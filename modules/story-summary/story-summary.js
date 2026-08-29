@@ -8,7 +8,7 @@
 // 4) Prompt 注入：extension_prompts + IN_CHAT + depth（动态计算，最小为2）
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { getContext } from "../../../../../extensions.js";
+import { getContext, extension_settings } from "../../../../../extensions.js";
 import {
     event_types,
     extension_prompts,
@@ -16,6 +16,7 @@ import {
     extension_prompt_roles,
     getRequestHeaders,
     chat_metadata,
+    saveSettingsDebounced,
 } from "../../../../../../script.js";
 import { EXT_ID, extensionFolderPath } from "../../core/constants.js";
 import { xbLog, CacheRegistry } from "../../core/debug-core.js";
@@ -421,6 +422,25 @@ const LEXICAL_WARMUP_DEBOUNCE_MS = 3000;
 const CHAT_CHANGE_LEXICAL_WARMUP_MS = 3000;
 const AUTO_SUMMARY_DELAY_MS = 3000;
 const AUTO_L0_BACKFILL_DELAY_MS = 5000;
+// 延迟总结配置：保留最近 N 层不纳入总结，手动/自动一致。
+// 通过 循环任务 调 setSummaryDelayFloors 修改，运行时生效。
+const SUMMARY_DELAY_KEY = "summaryDelayFloors";
+const DEFAULT_SUMMARY_DELAY_FLOORS = 0;
+
+export function getSummaryDelayFloors() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[SUMMARY_DELAY_KEY];
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : DEFAULT_SUMMARY_DELAY_FLOORS;
+}
+
+export function setSummaryDelayFloors(floors) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[SUMMARY_DELAY_KEY] = floors;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return getSummaryDelayFloors();
+}
+
 const BACKGROUND_VISIBLE_GRACE_MS = 6000;
 const VECTOR_RETRY_MAX_MS = 300000;
 
@@ -2841,6 +2861,11 @@ function openPanelForMessage(mesId) {
     sendVectorStatsToFrame();
 }
 
+export function openPanel() {
+    const { chat } = getContext();
+    openPanelForMessage(chat ? chat.length - 1 : 0);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Hide/Unhide
 // - 非向量：boundary = lastSummarizedMesId
@@ -3023,10 +3048,12 @@ async function maybeAutoRunSummary(reason) {
 
     const store = getSummaryStore();
     const lastSummarized = store?.lastSummarizedMesId ?? -1;
-    const pending = chat.length - lastSummarized - 1;
+    const targetMesId = chat.length - 1 - getSummaryDelayFloors();
+    if (targetMesId <= lastSummarized) return;
+    const pending = targetMesId - lastSummarized;
     if (pending < (trig.interval || 1)) return;
 
-    await autoRunSummaryWithRetry(chat.length - 1, { api: cfgAll.api, gen: cfgAll.gen, trigger: trig });
+    await autoRunSummaryWithRetry(targetMesId, { api: cfgAll.api, gen: cfgAll.gen, trigger: trig });
 }
 
 async function autoRunSummaryWithRetry(targetMesId, configForRun) {
@@ -3172,7 +3199,7 @@ async function handleFrameMessage(event) {
                 break;
             }
             const ctx = getContext();
-            currentMesId = (ctx.chat?.length ?? 1) - 1;
+            currentMesId = (ctx.chat?.length ?? 1) - 1 - getSummaryDelayFloors();
             handleManualGenerate(currentMesId, data.config || {});
             break;
         }
@@ -4037,7 +4064,7 @@ function clearExtensionPrompt() {
 // 整轮硬截止：召回在宿主 generate_interceptor 的 await 内执行，必须有兜底，
 // 不能把宿主发送流程无限卡住。30s 为初始护栏值，进入浏览器 E2E 后需结合
 // 真实 p50/p95 与首 token 体感校准。
-const STORY_SUMMARY_RECALL_DEADLINE_MS = 30000;
+const STORY_SUMMARY_RECALL_DEADLINE_MS = 6000000;
 const RECALL_WARNING_COOLDOWN_MS = 10000;
 const RECALL_REASONS_THAT_ABORT_GENERATION = new Set([
     'chat-changed',

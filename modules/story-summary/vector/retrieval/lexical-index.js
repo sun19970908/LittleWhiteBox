@@ -2,6 +2,7 @@ import MiniSearch from '../../../../libs/minisearch.mjs';
 import { getContext } from '../../../../../../../extensions.js';
 import { getSummaryStore } from '../../data/store.js';
 import { getAllChunks } from '../storage/chunk-store.js';
+import { lexicalIndexTable } from '../../data/db.js';
 import { xbLog } from '../../../../core/debug-core.js';
 import { tokenizeForIndex } from '../utils/tokenizer.js';
 
@@ -16,6 +17,10 @@ let activeBuild = null;
 
 // floor -> chunk doc ids (L1 only)
 let floorDocIds = new Map();
+// floor -> text signature (for snapshot diff on refresh)
+let floorSigs = new Map();
+// event id -> text signature (for snapshot diff on refresh)
+let eventSigs = new Map();
 
 // IDF stats over lexical docs (L1 chunks + L2 events)
 let termDfMap = new Map();
@@ -25,6 +30,49 @@ let lexicalDocCount = 0;
 const IDF_MIN = 1.0;
 const IDF_MAX = 4.0;
 const BUILD_BATCH_SIZE = 500;
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 持久化快照（页面刷新后避免 40s 全量重建）
+//
+// 策略：MiniSearch 索引整体序列化进 IndexedDB（lexicalIndex 表），每次增量
+// 写入时按“累计脏变更 ≥10 或空闲防抖”触发重存。刷新后 getLexicalIndex() 缓存
+// miss 时：先读快照，用 fingerprint 快速判定未过期则直接反序列化（秒级）；
+// 过期则对 楼层/事件 签名做 diff，只对新增/变更的部分分词增量 addAll/discard，
+// 而不是全量重建。真正不可预测的全量分词只在“无快照”（首启/表被清）时发生。
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 词法索引结构/分词器版本。tokenizer 规则、停用词、索引结构任一变更时 +1，
+// 会让所有已存快照失效回退全量重建（安全网）。
+const LEXICAL_INDEX_VERSION = 1;
+
+// 快照重存触发：累计脏变更达到该值，或空闲防抖到期，即触发保存。
+const SNAPSHOT_DIRTY_THRESHOLD = 10;
+const SNAPSHOT_SAVE_IDLE_MS = 3000;
+// 快速连发写入时两次保存的最小间隔，避免写风暴（每次全量序列化 ~200-500ms）。
+const SNAPSHOT_SAVE_MIN_INTERVAL_MS = 5000;
+
+let snapshotDirtyCount = 0;
+let snapshotSaveTimer = null;
+let lastSnapshotSaveAt = 0;
+let persistenceDisabled = false;
+
+/**
+ * MiniSearch 构造/反序列化必须使用同一组 options。返回新对象避免 MiniSearch
+ * 构造器原地改写共享引用。
+ */
+function createMiniSearchOptions() {
+    return {
+        fields: ['text'],
+        storeFields: ['type', 'floor'],
+        idField: 'id',
+        searchOptions: {
+            boost: { text: 1 },
+            fuzzy: 0.2,
+            prefix: true,
+        },
+        tokenize: tokenizeForIndex,
+    };
+}
 
 function cleanSummary(summary) {
     return String(summary || '')
@@ -48,6 +96,23 @@ function compareDocKeys(a, b) {
     if (ka < kb) return -1;
     if (ka > kb) return 1;
     return 0;
+}
+
+/**
+ * 楼层文本签名：对该楼层所有 chunk（按 chunkId 排序）的 chunkId+text 做滚动哈希。
+ * 用于刷新时判断该楼层是否变化。
+ */
+function hashFloorChunks(chunkList) {
+    const sorted = [...(chunkList || [])].sort((a, b) => String(a?.chunkId || '').localeCompare(String(b?.chunkId || '')));
+    let hash = 0x811C9DC5;
+    for (const c of sorted) {
+        hash = fnv1a32(`${c?.chunkId || ''}\u001F${c?.text || ''}\u001E`, hash);
+    }
+    return `${sorted.length}:${(hash >>> 0).toString(16)}`;
+}
+
+function hashText(text) {
+    return fnv1a32(String(text || ''));
 }
 
 function computeFingerprintFromDocs(docs) {
@@ -166,6 +231,9 @@ function buildEventDoc(ev) {
 function collectDocuments(chunks, events) {
     const docs = [];
     const nextFloorDocIds = new Map();
+    const nextFloorSigs = new Map();
+    const nextEventSigs = new Map();
+    const floorChunks = new Map();
 
     for (const chunk of chunks || []) {
         if (!chunk?.chunkId || !chunk.text) continue;
@@ -181,31 +249,30 @@ function collectDocuments(chunks, events) {
         if (floor >= 0) {
             if (!nextFloorDocIds.has(floor)) nextFloorDocIds.set(floor, []);
             nextFloorDocIds.get(floor).push(chunk.chunkId);
+            if (!floorChunks.has(floor)) floorChunks.set(floor, []);
+            floorChunks.get(floor).push(chunk);
         }
+    }
+
+    for (const [floor, chunkList] of floorChunks) {
+        nextFloorSigs.set(floor, hashFloorChunks(chunkList));
     }
 
     for (const ev of events || []) {
         const doc = buildEventDoc(ev);
-        if (doc) docs.push(doc);
+        if (doc) {
+            docs.push(doc);
+            nextEventSigs.set(doc.id, hashText(doc.text));
+        }
     }
 
-    return { docs, floorDocIds: nextFloorDocIds };
+    return { docs, floorDocIds: nextFloorDocIds, floorSigs: nextFloorSigs, eventSigs: nextEventSigs };
 }
 
 async function buildIndexAsync(docs) {
     const T0 = performance.now();
 
-    const index = new MiniSearch({
-        fields: ['text'],
-        storeFields: ['type', 'floor'],
-        idField: 'id',
-        searchOptions: {
-            boost: { text: 1 },
-            fuzzy: 0.2,
-            prefix: true,
-        },
-        tokenize: tokenizeForIndex,
-    });
+    const index = new MiniSearch(createMiniSearchOptions());
 
     if (!docs.length) return index;
 
@@ -221,6 +288,20 @@ async function buildIndexAsync(docs) {
     const elapsed = Math.round(performance.now() - T0);
     xbLog.info(MODULE_ID, `Index built: ${docs.length} docs (${elapsed}ms)`);
     return index;
+}
+
+/**
+ * 批量 addAll，批间让出主线程，避免大 diff 阻塞。
+ */
+async function addDocsBatched(index, docs) {
+    if (!index || !docs?.length) return;
+    for (let i = 0; i < docs.length; i += BUILD_BATCH_SIZE) {
+        const batch = docs.slice(i, i + BUILD_BATCH_SIZE);
+        index.addAll(batch);
+        if (i + BUILD_BATCH_SIZE < docs.length) {
+            await yieldToMain();
+        }
+    }
 }
 
 /**
@@ -376,7 +457,195 @@ export function searchLexicalIndex(index, terms) {
     return result;
 }
 
-async function collectAndBuild(chatId) {
+// ═══════════════════════════════════════════════════════════════════════════
+// 持久化快照（IndexedDB lexicalIndex 表）
+// ═══════════════════════════════════════════════════════════════════════════
+
+async function loadSnapshot(chatId) {
+    try {
+        const snap = await lexicalIndexTable.get(chatId);
+        if (!snap) return null;
+        if (snap.version !== LEXICAL_INDEX_VERSION) return null;
+        return {
+            fingerprint: snap.fingerprint,
+            indexJson: snap.indexJson,
+            termDfMap: new Map(Object.entries(snap.termDfMap || {})),
+            lexicalDocCount: Number(snap.lexicalDocCount || 0),
+            floorDocs: snap.floorDocs || {},
+            eventDocs: snap.eventDocs || {},
+        };
+    } catch (e) {
+        xbLog.warn(MODULE_ID, 'Failed to load lexical snapshot', e);
+        return null;
+    }
+}
+
+function buildSnapshotPayload(chatId, indexJson) {
+    const floorDocs = {};
+    for (const [floor, sig] of floorSigs) {
+        floorDocs[floor] = { sig, docIds: floorDocIds.get(floor) || [] };
+    }
+    const eventDocs = {};
+    for (const [id, sig] of eventSigs) {
+        eventDocs[id] = sig;
+    }
+    const termDfMapObj = {};
+    for (const [term, df] of termDfMap) {
+        termDfMapObj[term] = df;
+    }
+    return {
+        chatId,
+        version: LEXICAL_INDEX_VERSION,
+        fingerprint: cachedFingerprint,
+        indexJson,
+        termDfMap: termDfMapObj,
+        lexicalDocCount,
+        floorDocs,
+        eventDocs,
+        savedAt: Date.now(),
+    };
+}
+
+let snapshotSaveInFlight = false;
+
+async function persistSnapshotNow(chatId) {
+    if (persistenceDisabled || !cachedIndex || !chatId) return;
+    if (snapshotSaveInFlight) {
+        // 已有保存进行中：改走脏标记，等防抖再补一轮
+        markSnapshotDirty();
+        return;
+    }
+    snapshotSaveInFlight = true;
+    const T0 = performance.now();
+    try {
+        let indexJson;
+        try {
+            indexJson = JSON.stringify(cachedIndex);
+        } catch (e) {
+            xbLog.warn(MODULE_ID, 'Failed to serialize lexical index for snapshot', e);
+            return;
+        }
+        await lexicalIndexTable.put(buildSnapshotPayload(chatId, indexJson));
+        lastSnapshotSaveAt = Date.now();
+        snapshotDirtyCount = 0;
+        const ms = Math.round(performance.now() - T0);
+        xbLog.info(MODULE_ID, `Lexical snapshot saved (${ms}ms, docs=${lexicalDocCount})`);
+    } catch (e) {
+        // Quota 超限等：停止持久化，回退纯内存，不影响检索功能
+        persistenceDisabled = true;
+        xbLog.warn(MODULE_ID, 'Lexical snapshot persist failed; fall back to memory-only', e);
+    } finally {
+        snapshotSaveInFlight = false;
+    }
+}
+
+function markSnapshotDirty() {
+    if (!cachedIndex || persistenceDisabled) return;
+    snapshotDirtyCount++;
+    if (snapshotSaveTimer) return;
+    const chatId = cachedChatId;
+    if (!chatId) return;
+    const elapsed = Date.now() - lastSnapshotSaveAt;
+    const delay = snapshotDirtyCount >= SNAPSHOT_DIRTY_THRESHOLD
+        ? Math.max(0, SNAPSHOT_SAVE_MIN_INTERVAL_MS - elapsed)
+        : SNAPSHOT_SAVE_IDLE_MS;
+    snapshotSaveTimer = setTimeout(() => {
+        snapshotSaveTimer = null;
+        persistSnapshotNow(chatId);
+    }, delay);
+}
+
+/**
+ * 快照过期时对 楼层/事件 签名做 diff：只对新增/变更的文档增量 addAll，
+ * 对已删除的 discard；不回退全量分词。
+ * @returns {Promise<{addedCount:number, removedCount:number, nextCount:number}>}
+ */
+async function applyDiff(index, snapshot, collected) {
+    const docById = new Map();
+    for (const d of collected.docs) docById.set(d.id, d);
+
+    const snapshotAllIds = new Set();
+    for (const info of Object.values(snapshot.floorDocs)) {
+        for (const id of (info?.docIds || [])) snapshotAllIds.add(id);
+    }
+    for (const id of Object.keys(snapshot.eventDocs)) snapshotAllIds.add(id);
+
+    const removedIds = [];
+    const addedDocs = [];
+
+    // 楼层
+    for (const [floorKey, info] of Object.entries(snapshot.floorDocs)) {
+        const floor = Number(floorKey);
+        const curIds = collected.floorDocIds.get(floor) || [];
+        const curSig = collected.floorSigs.get(floor);
+        if (curIds.length === 0 || info?.sig !== curSig) {
+            for (const id of (info?.docIds || [])) removedIds.push(id);
+            for (const id of curIds) {
+                const d = docById.get(id);
+                if (d) addedDocs.push(d);
+            }
+        }
+    }
+    for (const [floor, ids] of collected.floorDocIds) {
+        if (!snapshot.floorDocs[floor]) {
+            for (const id of ids) {
+                const d = docById.get(id);
+                if (d) addedDocs.push(d);
+            }
+        }
+    }
+
+    // 事件
+    for (const [id, sig] of Object.entries(snapshot.eventDocs)) {
+        if (collected.eventSigs.get(id) !== sig) removedIds.push(id);
+    }
+    for (const [id, sig] of collected.eventSigs) {
+        if (snapshot.eventDocs[id] !== sig) {
+            const d = docById.get(id);
+            if (d) addedDocs.push(d);
+        }
+    }
+
+    const removedSet = new Set(removedIds);
+    const addedSet = new Set(addedDocs.map(d => d.id));
+
+    for (const id of removedSet) {
+        try {
+            index.discard(id);
+        } catch {
+            // ignore
+        }
+        removeDocumentIdf(id);
+    }
+
+    if (addedDocs.length) {
+        await addDocsBatched(index, addedDocs);
+        for (const d of addedDocs) {
+            // 重算新增文档 token，累计到 IDF（保留 docTokenSets 供后续内存删除递减）
+            const tokens = extractUniqueTokens(d.text);
+            docTokenSets.set(d.id, tokens);
+            for (const token of tokens) {
+                termDfMap.set(token, (termDfMap.get(token) || 0) + 1);
+            }
+        }
+    }
+
+    // 文档计数：快照基数 + 真正新增 - 真正删除
+    let removedGone = 0;
+    for (const id of removedSet) if (!addedSet.has(id)) removedGone++;
+    let addedNew = 0;
+    for (const id of addedSet) if (!snapshotAllIds.has(id)) addedNew++;
+    const nextCount = Math.max(0, snapshot.lexicalDocCount + addedNew - removedGone);
+
+    xbLog.info(
+        MODULE_ID,
+        `Lexical snapshot diff: added=${addedDocs.length} removed=${removedSet.size} count=${snapshot.lexicalDocCount}->${nextCount}`,
+    );
+
+    return { addedCount: addedDocs.length, removedCount: removedSet.size, nextCount };
+}
+
+async function resolveIndex(chatId) {
     const store = getSummaryStore();
     const events = store?.json?.events || [];
 
@@ -389,15 +658,81 @@ async function collectAndBuild(chatId) {
 
     const collected = collectDocuments(chunks, events);
     const { docs } = collected;
-    const fp = computeFingerprintFromDocs(docs);
+    const fingerprint = computeFingerprintFromDocs(docs);
 
-    if (cachedIndex && cachedChatId === chatId && cachedFingerprint === fp) {
-        return { index: cachedIndex, fingerprint: fp, docs, floorDocIds: collected.floorDocIds };
+    // 1) 内存缓存仍有效
+    if (cachedIndex && cachedChatId === chatId && cachedFingerprint === fingerprint) {
+        return {
+            index: cachedIndex,
+            fingerprint,
+            floorDocIds: collected.floorDocIds,
+            floorSigs: collected.floorSigs,
+            eventSigs: collected.eventSigs,
+            lexicalDocCount,
+            needsPersist: false,
+        };
     }
 
-    const index = await buildIndexAsync(docs);
+    // 2) 尝试持久化快照
+    const snapshot = await loadSnapshot(chatId);
+    if (snapshot) {
+        // 2a) 快照未过期 → 直接反序列化（秒级，不重新分词）
+        if (snapshot.fingerprint === fingerprint) {
+            const T0 = performance.now();
+            try {
+                const index = await MiniSearch.loadJSONAsync(snapshot.indexJson, createMiniSearchOptions());
+                termDfMap = snapshot.termDfMap;
+                lexicalDocCount = snapshot.lexicalDocCount;
+                const ms = Math.round(performance.now() - T0);
+                xbLog.info(MODULE_ID, `Lexical snapshot loaded (${ms}ms, docs=${lexicalDocCount})`);
+                return {
+                    index,
+                    fingerprint,
+                    floorDocIds: collected.floorDocIds,
+                    floorSigs: collected.floorSigs,
+                    eventSigs: collected.eventSigs,
+                    lexicalDocCount,
+                    needsPersist: false,
+                };
+            } catch (e) {
+                xbLog.warn(MODULE_ID, 'Failed to load snapshot index; fall back to full rebuild', e);
+            }
+        } else {
+            // 2b) 快照过期 → 对增量做 diff，只分词新增/变更部分
+            try {
+                const index = await MiniSearch.loadJSONAsync(snapshot.indexJson, createMiniSearchOptions());
+                termDfMap = snapshot.termDfMap;
+                lexicalDocCount = snapshot.lexicalDocCount;
+                const diff = await applyDiff(index, snapshot, collected);
+                lexicalDocCount = diff.nextCount;
+                xbLog.info(MODULE_ID, `Lexical snapshot diff applied (added=${diff.addedCount} removed=${diff.removedCount})`);
+                return {
+                    index,
+                    fingerprint,
+                    floorDocIds: collected.floorDocIds,
+                    floorSigs: collected.floorSigs,
+                    eventSigs: collected.eventSigs,
+                    lexicalDocCount,
+                    needsPersist: true,
+                };
+            } catch (e) {
+                xbLog.warn(MODULE_ID, 'Failed to diff snapshot; fall back to full rebuild', e);
+            }
+        }
+    }
 
-    return { index, fingerprint: fp, docs, floorDocIds: collected.floorDocIds };
+    // 3) 无快照 / 快照不可用 → 全量重建
+    const index = await buildIndexAsync(docs);
+    rebuildIdfFromDocs(docs);
+    return {
+        index,
+        fingerprint,
+        floorDocIds: collected.floorDocIds,
+        floorSigs: collected.floorSigs,
+        eventSigs: collected.eventSigs,
+        lexicalDocCount,
+        needsPersist: true,
+    };
 }
 
 /**
@@ -437,25 +772,32 @@ export async function getLexicalIndex() {
         }
     }
 
-    xbLog.info(MODULE_ID, `Lexical cache miss; rebuilding (chatId=${chatId.slice(0, 8)})`);
+    xbLog.info(MODULE_ID, `Lexical cache miss; resolving (chatId=${chatId.slice(0, 8)})`);
 
     const generation = buildGeneration;
     const build = {
         chatId,
         generation,
-        promise: collectAndBuild(chatId),
+        promise: resolveIndex(chatId),
     };
     activeBuild = build;
 
     try {
-        const { index, fingerprint, docs, floorDocIds: nextFloorDocIds } = await build.promise;
+        const result = await build.promise;
         if (activeBuild !== build || buildGeneration !== generation) return null;
-        cachedIndex = index;
+        if (!result?.index) return null;
+        cachedIndex = result.index;
         cachedChatId = chatId;
-        cachedFingerprint = fingerprint;
-        floorDocIds = nextFloorDocIds;
-        rebuildIdfFromDocs(docs);
-        return index;
+        cachedFingerprint = result.fingerprint;
+        floorDocIds = result.floorDocIds;
+        floorSigs = result.floorSigs;
+        eventSigs = result.eventSigs;
+        lexicalDocCount = result.lexicalDocCount;
+        if (result.needsPersist) {
+            // 快照缺失/过期时后台补写，不阻塞首次返回
+            persistSnapshotNow(chatId);
+        }
+        return cachedIndex;
     } catch (e) {
         xbLog.error(MODULE_ID, 'Index build failed', e);
         return null;
@@ -483,7 +825,14 @@ export function invalidateLexicalIndex() {
     buildGeneration++;
     activeBuild = null;
     floorDocIds = new Map();
+    floorSigs = new Map();
+    eventSigs = new Map();
     clearIdfState();
+    if (snapshotSaveTimer) {
+        clearTimeout(snapshotSaveTimer);
+        snapshotSaveTimer = null;
+    }
+    snapshotDirtyCount = 0;
 }
 
 export function addDocumentsForFloor(floor, chunks) {
@@ -511,12 +860,14 @@ export function addDocumentsForFloor(floor, chunks) {
 
     cachedIndex.addAll(docs);
     floorDocIds.set(floor, docIds);
+    floorSigs.set(floor, hashFloorChunks(chunks));
 
     for (const doc of docs) {
         addDocumentIdf(doc.id, doc.text);
     }
 
     xbLog.info(MODULE_ID, `Incremental add floor=${floor} chunks=${docs.length}`);
+    markSnapshotDirty();
 }
 
 export function removeDocumentsByFloor(floor) {
@@ -535,7 +886,9 @@ export function removeDocumentsByFloor(floor) {
     }
 
     floorDocIds.delete(floor);
+    floorSigs.delete(floor);
     xbLog.info(MODULE_ID, `Incremental remove floor=${floor} chunks=${docIds.length}`);
+    markSnapshotDirty();
 }
 
 export function addEventDocuments(events) {
@@ -553,6 +906,7 @@ export function addEventDocuments(events) {
             // Ignore if previous document does not exist.
         }
         removeDocumentIdf(doc.id);
+        eventSigs.set(doc.id, hashText(doc.text));
         docs.push(doc);
     }
 
@@ -564,4 +918,5 @@ export function addEventDocuments(events) {
     }
 
     xbLog.info(MODULE_ID, `Incremental add events=${docs.length}`);
+    markSnapshotDirty();
 }

@@ -673,8 +673,17 @@ function tokenizeCore(text) {
     // 1. 实体保护
     const { masked, entities } = maskEntities(input);
 
+    // 1.5 预先抽出完整占位符（格式 \uE000\uE010<序号>\uE001），
+    // 用空格替换后再分段，避免占位符内的 ASCII 序号被 segmentByScript 拆成
+    // 多段 other/latin 碎片；占位符随后交 unmaskTokens 还原为实体原词。
+    const keptPlaceholders = [];
+    const maskedForSeg = masked.replace(/\uE000\uE010\d+\uE001/g, m => {
+        keptPlaceholders.push(m);
+        return ' ';
+    });
+
     // 2. 分段
-    const segments = segmentByScript(masked);
+    const segments = segmentByScript(maskedForSeg);
 
     // 3. 分段分词
     const rawTokens = [];
@@ -692,6 +701,7 @@ function tokenizeCore(text) {
             rawTokens.push(...tokenizeLatin(seg.text));
         }
     }
+    rawTokens.push(...keptPlaceholders);
 
     // 4. 还原占位符
     return unmaskTokens(rawTokens, entities);

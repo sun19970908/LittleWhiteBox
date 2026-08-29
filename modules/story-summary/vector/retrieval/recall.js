@@ -1,4 +1,4 @@
-﻿// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
 // Story Summary - Recall Engine (v9 - Dense-Gated Lexical + Entity Bypass Tuning)
 //
 // 命名规范：
@@ -100,8 +100,9 @@ function recordExternalFailure(metrics, failure) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const CONFIG = {
-    // 固定读取 chat 末尾 3 条；普通发送时末条是真实入列的当前 USER 消息。
+    // 窗口：取 3 条消息（对齐 L0 对结构），pending 存在时取 2 条上下文
     LAST_MESSAGES_K: 3,
+    LAST_MESSAGES_K_WITH_PENDING: 2,
 
     // Anchor (L0 StateAtoms)
     ANCHOR_MIN_SIMILARITY: 0.58,
@@ -854,6 +855,23 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     // 6e. 构建 rerank documents（每个 floor: USER chunks + AI chunks）
     // ─────────────────────────────────────────────────────────────────
 
+    // ─── 方案A：floor rerank doc 每侧按 char 预算截取 top 相关 chunk ───
+    // chunks 已按 _cosineScore 降序（scoring.js:133-136），此处只读不写、保序截取。
+    // 至少保留每条首 chunk（单 chunk 楼层天然不受影响）；USER/AI 配对结构不变。
+    // 回滚：删掉本块 + 恢复下方 aiChunks/userChunks 两处即可（见方案文档 §6）。
+    const RERANK_DOC_CHAR_BUDGET_PER_SIDE = 400;
+    function takeTopChunksByCharBudget(chunks, budget) {
+        const out = [];
+        let used = 0;
+        for (const c of chunks) {
+            const len = (c.text || '').length;
+            if (out.length > 0 && used + len > budget) break;
+            out.push(c);
+            used += len;
+        }
+        return out;
+    }
+
     const normalFloors = fusedFloors.filter(f => !mustKeep.floorSet.has(f.id));
 
     const rerankCandidates = [];
@@ -861,9 +879,15 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
         const aiFloor = f.id;
         const userFloor = aiFloor - 1;
 
-        const aiChunks = l1ScoredByFloor.get(aiFloor) || [];
+        const aiChunks = takeTopChunksByCharBudget(
+            l1ScoredByFloor.get(aiFloor) || [],
+            RERANK_DOC_CHAR_BUDGET_PER_SIDE,
+        );
         const userChunks = (userFloor >= 0 && chat?.[userFloor]?.is_user)
-            ? (l1ScoredByFloor.get(userFloor) || [])
+            ? takeTopChunksByCharBudget(
+                l1ScoredByFloor.get(userFloor) || [],
+                RERANK_DOC_CHAR_BUDGET_PER_SIDE,
+            )
             : [];
 
         const parts = [];
@@ -1324,6 +1348,7 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     const T0 = performance.now();
     const { chat, chatId, name1 } = getContext();
     const {
+        pendingUserMessage = null,
         excludeLastAi = false,
         stageObserver = null,
         deferRuntimeRelease = false,
@@ -1344,7 +1369,10 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
 
     const T_Build_Start = performance.now();
 
-    const lastMessages = getLastMessages(chat, CONFIG.LAST_MESSAGES_K, excludeLastAi);
+    const lastMessagesCount = pendingUserMessage
+        ? CONFIG.LAST_MESSAGES_K_WITH_PENDING
+        : CONFIG.LAST_MESSAGES_K;
+    const lastMessages = getLastMessages(chat, lastMessagesCount, excludeLastAi);
 
     // Non-blocking preload: keep recall latency stable.
     // If not ready yet, query-builder will gracefully fall back to TF terms.
@@ -1352,7 +1380,7 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
         xbLog.warn(MODULE_ID, 'Preload lexical index failed; continue with TF fallback', e);
     });
 
-    const bundle = buildQueryBundle(lastMessages);
+    const bundle = buildQueryBundle(lastMessages, pendingUserMessage);
     if (captureStages) {
         observeRecallStage(stageObserver, 'queryFocusOwnership', [], describeQueryFocusOwnership(bundle));
     }
@@ -1680,6 +1708,11 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
             sim,
             { evidenceMinSimilarity: CONFIG.EVENT_EVIDENCE_MIN_SIMILARITY },
         );
+
+        // Cap lexical event merge to match the dense path (EVENT_CANDIDATE_MAX).
+        // lexicalResult.eventIds 已按词法加权分降序，此处只对通过 dense gate 的候选计数；
+        // 达到上限即停止，避免事件候选爆量（event rerank 只精排前 60、预算也只放得下 ~50 条）。
+        if (lexicalEventCount >= CONFIG.EVENT_CANDIDATE_MAX) break;
 
         eventHits.push({
             event: ev,

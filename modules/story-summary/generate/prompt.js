@@ -26,7 +26,7 @@ import { getMeta } from "../vector/storage/chunk-store.js";
 import { getStateAtoms } from "../vector/storage/state-store.js";
 import { getEngineFingerprint } from "../vector/utils/embedder.js";
 import { buildTrustedCharacters } from "../vector/retrieval/entity-lexicon.js";
-import { filterConstraintsByRelevance } from "./constraint-filter.js";
+import { filterConstraintsByRelevance, isBlockWorldEnabled, isBlockPeopleEnabled } from "./constraint-filter.js";
 import {
     getTemporalProtectionLimit,
     parseEventRange,
@@ -47,13 +47,46 @@ const MODULE_ID = "summaryPrompt";
 // 预算常量
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SHARED_POOL_MAX = 10000;
-const CONSTRAINT_MAX = 2000;
-const ARCS_MAX = 1500;
-const EVENT_BUDGET_MAX = 5000;
-const RELATED_EVENT_MAX = 500;
-const UNSUMMARIZED_EVIDENCE_MAX = 2000;
-const TOP_N_STAR = 5;
+// 预算配置：通过 循环任务 调 setPromptBudgets 修改，运行时生效
+// （extension_settings / saveSettingsDebounced / EXT_ID 在文件下方已 import/声明）
+const PROMPT_BUDGETS_KEY = "promptBudgets";
+const DEFAULT_PROMPT_BUDGETS = {
+    sharedPoolMax: 10000,           // SHARED_POOL_MAX
+    constraintMax: 2000,            // CONSTRAINT_MAX
+    arcsMax: 1500,                 // ARCS_MAX
+    eventBudgetMax: 5000,          // EVENT_BUDGET_MAX
+    relatedEventMax: 500,           // RELATED_EVENT_MAX
+    unsummarizedEvidenceMax: 2000,  // UNSUMMARIZED_EVIDENCE_MAX
+    topNStar: 5,                    // TOP_N_STAR
+};
+
+export function getPromptBudgets() {
+    const raw = extension_settings?.[EXT_ID]?.storySummary?.[PROMPT_BUDGETS_KEY] || {};
+    const clamp = (value, fallback, min, max) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
+    };
+    return {
+        SHARED_POOL_MAX: clamp(raw.sharedPoolMax, DEFAULT_PROMPT_BUDGETS.sharedPoolMax, 1000, 1000000),
+        CONSTRAINT_MAX: clamp(raw.constraintMax, DEFAULT_PROMPT_BUDGETS.constraintMax, 100, 100000),
+        ARCS_MAX: clamp(raw.arcsMax, DEFAULT_PROMPT_BUDGETS.arcsMax, 100, 100000),
+        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, DEFAULT_PROMPT_BUDGETS.eventBudgetMax, 100, 100000),
+        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, DEFAULT_PROMPT_BUDGETS.relatedEventMax, 10, 10000),
+        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, DEFAULT_PROMPT_BUDGETS.unsummarizedEvidenceMax, 100, 50000),
+        TOP_N_STAR: clamp(raw.topNStar, DEFAULT_PROMPT_BUDGETS.topNStar, 1, 20),
+    };
+}
+
+export function setPromptBudgets(patch) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[PROMPT_BUDGETS_KEY] = {
+        ...(root.storySummary[PROMPT_BUDGETS_KEY] || {}),
+        ...(patch || {}),
+    };
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return getPromptBudgets();
+}
 
 // L0 显示文本：分号拼接 vs 多行模式的阈值
 const L0_JOINED_MAX_LENGTH = 120;
@@ -266,14 +299,18 @@ function buildConstraintPeopleDict(recallResult, focusCharacters = []) {
 function groupConstraintsForDisplay(facts, peopleDict) {
     const people = new Map();
     const world = [];
+    const dropWorld = isBlockWorldEnabled();
+    const dropPeople = isBlockPeopleEnabled();
 
     for (const f of (facts || [])) {
         const subjectNorm = normalize(f?.s);
         const displayName = peopleDict.get(subjectNorm);
         if (displayName) {
-            if (!people.has(displayName)) people.set(displayName, []);
-            people.get(displayName).push(f);
-        } else {
+            if (!dropPeople) {
+                if (!people.has(displayName)) people.set(displayName, []);
+                people.get(displayName).push(f);
+            }
+        } else if (!dropWorld) {
             world.push(f);
         }
     }
@@ -421,13 +458,43 @@ function buildL0DisplayText(l0) {
  * @param {boolean} isUser - 是否为 USER 侧
  * @returns {string} 格式化后的行
  */
+
+import { extension_settings } from "../../../../../../extensions.js";
+import { saveSettingsDebounced } from "../../../../../../../script.js";
+
+const EXT_ID = "LittleWhiteBox";
+const BLANK_L1_SPEAKER_KEY = "blankL1Speaker";
+
+// ── L1 行 speaker 置空 开关 ─────────────────────────────
+// 默认打开：L1 行说话者置空（保持 4.3 现状）；
+// 关闭后：恢复显示说话者。
+export function isBlankL1SpeakerEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[BLANK_L1_SPEAKER_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function toggleBlankL1Speaker() {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    const next = !isBlankL1SpeakerEnabled();
+    root.storySummary[BLANK_L1_SPEAKER_KEY] = next;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return next;
+}
+
 function formatL1Line(chunk, isUser) {
     const { name1, name2 } = getContext();
-    const speaker = chunk.isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色");
+    const blankUser = isBlankL1SpeakerEnabled();
+    const speaker = chunk.isUser
+        ? (blankUser ? "" : (name1 || "用户"))
+        : (chunk.speaker || name2 || "角色");
     const text = String(chunk.text || "").trim();
     const symbol = isUser ? "┌" : "›";
     return `    ${symbol} #${chunk.floor + 1} [${speaker}] ${text}`;
 }
+
+
+
 
 /**
  * 格式化因果事件行
@@ -1006,6 +1073,18 @@ function factsInBudgetOrder(grouped) {
  */
 async function buildVectorPrompt(store, recallResult, causalById, focusCharacters, meta, metrics, options = {}) {
     const T_Start = performance.now();
+
+    // 预算运行时读取（生成时生效，无需刷新/重启）
+    const {
+        SHARED_POOL_MAX,
+        CONSTRAINT_MAX,
+        ARCS_MAX,
+        EVENT_BUDGET_MAX,
+        RELATED_EVENT_MAX,
+        UNSUMMARIZED_EVIDENCE_MAX,
+        TOP_N_STAR,
+    } = getPromptBudgets();
+
     let deferredDirectEvidenceContext = recallResult?.directEvidenceContext || null;
     try {
 
@@ -1021,6 +1100,9 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
             TEMPORAL_PROTECTION_POLICY.maxEvidenceBudgetShare,
         ),
     };
+    // 为远期记忆（distant）预留 20% 独立保底：DIRECT 准入时临时把共享池
+    // 压到 max - reserve，distant 准入前恢复，确保远期浓缩 L0 至少拿到 reserve。
+    const distantReserveTokens = Math.floor(summarizedEvidenceBudgetMax * 0.20);
 
     // 从 recallResult 解构
     const l0Selected = recallResult?.l0Selected || [];
@@ -1317,6 +1399,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         floorOverheadTokens: DIRECT_EVIDENCE_FLOOR_OVERHEAD_TOKENS,
         protectedBudget: temporalEvidenceProtectionBudget,
     };
+    summarizedEvidenceBudget.max = Math.max(0, summarizedEvidenceBudgetMax - distantReserveTokens);
     const admittedItems = admitDirectEvidenceItems(
         [...enumeration.l0Items, ...enumeration.l1Items],
         summarizedEvidenceBudget,
@@ -1330,6 +1413,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         summarizedEvidenceBudget,
         evidenceAdmissionOptions,
     );
+    summarizedEvidenceBudget.max = summarizedEvidenceBudgetMax;
 
     const allAdmittedItems = [...admittedItems, ...admittedFallbackItems];
     for (const item of allAdmittedItems) {
@@ -1691,7 +1775,7 @@ export async function buildVectorPromptForReplay(store, recallResult, causalById
  * @returns {Promise<{text: string, logText: string, notice: object|null}>}
  */
 export async function buildVectorPromptText(excludeLastAi = false, options = {}) {
-    const { signal = null } = options;
+    const { pendingUserMessage = null, signal = null } = options;
 
     if (!getSettings().storySummary?.enabled) {
         return { text: "", logText: "", notice: null };
@@ -1726,6 +1810,7 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
     try {
         recallResult = await recallMemory(allEvents, vectorCfg, {
             excludeLastAi,
+            pendingUserMessage,
             signal,
             deferRuntimeRelease: true,
         });

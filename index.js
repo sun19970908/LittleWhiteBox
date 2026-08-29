@@ -1062,12 +1062,12 @@ jQuery(async () => {
                 { condition: !CHAT_SURFACE_MANAGED, init: initButtonCollapse }
             ];
             moduleInits.forEach(({ condition, init }) => { if (condition) init(); });
+            try {
+                await initActiveDrawProvider();
+            } catch (e) {
+                console.error('[LittleWhiteBox] 初始化画图 provider 失败:', e);
+            }
             if (!CHAT_SURFACE_MANAGED) {
-                try {
-                    await initActiveDrawProvider();
-                } catch (e) {
-                    console.error('[LittleWhiteBox] 初始化画图 provider 失败:', e);
-                }
                 initImageJobRecoveryRuntime();
                 try { initFourthWallFloorTools(); } catch (e) { }
                 if (settings.fourthWall?.enabled) {
