@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:28:21.358Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-26T07:18:20.637Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1787728700637_8hywxtj",
+            "interval": 0,
+            "name": "删除词法索引快照",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n// ====== 删除词法索引快照（强制下次全量重建，替代改 LEXICAL_INDEX_VERSION） ======\n// 场景：改了 tokenizer/停用词/索引结构后，让旧规则建的索引作废。\n// 用法：把本代码完整放入命令框，点击任务按钮即可。\n\n(async () => {\n    const lex = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/retrieval/lexical-index.js');\n    const dbm = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/data/db.js');\n\n    lex.invalidateLexicalIndex();        // ① 清内存缓存（否则下次直接命中内存，白删）\n    await dbm.lexicalIndexTable.clear(); // ② 清 IndexedDB 快照（invalidate 不会删这个）\n\n    // ③ 可选：立即用当前分词规则全量重建并写新快照（约 40s，有进度会卡主线程）\n    // 若去掉这行，则下次召回/刷新时自动重建（那次的召回会慢）\n    lex.warmupIndex();\n\n    window.toastr?.success('词法索引快照已删除，正在用当前分词规则重建…');\n})();\n<</taskjs>>"
+        }
+    ]
+}

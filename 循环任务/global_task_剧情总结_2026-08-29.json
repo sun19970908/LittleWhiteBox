@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:27:05.662Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-03T10:51:01.218Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1785754261218_wz1b07w",
+            "interval": 0,
+            "name": "剧情总结",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/story-summary.js');\n    mod.openPanel();\n})();\n<</taskjs>>"
+        }
+    ]
+}

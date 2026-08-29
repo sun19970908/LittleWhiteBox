@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:28:22.499Z",
+    "tasks": [
+        {
+            "buttonActivated": false,
+            "createdAt": "2026-08-27T16:37:16.757Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1787848636757_vijsbch",
+            "interval": 0,
+            "name": "state约束直接保留（l3更多）",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/constraint-filter.js');\n    const on = mod.toggleKeepStateFacts();\n    window.toastr?.success('✅ 满足state即保留（l3更多）: ' + (on ? 'ON' : 'OFF'));\n})();\n<</taskjs>>"
+        }
+    ]
+}

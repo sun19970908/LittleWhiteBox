@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:28:23.927Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-27T17:02:34.741Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1787850154741_qjadths",
+            "interval": 0,
+            "name": "speaker留空",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/prompt.js');\n    const on = mod.toggleBlankL1Speaker();\n    window.toastr?.success('✅ L1 speaker 置空: ' + (on ? 'ON' : 'OFF'));\n})();\n<</taskjs>>"
+        }
+    ]
+}

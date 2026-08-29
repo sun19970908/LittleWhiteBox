@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:28:30.832Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-29T10:53:23.951Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788000803950_7c27p54",
+            "interval": 0,
+            "name": "participant 注册",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/integrations/tauritavern-chat-surface/index.js');\n    const next = await mod.toggleParticipantRegistration();   // 注意 await\n    window.toastr?.success(\n        (next ? '✅ 已阻断注册（JSR 独占渲染）' : '⚠️ 已恢复注册（LWB 接管渲染）')\n        + ' — 请重载页面生效'\n    );\n})();\n\n<</taskjs>>"
+        }
+    ]
+}

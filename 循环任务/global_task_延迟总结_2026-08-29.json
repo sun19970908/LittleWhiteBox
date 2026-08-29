@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:28:28.909Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-27T17:56:59.122Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1787853419122_smbw6bi",
+            "interval": 0,
+            "name": "延迟总结",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n// ====== 延迟总结楼层 配置 ======\n(async () => {\n    // ====== 修改这里 ======\n    const FLOORS = 2;  // 保留最近 N 层不纳入总结；0 = 不延迟（立即总结到最新）\n    // =====================\n\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/story-summary.js');\n    const v = mod.setSummaryDelayFloors(FLOORS);\n    window.toastr?.success('✅ 延迟总结楼层已保存: ' + v + ' 层');\n})();\n<</taskjs>>"
+        }
+    ]
+}

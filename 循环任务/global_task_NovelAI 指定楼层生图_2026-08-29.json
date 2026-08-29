@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:26:38.923Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-06T22:47:11.159Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1786056431159_w1o92wr",
+            "interval": 0,
+            "name": "NovelAI 指定楼层生图",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n// ====== NovelAI 指定楼层生图 ======\n// 创建手动触发循环任务，将此代码完整放入命令框。\n// 修改下方 FLOOR 值，点击任务按钮即可生效。\n\n(async () => {\n    // ====== 修改这里 ======\n    const FLOOR0 = 3710;\n    const FLOOR = FLOOR0+1;   // 楼层号（从 1 开始计数，1 = 第一条消息）\n    // =====================\n\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/novel-draw.js');\n    const { getContext } = await import('/scripts/extensions.js');\n\n    const ctx = getContext();\n    const chat = ctx.chat || [];\n    if (!chat.length) {\n        window.toastr?.error('当前没有聊天记录');\n        return;\n    }\n\n    // 楼层号(1-based) -> messageId(0-based)\n    const messageId = Number(FLOOR) - 1;\n    if (!Number.isInteger(messageId) || messageId < 0 || messageId >= chat.length) {\n        window.toastr?.error(`楼层无效，当前范围 1 ~ ${chat.length}`);\n        return;\n    }\n\n    const msg = chat[messageId];\n    if (!msg) {\n        window.toastr?.error(`楼层 ${FLOOR} 不存在`);\n        return;\n    }\n    if (msg.is_user) {\n        window.toastr?.warning(`楼层 ${FLOOR} 是用户消息，仍会尝试生图`);\n    }\n    if (!String(msg.mes || '').trim()) {\n        window.toastr?.error(`楼层 ${FLOOR} 内容为空`);\n        return;\n    }\n\n    window.toastr?.info(`开始为楼层 ${FLOOR} 生图...`);\n\n    try {\n        await mod.generateAndInsertImages({ messageId });\n        window.toastr?.success(`✅ 楼层 ${FLOOR} 生图完成`);\n    } catch (e) {\n        console.error('[DrawFloor]', e);\n        window.toastr?.error(`楼层 ${FLOOR} 生图失败: ${e?.message || e}`);\n    }\n})();\n<</taskjs>>"
+        }
+    ]
+}

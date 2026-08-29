@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:28:24.828Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-27T17:24:31.559Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1787851471559_7cl271r",
+            "interval": 0,
+            "name": "预算",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n// ====== Story Summary 预算配置 ======\n(async () => {\n    // ====== 修改这里（只填想改的，注释是旧常量名）=====\n    const BUDGETS = {\n        sharedPoolMax: 30000,        // SHARED_POOL_MAX  共享池\n        constraintMax: 6000,         // CONSTRAINT_MAX   约束上限\n        arcsMax: 10000,              // ARCS_MAX         弧光上限\n        eventBudgetMax: 10000,       // EVENT_BUDGET_MAX 事件预算\n        relatedEventMax: 500,        // RELATED_EVENT_MAX 相关事件\n        unsummarizedEvidenceMax: 2000, // UNSUMMARIZED_EVIDENCE_MAX 近期未总结证据\n        topNStar: 5,                 // TOP_N_STAR       星标条数\n    };\n    // =====================\n\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/prompt.js');\n    const b = mod.setPromptBudgets(BUDGETS);\n    window.toastr?.success('✅ 预算已保存: 池=' + b.SHARED_POOL_MAX\n        + ' 约束=' + b.CONSTRAINT_MAX + ' 弧光=' + b.ARCS_MAX\n        + ' 事件=' + b.EVENT_BUDGET_MAX + ' 相关=' + b.RELATED_EVENT_MAX\n        + ' 未总结=' + b.UNSUMMARIZED_EVIDENCE_MAX + ' 星标=' + b.TOP_N_STAR);\n})();\n<</taskjs>>"
+        }
+    ]
+}

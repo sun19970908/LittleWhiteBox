@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:28:30.111Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-27T19:22:44.445Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1787858564445_oh5hdci",
+            "interval": 0,
+            "name": "屏蔽l3",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/constraint-filter.js');\n    mod.setBlockedCharacters([\"十一月雨\"]);   // 名单：people/world 主体都行；空数组=取消屏蔽\n    mod.setBlockWorld(true);                       // 完全关掉 world 段；false=恢复\n    mod.setBlockPeople(false);\n    window.toastr?.success('✅ L3 屏蔽已保存');\n})();\n<</taskjs>>"
+        }
+    ]
+}
