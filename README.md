@@ -2,7 +2,7 @@
 
 原仓库：https://github.com/RT15548/LittleWhiteBox
 本仓库：https://github.com/sun19970908/LittleWhiteBox
-修改部分包括：index.js 、story summary  、\integrations\tauritavern-chat-surface
+修改部分包括：index.js 、story summary  、\integrations\tauritavern-chat-surface、streaming-generation.js
 几乎所有更改都有开关，随时可关闭
 
 1. 阻断了participant 注册实现了tauritavern的虚拟化时酒馆助手和小白x的部分兼容，需要二改的tauritavern和循环任务开关，并增加一个剧情总结的QR按钮
