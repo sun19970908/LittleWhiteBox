@@ -350,6 +350,7 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     }
 
     xbLog.info(MODULE_ID, `总结完成，已更新至 ${slice.endMesId + 1} 楼`);
+    window.toastr?.success(`📖 剧情总结完成：更新至 #${slice.endMesId + 1} 楼（新增 ${(parsed.events || []).length} 个事件）`);
 
     if (parsed.factUpdates?.length) {
         xbLog.info(MODULE_ID, `Facts 更新: ${parsed.factUpdates.length} 条`);
