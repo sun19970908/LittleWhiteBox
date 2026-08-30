@@ -311,7 +311,7 @@ const DEFAULT_EMBEDDING_MODEL = "BAAI/bge-m3";
 const DEFAULT_RERANK_MODEL = "BAAI/bge-reranker-v2-m3";
 const DEFAULT_SUMMARIZED_EVIDENCE_BUDGET = 4000;
 const MIN_SUMMARIZED_EVIDENCE_BUDGET = 3000;
-const MAX_SUMMARIZED_EVIDENCE_BUDGET = 5000;
+const MAX_SUMMARIZED_EVIDENCE_BUDGET = 50000;
 
 function getVectorProviderDefaultUrl(provider) {
     return provider === "openrouter" ? DEFAULT_OPENROUTER_URL : DEFAULT_L0_URL;
