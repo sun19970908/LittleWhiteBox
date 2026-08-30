@@ -217,7 +217,7 @@ class StreamingGeneration {
                 stop: Array.isArray(generateData?.stop) ? generateData.stop : undefined,
                 use_makersuite_sysprompt: false,
                 claude_use_sysprompt: oai_settings?.claude_use_sysprompt ?? false,
-                custom_prompt_post_processing: undefined,
+                custom_prompt_post_processing: baseOptions?.promptPostProcessing || undefined,
                 // thinking 模型支持
                 include_reasoning: oai_settings?.show_thoughts ?? true,
                 reasoning_effort: oai_settings?.reasoning_effort || 'medium',
@@ -1001,6 +1001,7 @@ class StreamingGeneration {
             enable_thinking: this.parseOpt(args, 'enable_thinking'),
             thinking_budget: this.parseOpt(args, 'thinking_budget'),
             min_p: this.parseOpt(args, 'min_p'),
+            promptPostProcessing: args?.promptpost,
         };
         let parsedStop;
         try {
@@ -1452,6 +1453,7 @@ class StreamingGeneration {
                 { name: 'bottomsys', description: '置底 system', typeList: [ARGUMENT_TYPE.STRING] },
                 { name: 'bottomuser', description: '置底 user', typeList: [ARGUMENT_TYPE.STRING] },
                 { name: 'bottomassistant', description: '置底 assistant', typeList: [ARGUMENT_TYPE.STRING] },
+                { name: 'promptpost', description: '提示词后处理模式，透传给后端 custom_prompt_post_processing（如 merge / strict）', typeList: [ARGUMENT_TYPE.STRING] },
                 { name: 'top', description: '复合置顶: assistant={A};user={B};sys={C}', typeList: [ARGUMENT_TYPE.STRING] },
                 { name: 'bottom', description: '复合置底: assistant={C};sys={D1}', typeList: [ARGUMENT_TYPE.STRING] },
                 { name: 'top64', description: '复合置顶(base64-url安全编码)', typeList: [ARGUMENT_TYPE.STRING] },
