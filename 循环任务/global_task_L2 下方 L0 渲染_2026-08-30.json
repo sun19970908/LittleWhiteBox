@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-30T11:54:45.026Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-30T11:48:11.056Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788090491056_idbg04z",
+            "interval": 0,
+            "name": "L2 下方 L0 渲染",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/prompt.js');\n    const next = mod.toggleHideL0UnderEvents();\n    window.toastr?.success('✅ L2 下方 L0 渲染: ' + (next ? '已隐藏' : '已恢复'));\n})();\n<</taskjs>>"
+        }
+    ]
+}

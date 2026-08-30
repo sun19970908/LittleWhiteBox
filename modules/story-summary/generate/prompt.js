@@ -482,6 +482,27 @@ export function toggleBlankL1Speaker() {
     return next;
 }
 
+const HIDE_L0_UNDER_EVENTS_KEY = "hideL0UnderEvents";
+
+// ── L2 下方 L0 渲染 开关 ─────────────────────────────
+// 默认打开：事件挂靠的证据组不渲染 L0（📌）行——L0 与事件摘要同源派生
+// （都从同批楼层文本提取），语义上多为摘要的子集；
+// 关闭后：恢复在事件下方渲染 L0 行。
+// 仅影响事件挂靠路径；零散/新鲜记忆路径的 L0 不受此开关控制。
+export function isHideL0UnderEventsEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[HIDE_L0_UNDER_EVENTS_KEY];
+    return v === undefined ? true : v === true;
+}
+
+export function toggleHideL0UnderEvents() {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    const next = !isHideL0UnderEventsEnabled();
+    root.storySummary[HIDE_L0_UNDER_EVENTS_KEY] = next;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return next;
+}
+
 function formatL1Line(chunk, isUser) {
     const { name1, name2 } = getContext();
     const blankUser = isBlankL1SpeakerEnabled();
@@ -651,10 +672,17 @@ function buildRecentEvidenceGroup(floor, l0AtomsForFloor) {
  *     › #500 [角色] ...
  *
  * @param {EvidenceGroup} group - 证据组
- * @returns {string[]} 文本行数组
+ * @param {object} [options]
+ * @param {boolean} [options.includeL0=true] - 事件挂靠路径传 false：L0 与事件摘要
+ *   同源派生（同一批楼层文本），语义上是其子集，L2 下方不渲染 📌 行；
+ *   零散/新鲜记忆路径保持 true（那里没有事件头，L0 是唯一呈现）。
+ * @returns {string[]} 文本数组
  */
-function formatEvidenceGroup(group) {
-    const displayTexts = group.l0Atoms.map(l0 => buildL0DisplayText(l0));
+function formatEvidenceGroup(group, options = {}) {
+    const includeL0 = options.includeL0 !== false;
+    const displayTexts = includeL0
+        ? group.l0Atoms.map(l0 => buildL0DisplayText(l0))
+        : [];
 
     const lines = [];
 
@@ -867,9 +895,10 @@ function formatEventWithEvidence(eventItem, idx, evidenceGroups, causalById) {
         if (c) lines.push(formatCausalEventLine(c));
     }
 
-    // EvidenceGroup 证据
+    // EvidenceGroup 证据（事件下方是否渲染 L0 由开关 hideL0UnderEvents 控制，默认不渲染）
+    const includeL0UnderEvents = !isHideL0UnderEventsEnabled();
     for (const group of evidenceGroups) {
-        lines.push(...formatEvidenceGroup(group));
+        lines.push(...formatEvidenceGroup(group, { includeL0: includeL0UnderEvents }));
     }
 
     return lines.join("\n");
