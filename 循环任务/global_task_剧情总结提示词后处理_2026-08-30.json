@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-30T06:37:48.869Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-30T04:05:50.911Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788062750911_jct2j1m",
+            "interval": 0,
+            "name": "剧情总结提示词后处理",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/llm.js');\n    const before = mod.isMergePrefillIntoUserEnabled();\n    const after = mod.toggleMergePrefillIntoUser();\n    window.toastr?.success(`剧情总结提示词后处理：${before ? '开' : '关'} → ${after ? '开' : '关'}`);\n})();\n<</taskjs>>"
+        }
+    ]
+}
