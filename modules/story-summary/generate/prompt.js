@@ -58,6 +58,9 @@ const DEFAULT_PROMPT_BUDGETS = {
     relatedEventMax: 500,           // RELATED_EVENT_MAX
     unsummarizedEvidenceMax: 2000,  // UNSUMMARIZED_EVIDENCE_MAX
     topNStar: 5,                    // TOP_N_STAR
+    rerankTopN: 20,                 // RERANK_TOP_N       楼层精排幸存数
+    fusionCap: 60,                  // FUSION_CAP         融合候选楼层数
+    eventSelectMax: 50,             // EVENT_SELECT_MAX   事件 MMR 选择上限
 };
 
 export function getPromptBudgets() {
@@ -74,6 +77,9 @@ export function getPromptBudgets() {
         RELATED_EVENT_MAX: clamp(raw.relatedEventMax, DEFAULT_PROMPT_BUDGETS.relatedEventMax, 10, 10000),
         UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, DEFAULT_PROMPT_BUDGETS.unsummarizedEvidenceMax, 100, 50000),
         TOP_N_STAR: clamp(raw.topNStar, DEFAULT_PROMPT_BUDGETS.topNStar, 1, 20),
+        RERANK_TOP_N: clamp(raw.rerankTopN, DEFAULT_PROMPT_BUDGETS.rerankTopN, 1, 200),
+        FUSION_CAP: clamp(raw.fusionCap, DEFAULT_PROMPT_BUDGETS.fusionCap, 10, 500),
+        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, DEFAULT_PROMPT_BUDGETS.eventSelectMax, 1, 500),
     };
 }
 

@@ -142,6 +142,28 @@ const CONFIG = {
     CAUSAL_INJECT_MAX: 30,
 };
 
+/**
+ * 运行时容量覆盖：RERANK_TOP_N / FUSION_CAP / EVENT_SELECT_MAX 可由预算循环任务
+ * （setPromptBudgets 的 rerankTopN / fusionCap / eventSelectMax）配置。
+ * 动态 import 读取（generate/prompt.js 静态依赖本模块，避免静态循环依赖）；
+ * 读取失败或未配置时回退 CONFIG 默认值。
+ */
+async function getCapacityOverrides() {
+    try {
+        const mod = await import('../../generate/prompt.js');
+        const b = mod.getPromptBudgets?.();
+        if (!b) return null;
+        const pick = (v, fallback) => (Number.isFinite(v) && v > 0 ? v : fallback);
+        return {
+            RERANK_TOP_N: pick(b.RERANK_TOP_N, CONFIG.RERANK_TOP_N),
+            FUSION_CAP: pick(b.FUSION_CAP, CONFIG.FUSION_CAP),
+            EVENT_SELECT_MAX: pick(b.EVENT_SELECT_MAX, CONFIG.EVENT_SELECT_MAX),
+        };
+    } catch {
+        return null;
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 工具函数
 // ═══════════════════════════════════════════════════════════════════════════
@@ -442,10 +464,11 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
     if (missingCandidateVectors > 0) {
         xbLog.warn(MODULE_ID, `L2候选向量缺失 ${missingCandidateVectors}/${candidateEventIds.length}，MMR diversity 可能退化`);
     }
-    // MMR 选择
+    // MMR 选择（容量可由预算任务 eventSelectMax 覆盖）
+    const capacityOverrides = await getCapacityOverrides();
     const selected = mmrSelect(
         candidates,
-        CONFIG.EVENT_SELECT_MAX,
+        capacityOverrides?.EVENT_SELECT_MAX ?? CONFIG.EVENT_SELECT_MAX,
         CONFIG.EVENT_MMR_LAMBDA,
         c => c.vector,
         c => c.similarity
@@ -684,6 +707,9 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
     const T_Start = performance.now();
 
+    // 融合/精排容量可由预算任务（fusionCap / rerankTopN）覆盖
+    const capacityOverrides = await getCapacityOverrides();
+
     // ─────────────────────────────────────────────────────────────────
     // 6a. Dense floor rank（加权聚合：maxSim×0.6 + meanSim×0.4）
     // ─────────────────────────────────────────────────────────────────
@@ -787,7 +813,7 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     // ─────────────────────────────────────────────────────────────────
 
     const T_Fusion_Start = performance.now();
-    const { top: fusedFloors, all: fusedFloorsPreCap, totalUnique } = fuseByFloor(denseFloorRank, lexFloorRank, CONFIG.FUSION_CAP);
+    const { top: fusedFloors, all: fusedFloorsPreCap, totalUnique } = fuseByFloor(denseFloorRank, lexFloorRank, capacityOverrides?.FUSION_CAP ?? CONFIG.FUSION_CAP);
     const fusionTime = Math.round(performance.now() - T_Fusion_Start);
 
     if (captureStages) {
@@ -918,7 +944,7 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     const T_Rerank_Start = performance.now();
 
     const reranked = await rerankChunks(rerankQuery, rerankCandidates, {
-        topN: CONFIG.RERANK_TOP_N,
+        topN: capacityOverrides?.RERANK_TOP_N ?? CONFIG.RERANK_TOP_N,
         minScore: CONFIG.RERANK_MIN_SCORE,
         signal,
     });
