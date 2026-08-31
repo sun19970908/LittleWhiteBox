@@ -881,17 +881,28 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     // 6e. 构建 rerank documents（每个 floor: USER chunks + AI chunks）
     // ─────────────────────────────────────────────────────────────────
 
-    // ─── 方案A：floor rerank doc 每侧按 char 预算截取 top 相关 chunk ───
+    // ─── 方案C：floor rerank doc 每侧「首块无条件进 + 第 2 块起按 char 预算」 ───
     // chunks 已按 _cosineScore 降序（scoring.js:133-136），此处只读不写、保序截取。
-    // 至少保留每条首 chunk（单 chunk 楼层天然不受影响）；USER/AI 配对结构不变。
-    // 回滚：删掉本块 + 恢复下方 aiChunks/userChunks 两处即可（见方案文档 §6）。
+    // 规则：
+    //   - 首块无条件进（不计入预算，保证单 chunk 楼层与首块为最强信号的楼层完整入 doc）
+    //   - 第 2 块起按 400 字符预算累计，累计超预算即停（chunk 内文字永不裁剪）
+    // 目的：把"每侧 1 块（200 字）"放宽到"每侧 2-3 块（400-600 字）"，
+    //       让 rerank 看到楼层里 2 个不同位置的文本片段，覆盖一个楼层有多个主题的情况。
+    // USER/AI 配对结构不变。
+    // 回滚：把函数体恢复为「if (out.length > 0 && used + len > budget) break; push; used += len;」即可。
     const RERANK_DOC_CHAR_BUDGET_PER_SIDE = 400;
     function takeTopChunksByCharBudget(chunks, budget) {
         const out = [];
         let used = 0;
         for (const c of chunks) {
             const len = (c.text || '').length;
-            if (out.length > 0 && used + len > budget) break;
+            // 首块无条件进（不计入预算）
+            if (out.length === 0) {
+                out.push(c);
+                continue;
+            }
+            // 第 2 块起：累计字符超过预算即停
+            if (used + len > budget) break;
             out.push(c);
             used += len;
         }
