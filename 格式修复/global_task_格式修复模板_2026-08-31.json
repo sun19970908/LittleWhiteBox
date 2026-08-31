@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-31T18:01:12.798Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-31T15:55:16.491Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788191716491_ypy0bci",
+            "interval": 0,
+            "name": "格式修复模板",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\nwindow.FmtFixConfigs = window.FmtFixConfigs || {};\nwindow.FmtFixConfigs['模板名'] = { builtinRules:\n//这里加上json数组\n//json数组开始 \n[\n// 正则\n{ name: '示例', pattern: '源文', replacement: '替换', flags: 'g' }\n\n// 代码\n{ name: '示例', code: (text) => text.replace(/x/, 'y') }\n]\n//json数组结束\n};\nwindow.FmtFixConfigs.active = '模板名';\nwindow.toastr?.success?.('已切换到：模板名');\n<</taskjs>>"
+        }
+    ]
+}
