@@ -13,7 +13,7 @@
 
 ## 剧情总结：
 - 增加一个延迟总结功能，需要循环任务。解决了编辑最后一楼l2不回滚的问题
-- 可以改剧情总结的预算，需要循环任务
+- 可以改剧情总结的预算，需要循环任务。包括UI里那个已总结证据预算（这个只能在循环任务里改）
 - 剧情总结允许speaker留空，方便导演模式，以免llm混淆导演和角色，需要循环任务
 - timeLabel 规则加强：剧情总结的timeLabel 要求用原文绝对时间，适用于长聊天
 - 剧情总结提示词可以后处理取消预填充防止gemini 3.7f不支持，需要循环任务
@@ -41,7 +41,18 @@
 二改tauritavern：https://github.com/sun19970908/TauriTavern
 还有一个酒馆助手脚本，发送之前的最后正则，可以对变量列表等一切提示词正则：
 
-
+# 预算原始数值备份
+const SHARED_POOL_MAX = 10000;
+const CONSTRAINT_MAX = 2000;
+const ARCS_MAX = 1500;
+const EVENT_BUDGET_MAX = 5000;
+const RELATED_EVENT_MAX = 500;
+const UNSUMMARIZED_EVIDENCE_MAX = 2000;
+const TOP_N_STAR = 5;
+rerankTopN: 20,             
+fusionCap: 60,            
+eventSelectMax: 50,
+VECTOR_BUDGET = 4000（已总结证据预算）
 ---
 # LittleWhiteBox
 
