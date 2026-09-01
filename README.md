@@ -3,7 +3,7 @@
 原仓库：https://github.com/RT15548/LittleWhiteBox
 本仓库：https://github.com/sun19970908/LittleWhiteBox
 修改部分包括：index.js 、story summary  、\integrations\tauritavern-chat-surface、streaming-generation.js
-几乎所有更改都有开关，随时可关闭
+几乎所有更改都有开关，功能默认关闭
 
 # 所需循环任务在仓库里
 
@@ -23,7 +23,7 @@
 - lexical可缓存，防止初次召回太慢，如果出错就用循环任务删除缓存
 - 向量召回distant增加20%保底（就是零散记忆）
 - 解除向量召回超时限制，防止手机太慢超时
-- reranker doc 截断，防止reranker doc 太长
+- rerank doc 截断，防止rerank doc 太长
 - l2下边不保留l0（L0与L2语义重复），需要循环任务
 - 可选屏蔽l3（定了的事）里的核心事实相关人物（state约束），防止长聊天l3太多
 - L3 人物屏蔽功能（可以按主体屏蔽 + 完全屏蔽 world + 完全屏蔽 people），需要循环任务
