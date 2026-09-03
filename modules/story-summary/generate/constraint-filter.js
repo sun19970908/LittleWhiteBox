@@ -4,21 +4,23 @@ import { normalizeUserIdentityKey } from '../data/character-aliases.js';
 import { isRelationFact, parseRelationTarget } from '../data/fact-predicates.js';
 
 const EXT_ID = "LittleWhiteBox";
-const KEEP_STATE_FACTS_KEY = "keepStateFacts";
 
-// ── state 约束直接保留 开关 ─────────────────────────────
-// 默认打开：_isState === true 的事实直接保留；
-// 关闭后：state 事实按常规相关性过滤。
-export function isKeepStateFactsEnabled() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[KEEP_STATE_FACTS_KEY];
-    return v === undefined ? true : v === true;
+// ── l3 仅保留焦点人物 开关 ─────────────────────────────
+// 默认关闭：按现有相关性规则过滤。
+// 打开后：仅保留主体 s 在焦点集的事实——主体不在焦点的关系/非关系/state 事实一律丢。
+// 优先级：仅弱于 blockedCharacters 屏蔽名单；强于 state 短路与所有相关性判断。
+const ONLY_KEEP_FOCUS_KEY = "onlyKeepFocusCharacters";
+
+export function isOnlyKeepFocusCharactersEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[ONLY_KEEP_FOCUS_KEY];
+    return v === undefined ? false : v === true;
 }
 
-export function toggleKeepStateFacts() {
+export function toggleOnlyKeepFocusCharacters() {
     const root = (extension_settings[EXT_ID] ??= {});
     root.storySummary ??= {};
-    const next = !isKeepStateFactsEnabled();
-    root.storySummary[KEEP_STATE_FACTS_KEY] = next;
+    const next = !isOnlyKeepFocusCharactersEnabled();
+    root.storySummary[ONLY_KEEP_FOCUS_KEY] = next;
     if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
     return next;
 }
@@ -88,15 +90,19 @@ export function filterConstraintsByRelevance(facts, focusCharacters, knownCharac
 
     const focusSet = new Set((focusCharacters || []).map(normalize));
     const userKey = normalizeUserIdentityKey(userName);
-    const keepStateFacts = isKeepStateFactsEnabled();
+    const onlyKeepFocus = isOnlyKeepFocusCharactersEnabled();
     const blockedSet = new Set(getBlockedCharacters().map(normalize));
 
     return facts.filter(fact => {
-        // 按主体屏蔽（先于 state 直接保留：被屏蔽人物的 state 事实也一并排除）
+        // 按主体屏蔽（先于一切：被屏蔽人物的所有事实一并排除）
         if (blockedSet.has(normalize(fact?.s))) return false;
 
-        // state 约束直接保留（开关，默认打开）
-        if (keepStateFacts && fact._isState === true) return true;
+        // l3 仅保留焦点人物（开关，默认关闭；优先级仅弱于屏蔽名单，强于 state 短路与所有相关性判断）
+        // 主体不在焦点集 → 整条丢；不再受后续判断影响。
+        if (onlyKeepFocus && !focusSet.has(normalize(fact?.s))) return false;
+
+        // state 约束直接保留（与原始代码一致：_isState === true 的事实无条件保留）
+        if (fact._isState === true) return true;
 
         if (isRelationFact(fact)) {
             const from = normalize(fact.s);

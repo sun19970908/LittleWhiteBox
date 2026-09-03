@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-03T20:53:00.890Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-03T20:46:12.451Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788468372451_jgvdk3t",
+            "interval": 0,
+            "name": "l3仅保留焦点人物",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/constraint-filter.js');\n    const on = mod.toggleOnlyKeepFocusCharacters();\n    window.toastr?.success('✅ l3仅保留焦点人物: ' + (on ? 'ON' : 'OFF'));\n})();\n<</taskjs>>"
+        }
+    ]
+}
