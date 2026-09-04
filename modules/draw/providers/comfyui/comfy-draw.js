@@ -2057,6 +2057,11 @@ function bindOverlayEvents() {
         });
     });
     querySettings('#comfy-shared-character-list')?.addEventListener('click', (event) => {
+        const editButton = event.target.closest('[data-sd-char-edit]');
+        if (editButton) {
+            toggleEditingChar(editButton.dataset.sdCharEdit);
+            return;
+        }
         const deleteButton = event.target.closest('[data-sd-char-delete]');
         if (deleteButton) {
             deleteCharacterTagDraft(deleteButton.dataset.sdCharDelete);
@@ -2066,6 +2071,9 @@ function bindOverlayEvents() {
         if (danbooruButton) {
             showComfyDanbooruPanel(danbooruButton.dataset.sdCharDanbooru);
         }
+    });
+    querySettings('#comfy-char-search')?.addEventListener('input', (event) => {
+        setCharSearchText(event.target.value);
     });
 }
 
@@ -2570,10 +2578,13 @@ function getSharedCharacterTagsFromForm() {
     })).filter((item) => item.name || item.appearance || item.danbooruTag || item.negativeTags || item.aliases.length || item.outfits?.length || item.dynamicStates?.length);
 }
 
+let editingCharIds = new Set();
+let charSearchText = "";
+
 function renderCharacterTagList(tags = []) {
     const list = querySettings('#comfy-shared-character-list');
     if (!list) return;
-    list.textContent = '';
+    list.textContent = "";
     if (!tags.length) {
         const empty = document.createElement('div');
         empty.className = 'char-empty sd-char-empty';
@@ -2588,29 +2599,53 @@ function renderCharacterTagList(tags = []) {
         return;
     }
 
+    const lowerSearch = charSearchText.toLowerCase();
     tags.forEach((tag, index) => {
         const card = document.createElement('div');
         card.className = 'sd-char-card';
+        if (editingCharIds.has(tag.id)) card.classList.add('editing');
+        if (lowerSearch && !charMatchesSearch(tag, lowerSearch)) card.classList.add('filtered-hidden');
         card.dataset.characterId = String(tag.id || `comfy-char-${index + 1}`);
 
-        const top = document.createElement('div');
-        top.className = 'sd-char-card-header';
-        const title = document.createElement('div');
-        title.className = 'sd-char-card-title';
-        const titleIcon = document.createElement('i');
-        titleIcon.className = 'fa-solid fa-user';
-        const titleText = document.createElement('span');
-        titleText.textContent = `角色 ${index + 1}`;
-        title.append(titleIcon, titleText);
+        // === 摘要 ===
+        const summary = document.createElement('div');
+        summary.className = 'sd-char-card-summary';
+        const identity = document.createElement('div');
+        identity.className = 'sd-char-identity';
+        const nameSpan = document.createElement('span');
+        nameSpan.className = 'sd-char-name';
+        nameSpan.textContent = tag.name || `角色 ${index + 1}`;
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'sd-char-type-text';
+        typeSpan.textContent = tag.type || 'girl';
+        identity.append(nameSpan, typeSpan);
+
+        const actions = document.createElement('div');
+        actions.className = 'sd-char-actions';
+        const enabledControl = createCharacterEnabledControl(document, card, {
+            enabled: tag.enabled !== false,
+            label: tag.name || `角色 ${index + 1}`,
+        });
+        const editBtn = document.createElement('button');
+        editBtn.className = 'sd-char-action-btn';
+        editBtn.type = 'button';
+        editBtn.dataset.sdCharEdit = card.dataset.characterId;
+        editBtn.title = '编辑';
+        editBtn.innerHTML = '<i class="fa-solid fa-pen"></i>';
         const delButton = document.createElement('button');
-        delButton.className = 'btn btn-danger btn-sm';
+        delButton.className = 'sd-char-action-btn';
         delButton.type = 'button';
         delButton.dataset.sdCharDelete = card.dataset.characterId;
-        const delIcon = document.createElement('i');
-        delIcon.className = 'fa-solid fa-trash';
-        const delText = document.createElement('span');
-        delText.textContent = '删除';
-        delButton.append(delIcon, delText);
+        delButton.title = '删除';
+        delButton.innerHTML = '<i class="fa-solid fa-trash"></i>';
+        actions.append(enabledControl, editBtn, delButton);
+
+        summary.append(identity, actions);
+        card.appendChild(summary);
+
+        // === body ===
+        const body = document.createElement('div');
+        body.className = 'sd-char-card-body';
         const danbooruButton = document.createElement('button');
         danbooruButton.className = 'btn btn-sm';
         danbooruButton.type = 'button';
@@ -2625,15 +2660,6 @@ function renderCharacterTagList(tags = []) {
         danbooruText.textContent = 'Danbooru';
         danbooruButton.append(danbooruIcon, danbooruText);
 
-        const actions = document.createElement('div');
-        actions.className = 'btn-group';
-        const enabledControl = createCharacterEnabledControl(document, card, {
-            enabled: tag.enabled !== false,
-            label: `角色 ${index + 1}${tag.name ? ` ${tag.name}` : ''}`,
-        });
-        actions.append(enabledControl, danbooruButton, delButton);
-        top.append(title, actions);
-
         const grid = document.createElement('div');
         grid.className = 'form-row';
         grid.append(
@@ -2641,8 +2667,8 @@ function renderCharacterTagList(tags = []) {
             createCharacterField('类型', 'type', tag.type || 'girl', '例如 girl / boy'),
         );
 
-        card.append(
-            top,
+        body.append(
+            danbooruButton,
             grid,
             createCharacterField('别名（逗号分隔）', 'aliases', (tag.aliases || []).join(', '), '例如 小芙, Freya'),
             createCharacterField('固定外貌', 'appearance', tag.appearance || '', '会拼进角色外观提示词', { multiline: true }),
@@ -2654,11 +2680,28 @@ function renderCharacterTagList(tags = []) {
         const panel = document.createElement('div');
         panel.className = 'danbooru-panel hidden';
         panel.dataset.charId = card.dataset.characterId;
-        card.appendChild(panel);
+        body.appendChild(panel);
+        card.appendChild(body);
         list.appendChild(card);
     });
 }
 
+function toggleEditingChar(charId) {
+    if (editingCharIds.has(charId)) editingCharIds.delete(charId);
+    else editingCharIds.add(charId);
+    renderCharacterTagList(getSharedCharacterTagsFromForm());
+}
+
+function setCharSearchText(text) {
+    charSearchText = text;
+    renderCharacterTagList(getSharedCharacterTagsFromForm());
+}
+
+function charMatchesSearch(tag, lower) {
+    const haystack = [tag.name, ...(tag.aliases || []), tag.appearance, tag.danbooruTag]
+        .filter(Boolean).join(' ').toLowerCase();
+    return haystack.includes(lower);
+}
 function createCharacterField(labelText, fieldName, value, placeholder, options = {}) {
     const field = document.createElement('div');
     field.className = 'form-group';

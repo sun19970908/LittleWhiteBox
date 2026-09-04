@@ -315,6 +315,17 @@ select.input { cursor: pointer; }
 .sd-char-card-title {
     display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 13px;
 }
+.sd-char-card-summary { display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.sd-char-identity { display:flex; align-items:center; gap:8px; flex:1; min-width:0; }
+.sd-char-name { font-weight:600; font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sd-char-type-text { font-size:11px; color:var(--text-muted); padding:1px 6px; border:1px solid var(--border); border-radius:4px; }
+.sd-char-actions { display:flex; gap:4px; flex-shrink:0; align-items:center; }
+.sd-char-action-btn { width:28px; height:28px; min-width:28px; display:inline-flex; align-items:center; justify-content:center; border:1px solid var(--border); border-radius:6px; background:var(--bg-input); color:var(--text-secondary); cursor:pointer; padding:0; }
+.sd-char-action-btn:hover { background:rgba(255,255,255,0.06); color:var(--text-primary); }
+.sd-char-card.editing .sd-char-card-summary { padding-bottom:8px; border-bottom:1px solid var(--border); margin-bottom:10px; }
+.sd-char-card-body { display:none; }
+.sd-char-card.editing .sd-char-card-body { display:flex; flex-direction:column; gap:10px; }
+.sd-char-card.filtered-hidden { display:none; }
 .character-enabled-control { min-height: 32px; padding: 6px 10px; font-size: 12px; white-space: nowrap; }
 .gallery-grid { display: grid; gap: 14px; }
 .gallery-char-card {
@@ -1056,7 +1067,10 @@ select.input { cursor: pointer; }
                                     <div class="card-title">👥 角色列表</div>
                                     <p class="form-hint" style="margin-top:6px;">角色底稿定好后，出图只需补当前动作、表情和互动</p>
                                 </div>
-                                <div id="comfy-draw-character-result-count" class="char-list-count">0 / 0</div>
+                                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:flex-end;">
+                                    <input id="comfy-char-search" type="text" class="input" placeholder="搜索名称、别名、外貌、Danbooru" style="width:240px;padding:6px 10px;min-height:32px;">
+                                    <div id="comfy-draw-character-result-count" class="char-list-count">0 / 0</div>
+                                </div>
                             </div>
                             <div class="char-list-body">
                                 <div id="comfy-shared-character-list" class="char-grid"></div>
