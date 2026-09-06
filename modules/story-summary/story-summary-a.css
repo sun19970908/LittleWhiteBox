@@ -243,7 +243,7 @@ header {
 
 main {
     display: grid;
-    grid-template-columns: 1fr 480px;
+    grid-template-columns: minmax(0, 1fr) 480px;
     gap: 24px;
     flex: 1;
     min-height: 0;
@@ -723,6 +723,94 @@ h1 {
 
 .tl-meta .imp {
     color: var(--hl);
+}
+
+/* Timeline pager */
+
+.tl-pager {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding: 4px 0 8px;
+    border-bottom: 1px solid var(--bdr);
+    font-size: .75rem;
+    color: var(--txt3);
+}
+
+.tl-pg-btn {
+    min-width: 22px;
+    height: 22px;
+    padding: 0 4px;
+    border: 1px solid var(--bdr);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--txt2);
+    font-size: .8125rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.tl-pg-btn:hover:not(:disabled):not(.cur) {
+    border-color: var(--hl);
+    color: var(--hl);
+}
+
+.tl-pg-btn:disabled {
+    opacity: .35;
+    cursor: default;
+}
+
+.tl-pg-strip {
+    position: relative;
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 1px 2px;
+    scrollbar-width: none;
+}
+
+.tl-pg-strip::-webkit-scrollbar {
+    display: none;
+}
+
+.tl-pg-strip .tl-pg-btn {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.tl-pg-btn.cur {
+    background: var(--hl);
+    border-color: var(--hl);
+    color: var(--inv);
+}
+
+.tl-pg-num {
+    flex: 0 0 auto;
+    width: 2.8em;
+    padding: 2px 4px;
+    border: 1px solid var(--bdr);
+    border-radius: 4px;
+    background: var(--bg2);
+    color: var(--txt);
+    font: inherit;
+    text-align: center;
+    -moz-appearance: textfield;
+    appearance: textfield;
+}
+
+.tl-pg-num::-webkit-outer-spin-button,
+.tl-pg-num::-webkit-inner-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+#tl-paging-toggle.on {
+    color: var(--hl);
+    border-color: var(--hl);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

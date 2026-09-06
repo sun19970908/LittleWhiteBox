@@ -137,7 +137,26 @@
                 <section class="card timeline">
                     <div class="sec-head">
                         <div class="sec-title">剧情时间线</div>
-                        <button class="sec-btn" data-section="events">编辑</button>
+                        <div class="sec-actions">
+                            <button class="sec-btn sec-icon" id="tl-paging-toggle" title="时间线分页开关">
+                                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor"
+                                    stroke-width="2">
+                                    <line x1="4" y1="6" x2="20" y2="6" />
+                                    <line x1="4" y1="12" x2="16" y2="12" />
+                                    <line x1="4" y1="18" x2="12" y2="18" />
+                                    <circle cx="19" cy="18" r="2" />
+                                </svg>
+                            </button>
+                            <button class="sec-btn" data-section="events">编辑</button>
+                        </div>
+                    </div>
+                    <div class="tl-pager hidden" id="tl-pager">
+                        <button class="tl-pg-btn" id="tl-pg-first" title="第一页">&laquo;</button>
+                        <button class="tl-pg-btn" id="tl-pg-prev" title="上一页">&lsaquo;</button>
+                        <div class="tl-pg-strip" id="tl-pg-strip"></div>
+                        <input type="number" class="tl-pg-num" id="tl-pg-num" min="1" value="1" title="跳转到指定页">
+                        <button class="tl-pg-btn" id="tl-pg-next" title="下一页">&rsaquo;</button>
+                        <button class="tl-pg-btn" id="tl-pg-last" title="最新页">&raquo;</button>
                     </div>
                     <div class="tl-list scroll" id="timeline-list"></div>
                 </section>
