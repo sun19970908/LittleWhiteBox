@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Text Filter - 通用文本过滤
-// 1) 内置过滤：避免污染 L1 chunk 与 L2 生成入参。
+// 1) 内置过滤（默认关闭，按需开启）：避免污染 L1 chunk 与 L2 生成入参。
 //    - IMAGE：聊天 [image:slotId] / 电纸书 [ebook-image:slotId] / 酒馆
 //      [tavern-image:slotId]，与 modules/draw/shared/scene-source.js 的
 //      IMAGE_MARKER_REGEX 保持一致。
@@ -9,7 +9,12 @@
 // 2) 用户过滤：用户在配置里写的「起始→结束」区间规则。
 // ═══════════════════════════════════════════════════════════════════════════
 
+import { extension_settings } from '../../../../../../../extensions.js';
+import { saveSettingsDebounced } from '../../../../../../../../script.js';
 import { getTextFilterRules } from '../../data/config.js';
+
+const EXT_ID = "LittleWhiteBox";
+const FILTER_BUILTIN_PLACEHOLDERS_KEY = "filterBuiltinPlaceholders";
 
 // 与 draw 模块的 IMAGE_MARKER_REGEX 保持一致。占位符语法变化时同步更新。
 const BUILTIN_PLACEHOLDER_REGEX = /\[(?:image|ebook-image|tavern-image)\s*:\s*[a-z0-9_-]+\]/gi;
@@ -82,9 +87,32 @@ export function applyTextFilterRules(text, rules) {
 
 /**
  * 便捷方法：使用当前配置过滤文本
- * 顺序：先剥内置占位符，再跑用户的 start→end 区间规则。
+ * 顺序：开关开启时先剥内置占位符，再跑用户的 start→end 区间规则。
+ * 开关关闭时直接走用户规则。
  */
 export function filterText(text) {
-    const cleaned = applyBuiltinPlaceholderFilters(text);
-    return applyTextFilterRules(cleaned, getTextFilterRules());
+    const source = isFilterBuiltinPlaceholdersEnabled()
+        ? applyBuiltinPlaceholderFilters(text)
+        : text;
+    return applyTextFilterRules(source, getTextFilterRules());
+}
+
+// ── 内置占位符过滤 开关 ─────────────────────────────────
+// 默认关闭：保留占位符原文，避免对 draw / ebook 等模块的副作用；
+// 想恢复"过滤 [image:...] 污染"时跑循环任务开启。
+export function isFilterBuiltinPlaceholdersEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[FILTER_BUILTIN_PLACEHOLDERS_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function setFilterBuiltinPlaceholders(flag) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[FILTER_BUILTIN_PLACEHOLDERS_KEY] = !!flag;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isFilterBuiltinPlaceholdersEnabled();
+}
+
+export function toggleFilterBuiltinPlaceholders() {
+    return setFilterBuiltinPlaceholders(!isFilterBuiltinPlaceholdersEnabled());
 }
