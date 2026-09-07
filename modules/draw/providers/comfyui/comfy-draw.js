@@ -2555,12 +2555,12 @@ async function renderGalleryManagement() {
     }
 }
 
-function getSharedCharacterTagsFromForm() {
+function getSharedCharacterTagsFromForm({ includeEmpty = false } = {}) {
     const existingById = new Map((getSharedDrawSettings().characterTags || [])
         .map((item) => [String(item.id || ''), item])
         .filter(([id]) => id));
 
-    return querySettingsAll('.sd-char-card').map((card, index) => ({
+    const mapped = querySettingsAll('.sd-char-card').map((card, index) => ({
         ...(existingById.get(String(card.dataset.characterId || '')) || {}),
         id: card.dataset.characterId || `comfy-char-${Date.now()}-${index}`,
         enabled: getCharacterEnabledFromCard(card),
@@ -2575,7 +2575,9 @@ function getSharedCharacterTagsFromForm() {
         danbooruTag: String(card.querySelector('[data-sd-char-field="danbooruTag"]')?.value || '').trim(),
         outfits: parseNamedTagLines(card.querySelector('[data-sd-char-field="outfits"]')?.value || ''),
         dynamicStates: parseNamedTagLines(card.querySelector('[data-sd-char-field="dynamicStates"]')?.value || ''),
-    })).filter((item) => item.name || item.appearance || item.danbooruTag || item.negativeTags || item.aliases.length || item.outfits?.length || item.dynamicStates?.length);
+    }));
+    if (includeEmpty) return mapped;
+    return mapped.filter((item) => item.name || item.appearance || item.danbooruTag || item.negativeTags || item.aliases.length || item.outfits?.length || item.dynamicStates?.length);
 }
 
 let editingCharIds = new Set();
@@ -2689,12 +2691,14 @@ function renderCharacterTagList(tags = []) {
 function toggleEditingChar(charId) {
     if (editingCharIds.has(charId)) editingCharIds.delete(charId);
     else editingCharIds.add(charId);
-    renderCharacterTagList(getSharedCharacterTagsFromForm());
+    // includeEmpty:true —— 新加的空卡（字段全空）也要保留，否则点编辑会把卡片吞掉
+    renderCharacterTagList(getSharedCharacterTagsFromForm({ includeEmpty: true }));
 }
 
 function setCharSearchText(text) {
     charSearchText = text;
-    renderCharacterTagList(getSharedCharacterTagsFromForm());
+    // includeEmpty:true —— 搜索时也要把空卡渲染出来，再让 charMatchesSearch 自己决定是否加 filtered-hidden
+    renderCharacterTagList(getSharedCharacterTagsFromForm({ includeEmpty: true }));
 }
 
 function charMatchesSearch(tag, lower) {
@@ -3288,6 +3292,12 @@ function addCharacterTagDraft() {
     });
     renderCharacterTagList(current);
     refreshSettingsSummary();
+    // 滚到刚加的卡，让用户看到摘要行（避免新卡落在长列表底部的视线盲区）
+    const list = querySettings('#comfy-shared-character-list');
+    const lastCard = list?.lastElementChild;
+    if (lastCard && typeof lastCard.scrollIntoView === 'function') {
+        lastCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
 }
 
 function clearCharacterTagsDraft() {
