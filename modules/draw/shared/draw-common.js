@@ -32,6 +32,7 @@ let drawPreviewRuntimeRefs = 0;
 let drawPreviewMessageObserver = null;
 let drawPreviewRuntimeGeneration = 0;
 let drawPreviewCacheSyncCleanup = null;
+let drawPreviewMountObserver = null;
 const drawPreviewPendingTimers = new Set();
 const drawPreviewRenderQueues = new WeakMap();
 
@@ -991,6 +992,31 @@ export function startSharedDrawPreviewRuntime() {
     drawPreviewRuntimeEvents.on(event_types.MESSAGE_SWIPED, handleDrawPreviewMessageModified);
     drawPreviewCacheSyncCleanup = subscribeGalleryCacheChanges(handleGalleryCacheChanged);
 
+    // 兜底 TauriTavern bounded chat surface：虚拟化初次扫描时倒数十楼等楼层不在
+    // #chat 内（tail 模式只挂视口+尾部），CHARACTER_MESSAGE_RENDERED 又不在虚拟化
+    // 重新挂载时触发，旧路径会漏渲染。这里挂一个 childList 监听：mes 节点一出现就
+    // 调 renderPreviewsForMessage。已渲染的 slot 在 renderPreviewsForMessageNow 内部
+    // 命中 querySelector 就 continue，不会进 replacePlaceholdersInDomBatch，因此虚拟化
+    // 来回挂载/卸载产生的多次触发不会导致 <img> 重建闪烁。非虚拟化下与 CHARACTER_MESSAGE_RENDERED
+    // 重叠的部分也走同一条 continue 路径，零副作用。
+    if (!drawPreviewMountObserver) {
+        const chatRoot = document.getElementById('chat');
+        if (chatRoot) {
+            drawPreviewMountObserver = new MutationObserver((records) => {
+                for (const record of records) {
+                    for (const node of record.addedNodes) {
+                        if (!(node instanceof HTMLElement)) continue;
+                        if (!node.classList.contains('mes')) continue;
+                        const id = parseInt(node.getAttribute('mesid') ?? '', 10);
+                        if (!Number.isInteger(id) || id < 0) continue;
+                        void renderPreviewsForMessage(id);
+                    }
+                }
+            });
+            drawPreviewMountObserver.observe(chatRoot, { childList: true });
+        }
+    }
+
     setTimeout(() => {
         if (!drawPreviewRuntimeEvents) return;
         void renderAllDrawPreviews();
@@ -1008,4 +1034,6 @@ export function stopSharedDrawPreviewRuntime() {
     drawPreviewRuntimeGeneration++;
     clearPendingDrawPreviewTimers();
     cleanupDrawPreviewMessageObserver();
+    drawPreviewMountObserver?.disconnect();
+    drawPreviewMountObserver = null;
 }
