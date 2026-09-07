@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-07T20:46:05.813Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-07T20:41:40.522Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788813700522_s4hkje7",
+            "interval": 0,
+            "name": "小白OS",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/xiaobai-os/dist/xiaobai-os-host.js');\n    await mod.openXiaobaiOs();\n})();\n<</taskjs>>"
+        }
+    ]
+}
