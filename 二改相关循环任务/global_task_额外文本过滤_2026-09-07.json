@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-07T00:47:00.390Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-06T22:58:33.131Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788735513131_47uak4e",
+            "interval": 0,
+            "name": "额外文本过滤",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/utils/text-filter.js');\n    const current = mod.getBuiltinTextFilters();\n    const isOn = Array.isArray(current) && current.length > 0;\n    const nextRules = isOn ? [] : [\n        '\\\\[(?:image|ebook-image|tavern-image)\\\\s*:\\\\s*[^\\\\]]+\\\\]',\n        '\\\\[tts:[^\\\\]]*\\\\]',\n        '<state>[\\\\s\\\\S]*?</state>',\n    ];\n    mod.setBuiltinTextFilters(nextRules);\n    mod.setFilterBuiltinPlaceholders(!isOn);\n    const label = (b) => (b ? '开启' : '关闭');\n    window.toastr?.success(`额外文本过滤：${label(isOn)} → ${label(!isOn)}（${nextRules.length} 条规则）`);\n})();\n<</taskjs>>"
+        }
+    ]
+}

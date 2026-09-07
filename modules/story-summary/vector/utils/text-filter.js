@@ -1,11 +1,10 @@
 // ═══════════════════════════════════════════════════════════════════════════
 // Text Filter - 通用文本过滤
-// 1) 内置过滤（默认关闭，按需开启）：避免污染 L1 chunk 与 L2 生成入参。
-//    - IMAGE：聊天 [image:slotId] / 电纸书 [ebook-image:slotId] / 酒馆
-//      [tavern-image:slotId]，与 modules/draw/shared/scene-source.js 的
-//      IMAGE_MARKER_REGEX 保持一致。
-//    - TTS：[tts:...] 音频占位符。
-//    - STATE：<state>...</state>（L0 已单独存储，不应在原文证据里重复出现）。
+// 1) 内置过滤（默认关闭，开关 + 数组驱动）：
+//    默认三条（聊天/电纸书/酒馆插图占位符合并为一条 + TTS + state），运行时编译
+//    为 RegExp（flags='gi'）。规则数组可由循环任务调用 setBuiltinTextFilters
+//    整体覆盖。IMAGE 部分与 draw/shared/scene-source.js 的
+//    IMAGE_MARKER_REGEX 保持一致。
 // 2) 用户过滤：用户在配置里写的「起始→结束」区间规则。
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -15,31 +14,51 @@ import { getTextFilterRules } from '../../data/config.js';
 
 const EXT_ID = "LittleWhiteBox";
 const FILTER_BUILTIN_PLACEHOLDERS_KEY = "filterBuiltinPlaceholders";
+const BUILTIN_TEXT_FILTERS_KEY = "builtinTextFilters";
 
-// 与 draw 模块的 IMAGE_MARKER_REGEX 保持一致。占位符语法变化时同步更新。
-const BUILTIN_PLACEHOLDER_REGEX = /\[(?:image|ebook-image|tavern-image)\s*:\s*[a-z0-9_-]+\]/gi;
-// TTS 音频占位符：[tts:任意非 ] 内容]
-const BUILTIN_TTS_REGEX = /\[tts:[^\]]*\]/gi;
-// state 标签：<state>...</state> 跨行、非贪婪
-const BUILTIN_STATE_REGEX = /<state>[\s\S]*?<\/state>/gi;
+// 默认规则：字符串形式（运行时编译为 RegExp，flags='gi'）
+// 顺序：先插图 → TTS → state
+const DEFAULT_BUILTIN_TEXT_FILTERS = [
+    '\\[(?:image|ebook-image|tavern-image)\\s*:\\s*[^\\]]+\\]',
+    '\\[tts:[^\\]]*\\]',
+    '<state>[\\s\\S]*?</state>',
+];
 
 /**
- * 转义正则特殊字符
+ * 转义正则特殊字符（用户规则用）
  */
 function escapeRegex(str) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 /**
- * 剥离内置占位符。
- * 顺序：先插图占位符 → TTS → state。三者互不重叠，独立处理即可。
+ * 把字符串数组编译为 RegExp 数组，flags 固定 'gi'。
+ * 非法正则跳过，不抛错。
+ */
+function compileBuiltinFilters(sources) {
+    if (!Array.isArray(sources)) return [];
+    const out = [];
+    for (const source of sources) {
+        const s = String(source ?? '').trim();
+        if (!s) continue;
+        try {
+            out.push(new RegExp(s, 'gi'));
+        } catch (e) {
+            // 非法正则跳过，避免一次坏规则打断整组
+        }
+    }
+    return out;
+}
+
+/**
+ * 剥离内置占位符：按规则数组逐条 .replace
  */
 function applyBuiltinPlaceholderFilters(text) {
     if (!text) return text;
-    return String(text)
-        .replace(BUILTIN_PLACEHOLDER_REGEX, '')
-        .replace(BUILTIN_TTS_REGEX, '')
-        .replace(BUILTIN_STATE_REGEX, '');
+    const regexes = compileBuiltinFilters(getBuiltinTextFilters());
+    let result = String(text);
+    for (const re of regexes) result = result.replace(re, '');
+    return result;
 }
 
 /**
@@ -87,7 +106,7 @@ export function applyTextFilterRules(text, rules) {
 
 /**
  * 便捷方法：使用当前配置过滤文本
- * 顺序：开关开启时先剥内置占位符，再跑用户的 start→end 区间规则。
+ * 顺序：开关开启时先按内置规则数组剥占位符，再跑用户的 start→end 区间规则。
  * 开关关闭时直接走用户规则。
  */
 export function filterText(text) {
@@ -97,7 +116,7 @@ export function filterText(text) {
     return applyTextFilterRules(source, getTextFilterRules());
 }
 
-// ── 内置占位符过滤 开关 ─────────────────────────────────
+// ── 内置占位符过滤 总开关 ─────────────────────────────────
 // 默认关闭：保留占位符原文，避免对 draw / ebook 等模块的副作用；
 // 想恢复"过滤 [image:...] 污染"时跑循环任务开启。
 export function isFilterBuiltinPlaceholdersEnabled() {
@@ -115,4 +134,23 @@ export function setFilterBuiltinPlaceholders(flag) {
 
 export function toggleFilterBuiltinPlaceholders() {
     return setFilterBuiltinPlaceholders(!isFilterBuiltinPlaceholdersEnabled());
+}
+
+// ── 内置规则数组 ─────────────────────────────────────────
+// 元素为正则源码字符串；运行时统一按 flags='gi' 编译为 RegExp。
+// settings 里只存字符串，跨刷新不丢；非法正则会被 compileBuiltinFilters 跳过。
+export function getBuiltinTextFilters() {
+    const raw = extension_settings?.[EXT_ID]?.storySummary?.[BUILTIN_TEXT_FILTERS_KEY];
+    if (Array.isArray(raw)) return raw;
+    return [...DEFAULT_BUILTIN_TEXT_FILTERS];
+}
+
+export function setBuiltinTextFilters(rules) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[BUILTIN_TEXT_FILTERS_KEY] = Array.isArray(rules)
+        ? rules.map(r => String(r ?? '').trim()).filter(Boolean)
+        : [...DEFAULT_BUILTIN_TEXT_FILTERS];
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return getBuiltinTextFilters();
 }
