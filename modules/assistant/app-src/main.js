@@ -75,7 +75,6 @@ const state = {
     configLoadError: '',
     configDraft: null,
     configDirty: false,
-    configExternalChangePending: false,
     runtime: null,
     workspaceDrafts: {},
     pendingApproval: null,
@@ -1140,11 +1139,6 @@ const settingsPanel = createSettingsPanel({
         beginConfigSave(requestId);
         post('xb-assistant:save-config', payload);
     },
-    reloadConfig: () => {
-        post('xb-assistant:reload-config', {
-            preserveDraft: state.configDirty === true,
-        });
-    },
     getRuntimeSummaryText: ({ draft, providerLabel }) => state.runtime
         ? `预设「${draft.currentPresetName || DEFAULT_PRESET_NAME}」 · ${providerLabel} · 已索引 ${state.runtime.indexedFileCount || 0} 个前端源码文件`
         : providerLabel,
@@ -1473,21 +1467,12 @@ sessionStore = createSessionStore({
     getActiveContextMessages,
 });
 
-function applyConfig(config, options = {}) {
+function applyConfig(config) {
     const nextConfig = normalizeAssistantConfig(config || {});
     state.configLoadError = '';
-    const preserveDraft = options.preserveDraft === true && state.configDirty === true;
     state.config = nextConfig;
-    if (preserveDraft) {
-        state.configExternalChangePending = true;
-        state.configFormSyncPending = true;
-        showToast('共享 API 配置已在其他页面更新；当前未保存编辑已保留。');
-        render();
-        return;
-    }
     state.configDraft = null;
     state.configDirty = false;
-    state.configExternalChangePending = false;
     requestConfigFormSync();
     render();
 }
@@ -1655,7 +1640,6 @@ function render() {
         isBusy: state.isBusy,
         canDeletePreset: (state.config?.presetNames || []).length > 1,
         configLoadError: state.configLoadError,
-        configExternalChangePending: state.configExternalChangePending,
     });
 }
 
@@ -2172,9 +2156,7 @@ window.addEventListener('message', (event) => {
         }
         state.configLoadError = String(data.payload?.configLoadError || '');
         if (data.payload?.config && typeof data.payload.config === 'object') {
-            applyConfig(data.payload.config, {
-                preserveDraft: data.payload?.externalChange === true,
-            });
+            applyConfig(data.payload.config);
         } else {
             render();
         }
@@ -2256,11 +2238,6 @@ window.addEventListener('message', (event) => {
     }
 
     if (data.type === 'xb-assistant:config-save-error') {
-        if (data.payload?.conflict === true && data.payload?.config && typeof data.payload.config === 'object') {
-            state.config = normalizeAssistantConfig(data.payload.config);
-            state.configExternalChangePending = true;
-            state.configFormSyncPending = true;
-        }
         completeConfigSave(data.payload?.requestId || '', { ok: false, error: data.payload?.error || '网络异常' });
         showToast(`保存失败：${data.payload?.error || '网络异常'}`);
         return;

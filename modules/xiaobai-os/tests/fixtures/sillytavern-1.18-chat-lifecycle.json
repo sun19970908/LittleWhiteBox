@@ -1,0 +1,55 @@
+{
+    "singleHeader": [
+        {
+            "user_name": "User",
+            "character_name": "Assistant",
+            "create_date": "2026-09-03@00h00m00s",
+            "chat_metadata": {
+                "extensions": {
+                    "LittleWhiteBox": {
+                        "xiaobaiOsRef": {
+                            "formatVersion": 1,
+                            "osId": "single_os"
+                        }
+                    }
+                }
+            }
+        }
+    ],
+    "groupHeader": [
+        {
+            "user_name": "User",
+            "character_name": "Group",
+            "create_date": "2026-09-03@00h00m00s",
+            "chat_metadata": {
+                "extensions": {
+                    "LittleWhiteBox": {
+                        "xiaobaiOsRef": {
+                            "formatVersion": 1,
+                            "osId": "group_os"
+                        }
+                    }
+                }
+            }
+        }
+    ],
+    "branchHeader": [
+        {
+            "user_name": "User",
+            "character_name": "Assistant",
+            "create_date": "2026-09-03@00h00m00s",
+            "chat_metadata": {
+                "main_chat": "parent-chat"
+            }
+        }
+    ],
+    "chatRenamed": {
+        "avatarId": "avatar.png",
+        "groupId": null,
+        "oldFileName": "old-chat",
+        "newFileName": "new-chat"
+    },
+    "chatDeleted": "old-chat",
+    "groupChatDeleted": "group-chat",
+    "characterRenamed": ["old-avatar.png", "new-avatar.png"]
+}

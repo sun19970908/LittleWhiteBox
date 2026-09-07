@@ -183,6 +183,10 @@
         <div class="template settings-section" style="display:none;">
           <div class="section-divider">小白agent</div>
           <hr class="sysHR" />
+          <div class="flex-container littlewhitebox-setting-row">
+            <input type="checkbox" id="xiaobaix_os_enabled" />
+            <label for="xiaobaix_os_enabled" class="has-tooltip" data-tooltip="在普通聊天发送栏启用小白 OS 入口">小白 OS</label>
+          </div>
           <div class="flex-container littlewhitebox-agent-actions">
             <button id="xiaobaix_assistant_open_settings" class="menu_button menu_button_icon littlewhitebox-agent-action-button" type="button" title="打开小白助手">
               <span>小白助手</span>
@@ -192,9 +196,6 @@
             </button>
             <button id="xiaobaix_tavern_open_settings" class="menu_button menu_button_icon littlewhitebox-agent-action-button" type="button" title="打开小白酒馆">
               <span>小白酒馆</span>
-            </button>
-            <button id="xiaobaix_fourth_wall_open_settings" class="menu_button menu_button_icon littlewhitebox-agent-action-button" type="button" title="打开四次元壁">
-              <span>四次元壁</span>
             </button>
           </div>
           <br>
@@ -614,25 +615,31 @@
 	      variablesCore: 'xiaobaix_variables_core_enabled',
 	      storySummary: 'xiaobaix_story_summary_enabled',
 	      tts: 'xiaobaix_tts_enabled',
+      xiaobaiOs: 'xiaobaix_os_enabled',
       enaPlanner: 'xiaobaix_ena_planner_enabled',
       storyOutline: 'xiaobaix_story_outline_enabled',
       useBlob: 'xiaobaix_use_blob',
 	      renderEnabled: 'xiaobaix_render_enabled',
 	    };
-	    const DEFAULTS_ON = ['templateEditor', 'tasks', 'variablesCore', 'storySummary', 'recorded'];
-	    const DEFAULTS_OFF = ['preview', 'scriptAssistant', 'immersive', 'variablesPanel', 'fourthWall', 'storyOutline', 'tts', 'enaPlanner'];
-	    const MODULE_KEYS = ['templateEditor', 'tasks', 'fourthWall', 'variablesCore', 'recorded', 'preview', 'scriptAssistant', 'immersive', 'variablesPanel', 'storySummary', 'storyOutline', 'tts', 'enaPlanner'];
+	    const MODULE_KEYS = ['templateEditor', 'tasks', 'xiaobaiOs', 'variablesCore', 'recorded', 'preview', 'scriptAssistant', 'immersive', 'variablesPanel', 'storySummary', 'storyOutline', 'tts', 'enaPlanner'];
 	    const DRAW_PROVIDER_VALUES = new Set(['disabled', 'novelai', 'sdwebui', 'comfyui']);
 	    function normalizeDrawProvider(provider) {
 	      return DRAW_PROVIDER_VALUES.has(provider) ? provider : 'disabled';
 	    }
+      function triggerChange(element) {
+        element?.dispatchEvent(new Event('change', { bubbles: true }));
+      }
 	    function setModuleEnabled(key, enabled) {
+	      const id = KEY_TO_CHECKBOX[key], el = id ? $id(id) : null;
+	      if (key === 'xiaobaiOs') {
+	        if (el) { el.checked = !!enabled; if (window.isXiaobaixEnabled) try { triggerChange(el); } catch (e) { } }
+	        return;
+	      }
 	      try {
 	        if (!extension_settings[EXT_ID][key]) extension_settings[EXT_ID][key] = {};
 	        extension_settings[EXT_ID][key].enabled = !!enabled;
       } catch (e) { }
-      const id = KEY_TO_CHECKBOX[key], el = id ? $id(id) : null;
-      if (el) { el.checked = !!enabled; try { $(el).trigger('change'); } catch (e) { } }
+      if (el) { el.checked = !!enabled; try { triggerChange(el); } catch (e) { } }
     }
     function captureStates() {
       const out = { modules: {}, drawProvider: 'disabled', useBlob: false, renderEnabled: true };
@@ -644,42 +651,23 @@
     }
     function applyStates(st) {
       if (!st) return;
-      try { Object.keys(st.modules || {}).forEach(k => setModuleEnabled(k, !!st.modules[k])); } catch (e) { }
+      try { MODULE_KEYS.forEach(k => { if (Object.hasOwn(st.modules || {}, k)) setModuleEnabled(k, !!st.modules[k]); }); } catch (e) { }
       try {
         const nextProvider = st.drawProvider === undefined
           ? normalizeDrawProvider(extension_settings[EXT_ID].drawProvider)
           : normalizeDrawProvider(st.drawProvider);
         const el = $id('xiaobaix_draw_provider');
-        if (el) { el.value = nextProvider; if (window.isXiaobaixEnabled) try { $(el).trigger('change'); } catch (e) { } }
+        if (el) { el.value = nextProvider; if (window.isXiaobaixEnabled) try { triggerChange(el); } catch (e) { } }
         else { extension_settings[EXT_ID].drawProvider = nextProvider; }
       } catch (e) { }
       try {
         extension_settings[EXT_ID].useBlob = !!st.useBlob;
-        const el = $id('xiaobaix_use_blob'); if (el) { el.checked = !!st.useBlob; if (window.isXiaobaixEnabled) try { $(el).trigger('change'); } catch (e) { } }
+        const el = $id('xiaobaix_use_blob'); if (el) { el.checked = !!st.useBlob; if (window.isXiaobaixEnabled) try { triggerChange(el); } catch (e) { } }
       } catch (e) { }
       try { extension_settings[EXT_ID].wrapperIframe = true; } catch (e) { }
       try {
         extension_settings[EXT_ID].renderEnabled = st.renderEnabled !== false;
-        const el = $id('xiaobaix_render_enabled'); if (el) { el.checked = st.renderEnabled !== false; if (window.isXiaobaixEnabled) try { $(el).trigger('change'); } catch (e) { } }
-      } catch (e) { }
-      try { if (window.saveSettingsDebounced) window.saveSettingsDebounced(); } catch (e) { }
-    }
-    function applyResetDefaults() {
-      DEFAULTS_ON.forEach(k => setModuleEnabled(k, true));
-      DEFAULTS_OFF.forEach(k => setModuleEnabled(k, false));
-      try {
-        const dp = $id('xiaobaix_draw_provider');
-        if (dp) { dp.value = 'disabled'; try { $(dp).trigger('change'); } catch (e) { } }
-        else { extension_settings[EXT_ID].drawProvider = 'disabled'; }
-      } catch (e) { }
-      try {
-        extension_settings[EXT_ID].useBlob = false; const bl = $id(KEY_TO_CHECKBOX.useBlob);
-        if (bl) { bl.checked = false; try { $(bl).trigger('change'); } catch (e) { } }
-      } catch (e) { }
-      try { extension_settings[EXT_ID].wrapperIframe = true; } catch (e) { }
-      try {
-        extension_settings[EXT_ID].renderEnabled = true; const re = $id(KEY_TO_CHECKBOX.renderEnabled);
-        if (re) { re.checked = true; try { $(re).trigger('change'); } catch (e) { } }
+        const el = $id('xiaobaix_render_enabled'); if (el) { el.checked = st.renderEnabled !== false; if (window.isXiaobaixEnabled) try { triggerChange(el); } catch (e) { } }
       } catch (e) { }
       try { if (window.saveSettingsDebounced) window.saveSettingsDebounced(); } catch (e) { }
     }
@@ -711,9 +699,6 @@
     onReady(() => {
       setupXBtnPositionButton();
       initTaskTabs();
-      try { $(document).off('click.xbreset', '#xiaobaix_reset_btn').on('click.xbreset', '#xiaobaix_reset_btn', e => { e.preventDefault(); e.stopPropagation(); applyResetDefaults(); }); } catch (e) {
-        const btn = $id('xiaobaix_reset_btn'); if (btn) { btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); applyResetDefaults(); }, { once: false }); }
-      }
     });
   }();
 </script>

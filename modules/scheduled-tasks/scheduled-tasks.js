@@ -63,9 +63,9 @@ let state = {
     taskLastExecutionTime: new Map(), cleanupTimer: null, lastTasksHash: '', taskBarVisible: true,
     processedMessagesSet: new Set(),
     taskBarSignature: '',
-    floorCounts: { all: 0, user: 0, llm: 0 },
     dynamicCallbacks: new Map(),
     qrObserver: null,
+    initTimers: new Set(),
     isUpdatingTaskBar: false,
     lastPresetName: ''
 };
@@ -83,7 +83,7 @@ const refreshExecutionState = () => {
 };
 const startExecutionRecord = (taskName, source = 'command') => {
     const token = uuidv4();
-    state.executingRecords.set(token, { taskName: normalizeTaskKey(taskName), source });
+    state.executingRecords.set(token, { taskName: normalizeTaskKey(taskName), source, startedAt: Date.now() });
     refreshExecutionState();
     return token;
 };
@@ -120,9 +120,44 @@ const isAnyTaskExecuting = () => state.executingRecords.size > 0;
 const isGloballyEnabled = () => (window.isXiaobaixEnabled !== undefined ? window.isXiaobaixEnabled : true) && getSettings().enabled;
 const clampInt = (v, min, max, d = 0) => (Number.isFinite(+v) ? Math.max(min, Math.min(max, +v)) : d);
 const nowMs = () => Date.now();
+const logExecutionLockSkip = (location, context = {}) => {
+    const now = nowMs();
+    const activeExecutions = Array.from(state.executingRecords.values(), entry => {
+        const startedAt = Number.isFinite(entry?.startedAt) ? entry.startedAt : null;
+        return {
+            taskName: entry?.taskName || 'UnknownTask',
+            source: entry?.source || 'unknown',
+            startedAt,
+            elapsedMs: startedAt === null ? null : Math.max(0, now - startedAt),
+        };
+    });
+    const detail = { location, ...context, activeExecutions };
+    console.warn('[循环任务] 触发因执行锁被跳过', detail);
+    try { xbLog.warn('scheduledTasks', { event: 'execution_lock_skip', ...detail }); } catch {}
+};
 
 const normalizeTiming = (t) => (String(t || '').toLowerCase() === 'initialization' ? 'character_init' : t);
 const mapTiming = (task) => ({ ...task, triggerTiming: normalizeTiming(task.triggerTiming) });
+
+async function readGlobalTaskCommands(task) {
+    if (task?.id) {
+        let commands;
+        try {
+            commands = await TasksStorage.getStrict(task.id, null);
+        } catch (error) {
+            throw new Error(`读取全局任务“${task.name || task.id}”失败：${error?.message || error}`);
+        }
+        if (commands === null && Object.prototype.hasOwnProperty.call(task, 'commands') && task.commands != null) {
+            return String(task.commands);
+        }
+        if (commands === null) throw new Error(`全局任务“${task.name || task.id}”的脚本不存在`);
+        return String(commands);
+    }
+    if (task && Object.prototype.hasOwnProperty.call(task, 'commands') && task.commands != null) {
+        return String(task.commands);
+    }
+    throw new Error(`全局任务“${task?.name || '未命名任务'}”缺少 ID 和脚本`);
+}
 
 const allTasksMeta = () => [
     ...getSettings().globalTasks.map(mapTiming),
@@ -134,10 +169,14 @@ const allTasks = allTasksMeta;
 
 async function allTasksFull() {
     const globalMeta = getSettings().globalTasks || [];
-    const globalTasks = await Promise.all(globalMeta.map(async (task) => ({
-        ...task,
-        commands: await TasksStorage.get(task.id)
-    })));
+    const globalTasks = (await Promise.all(globalMeta.map(async (task) => {
+        try {
+            return { ...task, commands: await readGlobalTaskCommands(task) };
+        } catch (error) {
+            console.error(`[循环任务] 已跳过无法读取的全局任务“${task?.name || '未命名任务'}”`, error);
+            return null;
+        }
+    }))).filter(Boolean);
     return [
         ...globalTasks.map(mapTiming),
         ...getCharacterTasks().map(mapTiming),
@@ -213,7 +252,7 @@ function markMessageAsProcessed(key) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getCharacterTasks() {
-    if (!this_chid || !characters[this_chid]) return [];
+    if (this_chid == null || !characters[this_chid]) return [];
     const c = characters[this_chid];
     if (!c.data) c.data = {};
     if (!c.data.extensions) c.data.extensions = {};
@@ -224,7 +263,7 @@ function getCharacterTasks() {
 }
 
 async function saveCharacterTasks(tasks) {
-    if (!this_chid || !characters[this_chid]) return;
+    if (this_chid == null || !characters[this_chid]) return;
     await writeExtensionField(Number(this_chid), TASKS_MODULE_NAME, { tasks });
     try {
         if (!characters[this_chid].data) characters[this_chid].data = {};
@@ -440,11 +479,51 @@ async function removeTaskByScope(scope, taskId, fallbackIndex = -1) {
 const __taskRunMap = new Map();
 const __taskDynamicCallbackPrefix = (taskName) => `${normalizeTaskKey(taskName)}_fl_`;
 
-function abortTaskRunEntry(entry) {
-    if (!entry) return;
+function cleanupTaskRunOwner(taskKey, entry) {
+    if (!entry || entry.cleaned) return false;
+    entry.cleaned = true;
+
+    for (const callbackId of Array.from(entry.callbackIds || [])) {
+        const callbackEntry = state.dynamicCallbacks.get(callbackId);
+        if (callbackEntry?.owner === entry) {
+            try { callbackEntry.abortController?.abort?.(); } catch {}
+            state.dynamicCallbacks.delete(callbackId);
+        }
+        entry.callbackIds.delete(callbackId);
+    }
+
     try { entry.abort?.abort?.(); } catch {}
     try { entry.timers?.forEach?.((id) => clearTimeout(id)); } catch {}
     try { entry.intervals?.forEach?.((id) => clearInterval(id)); } catch {}
+    for (const listener of Array.from(entry.listeners || [])) {
+        try { listener.target?.removeEventListener?.(listener.type, listener.wrapped, listener.capture); } catch {}
+        entry.listeners.delete(listener);
+    }
+    entry.timers?.clear?.();
+    entry.intervals?.clear?.();
+    if (__taskRunMap.get(taskKey) === entry) __taskRunMap.delete(taskKey);
+    return true;
+}
+
+function releaseTaskRunOwnerIfIdle(entry) {
+    if (!entry || entry.cleaned || !entry.bodySettled) return false;
+    if (entry.inFlightCallbacks > 0 || entry.callbackIds.size > 0 ||
+        entry.timers.size > 0 || entry.intervals.size > 0 || entry.listeners.size > 0) return false;
+    return cleanupTaskRunOwner(entry.taskKey, entry);
+}
+
+function removeFloorCallback(owner, callbackId) {
+    const callbackEntry = state.dynamicCallbacks.get(callbackId);
+    if (callbackEntry?.owner === owner) {
+        try { callbackEntry.abortController?.abort?.(); } catch {}
+        state.dynamicCallbacks.delete(callbackId);
+    }
+    owner?.callbackIds?.delete?.(callbackId);
+    releaseTaskRunOwnerIfIdle(owner);
+}
+
+function abortTaskRunEntry(entry) {
+    return cleanupTaskRunOwner(entry?.taskKey, entry);
 }
 
 function resetTaskRun(taskName) {
@@ -455,7 +534,6 @@ function resetTaskRun(taskName) {
     const runEntry = __taskRunMap.get(taskKey);
     if (runEntry) {
         abortTaskRunEntry(runEntry);
-        __taskRunMap.delete(taskKey);
         clearedRuns = 1;
     }
 
@@ -474,8 +552,7 @@ function resetTaskRun(taskName) {
 }
 
 function resetAllTaskRuns() {
-    for (const entry of __taskRunMap.values()) abortTaskRunEntry(entry);
-    __taskRunMap.clear();
+    for (const entry of Array.from(__taskRunMap.values())) abortTaskRunEntry(entry);
 
     for (const [id, entry] of state.dynamicCallbacks.entries()) {
         try { entry?.abortController?.abort?.(); } catch {}
@@ -558,50 +635,142 @@ CacheRegistry.register('scheduledTasks', {
 async function __runTaskSingleInstance(taskName, jsRunner, signature = null) {
     const existing = __taskRunMap.get(taskName);
     if (existing) {
-        try { existing.abort?.abort?.(); } catch {}
+        abortTaskRunEntry(existing);
         try { await Promise.resolve(existing.completion).catch(() => {}); } catch {}
-        __taskRunMap.delete(taskName);
     }
 
     const abort = new AbortController();
     const timers = new Set();
     const intervals = new Set();
-    const entry = { abort, timers, intervals, signature, completion: null };
+    const listeners = new Set();
+    const entry = {
+        taskKey: taskName,
+        abort,
+        timers,
+        intervals,
+        listeners,
+        signature,
+        completion: null,
+        callbackIds: new Set(),
+        bodySettled: false,
+        inFlightCallbacks: 0,
+        cleaned: false,
+    };
     __taskRunMap.set(taskName, entry);
 
+    const reportCallbackError = (kind, error) => {
+        console.error(`[任务${kind}回调错误]`, taskName, error);
+    };
+
+    const invokeOwnedCallback = (kind, callback, thisArg, args) => {
+        if (entry.cleaned) return;
+        if (typeof callback !== 'function') {
+            releaseTaskRunOwnerIfIdle(entry);
+            return;
+        }
+        entry.inFlightCallbacks++;
+        let result;
+        try {
+            result = callback.apply(thisArg, args);
+        } catch (error) {
+            reportCallbackError(kind, error);
+            entry.inFlightCallbacks = Math.max(0, entry.inFlightCallbacks - 1);
+            releaseTaskRunOwnerIfIdle(entry);
+            return;
+        }
+        Promise.resolve(result).catch(error => reportCallbackError(kind, error)).finally(() => {
+            entry.inFlightCallbacks = Math.max(0, entry.inFlightCallbacks - 1);
+            releaseTaskRunOwnerIfIdle(entry);
+        });
+    };
+
+    const removeOwnedListener = (listener) => {
+        if (!listener || !listeners.delete(listener)) return false;
+        try { listener.target?.removeEventListener?.(listener.type, listener.wrapped, listener.capture); } catch {}
+        releaseTaskRunOwnerIfIdle(entry);
+        return true;
+    };
+
     const addListener = (target, type, handler, opts = {}) => {
-        if (!target?.addEventListener) return;
+        if (!target?.addEventListener || typeof handler !== 'function' || entry.cleaned) return () => {};
         const normalized = typeof opts === 'boolean' ? { capture: opts } : { ...(opts || {}) };
-        target.addEventListener(type, handler, { ...normalized, signal: abort.signal });
+        const capture = !!normalized.capture;
+        const duplicate = Array.from(listeners).find(listener =>
+            listener.target === target && listener.type === type && listener.handler === handler && listener.capture === capture
+        );
+        if (duplicate) return () => removeOwnedListener(duplicate);
+
+        const listener = { target, type, handler, capture, wrapped: null };
+        listener.wrapped = function (...args) {
+            if (normalized.once) listeners.delete(listener);
+            invokeOwnedCallback('监听器', handler, this, args);
+        };
+        try {
+            target.addEventListener(type, listener.wrapped, { ...normalized, signal: abort.signal });
+            listeners.add(listener);
+        } catch (error) {
+            reportCallbackError('监听器注册', error);
+            return () => {};
+        }
+        return () => removeOwnedListener(listener);
+    };
+    const removeListener = (target, type, handler, opts = {}) => {
+        const capture = !!(opts === true || opts?.capture);
+        for (const listener of listeners) {
+            if (listener.target === target && listener.type === type && listener.capture === capture &&
+                (listener.handler === handler || listener.wrapped === handler)) {
+                removeOwnedListener(listener);
+                return;
+            }
+        }
+        try { target?.removeEventListener?.(type, handler, capture); } catch {}
     };
     const setTimeoutSafe = (fn, t, ...a) => {
+        if (entry.cleaned) return null;
         const id = setTimeout(() => {
             timers.delete(id);
-            try { fn(...a); } catch (e) { console.error(e); }
+            invokeOwnedCallback('定时器', fn, undefined, a);
         }, t);
         timers.add(id);
         return id;
     };
-    const clearTimeoutSafe = (id) => { clearTimeout(id); timers.delete(id); };
+    const clearTimeoutSafe = (id) => {
+        clearTimeout(id);
+        timers.delete(id);
+        releaseTaskRunOwnerIfIdle(entry);
+    };
     const setIntervalSafe = (fn, t, ...a) => {
-        const id = setInterval(fn, t, ...a);
+        if (entry.cleaned) return null;
+        const id = setInterval(() => invokeOwnedCallback('定时器', fn, undefined, a), t);
         intervals.add(id);
         return id;
     };
-    const clearIntervalSafe = (id) => { clearInterval(id); intervals.delete(id); };
+    const clearIntervalSafe = (id) => {
+        clearInterval(id);
+        intervals.delete(id);
+        releaseTaskRunOwnerIfIdle(entry);
+    };
 
     let jsRunnerResult;
     entry.completion = (async () => {
+        let succeeded = false;
         try {
-            jsRunnerResult = await jsRunner({ addListener, setTimeoutSafe, clearTimeoutSafe, setIntervalSafe, clearIntervalSafe, abortSignal: abort.signal });
+            jsRunnerResult = await jsRunner({
+                addListener,
+                removeListener,
+                setTimeoutSafe,
+                clearTimeoutSafe,
+                setIntervalSafe,
+                clearIntervalSafe,
+                abortSignal: abort.signal,
+                owner: entry,
+            });
+            succeeded = true;
         } finally {
-            try { abort.abort(); } catch {}
-            try {
-                timers.forEach((id) => clearTimeout(id));
-                intervals.forEach((id) => clearInterval(id));
-            } catch {}
+            entry.bodySettled = true;
+            if (succeeded) releaseTaskRunOwnerIfIdle(entry);
+            else cleanupTaskRunOwner(taskName, entry);
             try { window?.dispatchEvent?.(new CustomEvent('xiaobaix-task-cleaned', { detail: { taskName, signature } })); } catch {}
-            __taskRunMap.delete(taskName);
         }
         return jsRunnerResult;
     })();
@@ -661,15 +830,19 @@ function __hashStringForKey(str) {
 }
 
 async function executeTaskJS(jsCode, taskName = 'AnonymousTask') {
-    const STscript = async (command) => {
-        if (!command) return { error: "命令为空" };
-        if (!command.startsWith('/')) command = '/' + command;
-        return await executeSlashCommand(command);
-    };
-
     const codeSig = __hashStringForKey(String(jsCode || ''));
     const stableKey = (String(taskName || '').trim()) || `js-${codeSig}`;
     const isLightTask = stableKey.startsWith('[x]');
+    const STscript = async (command) => {
+        if (!command) return { error: "命令为空" };
+        if (!command.startsWith('/')) command = '/' + command;
+        const execToken = startExecutionRecord(stableKey, 'command');
+        try {
+            return await executeSlashCommand(command);
+        } finally {
+            setTimeout(() => finishExecutionRecord(execToken), 500);
+        }
+    };
 
     const taskContext = {
         taskName: String(taskName || 'AnonymousTask'),
@@ -682,11 +855,10 @@ async function executeTaskJS(jsCode, taskName = 'AnonymousTask') {
 
     const old = __taskRunMap.get(stableKey);
     if (old) {
-        try { old.abort?.abort?.(); } catch {}
+        abortTaskRunEntry(old);
         if (!isLightTask) {
             try { await Promise.resolve(old.completion).catch(() => {}); } catch {}
         }
-        __taskRunMap.delete(stableKey);
     }
 
     const callbackPrefix = `${stableKey}_fl_`;
@@ -699,102 +871,29 @@ async function executeTaskJS(jsCode, taskName = 'AnonymousTask') {
 
     const jsRunner = async (utils) => {
         const {
-            addListener: _addListener,
-            setTimeoutSafe: _setTimeoutSafe,
-            clearTimeoutSafe: _clearTimeoutSafe,
-            setIntervalSafe: _setIntervalSafe,
-            clearIntervalSafe: _clearIntervalSafe,
-            abortSignal
+            addListener,
+            removeListener,
+            setTimeoutSafe,
+            clearTimeoutSafe,
+            setIntervalSafe,
+            clearIntervalSafe,
+            abortSignal,
+            owner
         } = utils;
-
-        const timeouts = new Set();
-        const intervals = new Set();
-        const listeners = new Set();
-        const waiters = new Set();
-
-        const notifyActivityChange = () => {
-            for (const cb of Array.from(waiters)) { try { cb(); } catch {} }
-        };
-
-        const setTimeoutSafe = (fn, t, ...args) => {
-            const id = _setTimeoutSafe((...inner) => {
-                try { fn?.(...inner); }
-                finally {
-                    if (timeouts.delete(id)) notifyActivityChange();
-                }
-            }, t, ...args);
-            timeouts.add(id);
-            notifyActivityChange();
-            return id;
-        };
-
-        const clearTimeoutSafe = (id) => {
-            _clearTimeoutSafe(id);
-            if (timeouts.delete(id)) notifyActivityChange();
-        };
-
-        const setIntervalSafe = (fn, t, ...args) => {
-            const id = _setIntervalSafe(fn, t, ...args);
-            intervals.add(id);
-            notifyActivityChange();
-            return id;
-        };
-
-        const clearIntervalSafe = (id) => {
-            _clearIntervalSafe(id);
-            if (intervals.delete(id)) notifyActivityChange();
-        };
-
-        const addListener = (target, type, handler, opts = {}) => {
-            if (!target?.addEventListener || typeof handler !== 'function') return () => {};
-            const capture = !!(opts === true || opts?.capture);
-            let wrapped = handler;
-            let entry = null;
-
-            const isOnce = opts && typeof opts === 'object' && 'once' in opts && opts.once;
-            if (isOnce) {
-                wrapped = function (...args) {
-                    try { return handler.apply(this, args); }
-                    finally { if (entry) listeners.delete(entry); notifyActivityChange(); }
-                };
-            }
-
-            entry = { target, type, listener: wrapped, originalListener: handler, capture };
-            listeners.add(entry);
-            notifyActivityChange();
-
-            const normalized = typeof opts === 'boolean' ? { capture: opts } : { ...(opts || {}) };
-            _addListener(target, type, wrapped, { ...normalized, signal: abortSignal });
-
-            return () => removeListener(target, type, handler, opts);
-        };
-
-        const removeListener = (target, type, handler, opts = {}) => {
-            const capture = !!(opts === true || opts?.capture);
-            for (const entry of listeners) {
-                if (entry.target === target && entry.type === type && entry.capture === capture &&
-                    (entry.listener === handler || entry.originalListener === handler)) {
-                    listeners.delete(entry);
-                    try { target?.removeEventListener?.(type, entry.listener, opts); } catch {}
-                    notifyActivityChange();
-                    return;
-                }
-            }
-            try { target?.removeEventListener?.(type, handler, opts); } catch {}
-        };
-
-        const hardCleanup = () => {
-            try { timeouts.forEach(id => _clearTimeoutSafe(id)); } catch {}
-            try { intervals.forEach(id => _clearIntervalSafe(id)); } catch {}
-            listeners.clear();
-            waiters.clear();
-        };
 
         const addFloorListener = (callback, options = {}) => {
             if (typeof callback !== 'function') throw new Error('callback 必须是函数');
+            if (!owner || owner.cleaned || abortSignal?.aborted) return () => {};
             const callbackId = `${stableKey}_fl_${uuidv4()}`;
             const entryAbort = new AbortController();
-            try { abortSignal.addEventListener('abort', () => { try { entryAbort.abort(); } catch {} state.dynamicCallbacks.delete(callbackId); }); } catch {}
+            owner.callbackIds.add(callbackId);
+            try {
+                abortSignal.addEventListener('abort', () => {
+                    try { entryAbort.abort(); } catch {}
+                    state.dynamicCallbacks.delete(callbackId);
+                    owner.callbackIds.delete(callbackId);
+                }, { once: true });
+            } catch {}
             state.dynamicCallbacks.set(callbackId, {
                 callback,
                 options: {
@@ -802,9 +901,10 @@ async function executeTaskJS(jsCode, taskName = 'AnonymousTask') {
                     timing: options.timing || 'after_ai',
                     floorType: options.floorType || 'all'
                 },
-                abortController: entryAbort
+                abortController: entryAbort,
+                owner
             });
-            return () => { try { entryAbort.abort(); } catch {} state.dynamicCallbacks.delete(callbackId); };
+            return () => removeFloorCallback(owner, callbackId);
         };
 
         const runInScope = async (code) => {
@@ -817,27 +917,7 @@ async function executeTaskJS(jsCode, taskName = 'AnonymousTask') {
             return await fn(taskContext, taskContext, STscript, addFloorListener, addListener, removeListener, setTimeoutSafe, clearTimeoutSafe, setIntervalSafe, clearIntervalSafe, abortSignal);
         };
 
-        const hasActiveResources = () => (timeouts.size > 0 || intervals.size > 0 || listeners.size > 0);
-
-        const waitForAsyncSettled = () => new Promise((resolve) => {
-            if (abortSignal?.aborted) return resolve();
-            if (!hasActiveResources()) return resolve();
-            let finished = false;
-            const finalize = () => { if (finished) return; finished = true; waiters.delete(checkStatus); try { abortSignal?.removeEventListener?.('abort', finalize); } catch {} resolve(); };
-            const checkStatus = () => { if (finished) return; if (abortSignal?.aborted) return finalize(); if (!hasActiveResources()) finalize(); };
-            waiters.add(checkStatus);
-            try { abortSignal?.addEventListener?.('abort', finalize, { once: true }); } catch {}
-            checkStatus();
-        });
-
-        let result;
-        try {
-            result = await runInScope(jsCode);
-            await waitForAsyncSettled();
-        } finally {
-            hardCleanup();
-        }
-        return result;
+        return await runInScope(jsCode);
     };
 
     if (isLightTask) {
@@ -862,7 +942,15 @@ function handleTaskMessage(event) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function getFloorCounts() {
-    return state.floorCounts || { all: 0, user: 0, llm: 0 };
+    const messages = Array.isArray(chat) ? chat : [];
+    let user = 0;
+    let llm = 0;
+    for (const message of messages) {
+        if (message.is_system) continue;
+        if (message.is_user) user++;
+        else llm++;
+    }
+    return { all: messages.length, user, llm };
 }
 
 function pickFloorByType(floorType, counts) {
@@ -878,18 +966,6 @@ function calculateTurnCount() {
     const userMessages = chat.filter(msg => msg.is_user && !msg.is_system).length;
     const aiMessages = chat.filter(msg => !msg.is_user && !msg.is_system).length;
     return Math.min(userMessages, aiMessages);
-}
-
-function recountFloors() {
-    let user = 0, llm = 0, all = 0;
-    if (Array.isArray(chat)) {
-        for (const m of chat) {
-            all++;
-            if (m.is_system) continue;
-            if (m.is_user) user++; else llm++;
-        }
-    }
-    state.floorCounts = { all, user, llm };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -915,7 +991,11 @@ function matchInterval(task, counts, triggerContext) {
 }
 
 async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatChanged = null, overrideNewChat = null) {
-    if (!isGloballyEnabled() || isAnyTaskExecuting()) return;
+    if (!isGloballyEnabled()) return;
+    if (isAnyTaskExecuting()) {
+        logExecutionLockSkip('checkAndExecuteTasks', { triggerContext, commandGenerated: state.isCommandGenerated });
+        return;
+    }
 
     const tasks = await allTasksFull();
     const n = nowMs();
@@ -924,9 +1004,11 @@ async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatCha
     const dynamicTaskList = [];
     if (state.dynamicCallbacks?.size > 0) {
         for (const [callbackId, entry] of state.dynamicCallbacks.entries()) {
-            const { callback, options, abortController } = entry || {};
-            if (!callback) { state.dynamicCallbacks.delete(callbackId); continue; }
-            if (abortController?.signal?.aborted) { state.dynamicCallbacks.delete(callbackId); continue; }
+            const { callback, options, abortController, owner } = entry || {};
+            if (!callback || abortController?.signal?.aborted) {
+                removeFloorCallback(owner, callbackId);
+                continue;
+            }
             const interval = Number.isFinite(parseInt(options?.interval)) ? parseInt(options.interval) : 0;
             dynamicTaskList.push({
                 name: callbackId,
@@ -935,7 +1017,8 @@ async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatCha
                 floorType: options?.floorType || 'all',
                 triggerTiming: options?.timing || 'after_ai',
                 __dynamic: true,
-                __callback: callback
+                __callback: callback,
+                __callbackEntry: entry
             });
         }
     }
@@ -966,6 +1049,11 @@ async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatCha
         for (const task of tasksToExecute) {
             state.taskLastExecutionTime.set(task.name, n);
             if (task.__dynamic) {
+                const callbackEntry = state.dynamicCallbacks.get(task.name);
+                if (callbackEntry !== task.__callbackEntry || callbackEntry.abortController?.signal?.aborted) continue;
+                const owner = callbackEntry.owner;
+                if (owner?.cleaned) continue;
+                if (owner) owner.inFlightCallbacks++;
                 try {
                     const currentFloor = pickFloorByType(task.floorType || 'all', counts);
                     await Promise.resolve().then(() => task.__callback({
@@ -975,7 +1063,14 @@ async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatCha
                         interval: task.interval,
                         floorType: task.floorType || 'all'
                     }));
-                } catch (e) { console.error('[动态回调错误]', task.name, e); }
+                } catch (e) {
+                    console.error('[动态回调错误]', task.name, e);
+                } finally {
+                    if (owner) {
+                        owner.inFlightCallbacks = Math.max(0, owner.inFlightCallbacks - 1);
+                        releaseTaskRunOwnerIfIdle(owner);
+                    }
+                }
             } else {
                 await executeCommands(task.commands, task.name);
             }
@@ -995,13 +1090,15 @@ async function onMessageReceived(messageId) {
     if (typeof messageId !== 'number' || messageId < 0 || !chat[messageId]) return;
     const message = chat[messageId];
     if (message.is_user || message.is_system || message.mes === '...' ||
-        state.isCommandGenerated || isAnyTaskExecuting() ||
         (message.swipe_id !== undefined && message.swipe_id > 0)) return;
     if (!isGloballyEnabled()) return;
+    if (state.isCommandGenerated || isAnyTaskExecuting()) {
+        logExecutionLockSkip('onMessageReceived', { triggerContext: 'after_ai', messageId, commandGenerated: state.isCommandGenerated });
+        return;
+    }
     const messageKey = `${getContext().chatId}_${messageId}_${message.send_date || nowMs()}`;
     if (isMessageProcessed(messageKey)) return;
     markMessageAsProcessed(messageKey);
-    try { state.floorCounts.all = Math.max(0, (state.floorCounts.all || 0) + 1); state.floorCounts.llm = Math.max(0, (state.floorCounts.llm || 0) + 1); } catch {}
     await checkAndExecuteTasks('after_ai');
     state.chatJustChanged = state.isNewChat = false;
 }
@@ -1017,7 +1114,6 @@ async function onUserMessage() {
     const messageKey = `${getContext().chatId}_user_${chat.length}`;
     if (isMessageProcessed(messageKey)) return;
     markMessageAsProcessed(messageKey);
-    try { state.floorCounts.all = Math.max(0, (state.floorCounts.all || 0) + 1); state.floorCounts.user = Math.max(0, (state.floorCounts.user || 0) + 1); } catch {}
     await checkAndExecuteTasks('before_user');
     state.chatJustChanged = state.isNewChat = false;
 }
@@ -1028,7 +1124,6 @@ function onMessageDeleted() {
     settings.processedMessages = settings.processedMessages.filter(key => !key.startsWith(`${chatId}_`));
     state.processedMessagesSet = new Set(settings.processedMessages);
     clearAllExecutionRecords();
-    recountFloors();
     saveSettingsDebounced();
 }
 
@@ -1053,13 +1148,11 @@ async function onChatChanged(chatId) {
         requestAnimationFrame(() => requestAnimationFrame(() => { try { updateTaskBar(); } catch {} }));
     });
 
-    recountFloors();
     setTimeout(() => { state.chatJustChanged = state.isNewChat = false; }, 2000);
 }
 
 async function onChatCreated() {
     Object.assign(state, { isNewChat: true, chatJustChanged: true });
-    recountFloors();
     await checkAndExecuteTasks('chat_created', false, false);
 }
 
@@ -1235,12 +1328,15 @@ function updatePresetTaskHint() {
 // 任务栏
 // ═══════════════════════════════════════════════════════════════════════════
 
-const cache = { bar: null, btns: null, sig: '', ts: 0 };
+const cache = { bar: null, btns: null, ownsBar: false, sig: '', ts: 0 };
 
 const getActivatedTasks = () => isGloballyEnabled() ? allTasks().filter(t => t.buttonActivated && !t.disabled) : [];
 
 const getBar = () => {
     if (cache.bar?.isConnected) return cache.bar;
+    cache.bar = null;
+    cache.btns = null;
+    cache.ownsBar = false;
     cache.bar = document.getElementById('qr--bar') || document.getElementById('qr-bar');
     if (!cache.bar && !(window.quickReplyApi?.settings?.isEnabled || extension_settings?.quickReplyV2?.isEnabled)) {
         const parent = document.getElementById('send_form') || document.body;
@@ -1252,18 +1348,29 @@ const getBar = () => {
             }),
             parent.firstChild
         );
+        cache.ownsBar = true;
     }
     cache.btns = cache.bar?.querySelector('.qr--buttons');
     return cache.bar;
 };
 
+function applyTaskBarVisibility() {
+    const bar = cache.bar;
+    if (!bar) return;
+    if (cache.ownsBar) bar.style.display = state.taskBarVisible ? '' : 'none';
+    bar.querySelectorAll('.xiaobaix-task-button').forEach(button => {
+        button.style.display = state.taskBarVisible ? '' : 'none';
+    });
+}
+
 function createTaskBar() {
+    if (!window.__XB_TASKS_INITIALIZED__) return;
     const tasks = getActivatedTasks();
     const sig = state.taskBarVisible ? tasks.map(t => t.name).join() : '';
     if (sig === cache.sig && Date.now() - cache.ts < 100) return;
     const bar = getBar();
     if (!bar) return;
-    bar.style.display = state.taskBarVisible ? '' : 'none';
+    applyTaskBarVisibility();
     if (!state.taskBarVisible) return;
     const btns = cache.btns || bar;
     const exist = new Map([...btns.querySelectorAll('.xiaobaix-task-button')].map(el => [el.dataset.taskName, el]));
@@ -1281,6 +1388,7 @@ function createTaskBar() {
         }
     });
     frag.childNodes.length && btns.appendChild(frag);
+    applyTaskBarVisibility();
     cache.sig = sig;
     cache.ts = Date.now();
 }
@@ -1289,8 +1397,8 @@ const updateTaskBar = debounce(createTaskBar, 100);
 
 function toggleTaskBarVisibility() {
     state.taskBarVisible = !state.taskBarVisible;
-    const bar = getBar();
-    bar && (bar.style.display = state.taskBarVisible ? '' : 'none');
+    getBar();
+    applyTaskBarVisibility();
     createTaskBar();
     const btn = document.getElementById('toggle_task_bar');
     const txt = btn?.querySelector('small');
@@ -1300,14 +1408,12 @@ function toggleTaskBarVisibility() {
     }
 }
 
-document.addEventListener('click', async e => {
+function handleTaskBarClick(e) {
     const btn = e.target.closest('.xiaobaix-task-button');
     if (!btn) return;
     if (!isGloballyEnabled()) return;
     window.xbqte(btn.dataset.taskName).catch(console.error);
-});
-
-new MutationObserver(updateTaskBar).observe(document.body, { childList: true, subtree: true });
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 任务编辑器
@@ -1316,14 +1422,21 @@ new MutationObserver(updateTaskBar).observe(document.body, { childList: true, su
 async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
     const initialScope = scope || 'global';
     const sourceList = getTaskListByScope(initialScope);
+    const sourceIndex = sourceList.indexOf(task);
     
-    if (task && scope === 'global' && task.id) {
-        task = { ...task, commands: await TasksStorage.get(task.id) };
+    if (task && scope === 'global') {
+        try {
+            task = { ...task, commands: await readGlobalTaskCommands(task) };
+        } catch (error) {
+            console.error('[循环任务] 打开任务失败', error);
+            toastr?.error?.(`打开任务失败：${error?.message || error}`);
+            return;
+        }
     }
     
     state.currentEditingTask = task;
     state.currentEditingScope = initialScope;
-    state.currentEditingIndex = isEdit ? sourceList.indexOf(task) : -1;
+    state.currentEditingIndex = isEdit ? sourceIndex : -1;
     state.currentEditingId = task?.id || null;
 
     const editorTemplate = $('#task_editor_template').clone().removeAttr('id').show();
@@ -1331,7 +1444,7 @@ async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
     editorTemplate.find('.task_commands_edit').val(task?.commands || '');
     editorTemplate.find('.task_interval_edit').val(task?.interval ?? 3);
     editorTemplate.find('.task_floor_type_edit').val(task?.floorType || 'all');
-    editorTemplate.find('.task_trigger_timing_edit').val(task?.triggerTiming || 'after_ai');
+    editorTemplate.find('.task_trigger_timing_edit').val(task?.triggerTiming === 'character_init' ? 'initialization' : (task?.triggerTiming || 'after_ai'));
     editorTemplate.find('.task_type_edit').val(initialScope);
     editorTemplate.find('.task_enabled_edit').prop('checked', !task?.disabled);
     editorTemplate.find('.task_button_activated_edit').prop('checked', task?.buttonActivated || false);
@@ -1408,6 +1521,7 @@ async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
             const commands = rawCommands && isAutoWrapTaskJsEnabled() && !/<<taskjs>>/i.test(rawCommands)
                 ? `<<taskjs>>\n${rawCommands}\n<</taskjs>>`
                 : rawCommands;
+            const selectedTriggerTiming = editorTemplate.find('.task_trigger_timing_edit').val() || 'after_ai';
             const newTask = {
                 ...base,
                 id: base.id || `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
@@ -1415,7 +1529,9 @@ async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
                 commands: commands,
                 interval: parseInt(String(editorTemplate.find('.task_interval_edit').val() || '0'), 10) || 0,
                 floorType: editorTemplate.find('.task_floor_type_edit').val() || 'all',
-                triggerTiming: editorTemplate.find('.task_trigger_timing_edit').val() || 'after_ai',
+                triggerTiming: task?.triggerTiming === 'character_init' && selectedTriggerTiming === 'initialization'
+                    ? 'character_init'
+                    : selectedTriggerTiming,
                 disabled: !editorTemplate.find('.task_enabled_edit').prop('checked'),
                 buttonActivated: editorTemplate.find('.task_button_activated_edit').prop('checked'),
                 createdAt: base.createdAt || new Date().toISOString(),
@@ -1439,6 +1555,13 @@ async function saveTaskFromEditor(task, scope) {
     if (!task.name || (!isManual && !task.commands)) return;
 
     const isEditingExistingTask = state.currentEditingIndex >= 0 || !!state.currentEditingId;
+    const previousTask = isEditingExistingTask ? state.currentEditingTask : null;
+    const previousName = previousTask?.name;
+    const shouldResetPreviousRun = !!previousName && (
+        normalizeTaskKey(previousName) !== normalizeTaskKey(task.name)
+        || String(previousTask?.commands ?? '') !== String(task.commands ?? '')
+        || (!previousTask?.disabled && task.disabled === true)
+    );
     const previousScope = state.currentEditingScope || 'global';
     const taskTypeChanged = isEditingExistingTask && previousScope !== targetScope;
 
@@ -1464,6 +1587,7 @@ async function saveTaskFromEditor(task, scope) {
     }
 
     await persistTaskListByScope(targetScope, [...list]);
+    if (shouldResetPreviousRun) resetTaskRun(previousName);
 
     resetTaskEditorState();
     state.lastTasksHash = '';
@@ -1494,6 +1618,7 @@ async function deleteTask(index, scope) {
         document.getElementById(styleId)?.remove();
         if (result) {
             await removeTaskByScope(scope, task.id, index);
+            resetTaskRun(task.name);
             if (state.currentEditingId === task.id || (state.currentEditingScope === scope && state.currentEditingIndex === index)) {
                 resetTaskEditorState();
             }
@@ -1512,7 +1637,7 @@ const getAllTaskNames = () => allTasks().filter(t => !t.disabled).map(t => t.nam
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function checkEmbeddedTasks() {
-    if (!this_chid) return;
+    if (this_chid == null || !characters[this_chid]) return;
     const avatar = characters[this_chid]?.avatar;
     const tasks = characters[this_chid]?.data?.extensions?.[TASKS_MODULE_NAME]?.tasks;
 
@@ -1657,8 +1782,14 @@ async function exportSingleTask(index, scope) {
     if (index < 0 || index >= list.length) return;
     
     let task = list[index];
-    if (scope === 'global' && task.id) {
-        task = { ...task, commands: await TasksStorage.get(task.id) };
+    if (scope === 'global') {
+        try {
+            task = { ...task, commands: await readGlobalTaskCommands(task) };
+        } catch (error) {
+            console.error('[循环任务] 导出任务失败', error);
+            toastr?.error?.(`导出任务失败：${error?.message || error}`);
+            return;
+        }
     }
     
     const fileName = `${scope}_task_${task?.name || 'unnamed'}_${new Date().toISOString().split('T')[0]}.json`;
@@ -1710,7 +1841,7 @@ async function importGlobalTasks(file) {
         if (!tasksToImport.length) throw new Error('没有可导入的任务');
 
         if (fileType === 'character') {
-            if (!this_chid || !characters[this_chid]) {
+            if (this_chid == null || !characters[this_chid]) {
                 toastr?.warning?.('角色任务请先在角色聊天界面导入。');
                 return;
             }
@@ -1799,27 +1930,37 @@ function onCharacterDeleted({ character }) {
 }
 
 function cleanup() {
+    delete window.__XB_TASKS_INITIALIZED__;
     if (state.cleanupTimer) {
         clearInterval(state.cleanupTimer);
         state.cleanupTimer = null;
     }
+    state.initTimers.forEach(timer => clearTimeout(timer));
+    state.initTimers.clear();
     resetAllTaskRuns();
     TasksStorage.clearCache();
 
     events.cleanup();
     window.removeEventListener('message', handleTaskMessage);
-    $(window).off('beforeunload', cleanup);
+    document.removeEventListener('click', handleTaskBarClick);
+    $(window).off('.xbTasks');
+
+    $('#scheduled_tasks_enabled, #add_global_task, #add_character_task, #add_preset_task, #toggle_task_bar, #import_global_tasks, #cloud_tasks_button, #import_tasks_file').off('.xbTasks');
+    $('#global_tasks_list, #character_tasks_list, #preset_tasks_list').off('.xbTasks');
 
     try {
-        const $qrButtons = $('#qr--bar .qr--buttons, #qr--bar, #qr-bar');
-        $qrButtons.off('click.xb');
-        $qrButtons.find('.xiaobaix-task-button').remove();
+        document.querySelectorAll('.xiaobaix-task-button').forEach(button => button.remove());
+        if (cache.ownsBar) cache.bar?.remove();
     } catch {}
 
     try { state.qrObserver?.disconnect(); } catch {}
     state.qrObserver = null;
+    cache.bar = null;
+    cache.btns = null;
+    cache.ownsBar = false;
+    cache.sig = '';
+    cache.ts = 0;
     resetPresetTasksCache();
-    delete window.__XB_TASKS_INITIALIZED__;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1869,20 +2010,24 @@ function cleanup() {
         const { mode = 'replace', scope = 'all' } = opts;
         const hit = find(name, scope);
         if (!hit) throw new Error(`找不到任务: ${name}`);
-        
-        let old = hit.task.commands || '';
-        if (hit.scope === 'global' && hit.task.id) {
-            old = await TasksStorage.get(hit.task.id);
-        }
-        
+
         const body = String(commands ?? '');
         let newCommands;
-        if (mode === 'append') newCommands = old ? (old + '\n' + body) : body;
-        else if (mode === 'prepend') newCommands = old ? (body + '\n' + old) : body;
-        else newCommands = body;
+        if (mode === 'append' || mode === 'prepend') {
+            const old = hit.scope === 'global'
+                ? await readGlobalTaskCommands(hit.task)
+                : String(hit.task.commands || '');
+            newCommands = mode === 'append'
+                ? (old ? `${old}\n${body}` : body)
+                : (old ? `${body}\n${old}` : body);
+        } else {
+            newCommands = body;
+        }
 
+        const previousName = hit.task.name;
         hit.task.commands = newCommands;
         await persistTaskListByScope(hit.scope, hit.list);
+        resetTaskRun(previousName);
         refreshTaskLists();
         return { ok: true, scope: hit.scope, name: hit.task.name };
     }
@@ -1895,8 +2040,20 @@ function cleanup() {
     async function setProps(name, props, scope = 'all') {
         const hit = find(name, scope);
         if (!hit) throw new Error(`找不到任务: ${name}`);
-        Object.assign(hit.task, props || {});
+        const patch = props || {};
+        const previousName = hit.task.name;
+        const wasDisabled = !!hit.task.disabled;
+        const shouldResetPreviousRun = (
+            (Object.prototype.hasOwnProperty.call(patch, 'name')
+                && normalizeTaskKey(previousName) !== normalizeTaskKey(patch.name))
+            || Object.prototype.hasOwnProperty.call(patch, 'commands')
+            || (!wasDisabled
+                && Object.prototype.hasOwnProperty.call(patch, 'disabled')
+                && !!patch.disabled)
+        );
+        Object.assign(hit.task, patch);
         await persistTaskListByScope(hit.scope, hit.list);
+        if (shouldResetPreviousRun) resetTaskRun(previousName);
         refreshTaskLists();
         return { ok: true, scope: hit.scope, name: hit.task.name };
     }
@@ -1904,23 +2061,22 @@ function cleanup() {
     async function exec(name) {
         const hit = find(name, 'all');
         if (!hit) throw new Error(`找不到任务: ${name}`);
-        let commands = hit.task.commands || '';
-        if (hit.scope === 'global' && hit.task.id) {
-            commands = await TasksStorage.get(hit.task.id);
-        }
+        const commands = hit.scope === 'global'
+            ? await readGlobalTaskCommands(hit.task)
+            : String(hit.task.commands || '');
         return await executeCommands(commands, hit.task.name);
     }
 
     async function dump(scope = 'all') {
+        if (scope === 'character') return structuredClone(getCharacterTasks() || []);
+        if (scope === 'preset') return structuredClone(getPresetTasks() || []);
         const g = await Promise.all((getSettings().globalTasks || []).map(async t => ({
             ...structuredClone(t),
-            commands: await TasksStorage.get(t.id)
+            commands: await readGlobalTaskCommands(t)
         })));
+        if (scope === 'global') return g;
         const c = structuredClone(getCharacterTasks() || []);
         const p = structuredClone(getPresetTasks() || []);
-        if (scope === 'global') return g;
-        if (scope === 'character') return c;
-        if (scope === 'preset') return p;
         return { global: g, character: c, preset: p };
     }
 
@@ -1938,10 +2094,16 @@ function cleanup() {
 window.xbqte = async (name) => {
     try {
         if (!name?.trim()) throw new Error('请提供任务名称');
-        const tasks = await allTasksFull();
-        const task = tasks.find(t => t.name.toLowerCase() === name.toLowerCase());
+        const expected = name.toLowerCase();
+        const globalTask = getSettings().globalTasks.find(task => task.name.toLowerCase() === expected);
+        const task = globalTask
+            || getCharacterTasks().find(item => item.name.toLowerCase() === expected)
+            || getPresetTasks().find(item => item.name.toLowerCase() === expected);
         if (!task) throw new Error(`找不到名为 "${name}" 的任务`);
         if (task.disabled) throw new Error(`任务 "${name}" 已被禁用`);
+        const commands = task === globalTask
+            ? await readGlobalTaskCommands(task)
+            : String(task.commands || '');
         if (isTaskExecutionActive(task.name) || __taskRunMap.has(normalizeTaskKey(task.name))) {
             resetTaskRun(task.name);
         }
@@ -1950,7 +2112,7 @@ window.xbqte = async (name) => {
             throw new Error(`任务 "${name}" 仍在冷却中，剩余 ${cd.remainingCooldown}ms`);
         }
         setTaskCooldown(task.name);
-        const result = await executeCommands(task.commands, task.name);
+        const result = await executeCommands(commands, task.name);
         return result || `已执行任务: ${task.name}`;
     } catch (error) {
         console.error(`执行任务失败: ${error.message}`);
@@ -2001,7 +2163,10 @@ Object.assign(window, {
 // 斜杠命令
 // ═══════════════════════════════════════════════════════════════════════════
 
+let slashCommandsRegistered = false;
+
 function registerSlashCommands() {
+    if (slashCommandsRegistered) return;
     try {
         SlashCommandParser.addCommandObject(SlashCommand.fromProps({
             name: 'xbqte',
@@ -2049,6 +2214,8 @@ function registerSlashCommands() {
                 if (!task) throw new Error(`找不到任务 "${name}"`);
 
                 const changed = [];
+                const previousTaskName = task.name;
+                const wasDisabled = !!task.disabled;
 
                 if (namedArgs.status !== undefined) {
                     const val = String(namedArgs.status).toLowerCase();
@@ -2083,6 +2250,7 @@ function registerSlashCommands() {
 
                 if (isCharacter) await saveCharacterTasks(getCharacterTasks());
                 else saveSettingsDebounced();
+                if (!wasDisabled && task.disabled === true) resetTaskRun(previousTaskName);
                 refreshTaskLists();
 
                 return `已更新任务 "${name}": ${changed.join(', ')}`;
@@ -2096,6 +2264,7 @@ function registerSlashCommands() {
             unnamedArgumentList: [SlashCommandArgument.fromProps({ description: '任务名称', typeList: [ARGUMENT_TYPE.STRING], isRequired: true, enumProvider: getAllTaskNames })],
             helpString: `设置任务属性。用法: /xbset status=on/off interval=数字 timing=时机 floorType=类型 任务名`
         }));
+        slashCommandsRegistered = true;
     } catch (error) {
         console.error("注册斜杠命令时出错:", error);
     }
@@ -2120,117 +2289,136 @@ async function initTasks() {
     }
 
     if (window.registerModuleCleanup) {
-        window.registerModuleCleanup('scheduledTasks', cleanup);
+        window.registerModuleCleanup('tasks', cleanup);
     }
 
+    window.removeEventListener('message', handleTaskMessage);
     // eslint-disable-next-line no-restricted-syntax -- legacy task bridge; keep behavior unchanged.
     window.addEventListener('message', handleTaskMessage);
+    document.removeEventListener('click', handleTaskBarClick);
+    document.addEventListener('click', handleTaskBarClick);
 
-    $('#scheduled_tasks_enabled').on('input', e => {
+    state.qrObserver?.disconnect();
+    state.qrObserver = new MutationObserver(updateTaskBar);
+    state.qrObserver.observe(document.body, { childList: true, subtree: true });
+
+    $('#scheduled_tasks_enabled').off('.xbTasks').on('input.xbTasks', e => {
         const enabled = $(e.target).prop('checked');
         getSettings().enabled = enabled;
         saveSettingsDebounced();
         try { createTaskBar(); } catch {}
     });
 
-    $('#add_global_task').on('click', () => showTaskEditor(null, false, 'global'));
-    $('#add_character_task').on('click', () => showTaskEditor(null, false, 'character'));
-    $('#add_preset_task').on('click', () => showTaskEditor(null, false, 'preset'));
-    $('#toggle_task_bar').on('click', toggleTaskBarVisibility);
-    $('#import_global_tasks').on('click', () => $('#import_tasks_file').trigger('click'));
-    $('#cloud_tasks_button').on('click', () => showCloudTasksModal());
-    $('#import_tasks_file').on('change', function (e) {
+    $('#add_global_task').off('.xbTasks').on('click.xbTasks', () => showTaskEditor(null, false, 'global'));
+    $('#add_character_task').off('.xbTasks').on('click.xbTasks', () => showTaskEditor(null, false, 'character'));
+    $('#add_preset_task').off('.xbTasks').on('click.xbTasks', () => showTaskEditor(null, false, 'preset'));
+    $('#toggle_task_bar').off('.xbTasks').on('click.xbTasks', toggleTaskBarVisibility);
+    $('#import_global_tasks').off('.xbTasks').on('click.xbTasks', () => $('#import_tasks_file').trigger('click'));
+    $('#cloud_tasks_button').off('.xbTasks').on('click.xbTasks', () => showCloudTasksModal());
+    $('#import_tasks_file').off('.xbTasks').on('change.xbTasks', function (e) {
         const file = e.target.files[0];
         if (file) { importGlobalTasks(file); $(this).val(''); }
     });
 
-    $('#global_tasks_list')
-        .on('input', '.disable_task', function () {
+    $('#global_tasks_list').off('.xbTasks')
+        .on('input.xbTasks', '.disable_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getSettings().globalTasks;
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) {
-                list[idx].disabled = $(this).prop('checked');
+                const taskName = list[idx].name;
+                const wasDisabled = !!list[idx].disabled;
+                const disabled = $(this).prop('checked');
+                list[idx].disabled = disabled;
                 saveSettingsDebounced();
+                if (!wasDisabled && disabled) resetTaskRun(taskName);
                 state.lastTasksHash = '';
                 refreshTaskLists();
             }
         })
-        .on('click', '.edit_task', function () {
+        .on('click.xbTasks', '.edit_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getSettings().globalTasks;
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) editTask(idx, 'global');
         })
-        .on('click', '.export_task', function () {
+        .on('click.xbTasks', '.export_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getSettings().globalTasks;
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) exportSingleTask(idx, 'global');
         })
-        .on('click', '.delete_task', function () {
+        .on('click.xbTasks', '.delete_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getSettings().globalTasks;
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) deleteTask(idx, 'global');
         });
 
-    $('#character_tasks_list')
-        .on('input', '.disable_task', function () {
+    $('#character_tasks_list').off('.xbTasks')
+        .on('input.xbTasks', '.disable_task', async function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getCharacterTasks();
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) {
-                list[idx].disabled = $(this).prop('checked');
-                saveCharacterTasks(list);
+                const taskName = list[idx].name;
+                const wasDisabled = !!list[idx].disabled;
+                const disabled = $(this).prop('checked');
+                list[idx].disabled = disabled;
+                await saveCharacterTasks(list);
+                if (!wasDisabled && disabled) resetTaskRun(taskName);
                 state.lastTasksHash = '';
                 refreshTaskLists();
             }
         })
-        .on('click', '.edit_task', function () {
+        .on('click.xbTasks', '.edit_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getCharacterTasks();
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) editTask(idx, 'character');
         })
-        .on('click', '.export_task', function () {
+        .on('click.xbTasks', '.export_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getCharacterTasks();
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) exportSingleTask(idx, 'character');
         })
-        .on('click', '.delete_task', function () {
+        .on('click.xbTasks', '.delete_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getCharacterTasks();
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) deleteTask(idx, 'character');
         });
 
-    $('#preset_tasks_list')
-        .on('input', '.disable_task', async function () {
+    $('#preset_tasks_list').off('.xbTasks')
+        .on('input.xbTasks', '.disable_task', async function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getPresetTasks();
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) {
-                list[idx].disabled = $(this).prop('checked');
+                const taskName = list[idx].name;
+                const wasDisabled = !!list[idx].disabled;
+                const disabled = $(this).prop('checked');
+                list[idx].disabled = disabled;
                 await savePresetTasks([...list]);
+                if (!wasDisabled && disabled) resetTaskRun(taskName);
                 state.lastTasksHash = '';
                 refreshTaskLists();
             }
         })
-        .on('click', '.edit_task', function () {
+        .on('click.xbTasks', '.edit_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getPresetTasks();
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) editTask(idx, 'preset');
         })
-        .on('click', '.export_task', function () {
+        .on('click.xbTasks', '.export_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getPresetTasks();
             const idx = list.findIndex(t => t?.id === id);
             if (idx !== -1) exportSingleTask(idx, 'preset');
         })
-        .on('click', '.delete_task', function () {
+        .on('click.xbTasks', '.delete_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getPresetTasks();
             const idx = list.findIndex(t => t?.id === id);
@@ -2255,13 +2443,20 @@ async function initTasks() {
     events.on(event_types.OAI_PRESET_CHANGED_AFTER, onPresetChanged);
     events.on(event_types.MAIN_API_CHANGED, onMainApiChanged);
 
-    $(window).on('beforeunload', cleanup);
+    $(window).off('beforeunload.xbTasks').on('beforeunload.xbTasks', cleanup);
     registerSlashCommands();
-    setTimeout(() => checkEmbeddedTasks(), 1000);
+    const embeddedTasksTimer = setTimeout(() => {
+        state.initTimers.delete(embeddedTasksTimer);
+        if (window.__XB_TASKS_INITIALIZED__) checkEmbeddedTasks();
+    }, 1000);
+    state.initTimers.add(embeddedTasksTimer);
 
-    setTimeout(() => {
+    const pluginInitTimer = setTimeout(() => {
+        state.initTimers.delete(pluginInitTimer);
+        if (!window.__XB_TASKS_INITIALIZED__) return;
         try { checkAndExecuteTasks('plugin_initialized', false, false); } catch (e) { console.debug(e); }
     }, 0);
+    state.initTimers.add(pluginInitTimer);
 }
 
 export { initTasks };

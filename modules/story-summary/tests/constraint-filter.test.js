@@ -12,8 +12,8 @@ test('ordinary USER facts remain relevant without making unrelated characters re
         filterConstraintsByRelevance(
             [userFact, unrelatedCharacterFact, worldFact],
             [],
-            new Set(['蓝袖', '林月']),
-            '蓝袖',
+            new Set(['白帝', '林月']),
+            '白帝',
         ),
         [userFact, worldFact],
     );

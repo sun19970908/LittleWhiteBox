@@ -19,7 +19,7 @@ the extension entry point is the only composition root shared with this integrat
 
 Managed ChatSurface currently supports the core iframe renderer, recorded-request history buttons, Variables Panel,
 Story Summary buttons, and button collapsing. Immersive mode, message preview/purge, Story Outline floor tools, TTS
-floor tools, Fourth Wall floor tools, draw providers, and custom template iframes are rejected before participant
+floor tools, Xiaobai OS, draw providers, and custom template iframes are rejected before participant
 registration.
 
 The integration adds no persistent data. Removing it consists of deleting this directory, removing its manifest/entry

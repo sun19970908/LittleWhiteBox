@@ -4,25 +4,20 @@ import {
     getRequestHeaders,
     saveSettingsDebounced,
     substituteParamsExtended,
-    updateMessageBlock,
 } from '../../../../../../script.js';
+import { shouldSendOnEnter } from '../../../../../../scripts/RossAscends-mods.js';
 import { extensionFolderPath } from '../../core/constants.js';
 import { createModuleEvents } from '../../core/event-manager.js';
 import { EnaPlannerStorage } from '../../core/server-storage.js';
 import { executeSlashCommand } from '../../core/slash-command.js';
 import { postToIframe, isTrustedIframeEvent } from '../../core/iframe-messaging.js';
 import { DEFAULT_PROMPT_BLOCKS, BUILTIN_TEMPLATES } from './ena-planner-presets.js';
-import { createEnaPlannerInterceptor } from './ena-planner-interceptor.js';
+import { createEnaPlannerSendInterceptor } from './ena-planner-interceptor.js';
 import {
     createAbortError,
     mergeAbortSignals,
     throwIfSignalAborted,
 } from '../../shared/common/abort-utils.js';
-import {
-    GENERATE_INTERCEPTOR_ORDER,
-    registerGenerateInterceptor,
-    unregisterGenerateInterceptor,
-} from '../../shared/common/generate-interceptor.js';
 import { scheduleDelayedNotice } from '../../shared/common/delayed-notice.js';
 import { getDefaultApiPrefix, resolveApiBaseUrl } from '../../shared/common/openai-url-utils.js';
 import {
@@ -32,6 +27,7 @@ import {
     setHostChatCompletionsRequestHeadersProvider,
     streamHostChatCompletion,
 } from '../../shared/host-llm/chat-completions/client.js';
+import { getStorySummaryForEna } from '../story-summary/story-summary.js';
 import { formatOutlinePrompt } from '../story-outline/story-outline.js';
 import jsyaml from '../../libs/js-yaml.mjs';
 
@@ -49,7 +45,6 @@ const SLOW_PLANNING_NOTICE_DELAY_MS = 3000;
 function getDefaultSettings() {
     return {
         enabled: true,
-        skipIfPlotPresent: true,
         mergeConsecutiveSystemMessages: false,
 
         // Chat history: tags to strip from AI responses (besides <think>)
@@ -155,6 +150,7 @@ function normalizeSettings(value) {
     delete s.includeVectorRecall;
     delete s.historyMessageCount;
     delete s.worldbookActivationMode;
+    delete s.skipIfPlotPresent;
 
     return s;
 }
@@ -1016,6 +1012,10 @@ function filterPlannerForInput(rawFull) {
     return noThink;
 }
 
+function filterPlannerPreview(rawPartial) {
+    return stripThinkBlocks(rawPartial);
+}
+
 /**
  * -------------------------
  * Planner API calls
@@ -1171,7 +1171,7 @@ async function buildPlannerMessages(rawUserInput, options = {}) {
     const charBlockRaw = formatCharCardBlock(charObj);
 
     const storyMemoryRaw = String(options.storyMemoryText || '').trim();
-    console.log(`[Ena] Story memory source: ${storyMemoryRaw ? 'shared-recall' : 'none'}`);
+    console.log(`[Ena] Story memory source: ${storyMemoryRaw ? 'canonical-summary' : 'none'}`);
 
     // --- Chat history: last 2 AI messages (floors N-1 & N-3) ---
     // Two messages instead of one so the planner retains immediate continuity
@@ -1295,25 +1295,37 @@ async function runPlanningOnce(rawUserInput, silent = false, options = {}) {
     }
 }
 
-const enaPlannerGeneration = createEnaPlannerInterceptor({
-    getContext: getContextSafe,
+function getEnaChatIdentity() {
+    const context = getContextSafe();
+    const chatId = context?.chatId;
+    if (chatId === null || chatId === undefined || chatId === '') return '';
+    const groupId = context?.groupId;
+    const owner = groupId === null || groupId === undefined
+        ? `character:${context?.characterId ?? context?.this_chid ?? ''}`
+        : `group:${groupId}`;
+    return `${owner}:${chatId}`;
+}
+
+const enaPlannerSend = createEnaPlannerSendInterceptor({
+    eventTarget: document,
+    getChatIdentity: getEnaChatIdentity,
     getSettings: ensureSettings,
+    getTextarea: () => document.getElementById('send_textarea'),
+    getSendButton: () => document.getElementById('send_but') || document.getElementById('send_button'),
+    shouldSendOnEnter,
+    readStorySummary: getStorySummaryForEna,
     plan: (rawUserInput, options) => runPlanningOnce(rawUserInput, true, options),
-    updateMessageBlock,
+    filterPreview: filterPlannerPreview,
     scheduleNotice: () => scheduleDelayedNotice(
         () => executeSlashCommand('/echo severity=info 剧情规划仍在处理中，请稍候。'),
         SLOW_PLANNING_NOTICE_DELAY_MS,
         error => console.warn('[EnaPlanner] Failed to show planning status:', error),
     ),
     onError(error) {
-        console.warn('[EnaPlanner] Planning failed open:', error);
+        console.warn('[EnaPlanner] Planning or final send failed:', error);
         toastErr(String(error?.message ?? error));
     },
 });
-
-export async function runEnaPlannerInterceptor(coreChat, contextSize, abort, type, runContext) {
-    return await enaPlannerGeneration.run(coreChat, contextSize, abort, type, runContext);
-}
 
 function getIframeConfigPayload() {
     const s = ensureSettings();
@@ -1391,7 +1403,7 @@ async function handleIframeMessage(ev) {
             const ok = await saveConfigNow(nextConfig => Object.assign(nextConfig, configPatch));
             if (!isCurrentLifecycle(messageEpoch)) return;
             if (ok) {
-                if (!config.enabled) enaPlannerGeneration.cancel('disabled');
+                if (!config.enabled) enaPlannerSend.cancel('disabled');
                 postToIframe(iframe, {
                     type: 'xb-ena:config-saved',
                     payload: {
@@ -1527,16 +1539,10 @@ export async function initEnaPlanner() {
         return false;
     }
     loadPersistedLogsMaybe();
-    registerGenerateInterceptor(
-        EXT_NAME,
-        runEnaPlannerInterceptor,
-        GENERATE_INTERCEPTOR_ORDER.ENA_PLANNER,
-    );
+    enaPlannerSend.install();
     if (!runtimeEvents) {
         runtimeEvents = createModuleEvents(EXT_NAME);
-        runtimeEvents.on(event_types.CHAT_CHANGED, () => enaPlannerGeneration.cancel('chat-changed'));
-        runtimeEvents.on(event_types.GENERATION_STOPPED, () => enaPlannerGeneration.cancel('generation-stopped'));
-        runtimeEvents.on(event_types.GENERATION_ENDED, () => enaPlannerGeneration.cancel('generation-ended'));
+        runtimeEvents.on(event_types.CHAT_CHANGED, () => enaPlannerSend.cancel('chat-changed'));
     }
     window.xiaobaixEnaPlanner = { openSettings, closeSettings };
     return true;
@@ -1548,8 +1554,7 @@ export function cleanupEnaPlanner() {
     config = null;
     state.logs = [];
     logsClearBuffer = null;
-    enaPlannerGeneration.cancel('unloaded');
-    unregisterGenerateInterceptor(EXT_NAME);
+    enaPlannerSend.cleanup();
     runtimeEvents?.cleanup();
     runtimeEvents = null;
     closeSettings();

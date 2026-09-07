@@ -166,14 +166,9 @@ declare module '*.js' {
         options?: Record<string, unknown>,
     ): Promise<{
         ok: boolean;
-        conflict?: boolean;
         config: Record<string, unknown> | null;
         error?: string;
     }>;
-    export function subscribeSharedAgentSettingsChanged(
-        listener: (detail: { source?: string; updatedAt?: number }) => void,
-        options?: Record<string, unknown>,
-    ): () => void;
     export function createFirstPartyIframeOverlay(options: {
         overlayId: string;
         iframeId: string;

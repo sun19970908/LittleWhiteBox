@@ -1,0 +1,73 @@
+@import url('./apps/messages/host/message-renderer.css');
+@import url('./host/quick-launcher.css');
+
+.xiaobaix-os-button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    border-radius: 5px;
+    color: var(--SmartThemeBodyColor, currentColor);
+    cursor: pointer;
+    display: inline-flex;
+    flex: 0 0 auto;
+    font-size: var(--bottomFormIconSize, 28.5px);
+    height: var(--bottomFormBlockSize, 34.5px);
+    justify-content: center;
+    margin: 0;
+    opacity: .7;
+    padding: 0;
+    transition: opacity var(--animation-duration-2x, 200ms) ease, filter var(--animation-duration-2x, 200ms) ease, transform 140ms ease;
+    width: var(--bottomFormBlockSize, 34.5px);
+}
+
+.xiaobaix-os-button>svg {
+    display: block;
+    height: .84em;
+    width: .84em;
+}
+
+.xiaobaix-os-button:hover {
+    filter: brightness(1.2);
+    opacity: 1;
+}
+
+.xiaobaix-os-button:active {
+    transform: scale(.91);
+}
+
+.xiaobaix-os-button:focus-visible {
+    outline: 2px solid #4b78ff;
+    outline-offset: 2px;
+}
+
+.xiaobaix-os-overlay {
+    height: 100vh;
+    height: 100dvh;
+    inset: 0;
+    position: fixed;
+    width: 100vw;
+    z-index: 10020;
+}
+
+.xiaobaix-os-frame {
+    background: transparent;
+    border: 0;
+    display: block;
+    height: 100%;
+    width: 100%;
+}
+
+.xiaobaix-os-commentary {
+    background: rgba(250, 250, 252, .97);
+    border: 1px solid rgba(35, 37, 45, .14);
+    border-radius: 14px 14px 5px 14px;
+    box-shadow: 0 12px 36px rgba(0, 0, 0, .22);
+    color: #272932;
+    cursor: pointer;
+    font: 13px/1.55 "Segoe UI", "Microsoft YaHei UI", sans-serif;
+    max-width: min(260px, calc(100vw - 24px));
+    padding: 9px 13px;
+    position: fixed;
+    text-align: left;
+    z-index: 10025;
+}

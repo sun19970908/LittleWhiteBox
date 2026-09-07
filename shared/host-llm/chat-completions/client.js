@@ -148,6 +148,24 @@ function formatHttpStatus(context = {}) {
     return `HTTP ${context.status}${context.statusText ? ` ${context.statusText}` : ''}`;
 }
 
+function extractStructuredFailureMessage(rawText = '') {
+    const source = String(rawText || '').trim();
+    if (!source || (source[0] !== '{' && source[0] !== '[')) return '';
+    try {
+        const data = JSON.parse(source);
+        const nestedMessage = data?.error?.message;
+        if (typeof nestedMessage === 'string' && nestedMessage.trim()) {
+            return nestedMessage.trim();
+        }
+        if (typeof data?.message === 'string' && data.message.trim()) {
+            return data.message.trim();
+        }
+    } catch {
+        return '';
+    }
+    return '';
+}
+
 function normalizeHostFailureMessage(rawText = '', fallbackMessage = '', response = null) {
     if (isCsrfFailureText(rawText)) {
         return buildCsrfRefreshMessage();
@@ -163,7 +181,8 @@ function normalizeHostFailureMessage(rawText = '', fallbackMessage = '', respons
             summary ? `：${summary}` : '',
         ].join('');
     }
-    return String(rawText || fallbackMessage || '').trim();
+    return extractStructuredFailureMessage(rawText)
+        || String(rawText || fallbackMessage || '').trim();
 }
 
 function buildHostChatCompletionsFields(config = {}, source = HOST_CHAT_COMPLETIONS_SOURCE_OPENAI) {

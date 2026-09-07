@@ -197,9 +197,9 @@ test('alias table formats canonical groups for prompt context', () => {
 });
 
 test('USER identity normalization ignores internal whitespace and invisible characters', () => {
-    const expected = normalizeUserIdentityKey('蓝袖');
+    const expected = normalizeUserIdentityKey('白帝');
 
-    assert.equal(normalizeUserIdentityKey(' 蓝  袖 '), expected);
-    assert.equal(normalizeUserIdentityKey('蓝\u200B袖'), expected);
+    assert.equal(normalizeUserIdentityKey(' 白  帝 '), expected);
+    assert.equal(normalizeUserIdentityKey('白\u200B帝'), expected);
     assert.equal(normalizeUserIdentityKey('ＢＬＵＥ'), normalizeUserIdentityKey('blue'));
 });

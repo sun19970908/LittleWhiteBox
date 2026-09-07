@@ -3,7 +3,7 @@
  */
 
 export class TtsPlayer {
-    constructor() {
+    constructor({ ownership = null } = {}) {
         this.queue = [];
         this.currentAudio = null;
         this.currentItem = null;
@@ -12,6 +12,12 @@ export class TtsPlayer {
         this.isPlaying = false;
         this.playbackRate = 1;
         this.onStateChange = null; // 回调：(state, item, info) => void
+        this._disposed = false;
+        this._suspended = false;
+        this._ownership = ownership?.register(reason => {
+            if (reason === 'disposed') this.dispose();
+            else this.pause();
+        });
     }
 
     /**
@@ -20,6 +26,7 @@ export class TtsPlayer {
      * @returns {boolean} 是否成功入队（重复id会跳过）
      */
     enqueue(item) {
+        if (this._disposed) return false;
         if (!item?.audioBlob && !item?.streamFactory) return false;
         // 防重复
         if (item.id && this.queue.some(q => q.id === item.id)) {
@@ -27,7 +34,7 @@ export class TtsPlayer {
         }
         this.queue.push(item);
         this._notifyState('enqueued', item);
-        if (!this.isPlaying) {
+        if (!this.currentAudio && !this._suspended) {
             this._playNext();
         }
         return true;
@@ -41,7 +48,41 @@ export class TtsPlayer {
         this._stopCurrent(true);
         this.currentItem = null;
         this.isPlaying = false;
+        this._suspended = false;
+        this._ownership?.release();
         this._notifyState('cleared', null);
+    }
+
+    dispose() {
+        if (this._disposed) return;
+        this.clear();
+        this._disposed = true;
+        this._ownership?.dispose();
+        this._notifyState('disposed', null);
+        this.onStateChange = null;
+    }
+
+    // Explicit playback may take ownership; enqueue/automatic continuation may not.
+    activate() {
+        if (this._disposed || (this._ownership && !this._ownership.acquire(true))) return false;
+        this._suspended = false;
+        return true;
+    }
+
+    pause() {
+        this._suspended = true;
+        this.isPlaying = false;
+        const alreadyPaused = !this.currentAudio || this.currentAudio.paused;
+        this.currentAudio?.pause();
+        this._ownership?.release();
+        if (alreadyPaused) this._notifyState('paused', this.currentItem);
+    }
+
+    resume() {
+        if (!this.activate()) return false;
+        if (this.currentAudio) this._playAudio(this.currentAudio, this.currentItem);
+        else this._playNext();
+        return true;
     }
 
     /**
@@ -57,6 +98,7 @@ export class TtsPlayer {
      */
     playNow(item) {
         if (!item?.audioBlob && !item?.streamFactory) return false;
+        if (!this.activate()) return false;
         this.queue = [];
         this._stopCurrent(true);
         this._playItem(item);
@@ -71,12 +113,9 @@ export class TtsPlayer {
         if (!item?.audioBlob && !item?.streamFactory) return false;
         if (this.currentItem?.id === item.id && this.currentAudio) {
             if (this.currentAudio.paused) {
-                this.currentAudio.play().catch(err => {
-                    console.warn('[TTS Player] 播放被阻止（需用户手势）:', err);
-                    this._notifyState('blocked', item);
-                });
+                this.resume();
             } else {
-                this.currentAudio.pause();
+                this.pause();
             }
             return true;
         }
@@ -110,10 +149,17 @@ export class TtsPlayer {
     }
 
     _playNext() {
+        if (this._disposed || this._suspended) return;
         if (this.queue.length === 0) {
             this.isPlaying = false;
             this.currentItem = null;
+            this._ownership?.release();
             this._notifyState('idle', null);
+            return;
+        }
+
+        if (this._ownership && !this._ownership.acquire()) {
+            this._suspended = true;
             return;
         }
 
@@ -122,9 +168,9 @@ export class TtsPlayer {
     }
 
     _playItem(item) {
-        this.isPlaying = true;
+        this.isPlaying = false;
         this.currentItem = item;
-        this._notifyState('playing', item);
+        this._notifyState('loading', item);
 
         if (item.streamFactory) {
             this._playStreamItem(item);
@@ -140,45 +186,46 @@ export class TtsPlayer {
         };
 
         audio.onloadedmetadata = () => {
+            if (this.currentAudio !== audio) return;
             this._notifyState('metadata', item, { duration: audio.duration || 0 });
         };
 
         audio.ontimeupdate = () => {
+            if (this.currentAudio !== audio) return;
             this._notifyState('progress', item, { currentTime: audio.currentTime || 0, duration: audio.duration || 0 });
         };
 
         audio.onplay = () => {
+            if (this.currentAudio !== audio) return;
+            if (this._suspended) { audio.pause(); return; }
+            this.isPlaying = true;
             this._notifyState('playing', item);
         };
 
         audio.onpause = () => {
+            if (this.currentAudio !== audio) return;
+            this.isPlaying = false;
             if (!audio.ended) this._notifyState('paused', item);
         };
 
         audio.onended = () => {
-            this.currentCleanup?.();
-            this.currentCleanup = null;
-            this.currentAudio = null;
+            if (this.currentAudio !== audio || this._suspended) return;
+            this._stopCurrent();
             this.currentItem = null;
             this._notifyState('ended', item);
             this._playNext();
         };
 
         audio.onerror = (e) => {
+            if (this.currentAudio !== audio) return;
             console.error('[TTS Player] 播放失败:', e);
-            this.currentCleanup?.();
-            this.currentCleanup = null;
-            this.currentAudio = null;
+            this._stopCurrent();
             this.currentItem = null;
             this._notifyState('error', item);
             this._playNext();
         };
 
-        audio.play().catch(err => {
-            console.warn('[TTS Player] 播放被阻止（需用户手势）:', err);
-            this._notifyState('blocked', item);
-            this._playNext();
-        });
+        this._playAudio(audio, item);
     }
 
     _playStreamItem(item) {
@@ -197,12 +244,7 @@ export class TtsPlayer {
         this.currentAudio = audio;
 
         const cleanup = () => {
-            if (this.currentAudio) {
-                this.currentAudio.pause();
-            }
-            this.currentAudio = null;
-            this.currentItem = null;
-            this.currentStream = null;
+            audio.pause();
             if (objectUrl) {
                 URL.revokeObjectURL(objectUrl);
                 objectUrl = '';
@@ -211,6 +253,7 @@ export class TtsPlayer {
         this.currentCleanup = cleanup;
 
         const pump = () => {
+            if (this.currentAudio !== audio) return;
             if (!sourceBuffer || sourceBuffer.updating || queue.length === 0) {
                 if (streamEnded && sourceBuffer && !sourceBuffer.updating && queue.length === 0) {
                     try {
@@ -231,12 +274,11 @@ export class TtsPlayer {
 
         const handleStreamError = (err) => {
             if (hasError) return;
-            if (this.currentItem !== item) return;
+            if (this.currentAudio !== audio) return;
             hasError = true;
             console.error('[TTS Player] 流式播放失败:', err);
-            try { stream?.abort?.(); } catch {}
-            cleanup();
-            this.currentCleanup = null;
+            this._stopCurrent(true);
+            this.currentItem = null;
             this._notifyState('error', item);
             this._playNext();
         };
@@ -247,7 +289,7 @@ export class TtsPlayer {
 
         mediaSource.addEventListener('sourceopen', () => {
             if (hasError) return;
-            if (this.currentItem !== item) return;
+            if (this.currentAudio !== audio) return;
             try {
                 const mimeType = stream?.mimeType || 'audio/mpeg';
                 if (!MediaSource.isTypeSupported(mimeType)) {
@@ -262,7 +304,7 @@ export class TtsPlayer {
             }
 
             const append = (chunk) => {
-                if (hasError) return;
+                if (hasError || this.currentAudio !== audio) return;
                 queue.push(chunk);
                 pump();
             };
@@ -280,25 +322,32 @@ export class TtsPlayer {
         });
 
         audio.onloadedmetadata = () => {
+            if (this.currentAudio !== audio) return;
             this._notifyState('metadata', item, { duration: audio.duration || 0 });
         };
 
         audio.ontimeupdate = () => {
+            if (this.currentAudio !== audio) return;
             this._notifyState('progress', item, { currentTime: audio.currentTime || 0, duration: audio.duration || 0 });
         };
 
         audio.onplay = () => {
+            if (this.currentAudio !== audio) return;
+            if (this._suspended) { audio.pause(); return; }
+            this.isPlaying = true;
             this._notifyState('playing', item);
         };
 
         audio.onpause = () => {
+            if (this.currentAudio !== audio) return;
+            this.isPlaying = false;
             if (!audio.ended) this._notifyState('paused', item);
         };
 
         audio.onended = () => {
-            if (this.currentItem !== item) return;
-            cleanup();
-            this.currentCleanup = null;
+            if (this.currentAudio !== audio || this._suspended) return;
+            this._stopCurrent(true);
+            this.currentItem = null;
             this._notifyState('ended', item);
             this._playNext();
         };
@@ -308,22 +357,27 @@ export class TtsPlayer {
             handleStreamError(e);
         };
 
+        this._playAudio(audio, item);
+    }
+
+    _playAudio(audio, item) {
         audio.play().catch(err => {
+            if (this.currentAudio !== audio || this._suspended) return;
             console.warn('[TTS Player] 播放被阻止（需用户手势）:', err);
-            try { stream?.abort?.(); } catch {}
-            cleanup();
+            this.pause();
             this._notifyState('blocked', item);
-            this._playNext();
         });
     }
 
     _stopCurrent(abortStream = false) {
+        const audio = this.currentAudio;
+        this.currentAudio = null;
         if (abortStream) {
             try { this.currentStream?.abort?.(); } catch {}
         }
-        if (this.currentAudio) {
-            this.currentAudio.pause();
-            this.currentAudio = null;
+        if (audio) {
+            audio.onloadedmetadata = audio.ontimeupdate = audio.onplay = audio.onpause = audio.onended = audio.onerror = null;
+            audio.pause();
         }
         this.currentCleanup?.();
         this.currentCleanup = null;

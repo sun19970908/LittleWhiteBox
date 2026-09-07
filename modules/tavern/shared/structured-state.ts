@@ -20,9 +20,11 @@ import db, {
     type TavernStructuredStateDocumentRecord,
     type TavernStructuredStatePatchRecord,
 } from './session-db';
+import { compileAtlasIntent } from './map/atlas-intent';
+import { MAP_ELEMENT_CATEGORIES, MAP_THEMES, MAP_STATUSES, ATLAS_LOCATION_SCALES, ATLAS_LOCATION_STATUSES, ATLAS_LINK_KINDS, ATLAS_UNSET_FIELDS, MAP_INTENT_SHAPES, normalizeAtlasKey, normalizeAtlasKeyOrThrow, type MapIntentShapeKey } from './map/vocabulary';
+import { mapToolElement, mapIntentErrorHint, sceneReadElements } from './map/tool-projection';
 import {
     buildSeedLabelId,
-    buildSeedMapHint,
     createSeedMapDocument,
     isSeedLabelId,
     isUninitializedMapData,
@@ -46,7 +48,6 @@ import {
 import {
     isMapExitSemantic,
     normalizeMapElementKind,
-    TAVERN_MAP_ELEMENT_KINDS,
     type TavernMapElementKind,
 } from './map-material-symbols';
 import {
@@ -55,9 +56,6 @@ import {
     isTavernMapMaterial,
     isTavernMapMood,
     semanticFingerprint,
-    TAVERN_MAP_CERTAINTIES,
-    TAVERN_MAP_MATERIALS,
-    TAVERN_MAP_MOODS,
     type TavernMapCertainty,
     type TavernMapMaterial,
     type TavernMapMood,
@@ -68,18 +66,13 @@ export const TAVERN_STATE_TOOL_NAMES = {
     READ: 'MapInspect',
     PATCH: 'MapPatch',
     READ_ATLAS: 'MapAtlasRead',
+    EDIT_ATLAS: 'MapAtlasEdit',
     READ_SCENE: 'MapSceneRead',
     EDIT_SCENE: 'MapSceneEdit',
 } as const;
 
 /** Maximum complete patch history the map replay UI will load into memory. */
 export const TAVERN_MAP_TIMELINE_PATCH_LIMIT = 80;
-
-const MODEL_FACING_STATE_TOOL_NAMES = new Set<string>([
-    TAVERN_STATE_TOOL_NAMES.READ_ATLAS,
-    TAVERN_STATE_TOOL_NAMES.READ_SCENE,
-    TAVERN_STATE_TOOL_NAMES.EDIT_SCENE,
-]);
 
 export type TavernMapElementCategory =
     | 'wall'
@@ -110,7 +103,6 @@ export interface TavernMapDocumentMeta {
     theme: TavernMapTheme;
     status: TavernMapStatus;
     mood?: TavernMapMood;
-    hint?: string;
 }
 
 export interface TavernMapElement {
@@ -232,7 +224,6 @@ export interface TavernStateToolResult {
 export type TavernStateToolCaller = 'auto' | 'chat';
 
 type MapShapeKey = 'rect' | 'circle' | 'path' | 'curve' | 'icon' | 'text';
-type MapIntentShapeKey = 'rect' | 'circle' | 'path' | 'curve' | 'icon' | 'label';
 type NormalizeSource = 'model-input' | 'stored-document';
 
 const MAP_DOC_TYPE: TavernStructuredStateDocType = TAVERN_MAP_DOC_TYPE;
@@ -245,30 +236,7 @@ const MAX_STATE_READ_LIMIT = 300;
 
 const MAP_SHAPE_KEYS: MapShapeKey[] = ['rect', 'circle', 'path', 'curve', 'icon', 'text'];
 const MAP_GEOMETRY_KEYS: MapShapeKey[] = ['rect', 'circle', 'path', 'curve', 'icon'];
-const MAP_ELEMENT_CATEGORIES = new Set<TavernMapElementCategory>([
-    'wall',
-    'road',
-    'water',
-    'terrain',
-    'furniture',
-    'decoration',
-    'door',
-    'danger',
-    'marker',
-    'actor',
-    'label',
-    'grid',
-    'magic',
-    'secret',
-    'light',
-]);
-const MAP_THEMES = new Set<TavernMapTheme>(['parchment', 'paper', 'dark', 'blueprint', 'grid']);
-const MAP_STATUSES = new Set<TavernMapStatus>(['uninitialized', 'active']);
-const ATLAS_LOCATION_SCALES = new Set<TavernAtlasLocationScale>(['city', 'district', 'building', 'floor', 'room', 'outdoor']);
-const ATLAS_LOCATION_STATUSES = new Set<TavernAtlasLocationStatus>(['mentioned', 'visited']);
-const ATLAS_LINK_KINDS = new Set<TavernAtlasLinkKind>(['door', 'stairs', 'elevator', 'path', 'road', 'portal', 'passage']);
-const ATLAS_UNSET_FIELDS = new Set(['parent', 'mapDocId', 'aliases', 'brief']);
-const MAP_INTENT_SHAPES = new Set<MapIntentShapeKey>(['rect', 'circle', 'path', 'curve', 'icon', 'label']);
+
 
 interface TavernMapIntentTarget {
     sceneName: string;
@@ -439,7 +407,7 @@ async function buildMapAtlasMismatchWarning(sessionId = '', activatedDocId = '')
     const atlasMapDocId = activeLocation?.mapDocId;
     if (!atlas.activeLocationKey || !atlasMapDocId || atlasMapDocId === activatedDocId) {return [];}
     return [
-        `Map doc '${activatedDocId}' activated. Atlas still says player/current location is '${atlas.activeLocationKey}'. If the story moved the player, send tavern.atlas move-actor with actorKey:"player" and the correct locationKey.`,
+        `Map '${activatedDocId}' is displayed, while the player's recorded place remains '${atlas.activeLocationKey}'. If story evidence moved the player, use MapSceneEdit for that scene with playerHere:true.`,
     ];
 }
 
@@ -680,16 +648,12 @@ function normalizeMapMeta(value: unknown, fallback: Partial<TavernMapDocumentMet
     const source = isPlainObject(value) ? value : {};
     const status = normalizeMapStatus(source.status ?? fallback.status ?? 'active', fallback.status ?? 'active');
     const nameSource = 'name' in source ? source.name : fallback.name;
-    const hintSource = 'hint' in source ? source.hint : fallback.hint;
     return {
         name: nameSource === null ? null : normalizeText(nameSource, 120) || null,
         viewBox: 'viewBox' in source ? normalizeViewBox(source.viewBox) : normalizeViewBox(fallback.viewBox ?? null),
         theme: normalizeMapTheme(source.theme ?? fallback.theme ?? 'parchment', fallback.theme ?? 'parchment'),
         status,
         mood: normalizeMapMood(source.mood ?? fallback.mood ?? 'neutral', fallback.mood ?? 'neutral', warnings),
-        ...(status === 'uninitialized'
-            ? { hint: normalizeText(hintSource ?? buildSeedMapHint(), 1200) || buildSeedMapHint() }
-            : {}),
     };
 }
 
@@ -718,10 +682,6 @@ function normalizeMetaSet(value: unknown, warnings: string[] = []): Partial<Tave
             warnings.push(`Ignored invalid map mood: ${moodText}.`);
         }
     }
-    if ('hint' in value) {
-        const hint = normalizeText(value.hint, 1200);
-        set.hint = hint || undefined;
-    }
     return set;
 }
 
@@ -729,7 +689,6 @@ function mergeMapMeta(current: TavernMapDocumentMeta, set: Partial<TavernMapDocu
     return normalizeMapMeta({
         ...current,
         ...set,
-        ...(set.hint === undefined && 'hint' in set ? { hint: null } : {}),
     }, current);
 }
 
@@ -1227,23 +1186,6 @@ function mapTitle(document: TavernMapDocument): string {
     return normalizeText(document.meta.name || 'Map', 120) || 'Map';
 }
 
-function normalizeAtlasKey(value: unknown = ''): string {
-    return String(value || '')
-        .normalize('NFKC')
-        .replace(/[\u200B-\u200D\uFEFF]/g, '')
-        .trim()
-        .replace(/\s+/g, '-')
-        .slice(0, 120);
-}
-
-function normalizeAtlasKeyOrThrow(value: unknown, error: string): string {
-    const key = normalizeAtlasKey(value);
-    if (!key || /[/\\:*?"<>|\u0000-\u001F]/.test(key) || key === '.' || key === '..') {
-        throw new Error(error);
-    }
-    return key;
-}
-
 function normalizeAtlasScale(value: unknown): TavernAtlasLocationScale {
     const text = String(value || '').trim() as TavernAtlasLocationScale;
     if (!ATLAS_LOCATION_SCALES.has(text)) {throw new Error('atlas_location_scale_invalid');}
@@ -1268,10 +1210,9 @@ function normalizeAtlasStringArray(value: unknown, limit = 20): string[] | undef
 }
 
 function defaultAtlasLinkId(from: string, to: string, kind: TavernAtlasLinkKind, bidirectional = true): string {
-    if (bidirectional === false) {
-        return `link:${from}:${to}:${kind}`;
-    }
-    return `link:${[from, to].sort().join(':')}:${kind}`;
+    const ends = bidirectional === false ? [from, to] : [from, to].sort();
+    const id = `link:${ends.join(':')}:${kind}`;
+    return id.length <= 160 ? id : `link:${hashSceneKey(id)}`;
 }
 
 function normalizeAtlasLocation(value: unknown): TavernAtlasLocation | null {
@@ -1567,7 +1508,7 @@ function describeMapPatchError(error = ''): string {
     case 'map_element_id_reserved':
         return `${id} uses the reserved \`__label__\` prefix. Use a normal id instead.`;
     case 'map_element_at_required':
-        return `${id} is missing a position. Provide \`at:[x,y]\`. Legacy aliases such as pos/center/x+y are also accepted.`;
+        return `${id} is missing a position. Provide \`at:[x,y]\`.`;
     case 'map_element_rect_invalid':
         return `${id} has an invalid rect. Use positive dimensions such as \`rect:[120,80]\`.`;
     case 'map_element_radius_required':
@@ -1595,7 +1536,7 @@ function describeMapPatchError(error = ''): string {
     case 'map_modify_set_required':
         return `${id} is missing a \`set\` object. \`modify\` requires \`set\`.`;
     case 'map_op_not_supported':
-        return `Unsupported op: ${id}. Supported canonical ops are meta/add/modify/remove. Legacy init/reset/replace input is still absorbed at runtime.`;
+        return `Unsupported op: ${id}. Supported ops are meta/add/modify/remove.`;
     case 'map_element_center_required':
         return `${id} is missing a center point.`;
     case 'map_element_arc_angles_required':
@@ -1603,7 +1544,7 @@ function describeMapPatchError(error = ''): string {
     case 'atlas_doc_id_invalid':
         return 'Atlas has exactly one document: tavern.atlas/main.';
     case 'atlas_activate_not_supported':
-        return 'Atlas does not support activate:true. Move the player with move-actor(actorKey:"player").';
+        return 'Use MapSceneEdit with the destination scene and playerHere:true to record player movement.';
     case 'atlas_location_key_invalid':
         return 'Invalid atlas location key. Use a stable non-empty key without path separators or control characters.';
     case 'atlas_location_create_required':
@@ -2333,10 +2274,10 @@ function buildMapIntentElementInput(rawElement: unknown, index: number, warnings
     const material = normalizeMapMaterial(rawElement.material, { elementId: id, warnings, source: 'model-input' });
     if (material) {element.material = material;}
     const certainty = normalizeMapCertainty(rawElement.certainty, undefined, { elementId: id, warnings });
-    if (certainty && certainty !== 'confirmed') {element.certainty = certainty;}
+    if (certainty) {element.certainty = certainty;}
     const actorKey = normalizeText(rawElement.actorKey, 120);
     if (actorKey) {element.actorKey = actorKey;}
-    if (rawElement.closed === true || geo.closed === true) {element.closed = true;}
+    if (typeof rawElement.closed === 'boolean') {element.closed = rawElement.closed;}
 
     if (shape === 'rect') {
         const rect = firstMapIntentRect(rawElement, geo);
@@ -2413,19 +2354,29 @@ function compileMapIntentToPatch(currentDocument: TavernMapDocument, args: Recor
 
     rawElements.forEach((rawElement, index) => {
         try {
-            const compiled = buildMapIntentElementInput(rawElement, index, warnings);
+            const existing = isPlainObject(rawElement) ? working.elements.find(item => item.id === rawElement.id) : undefined;
+            const previous = existing ? mapToolElement(existing, working.elements) : undefined;
+            const input = previous ? { ...previous, ...rawElement as Record<string, unknown> } : rawElement;
+            const compiled = buildMapIntentElementInput(input, index, warnings);
+            // A field-only update or an unchanged read-back must not re-quantize coordinates
+            // or trigger the geometry-replacement path that clears stored display properties.
+            if (previous && isPlainObject(input) && compiled.shape === previous.shape && deepEqual(input.geo, previous.geo)) {
+                for (const key of [...MAP_GEOMETRY_KEYS, 'at', 'shape']) {delete compiled.element[key];}
+            }
             const exists = working.elements.some((element) => element.id === compiled.id);
             const op = exists
                 ? { op: 'modify' as const, id: compiled.id, set: compiled.element }
                 : { op: 'add' as const, element: compiled.element };
-            const patch = applyMapOps(working, [op]);
+            const patch = applyMapOps(working, exists && compiled.shape === 'label' && existing && hasGeometryShape(existing)
+                ? [{ op: 'remove', id: compiled.id }, { op: 'add', element: compiled.element }]
+                : [op]);
             if (patch.failed.length) {
                 const failure = patch.failed[0];
                 skipped.push({
                     index,
                     id: compiled.id,
                     reason: failure.error,
-                    hint: failure.hint || describeMapPatchError(failure.error),
+                    hint: mapIntentErrorHint(failure.error),
                     guessedShape: compiled.shape,
                 });
                 warnings.push(...patch.warnings);
@@ -2452,7 +2403,7 @@ function compileMapIntentToPatch(currentDocument: TavernMapDocument, args: Recor
                 index,
                 id: isPlainObject(rawElement) ? normalizeText(rawElement.id, 120) : '',
                 reason,
-                hint: describeMapPatchError(reason),
+                hint: mapIntentErrorHint(reason),
             });
         }
     });
@@ -2543,28 +2494,6 @@ async function getSeededAtlasDocumentRecord(
     if (existing) {return existing;}
     await ensureSeedStructuredStateDocument(sessionId, { touchSession: false });
     return await getTavernStructuredStateDocument(sessionId, ATLAS_DOC_TYPE, DEFAULT_ATLAS_DOC_ID);
-}
-
-function buildCanonicalFullReplaceOps(current: TavernMapDocument, next: TavernMapDocument): TavernMapPatchOp[] {
-    const ops: TavernMapPatchOp[] = [];
-    current.elements.forEach((element) => {
-        ops.push({ op: 'remove', id: element.id, _internalSoft: true });
-    });
-    ops.push({
-        op: 'meta',
-        set: {
-            name: next.meta.name,
-            viewBox: next.meta.viewBox,
-            theme: next.meta.theme,
-            status: next.meta.status,
-            mood: next.meta.mood,
-            hint: next.meta.hint,
-        },
-    });
-    next.elements.forEach((element) => {
-        ops.push({ op: 'add', element });
-    });
-    return ops;
 }
 
 function applyMapOps(source: TavernMapDocument, rawOps: unknown[]): {
@@ -2801,38 +2730,6 @@ function applyMapOps(source: TavernMapDocument, rawOps: unknown[]): {
                 continue;
             }
 
-            if (op === 'replace') {
-                const id = normalizeText(rawOp.id, 120);
-                if (!id) {throw new Error('map_element_id_invalid');}
-                if (findIndex(id) < 0) {throw new Error(`map_element_not_found:${id}`);}
-                applyRemove(id, { cascadeLabel: true });
-                normalizeMapElementInput(rawOp.element, { forcedId: id, source: 'model-input', warnings }).forEach((element) => applyAdd(element));
-                continue;
-            }
-
-            if (op === 'init' || op === 'reset') {
-                const next = normalizeMapDocument(rawOp.document || {
-                    meta: {
-                        ...(isPlainObject(rawOp.meta) ? rawOp.meta : {}),
-                        status: 'active',
-                    },
-                    elements: rawOp.elements,
-                }, {
-                    ...document.meta,
-                    status: 'active',
-                    hint: document.meta.hint,
-                }, 'model-input', warnings);
-                if (op === 'init' && document.meta.status === 'active' && document.elements.length && rawOp.replaceDocument !== true) {
-                    throw new Error('state_init_existing_document_requires_reset');
-                }
-                buildCanonicalFullReplaceOps(document, next).forEach((canonicalOp) => {
-                    if (canonicalOp.op === 'meta') {applyMeta(canonicalOp.set);}
-                    else if (canonicalOp.op === 'add') {applyAdd(canonicalOp.element);}
-                    else if (canonicalOp.op === 'remove') {applyRemove(canonicalOp.id, { soft: canonicalOp._internalSoft === true, cascadeLabel: false });}
-                });
-                continue;
-            }
-
             throw new Error(`map_op_not_supported:${op}`);
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error || 'map_op_failed');
@@ -2877,482 +2774,7 @@ function applyMapOps(source: TavernMapDocument, rawOps: unknown[]): {
     };
 }
 
-function buildMapElementSchema() {
-    return {
-        type: 'object',
-        description: 'One map element. It must have `id` and `cat`, plus exactly one geometry shape: `rect`, `circle`, `path`, `curve`, `text`, or explicit `shape:"icon"`. The `icon` field is only a visual Material Symbols name for icon-shaped elements. Omit unused shape keys entirely; never send empty `path:[]`, `curve:[]`, `points:[]`, or `line:[]`. Most elements use `at:[x,y]`; `path` and `curve` may omit `at` and let the first point become the anchor.',
-        properties: {
-            id: {
-                type: 'string',
-                description: 'Stable unique id. Do not use the reserved `__label__` prefix.',
-            },
-            at: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Anchor coordinate `[x,y]`. Most elements should provide `at`; `path` and `curve` may omit it and use the first point as the anchor. North = smaller y, south = larger y, west = smaller x, east = larger x.',
-            },
-            cat: {
-                type: 'string',
-                enum: [...MAP_ELEMENT_CATEGORIES],
-                description: 'Closed layer/category such as wall, door, marker, actor, terrain, road, furniture, decoration, light, or label. Use terrain for the main continuous scene surface or filled base area: floor, ground, deck, platform, clearing, yard, roadbed, shoreline area, or any large closed support surface. Do not use floor, ground, surface, deck, platform, base, area, or region as category names.',
-            },
-            kind: {
-                type: 'string',
-                enum: [...TAVERN_MAP_ELEMENT_KINDS],
-                description: 'Optional closed system semantic for logic such as exits and interactives. Use kind for facts like door/stairs/elevator/portal/passage/entrance/exit/trap/chest/marker/player/actor/north/south/east/west/up/down. Do not put visual icon names here.',
-            },
-            material: {
-                type: 'string',
-                enum: [...TAVERN_MAP_MATERIALS],
-                description: 'Optional renderer-owned material enum. Use only when RP facts confirm it. Common values include wood, stone, tile, carpet, bed-sheet, fabric, tatami, sand, marble, blood, water, grass, dirt, snow, metal, rune, warm-light, cold-light, shadow, or unknown. Use bed-sheet/fabric for bedding, upholstery, curtains, cushions, or other furniture/soft goods, not the main terrain surface. Do not invent material names.',
-            },
-            certainty: {
-                type: 'string',
-                enum: [...TAVERN_MAP_CERTAINTIES],
-                description: 'Optional semantic confidence. Omit for confirmed facts. Use inferred for likely/unconfirmed placements and unknown when the position or existence is explicitly uncertain.',
-            },
-            rect: {
-                type: 'array',
-                items: { type: 'number' },
-                minItems: 2,
-                maxItems: 2,
-                description: 'Rectangle `[width,height]`. The top-left corner is at `at`.',
-            },
-            circle: {
-                type: 'number',
-                description: 'Circle radius. The center is at `at`.',
-            },
-            path: {
-                type: 'array',
-                items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 },
-                description: 'Polyline point array with at least two points. Omit this key for non-line elements; do not send an empty array. With `at`, points are relative offsets. Without `at`, points are absolute coordinates and the first point becomes the anchor.',
-            },
-            curve: {
-                type: 'array',
-                items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 },
-                description: 'Smooth curve point array with at least two points. Omit this key for non-curve elements; do not send an empty array. The anchor and relative/absolute rules are the same as `path`.',
-            },
-            shape: {
-                type: 'string',
-                enum: ['icon'],
-                description: 'Explicit icon geometry marker. Use shape:"icon" when the element is a point icon and `icon` is omitted or only a visual override.',
-            },
-            icon: {
-                type: 'string',
-                description: 'Optional visual Material Symbols official name for shape:"icon". Use lowercase underscores, such as door_open, stairs, elevator, inventory_2, chair, table_bar, single_bed, local_bar, menu_book, science, biotech, swords, local_fire_department, water_drop, skull, park, or location_on. Omit when unsure; renderer falls back from kind/cat. Do not invent non-official names such as sword or door.',
-            },
-            text: {
-                type: 'string',
-                description: 'Short label text. If you provide text together with label-eligible geometry in an add input, the runtime will split the text into a derived label element automatically. Terrain, light, grid, and label categories do not derive labels from geometry text.',
-            },
-            actorKey: {
-                type: 'string',
-                description: 'Optional full-session actor identity key for cat:"actor". If omitted, the element id is used as the actor key fallback.',
-            },
-            closed: { type: 'boolean', description: 'Whether a path or curve should be closed.' },
-        },
-        required: ['id', 'cat'],
-        additionalProperties: false,
-    };
-}
-
-function buildMapMetaSetSchema() {
-    return {
-        type: 'object',
-        description: 'For map `meta`, merge only map document fields. Renderer style fields such as fill/style/opacity/zIndex/rotation/blur and visual transform scale are intentionally not part of this schema.',
-        properties: {
-            name: { type: 'string', description: 'Map title. Empty string clears the title.' },
-            viewBox: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'Map camera frame `[x,y,width,height]`; it does not move elements.' },
-            theme: { type: 'string', enum: [...MAP_THEMES], description: 'Map renderer theme.' },
-            status: { type: 'string', enum: [...MAP_STATUSES], description: 'Map document status.' },
-            mood: { type: 'string', enum: [...TAVERN_MAP_MOODS], description: 'Map mood; use only when scene facts support it.' },
-            hint: { type: 'string', description: 'Map maintenance hint for uninitialized scene maps.' },
-        },
-        additionalProperties: false,
-    };
-}
-
-function buildMapElementSetSchema() {
-    const pointPair = {
-        type: 'array',
-        items: { type: 'number' },
-        minItems: 2,
-        maxItems: 2,
-    };
-    const pointList = {
-        type: 'array',
-        items: pointPair,
-    };
-    return {
-        type: 'object',
-        description: 'For map `modify`, merge only map element semantic and geometry fields. Renderer style fields such as fill/style/opacity/zIndex/rotation/blur and visual transform scale are intentionally not part of this schema.',
-        properties: {
-            at: { ...pointPair, description: 'Map element anchor coordinate `[x,y]`.' },
-            cat: { type: 'string', enum: [...MAP_ELEMENT_CATEGORIES], description: 'Map element semantic category.' },
-            kind: { type: 'string', enum: [...TAVERN_MAP_ELEMENT_KINDS], description: 'Closed map element semantic kind for logic; do not use visual icon names here.' },
-            material: { type: 'string', enum: [...TAVERN_MAP_MATERIALS], description: 'Map element material enum. Use unknown when the material is explicitly unclear.' },
-            certainty: { type: 'string', enum: [...TAVERN_MAP_CERTAINTIES], description: 'Map element certainty enum. Use confirmed to clear stored uncertainty.' },
-            rect: { ...pointPair, description: 'Map element rectangle size `[width,height]`.' },
-            circle: { type: 'number', description: 'Map element circle radius.' },
-            path: { ...pointList, description: 'Map element polyline points. Omit this key unless changing the element into a real path with at least two points; do not send an empty array.' },
-            curve: { ...pointList, description: 'Map element curve points. Omit this key unless changing the element into a real curve with at least two points; do not send an empty array.' },
-            shape: { type: 'string', enum: ['icon'], description: 'Explicitly changes the element geometry into an icon shape. Use this to convert an existing rect/circle/path/curve/text element into a point icon.' },
-            icon: { type: 'string', description: 'Visual Material Symbols official name for an icon-shaped element. Setting or clearing icon only affects the explicit visual name; it does not change geometry by itself.' },
-            text: { type: 'string', description: 'Map label text. Empty string clears source/derived label text.' },
-            actorKey: { type: 'string', description: 'Map actor identity key for cat:"actor".' },
-            closed: { type: 'boolean', description: 'Whether a path or curve should be closed.' },
-        },
-        additionalProperties: false,
-    };
-}
-
-function buildAtlasLocationSetSchema() {
-    return {
-        type: 'object',
-        description: 'For atlas `upsert-location`, merge only world-location fields. Atlas locations do not accept scene-map element geometry such as shape/icon/rect/circle/path.',
-        properties: {
-            name: { type: 'string', description: 'Atlas location display name.' },
-            scale: { type: 'string', enum: [...ATLAS_LOCATION_SCALES], description: 'Atlas location scale.' },
-            status: { type: 'string', enum: [...ATLAS_LOCATION_STATUSES], description: 'Atlas location status.' },
-            parent: { type: 'string', description: 'Atlas parent location key. Prefer unset:["parent"] to clear it.' },
-            mapDocId: { type: 'string', description: 'Atlas linked scene-map docId. Prefer unset:["mapDocId"] to clear it.' },
-            aliases: { type: 'array', items: { type: 'string' }, description: 'Atlas location aliases.' },
-            brief: { type: 'string', description: 'Short atlas location note. Prefer unset:["brief"] to clear it.' },
-        },
-        additionalProperties: false,
-    };
-}
-
-export function getTavernStateToolDefinitions(): Array<{ type: 'function'; function: { name: string; description: string; parameters: unknown } }> {
-    const mapElementSchema = buildMapElementSchema();
-    const mapMetaSetSchema = buildMapMetaSetSchema();
-    const mapElementSetSchema = buildMapElementSetSchema();
-    const atlasLocationSetSchema = buildAtlasLocationSetSchema();
-    return [
-        {
-            type: 'function',
-            function: {
-                name: TAVERN_STATE_TOOL_NAMES.LIST,
-                description: [
-                    'List structured map documents in the current RP session.',
-                    'Returns document entries only. It does not read full state, elements, or patch history.',
-                    'Use before MapInspect when you need available scene-map documents, or when you need the atlas world index.',
-                    'Map scope is fixed to this tavern session; it cannot inspect text sources, memory Markdown, RP chat history, character cards, world books, settings, or plugin source code.',
-                ].join('\n'),
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        docType: { type: 'string', enum: [MAP_DOC_TYPE, ATLAS_DOC_TYPE], description: 'Optional structured document type filter: `tavern.map` for scene maps, `tavern.atlas` for the world index.' },
-                    },
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TAVERN_STATE_TOOL_NAMES.READ,
-                description: [
-                    'Inspect a structured scene map or world atlas document in the current RP session.',
-                    'Use `summary` first when choosing what to patch, checking revision, or deciding whether a map/atlas update is needed.',
-                    'For `tavern.map`, use `summary` first, `elements` to browse map elements, `element` for one id, `document` for the full map, and `history` for saved map patch transactions.',
-                    'For `tavern.atlas`, use `summary`, `document`, `locations`, `location`, `links`, `actors`, or `history`. Atlas does not have map elements.',
-                    'This inspects structured spatial data only. Use LS/Grep/Read for text evidence, memory files, chat history, and worldbook material.',
-                ].join('\n'),
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        docType: { type: 'string', enum: [MAP_DOC_TYPE, ATLAS_DOC_TYPE], description: 'Structured document type. Use `tavern.map` for scene maps or `tavern.atlas` for the world index.' },
-                        docId: { type: 'string', description: 'Structured document id. Omit for the active map; atlas always uses `main`.' },
-                        mode: { type: 'string', enum: ['summary', 'elements', 'document', 'element', 'history', 'locations', 'location', 'links', 'actors'], description: 'For maps: summary/elements/document/element/history. For atlas: summary/document/locations/location/links/actors/history.' },
-                        elementId: { type: 'string', description: 'Required for `element` mode. Exact element id to read.' },
-                        locationKey: { type: 'string', description: 'Required for atlas `location` mode.' },
-                        actorKey: { type: 'string', description: 'Optional atlas `actors` filter.' },
-                        parent: { type: 'string', description: 'Optional atlas `locations` parent filter.' },
-                        status: { type: 'string', enum: ['mentioned', 'visited'], description: 'Optional atlas `locations` status filter.' },
-                        from: { type: 'string', description: 'Optional atlas `links` from filter.' },
-                        to: { type: 'string', description: 'Optional atlas `links` to filter.' },
-                        kind: { type: 'string', enum: [...new Set([...ATLAS_LINK_KINDS, ...TAVERN_MAP_ELEMENT_KINDS])], description: 'Optional map element kind filter for `elements` mode, or atlas `links` kind filter.' },
-                        elementType: { type: 'string', enum: [...MAP_SHAPE_KEYS], description: 'Optional `elements`-mode shape filter such as rect, circle, path, curve, icon, or text.' },
-                        category: { type: 'string', enum: [...MAP_ELEMENT_CATEGORIES], description: 'Optional `elements`-mode category filter such as wall, door, marker, terrain, road, or label.' },
-                        query: { type: 'string', description: 'Optional `elements`-mode text query matched against id, category, kind, shape, icon, label text, material, and certainty.' },
-                        offset: { type: 'number', minimum: 0, description: 'Pagination offset for `elements` or `history` results. Default 0.' },
-                        limit: { type: 'number', minimum: 1, maximum: MAX_STATE_READ_LIMIT, description: 'Maximum `elements` or `history` results to return. Default 30 for `elements`, 20 for `history`.' },
-                        tail: { type: 'number', minimum: 1, maximum: MAX_STATE_READ_LIMIT, description: 'For `history` mode, return the final N patch transactions.' },
-                    },
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TAVERN_STATE_TOOL_NAMES.READ_ATLAS,
-                description: [
-                    'Read the map world file for the current RP session.',
-                    'The world file is the atlas: it lists known places, scene map files, links, and actor locations such as player.',
-                    'Use this before editing a scene map so you can choose an explicit scene name. The file name is always `world`.',
-                ].join('\n'),
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        mode: { type: 'string', enum: ['summary', 'document', 'locations', 'links', 'actors'], description: 'World read mode. Default summary.' },
-                        query: { type: 'string', description: 'Optional location search text for locations mode.' },
-                        actorKey: { type: 'string', description: 'Optional actor key filter for actors mode.' },
-                        limit: { type: 'number', minimum: 1, maximum: MAX_STATE_READ_LIMIT },
-                        offset: { type: 'number', minimum: 0 },
-                    },
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TAVERN_STATE_TOOL_NAMES.READ_SCENE,
-                description: [
-                    'Read one scene map file by explicit scene name.',
-                    'Use this when you need existing element ids before editing. Missing scene files are reported clearly; MapSceneEdit creates them automatically.',
-                ].join('\n'),
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        scene: { type: 'string', description: 'Explicit scene name or stable place key, such as 酒馆大厅 or 地下走廊.' },
-                        mode: { type: 'string', enum: ['summary', 'elements', 'document', 'element', 'history'], description: 'Scene read mode. Default summary.' },
-                        elementId: { type: 'string', description: 'Required for element mode.' },
-                        query: { type: 'string', description: 'Optional element text/id/category search.' },
-                        category: { type: 'string', enum: [...MAP_ELEMENT_CATEGORIES] },
-                        limit: { type: 'number', minimum: 1, maximum: MAX_STATE_READ_LIMIT },
-                        offset: { type: 'number', minimum: 0 },
-                        tail: { type: 'number', minimum: 1, maximum: MAX_STATE_READ_LIMIT },
-                    },
-                    required: ['scene'],
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TAVERN_STATE_TOOL_NAMES.EDIT_SCENE,
-                description: [
-                    'Edit one scene map file with tolerant map intent. Use this as the normal map write tool.',
-                    'Always provide an explicit `scene` name. The runtime creates the scene file if needed, links it from the world atlas, normalizes intent into canonical map ops, and saves only clean canonical results.',
-                    'Elements use one `shape` plus `geo`; label is independent and does not count as a shape. Renderer styling such as opacity, color, zIndex, blur, pattern, and custom fill is not accepted.',
-                    'Use only the minimum geo for the chosen shape: rect={center,size}, circle={at,radius}, icon={at,icon?}, path={points}, curve={curve}, label={at}+label. Do not fill unused geo keys.',
-                    '`cat` and optional `kind` are closed semantics for map logic; `icon` is only a visual Material Symbols official name. If unsure about the official icon name, omit icon and provide kind/cat.',
-                    'If one element is bad, that element is skipped and the other valid elements can still save. Read the returned applied/skipped/warnings report before retrying only failed elements.',
-                ].join('\n'),
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        scene: { type: 'string', description: 'Explicit scene file name or place key. Required; do not rely on current/active map.' },
-                        title: { type: 'string', description: 'Optional display title. Defaults to scene.' },
-                        scale: { type: 'string', enum: [...ATLAS_LOCATION_SCALES], description: 'Optional atlas location scale for new places. Default room.' },
-                        status: { type: 'string', enum: [...ATLAS_LOCATION_STATUSES], description: 'Optional atlas location status. Defaults visited only when playerHere is true, otherwise mentioned.' },
-                        playerHere: { type: 'boolean', description: 'Set true only when the current RP confirms the player is in this scene. This writes world.actors.player.locationKey.' },
-                        viewBox: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4, description: 'Optional camera frame [x,y,width,height]. It does not move elements.' },
-                        mood: { type: 'string', enum: [...TAVERN_MAP_MOODS], description: 'Optional scene mood when facts support it.' },
-                        theme: { type: 'string', enum: [...MAP_THEMES], description: 'Optional renderer theme.' },
-                        desc: { type: 'string', description: 'Short summary of this map edit.' },
-                        dryRun: { type: 'boolean', description: 'Validate and compile without saving.' },
-                        elements: {
-                            type: 'array',
-                            description: 'Tolerant scene element intents. Prefer one shape plus geo; if shape is missing, the runtime can infer it from geo or label.',
-                            items: {
-                                type: 'object',
-                                properties: {
-                                    id: { type: 'string', description: 'Stable element id within this scene.' },
-                                    cat: { type: 'string', enum: [...MAP_ELEMENT_CATEGORIES], description: 'Closed layer/category.' },
-                                    kind: { type: 'string', enum: [...TAVERN_MAP_ELEMENT_KINDS], description: 'Optional closed system semantic: door/stairs/elevator/portal/passage/entrance/exit/trap/chest/marker/player/actor/north/south/east/west/up/down.' },
-                                    shape: { type: 'string', enum: [...MAP_INTENT_SHAPES], description: 'One shape: rect/circle/path/curve/icon/label.' },
-                                    geo: {
-                                        type: 'object',
-                                        description: 'Minimal geometry for the chosen shape only. Omit unused keys.',
-                                        properties: {
-                                            center: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Center [x,y] for shape:"rect".' },
-                                            at: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Position [x,y] for circle, icon, or label.' },
-                                            size: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Rect size [width,height].' },
-                                            radius: { type: 'number', description: 'Circle radius.' },
-                                            points: { type: 'array', items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 }, description: 'Path points.' },
-                                            curve: { type: 'array', items: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 }, description: 'Curve control/polyline points.' },
-                                            icon: { type: 'string', description: 'Visual Material Symbols official name for shape:"icon", lowercase underscores. Examples: door_open, stairs, elevator, inventory_2, chair, table_bar, single_bed, local_bar, menu_book, science, biotech, swords, local_fire_department, water_drop, skull, park, location_on. Omit when unsure; renderer falls back from kind/cat.' },
-                                        },
-                                        additionalProperties: false,
-                                    },
-                                    label: { type: 'string', description: 'Optional label attached to this element. It is not a shape.' },
-                                    actorKey: { type: 'string', description: 'Actor identity for cat:"actor". Use player for the player marker.' },
-                                    material: { type: 'string', enum: [...TAVERN_MAP_MATERIALS], description: 'Closed semantic material enum; omit if unsure.' },
-                                    certainty: { type: 'string', enum: [...TAVERN_MAP_CERTAINTIES], description: 'Optional uncertainty marker; omit for confirmed.' },
-                                    closed: { type: 'boolean' },
-                                },
-                                required: ['id'],
-                                additionalProperties: false,
-                            },
-                        },
-                    },
-                    required: ['scene', 'elements'],
-                    additionalProperties: false,
-                },
-            },
-        },
-        {
-            type: 'function',
-            function: {
-                name: TAVERN_STATE_TOOL_NAMES.PATCH,
-                description: [
-                    'Advanced/internal structured map/atlas patch transaction tool. Prefer MapAtlasRead and MapSceneEdit for normal model map work.',
-                    'Use this only for confirmed spatial changes from RP source text or a user-requested correction. If nothing spatial changed, do not patch.',
-                    'Read MapInspect summary first unless you already have the current doc, ids, and revision from this turn. Use `baseRevision` when you are protecting against concurrent changes.',
-                    'For `tavern.map`, canonical ops are `meta`, `add`, `modify`, and `remove`. One MapPatch call is one atomic transaction and becomes exactly one revision when it saves.',
-                    'Use `meta` to update document fields such as name, viewBox, theme, status, mood, or hint. Mood enum is neutral/warm/cold/dark/mystic/danger/calm; write it only when the scene facts support it.',
-                    'Each element has `id` and closed `cat`, optional closed `kind`, plus exactly one geometry shape: `rect`, `circle`, `path`, `curve`, `text`, or explicit `shape:"icon"`. `kind` drives map logic such as exits; `icon` is only a visual Material Symbols official name and never changes geometry by itself. Most elements use `at:[x,y]`; `path` and `curve` may omit `at` and use the first point as the anchor.',
-                    'Omit unused shape keys entirely. Never send empty `path:[]`, `curve:[]`, `points:[]`, or `line:[]`; for a rectangular room use only `rect`. Player markers may be `circle` or shape:"icon"; normal MapSceneEdit examples use icon with kind/cat fallback when icon is omitted.',
-                    'Minimal first scene-map example: `{"docType":"tavern.map","docId":"main","activate":true,"ops":[{"op":"meta","set":{"name":"测试房间","viewBox":[0,0,320,220],"status":"active"}},{"op":"add","element":{"id":"room-surface","cat":"terrain","at":[30,30],"rect":[240,140],"material":"wood"}},{"op":"add","element":{"id":"room-wall","cat":"wall","at":[30,30],"rect":[240,140],"text":"房间"}},{"op":"add","element":{"id":"player","cat":"actor","kind":"player","actorKey":"player","shape":"icon","at":[150,110],"text":"玩家"}}]}`.',
-                    'Use semantic material/certainty instead of renderer styling. Material enum is unknown/wood/stone/tile/carpet/bed-sheet/fabric/tatami/sand/marble/blood/water/grass/dirt/snow/metal/rune/warm-light/cold-light/shadow. Use bed-sheet/fabric only for bedding, upholstery, curtains, cushions, or other furniture/soft goods, not the main terrain surface. Certainty enum is confirmed/inferred/unknown; omit confirmed fields.',
-                    'Use cat:"terrain" for the main continuous scene surface or filled base area: indoor floor, outdoor ground, deck, platform, clearing, yard, roadbed, shoreline area, or any large closed support surface. Then draw walls, edges, shell outlines, doors, furniture, hazards, labels, and actors on top. Do not use floor, ground, surface, deck, platform, base, area, region, subtype, opacity, zIndex, rotation, visual scale, blur, or custom fill colors in new map patches.',
-                    'For `cat:"actor"`, optional `actorKey` is the full-session identity key. If omitted, the element id is used. The runtime keeps only the latest actor with the same final key across all map documents.',
-                    'With `at`, `path` and `curve` points are relative offsets. Without `at`, the points are treated as absolute coordinates and the stored result becomes relative to the first point.',
-                    'If one add element contains label-eligible geometry plus text, the runtime splits the text into a system label element automatically. Terrain/light/grid geometry does not derive labels.',
-                    'Atlas scale describes place hierarchy; the renderer chooses its visual icon. Scene maps describe local space; draw the local walls, doors, roads, furniture, hazards, objects, labels, and actor positions instead of writing place glyphs.',
-                    'For `tavern.atlas/main`, use only `upsert-location`, `remove-location`, `upsert-link`, `remove-link`, and `move-actor`. There is no set-active-location op.',
-                    'Atlas links may omit `id`. The default link id is `link:${sorted(from,to).join(":")}:${kind}` for bidirectional links and `link:${from}:${to}:${kind}` for `bidirectional:false`. Use an explicit id only when two locations need multiple same-kind links.',
-                    'Move the player between places with `move-actor` and `actorKey:"player"`. That updates atlas.activeLocationKey, marks the location visited, and syncs activeMapDocId when the location has mapDocId. Non-player actors do not change the current location.',
-                    'Pass `activate:true` only for `tavern.map` to make that map document active for map tools. Activate-only calls may omit `ops` or pass `ops:[]`. Do not use map activate to represent player movement.',
-                    '`meta.viewBox` is the camera. Changing it does not move elements. Move actors by changing their `at`, then adjust `viewBox` only if the camera should follow.',
-                    'The `ops` argument must be a real JSON array, not a quoted JSON string. With `dryRun:true`, validate without saving or incrementing revision.',
-                    'Legacy `init`, `reset`, and `replace` input is still absorbed at runtime, but do not rely on it in new calls.',
-                ].join('\n'),
-                parameters: {
-                    type: 'object',
-                    properties: {
-                        docType: { type: 'string', enum: [MAP_DOC_TYPE, ATLAS_DOC_TYPE], description: 'Structured document type. Use `tavern.map` for scene maps or `tavern.atlas` for the world index.' },
-                        docId: { type: 'string', description: 'Structured document id. For scene maps, prefer an explicit stable place-named docId; omit only when intentionally maintaining the currently active scene-map doc. Atlas always uses `main`.' },
-                        baseRevision: { type: 'number', description: 'Optional optimistic revision check from MapInspect summary/document.' },
-                        dryRun: { type: 'boolean', description: 'Validate and simulate the transaction without saving or incrementing the revision.' },
-                        activate: { type: 'boolean', description: 'Set this map document as the current scene after the transaction. With `ops:[]`, this only switches the active map.' },
-                        desc: { type: 'string', description: 'Short one-line summary of this turn’s spatial update.' },
-                        ops: {
-                            type: 'array',
-                            description: 'Patch ops as one atomic transaction. Required unless `activate:true` is only switching an existing scene map. For maps use `meta/add/modify/remove`. For atlas use `upsert-location/remove-location/upsert-link/remove-link/move-actor`.',
-                            items: {
-                                anyOf: [
-                                    {
-                                        type: 'object',
-                                        description: 'Map document metadata update.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['meta'], description: 'Map document metadata operation.' },
-                                            set: mapMetaSetSchema,
-                                        },
-                                        required: ['op'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Add one full scene-map element.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['add'], description: 'Map element add operation.' },
-                                            element: { ...mapElementSchema, description: 'Full element object for `add`. Use exactly one shape key and omit unused shape keys; never send empty `path:[]`, `curve:[]`, `points:[]`, or `line:[]`.' },
-                                        },
-                                        required: ['op', 'element'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Modify one existing scene-map element.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['modify'], description: 'Map element modify operation.' },
-                                            id: { type: 'string', description: 'Map element id for `modify`.' },
-                                            set: mapElementSetSchema,
-                                        },
-                                        required: ['op', 'id', 'set'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Remove one existing scene-map element.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['remove'], description: 'Map element remove operation.' },
-                                            id: { type: 'string', description: 'Map element id for `remove`.' },
-                                        },
-                                        required: ['op', 'id'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Create or update one world-atlas location.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['upsert-location'], description: 'Atlas location upsert operation.' },
-                                            key: { type: 'string', description: 'Atlas location key.' },
-                                            set: atlasLocationSetSchema,
-                                            unset: { type: 'array', items: { type: 'string', enum: ['parent', 'mapDocId', 'aliases', 'brief'] }, description: 'Atlas upsert-location optional fields to remove.' },
-                                        },
-                                        required: ['op', 'key'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Remove one world-atlas location.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['remove-location'], description: 'Atlas location remove operation.' },
-                                            key: { type: 'string', description: 'Atlas location key.' },
-                                        },
-                                        required: ['op', 'key'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Create or update one world-atlas link.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['upsert-link'], description: 'Atlas link upsert operation.' },
-                                            id: { type: 'string', description: 'Optional atlas link id. Atlas links may omit it and use the default id rule.' },
-                                            from: { type: 'string', description: 'Atlas link source location key.' },
-                                            to: { type: 'string', description: 'Atlas link target location key.' },
-                                            kind: { type: 'string', enum: [...ATLAS_LINK_KINDS], description: 'Atlas link kind.' },
-                                            label: { type: 'string', description: 'Optional atlas link label.' },
-                                            bidirectional: { type: 'boolean', description: 'Atlas link direction flag. Defaults true.' },
-                                        },
-                                        required: ['op', 'from', 'to', 'kind'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Remove one world-atlas link.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['remove-link'], description: 'Atlas link remove operation.' },
-                                            id: { type: 'string', description: 'Atlas link id for `remove-link`.' },
-                                        },
-                                        required: ['op', 'id'],
-                                        additionalProperties: false,
-                                    },
-                                    {
-                                        type: 'object',
-                                        description: 'Move one actor between atlas locations.',
-                                        properties: {
-                                            op: { type: 'string', enum: ['move-actor'], description: 'Atlas actor move operation.' },
-                                            actorKey: { type: 'string', description: 'Atlas actor key. Use actorKey:"player" for the player.' },
-                                            locationKey: { type: 'string', description: 'Atlas target location key.' },
-                                        },
-                                        required: ['op', 'actorKey', 'locationKey'],
-                                        additionalProperties: false,
-                                    },
-                                ],
-                            },
-                        },
-                    },
-                    additionalProperties: false,
-                },
-            },
-        },
-    ];
-}
-
-export function getTavernManagerStateToolDefinitions(): Array<{ type: 'function'; function: { name: string; description: string; parameters: unknown } }> {
-    return getTavernStateToolDefinitions()
-        .filter((tool) => MODEL_FACING_STATE_TOOL_NAMES.has(String(tool.function.name || '').trim()));
-}
+export { getTavernManagerStateToolDefinitions } from './map/tool-contract';
 
 export async function executeTavernStateTool(
     sessionId = '',
@@ -3371,6 +2793,15 @@ export async function executeTavernStateTool(
     const normalizedToolName = String(toolName || '').trim();
     if (!id) {return { ok: false, summary: 'Missing sessionId.', error: 'state_session_required' };}
     try {
+        if (normalizedToolName === TAVERN_STATE_TOOL_NAMES.EDIT_ATLAS) {
+            const record = await getTavernStructuredStateDocument(id, ATLAS_DOC_TYPE, DEFAULT_ATLAS_DOC_ID);
+            const ops = compileAtlasIntent(args, normalizeAtlasDocumentFromRecord(record));
+            if (!ops.length) {return { ok: true, changed: false, summary: 'No atlas changes requested.' };}
+            return await executeTavernStateTool(id, TAVERN_STATE_TOOL_NAMES.PATCH, {
+                docType: ATLAS_DOC_TYPE, docId: DEFAULT_ATLAS_DOC_ID,
+                baseRevision: record?.revision || 0, ops, dryRun: args.dryRun, desc: args.desc,
+            }, options);
+        }
         if (normalizedToolName === TAVERN_STATE_TOOL_NAMES.READ_ATLAS) {
             const mode = String(args.mode || 'summary').trim() || 'summary';
             const record = await getSeededAtlasDocumentRecord(id);
@@ -3447,6 +2878,9 @@ export async function executeTavernStateTool(
             const atlas = normalizeAtlasDocumentFromRecord(atlasRecord);
             const target = resolveMapIntentTarget(atlas, args);
             const mode = String(args.mode || 'summary').trim() || 'summary';
+            if (!['summary', 'document', 'elements', 'element'].includes(mode)) {
+                return { ok: false, summary: 'Use summary, document, elements or element.', error: 'map_scene_read_mode_invalid' };
+            }
             const record = await getTavernStructuredStateDocument(id, MAP_DOC_TYPE, target.docId);
             if (!record) {
                 return {
@@ -3459,7 +2893,8 @@ export async function executeTavernStateTool(
                     error: 'map_scene_not_found',
                 };
             }
-            const document = normalizeMapDocumentFromRecord(record);
+            const stored = normalizeMapDocumentFromRecord(record);
+            const document = { ...stored, elements: sceneReadElements(stored.elements) };
             if (mode === 'document') {
                 return {
                     ok: true,
@@ -3506,32 +2941,6 @@ export async function executeTavernStateTool(
                     truncated: result.truncated,
                     nextOffset: result.nextOffset,
                     elements: result.elements,
-                };
-            }
-            if (mode === 'history') {
-                const tail = Math.max(0, Number(args.tail) || 0);
-                const limit = Math.max(1, Math.min(MAX_STATE_READ_LIMIT, Number(args.limit) || 20));
-                const offset = Math.max(0, Number(args.offset) || 0);
-                const page = await listTavernStructuredStatePatchPage({
-                    sessionId: id,
-                    docType: MAP_DOC_TYPE,
-                    docId: target.docId,
-                    limit: tail > 0 ? Math.min(MAX_STATE_READ_LIMIT, tail) : limit,
-                    offset,
-                    tail: tail > 0 ? Math.min(MAX_STATE_READ_LIMIT, tail) : 0,
-                });
-                return {
-                    ok: true,
-                    file: target.sceneName,
-                    scene: target.sceneName,
-                    summary: `Found ${page.total} saved scene patch transaction(s); returned ${page.patches.length}.`,
-                    docType: MAP_DOC_TYPE,
-                    docId: target.docId,
-                    revision: record.revision,
-                    count: page.total,
-                    truncated: page.truncated,
-                    nextOffset: page.nextOffset,
-                    patches: page.patches,
                 };
             }
             return {
@@ -4153,7 +3562,7 @@ export async function executeTavernStateTool(
                 return { ok: false, summary: 'MapPatch ops are required unless activate:true is used to switch active map.', docType, docId, error: 'state_patch_ops_required' };
             }
             if (docType === ATLAS_DOC_TYPE && activate) {
-                return { ok: false, summary: 'Atlas has no activate:true operation. Move the player with move-actor(actorKey:"player").', docType, docId, error: 'atlas_activate_not_supported' };
+                return { ok: false, summary: describeMapPatchError('atlas_activate_not_supported'), docType, docId, error: 'atlas_activate_not_supported' };
             }
             if (docType === ATLAS_DOC_TYPE) {
                 return await db.transaction(
@@ -4623,7 +4032,7 @@ export async function getTavernMapStateForSession(sessionId = ''): Promise<{
 }
 
 export async function getTavernAtlasStateForSession(sessionId = ''): Promise<{
-    document: TavernStructuredStateDocumentRecord | null;
+    document: (TavernStructuredStateDocumentRecord & { data: TavernAtlasDocument }) | null;
     latestPatchSummary: string;
     activeLocationKey: string;
 }> {

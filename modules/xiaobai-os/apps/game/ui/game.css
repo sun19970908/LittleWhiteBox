@@ -1,0 +1,346 @@
+/* Games: a direct library, with tactile objects on each table. */
+.game-app {
+    --game-paper: #fff; --game-surface: #f4f6fa; --game-ink: #181e29;
+    --game-muted: #677387; --game-line: #e4e9f1; --game-accent: #2467ed; --game-loss: #c73550;
+    background: var(--game-paper); color: var(--game-ink); display: flex; flex-direction: column;
+    height: 100%; min-height: 0; padding-top: var(--os-status-height, 0px); font-size: 13px; container-type: inline-size; color-scheme: light;
+}
+.theme-dark .game-app {
+    --game-paper: #11161f; --game-surface: #1d2634; --game-ink: #f4f7fc;
+    --game-muted: #a7b4c8; --game-line: #303d51; --game-accent: #81b2ff; --game-loss: #ff8eaa; color-scheme: dark;
+}
+.game-app *, .game-app *::before, .game-app *::after { box-sizing: border-box; }
+.game-app button, .game-app input { font: inherit; }
+.game-app button { cursor: pointer; touch-action: manipulation; }
+.game-app button:disabled { cursor: default; opacity: .45; }
+.game-app :is(button, input, summary):focus-visible { outline: 2px solid var(--game-accent); outline-offset: 3px; }
+.game-app h1, .game-app h2, .game-app h3, .game-app p { margin: 0; }
+.game-app h2 { font-weight: 600; }
+.game-header { display: flex; align-items: center; gap: 8px; padding: 12px 20px; flex-shrink: 0; min-height: 62px; }
+.game-header h1 { font-size: 21px; font-weight: 650; letter-spacing: -.03em; }
+.game-funds { margin-left: auto; text-align: right; min-width: 0; max-width: 48%; overflow-wrap: anywhere; }
+.game-funds strong { font-size: 14px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.game-back { background: transparent; border: 0; color: inherit; width: 32px; height: 40px; font-size: 30px !important; line-height: 1; flex-shrink: 0; }
+.game-nav { display: flex; gap: 24px; border-bottom: 1px solid var(--game-line); padding: 0 20px; flex-shrink: 0; }
+.game-nav button { display: flex; align-items: center; gap: 6px; background: transparent; border: 0; border-bottom: 2px solid transparent; min-height: 42px; color: var(--game-muted); padding: 0 0 8px; white-space: nowrap; }
+.game-nav button[aria-current] { border-bottom-color: var(--game-accent); color: var(--game-ink); font-weight: 600; }
+.game-nav i { width: 5px; height: 5px; background: var(--game-accent); border-radius: 50%; }
+.game-scroll { overflow: auto; flex: 1; min-height: 0; padding: 20px 20px max(24px, env(safe-area-inset-bottom)); overscroll-behavior: contain; }
+.game-scroll > * { max-width: 940px; margin-inline: auto; }
+.game-notice { background: var(--game-surface); padding: 10px 20px; font-size: 12px; border-bottom: 1px solid var(--game-line); flex-shrink: 0; max-height: 30%; overflow: auto; }
+.game-notice p { line-height: 1.6; }
+.game-notice button, .game-empty button, .game-load-more { background: transparent; border: 0; color: var(--game-accent); min-height: 40px; padding: 8px 12px 0 0; }
+.game-continue { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; border: 0; background: var(--game-surface); color: var(--game-ink); border-radius: 12px; padding: 10px 16px 10px 8px; margin-bottom: 20px; }
+.game-continue img { width: 48px; height: 48px; }
+.game-continue span { display: grid; gap: 5px; }
+.game-continue small { color: var(--game-muted); font-size: 11px; }
+.game-continue b { margin-left: auto; font-size: 12px; color: var(--game-accent); }
+.game-search { display: flex; align-items: center; gap: 8px; background: var(--game-surface); border-radius: 11px; padding: 0 12px; }
+.game-search svg { width: 17px; height: 17px; stroke: var(--game-muted); fill: none; stroke-width: 1.7; flex-shrink: 0; }
+.game-search input { color: var(--game-ink); width: 100%; min-width: 0; min-height: 42px; background: transparent; border: 0; }
+.game-search input::placeholder { color: var(--game-muted); }
+.game-categories { display: flex; gap: 6px; overflow-x: auto; padding: 12px 0 20px; }
+.game-categories button { flex-shrink: 0; border: 0; border-radius: 20px; padding: 8px 15px; min-height: 40px; background: transparent; color: var(--game-muted); }
+.game-categories button[aria-pressed="true"] { background: var(--game-ink); color: var(--game-paper); }
+.game-shelf { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px 16px; }
+.game-tile { background: transparent; border: 0; border-radius: 14px; padding: 0; text-align: left; color: var(--game-ink); min-width: 0; transition: transform 180ms ease; }
+.game-tile-art { aspect-ratio: 1.15; background: #dbf8ef; border-radius: 16px; display: grid; place-items: center; overflow: hidden; }
+.tone-claret .game-tile-art { background: #eee8ff; }
+.tone-amber .game-tile-art { background: #e1f3ff; }
+.game-tile-art img { width: 100%; height: 100%; object-fit: contain; padding: 6px; transition: transform 250ms ease; }
+.game-tile-copy { padding: 12px 2px 0; }
+.game-tile h3 { font-size: 15px; font-weight: 600; }
+.game-tile-copy > span { display: flex; align-items: center; justify-content: space-between; color: var(--game-muted); font-size: 11px; margin-top: 5px; }
+.game-tile-copy i { font-size: 17px; font-style: normal; }
+.game-empty { padding: 40px 16px; text-align: center; color: var(--game-muted); line-height: 1.8; }
+.game-empty h3 { color: var(--game-ink); font-size: 16px; margin-bottom: 8px; }
+@container (min-width: 600px) { .game-shelf { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 24px; } }
+/* Rules precede the stake; chips remain physical, with an explicit start. */
+.game-scroll > .game-entry, .game-entry { max-width: 540px; }
+.game-entry-art { height: 150px; border-radius: 16px; background: #dbf8ef; }
+.game-entry.is-claret .game-entry-art { background: #eee8ff; }
+.game-entry.is-amber .game-entry-art { background: #e1f3ff; }
+.game-entry-art img { width: 100%; height: 100%; object-fit: contain; padding: 8px 20px; }
+.game-entry-rules { padding: 0 0 0 18px; margin: 12px 0 20px; }
+.game-entry-rules li { padding-left: 4px; margin-top: 8px; line-height: 1.8; font-size: 12px; }
+.game-entry-rules li::marker { color: var(--game-accent); }
+.game-entry-stake { border-top: 1px solid var(--game-line); padding-top: 20px; }
+.game-entry-stake h3 { font-size: 14px; font-weight: 600; }
+.game-stake-chips { display: flex; justify-content: space-around; gap: 10px; margin: 20px 0; flex-wrap: wrap; }
+.game-stake-chips button { border: 4px dashed #82a8fa; border-radius: 50%; width: 54px; height: 54px; padding: 4px; color: var(--game-ink); background: var(--game-surface); box-shadow: 0 3px 0 var(--game-line); }
+.game-stake-chips button span { border: 1px solid var(--game-line); display: grid; place-items: center; height: 100%; border-radius: 50%; font-size: 13px; font-weight: 600; }
+.game-stake-chips button[aria-pressed="true"] { background: #2467ed; border-color: #bfd7ff; color: #fff; transform: translateY(-3px); box-shadow: 0 4px 0 #15439c; }
+.game-stake-input { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--game-muted); }
+.game-stake-input input { min-height: 40px; border: 0; border-bottom: 1px solid var(--game-line); background: transparent; color: var(--game-ink); width: 100px; padding: 8px; text-align: center; }
+.game-entry-balance { font-size: 11px; color: var(--game-muted); margin: 20px 0 12px !important; }
+.game-primary-action, .game-secondary-action { border-radius: 12px; min-height: 46px; padding: 12px 16px; font-weight: 600 !important; }
+.game-primary-action { background: #2467ed; color: #fff; border: 1px solid #2467ed; }
+.game-secondary-action { background: transparent; color: var(--game-ink); border: 1px solid var(--game-line); }
+.game-start { width: 100%; }
+.game-inline-note, .game-help { color: var(--game-muted); font-size: 11px; line-height: 1.7; margin-top: 12px !important; }
+.game-entry-blocked { border-top: 1px solid var(--game-line); padding-top: 20px; line-height: 1.8; }
+.game-entry-blocked button { margin-top: 14px; width: 100%; }
+
+/* A teal felt table, white dice and a clear calling tray. */
+.dice-table, .dice-showdown, .dice-opening { max-width: 600px; background: radial-gradient(ellipse at 45% 10%, #129b92, #076c70 90%); border: 1px solid #087b7c; border-radius: 24px; padding: 24px 20px 18px; color: #fff; box-shadow: inset 0 0 0 5px #ffffff05, 0 10px 26px #10271c12; }
+.dice-stake { text-align: right; color: #d2f4ef; font-size: 10px; margin-bottom: 14px !important; }
+.dice-opponent { display: flex; align-items: center; gap: 12px; }
+.dice-opponent > div { display: grid; gap: 7px; }
+.dice-opponent strong { font-size: 12px; font-weight: 500; }
+.dice-opponent small { color: #d2f4ef; font-size: 10px; line-height: 1.5; }
+.dice-hidden-count { margin-left: auto; color: #d2f4ef; font-size: 10px; white-space: nowrap; }
+.dice-cup { display: inline-block; width: 34px; height: 43px; border: 2px solid #dae5f1; border-radius: 9px 9px 15px 15px; background: linear-gradient(90deg, #a3b6cc, #f0f5fc 45%, #8aa0bb); box-shadow: inset 0 5px 0 #fff, 0 5px 8px #0004; transform: rotate(-12deg); flex-shrink: 0; }
+.dice-call { text-align: center; padding: 27px 0 20px; }
+.dice-call h3 { font-size: 21px; font-weight: 600; }
+.dice-call-dice { display: flex; flex-wrap: wrap; max-width: 300px; margin: 18px auto 12px; justify-content: center; gap: 12px; }
+.dice-call-dice .game-die { --game-die-size: 30px; }
+.dice-call p { font-size: 10px; color: #d2f4ef; margin-top: 12px; }
+.dice-first-call { padding: 32px 0 26px; text-align: center; }
+.dice-first-call > span { display: block; font-size: 22px; font-weight: 600; margin-bottom: 12px; }
+.dice-first-call p { color: #d2f4ef; line-height: 1.8; font-size: 12px; }
+.dice-own-hand { text-align: center; border-top: 1px solid #accba22b; padding: 18px 0; }
+.dice-own-hand > small, .dice-reveal-hand > span { color: #d2f4ef; font-size: 10px; display: block; margin-bottom: 16px; }
+.game-dice-row { display: flex; justify-content: center; gap: 14px; padding: 3px 0; }
+.dice-own-hand p { font-size: 10px; color: #d2f4ef; margin-top: 15px; }
+.dice-wild-dot { display: inline-block; width: 5px; height: 5px; background: #e4a18a; border-radius: 50%; vertical-align: 1px; margin-right: 5px; }
+.dice-builder { background: #fff; color: #18252c; border-radius: 16px; padding: 18px; margin-top: 6px; box-shadow: 0 4px 12px #081d2726; }
+.dice-builder-label { display: flex; align-items: center; justify-content: space-between; }
+.dice-builder-label strong { font-size: 13px; }
+.dice-builder-label span { font-size: 10px; color: #677783; }
+.dice-number-picker { display: flex; align-items: center; justify-content: center; gap: 30px; padding: 16px 0; }
+.dice-number-picker button { border: 1px solid #dbe3eb; background: transparent; color: #15545f; width: 42px; height: 42px; border-radius: 50%; font-size: 23px; }
+.dice-number-picker strong { min-width: 60px; text-align: center; font-size: 32px; }
+.dice-number-picker small { font-size: 12px; margin-left: 6px; font-weight: 500; }
+.dice-face-picker { display: flex; justify-content: center; gap: 6px; padding-bottom: 18px; }
+.dice-face-picker button { padding: 9px; border: 1px solid transparent; border-radius: 10px; background: transparent; }
+.dice-face-picker button[aria-pressed="true"] { border-color: #0b8e91; background: #dcf8f3; box-shadow: inset 0 0 0 1px #0b8e91; }
+.dice-face-picker .game-die { --game-die-size: 30px; pointer-events: none; }
+.dice-turn-actions { display: flex; gap: 10px; align-items: stretch; }
+.dice-turn-actions > .game-primary-action { flex: 1; }
+.dice-open-cup { border: 1px solid #a8c3d5; border-radius: 12px; padding: 6px 16px; color: #225464; background: transparent; font-weight: 700 !important; }
+.dice-open-cup small { display: block; font-size: 9px; font-weight: 400; margin-top: 3px; }
+.dice-last-call { text-align: center; line-height: 2; padding: 16px; }
+.dice-last-call button { width: 100%; margin-top: 8px; }
+.game-small-rules { font-size: 11px; line-height: 1.8; color: #d2f4ef; margin-top: 18px; }
+.game-small-rules summary { cursor: pointer; padding: 8px 0; }
+.game-small-rules p { padding: 8px 0; }
+.dice-call-history { padding-left: 18px; margin: 8px 0 0; }
+.dice-call-history li { padding: 4px; }
+.dice-call-history li span { margin-right: 15px; }
+.dice-reveal-hand { text-align: center; padding: 14px 0; }
+.dice-verdict { text-align: center; font-size: 15px; line-height: 1.8; padding: 12px 0; }
+.dice-verdict strong { margin: 0 4px; color: #fff; }
+.dice-verdict small { display: block; color: #d2f4ef; font-size: 10px; margin-top: 7px; }
+.game-skip-reveal { display: block; background: transparent; border: 0; color: #fff; padding: 16px; margin: 12px auto 0; min-height: 44px; }
+.dice-opening { text-align: center; padding: 70px 20px; }
+.dice-opening .dice-cup { width: 70px; height: 90px; margin-bottom: 30px; }
+.dice-opening h2 { font-size: 23px; }
+.dice-opening p { font-size: 12px; color: #d2f4ef; margin-top: 14px; }
+.is-shaking { animation: game-cup-shake 750ms ease-in-out infinite; }
+
+/* Violet felt, geometric card backs and seven places for coins. */
+.room-heading { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 2px 0 12px; }
+.room-heading > small { color: var(--game-muted); font-size: 10px; }
+.push-table, .ladder-table { max-width: 600px; }
+.push-felt { background: radial-gradient(ellipse at 50% 20%, #8667e5, #5740b3); border-radius: 24px; border: 1px solid #7355d1; box-shadow: inset 0 0 0 5px #ffffff0d; padding: 25px 18px 24px; color: #fff; }
+.push-pot, .ladder-prize { display: grid; gap: 7px; text-align: center; }
+.push-pot > span, .ladder-prize > span { font-size: 11px; opacity: .8; }
+.push-pot strong, .ladder-prize strong { font-size: 36px; letter-spacing: -.04em; font-variant-numeric: tabular-nums; }
+.push-card-stage { display: flex; justify-content: center; align-items: center; gap: 28px; height: 220px; }
+.push-deck { position: relative; width: 96px; height: 136px; transform: rotate(-12deg); }
+.push-deck i { position: absolute; inset: 0; border: 4px solid #fff; border-radius: 10px; background: repeating-linear-gradient(45deg, #425cb8 0 4px, #728adc 4px 5px); box-shadow: 0 3px 4px #24081255; }
+.push-deck i:nth-child(1) { transform: translate(-5px, 6px) rotate(-6deg); }
+.push-deck i:nth-child(2) { transform: translate(-2px, 3px) rotate(-3deg); }
+.push-card { width: 104px; height: 150px; perspective: 800px; transform: rotate(7deg); }
+.push-card-inner { position: relative; width: 100%; height: 100%; transform-style: preserve-3d; }
+.push-card-back, .push-card-face { position: absolute; inset: 0; border: 5px solid #fff; border-radius: 12px; backface-visibility: hidden; display: flex; flex-direction: column; align-items: center; justify-content: center; box-shadow: 0 7px 15px #2c121255; }
+.push-card-back { background: repeating-linear-gradient(45deg, #425cb8 0 5px, #728adc 5px 6px); color: #fff; }
+.push-card-back b { display: grid; place-items: center; border: 1px solid #b6d4ff; width: 54px; height: 70px; border-radius: 50%; font-size: 29px; font-weight: 600; background: #3c57a9; }
+.push-card-face { transform: rotateY(180deg); background: #fff; color: #8b5500; }
+.push-card-face b { width: 64px; height: 64px; display: grid; place-items: center; background: #ffcc45; box-shadow: inset 0 0 0 4px #efa91c, inset 0 0 0 6px #fff0b0; border-radius: 50%; font-size: 42px; }
+.push-card-face small { margin-top: 10px; font-size: 16px; font-weight: 700; }
+.push-card-face.is-bomb { background: #fff0f2; color: #bd3248; }
+.push-card-face.is-bomb b { background: #343c51; color: #ffb4c4; box-shadow: none; }
+.push-card.is-revealed .push-card-inner { transform: rotateY(180deg); }
+.push-card.is-turning .push-card-inner { animation: game-card-turn 660ms cubic-bezier(.25,.6,.3,1) both; }
+.push-card.is-waiting { animation: game-card-wait 800ms ease-in-out infinite; }
+.push-table-talk { text-align: center; font-size: 12px; line-height: 1.7; min-height: 22px; }
+.push-coins { display: flex; justify-content: center; gap: 8px; margin-top: 22px; }
+.push-coins span { width: 28px; height: 28px; border: 1px dashed #ffffff65; border-radius: 50%; color: #ffffff65; display: grid; place-items: center; font-size: 19px; }
+.push-coins .is-found { color: #8b5500; background: #ffcc45; border: 2px solid #efa91c; box-shadow: 0 2px 0 #bb7c10, inset 0 0 0 1px #fff0b0; }
+.push-odds { padding: 20px 0; text-align: center; font-size: 12px; }
+.push-odds small { display: block; color: var(--game-muted); margin-top: 7px; }
+.room-actions { display: flex; gap: 10px; }
+.room-actions > button { flex: 1; }
+.game-help { text-align: center; }
+
+/* Five actual steps, with a pawn whose position is held until the verdict. */
+.ladder-landscape { border-radius: 24px; background: linear-gradient(165deg, #e6f7ff, #bcdfff); color: #174466; padding: 20px 20px 18px; overflow: hidden; border: 1px solid #afd3f5; }
+.ladder-stairs { position: relative; height: 178px; max-width: 430px; margin: 0 auto; }
+.ladder-stair { position: absolute; bottom: 18px; left: calc((var(--floor) - 1) * 18% + 9%); width: 18%; height: calc(var(--floor) * 24px); background: linear-gradient(90deg, #5d9dec, #8dbffa); border-top: 6px solid #e5f3ff; box-shadow: 4px 4px 0 #3676b928; color: #123f79; }
+.ladder-stair > span { position: absolute; bottom: 7px; left: 50%; transform: translateX(-50%); font-size: 11px; opacity: .7; }
+.ladder-stair.is-done { background: linear-gradient(90deg, #1269d7, #3b93ee); border-top-color: #a6e3ff; color: #fff; }
+.ladder-stair.is-next { border-top-color: #fff; }
+.ladder-stair > i { position: absolute; top: -38px; width: 100%; text-align: center; color: #f39700; font-size: 25px; font-style: normal; }
+.ladder-traveler { position: absolute; left: calc(max(0, var(--position) - 1) * 18% + 16%); bottom: calc(var(--position) * 24px + 18px); width: 20px; height: 32px; transform: translateX(-50%); transition: left 360ms ease, bottom 360ms ease; z-index: 1; }
+.ladder-traveler::before { content: ''; position: absolute; width: 13px; height: 13px; border-radius: 50%; left: 4px; top: 0; background: #f05e4f; box-shadow: inset 2px 1px 0 #ffafa1; }
+.ladder-traveler i { position: absolute; left: 1px; bottom: 0; width: 19px; height: 20px; border-radius: 7px 7px 4px 4px; background: #f05e4f; box-shadow: inset 2px 0 0 #ffafa1, 0 3px 0 #ac3439; }
+.is-climbing .ladder-traveler { animation: game-pawn-wait 600ms ease-in-out infinite; }
+.is-fallen .ladder-traveler { transform: translateX(-50%) rotate(65deg); transform-origin: bottom; }
+.ladder-landscape > p { text-align: center; font-size: 11px; min-height: 18px; }
+.ladder-next { text-align: center; padding: 24px 0 16px; }
+.ladder-next h3 { font-size: 16px; }
+.ladder-next p { font-size: 11px; color: var(--game-muted); margin-top: 8px; }
+.ladder-paths { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
+.ladder-paths button { background: var(--game-surface); color: var(--game-ink); border: 1px solid var(--game-line); border-radius: 16px; padding: 12px 4px; display: grid; gap: 7px; justify-items: center; }
+.ladder-paths i { font-style: normal; font-size: 27px; line-height: 1; width: 38px; height: 38px; border-radius: 50%; color: #175bb8; background: #e1eeff; display: grid; place-items: center; margin-bottom: 3px; }
+.ladder-paths .is-medium i { background: #eee4ff; color: #6837bf; }
+.ladder-paths .is-risky i { background: #ffe7df; color: #b64235; }
+.ladder-paths strong { font-size: 13px; }
+.ladder-paths span { font-size: 11px; color: var(--game-muted); }
+.ladder-paths small { font-size: 11px; color: var(--game-muted); margin-top: 7px; }
+.ladder-paths b { font-size: 16px; font-variant-numeric: tabular-nums; }
+.ladder-cashout { width: 100%; margin-top: 18px; }
+
+/* A receipt, shared across games. No automatic repeat stake. */
+.game-result { background: var(--game-surface); color: var(--game-ink); text-align: center; padding: 25px 20px 20px; border-radius: 18px; margin-top: 20px; animation: game-result-in 240ms ease-out; }
+.game-result h3 { font-size: 21px; margin: 0 0 4px; font-weight: 600; }
+.game-result-net { display: block; font-size: 40px; margin: 12px 0; }
+.game-result-net small { font-size: 11px; font-weight: 500; margin-left: 8px; }
+.game-result.is-loss .game-result-net { color: var(--game-loss); }
+.game-result p { color: var(--game-muted); font-size: 12px; line-height: 1.9; }
+.game-result > div { display: flex; gap: 10px; margin-top: 20px; }
+.game-result button { flex: 1; }
+.game-section-heading { display: flex; align-items: end; justify-content: space-between; padding: 8px 0 24px; }
+.game-section-heading h2 { font-size: 19px; margin: 0; }
+.game-section-heading > small { font-size: 11px; color: var(--game-muted); }
+.game-record { display: flex; gap: 12px; padding: 20px 0; border-top: 1px solid var(--game-line); }
+.game-record-mark { width: 38px; height: 44px; border-radius: 8px; background: var(--game-surface); border: 1px solid var(--game-line); flex-shrink: 0; display: grid; place-items: center; font-size: 20px; font-weight: 600; }
+.game-record-main { min-width: 0; flex: 1; }
+.game-record-main header { display: flex; justify-content: space-between; align-items: start; gap: 8px; }
+.game-record-main header div { display: grid; gap: 6px; }
+.game-record-main header span { font-size: 10px; color: var(--game-muted); }
+.game-record-main header strong { font-size: 14px; }
+.game-record time { font-size: 10px; color: var(--game-muted); white-space: nowrap; }
+.game-record-money { display: flex; flex-wrap: wrap; gap: 6px 12px; margin-top: 14px; font-size: 10px; color: var(--game-muted); }
+.game-record-money strong { margin-left: auto; font-size: 15px; color: var(--game-accent); }
+.game-record.is-loss .game-record-money strong { color: var(--game-loss); }
+.game-record details { font-size: 11px; color: var(--game-muted); margin-top: 8px; line-height: 1.8; }
+.game-record summary { min-height: 36px; padding: 8px 0; cursor: pointer; }
+.game-record-steps { padding-left: 16px; }
+.game-record-steps li { margin: 6px 0; }
+.dice-record > span { display: block; margin: 12px 0; font-size: 10px; }
+.dice-record .game-dice-row { justify-content: flex-start; padding-left: 3px; }
+.dice-record .game-die { --game-die-size: 27px; }
+.game-record-empty { text-align: center; color: var(--game-muted); padding: 60px 16px; line-height: 2; }
+.game-record-empty > span { font-size: 42px; }
+.game-inline-error { color: var(--game-loss); font-size: 12px; }
+.game-load-more { display: block; margin: auto; }
+
+/* Three layers on purpose: `filter` is a grouping property, so keeping it on
+   the same element as `perspective` risks flattening the cube. */
+.game-die {
+    --game-die-size: 40px;
+    filter: drop-shadow(0 4px 4px rgba(8, 24, 45, .25));
+    height: var(--game-die-size);
+    position: relative;
+    width: var(--game-die-size);
+}
+
+.game-die-stage { height: 100%; perspective: calc(var(--game-die-size) * 13); width: 100%; }
+
+/* Light lives here rather than on the faces: it must not rotate with the cube,
+   otherwise whichever face is turned forward reads as unlit. Sitting outside
+   the perspective layer is what lets z-index hold it above the die. */
+.game-die::after {
+    background: radial-gradient(122% 112% at 25% 15%, rgba(255, 255, 255, .2), transparent 56%);
+    border-radius: 50%;
+    content: "";
+    inset: -6%;
+    pointer-events: none;
+    position: absolute;
+    z-index: 2;
+}
+
+.game-die-cube { height: 100%; position: relative; transform-style: preserve-3d; width: 100%; }
+
+.game-die-face {
+    background:
+        linear-gradient(var(--game-die-shade, transparent), var(--game-die-shade, transparent)),
+        radial-gradient(128% 128% at 27% 20%, #fff 0%, #f9fbff 34%, #e5ecf5 72%, #b9c8db 100%);
+    border-radius: calc(var(--game-die-size) * .18);
+    box-shadow:
+        inset 0 0 0 1px rgba(64, 91, 127, .25),
+        inset 0 1.5px 1px rgba(255, 255, 255, .95),
+        inset 0 calc(var(--game-die-size) * -.07) calc(var(--game-die-size) * .12) rgba(60, 80, 110, .22);
+    height: 100%;
+    position: absolute;
+    width: 100%;
+}
+
+.game-die-face.is-front { transform: translateZ(calc(var(--game-die-size) / 2)); }
+.game-die-face.is-back { --game-die-shade: rgba(25, 44, 70, .16); transform: rotateY(180deg) translateZ(calc(var(--game-die-size) / 2)); }
+.game-die-face.is-right { --game-die-shade: rgba(25, 44, 70, .1); transform: rotateY(90deg) translateZ(calc(var(--game-die-size) / 2)); }
+.game-die-face.is-left { --game-die-shade: rgba(25, 44, 70, .13); transform: rotateY(-90deg) translateZ(calc(var(--game-die-size) / 2)); }
+.game-die-face.is-top { --game-die-shade: rgba(255, 255, 255, .1); transform: rotateX(90deg) translateZ(calc(var(--game-die-size) / 2)); }
+.game-die-face.is-bottom { --game-die-shade: rgba(25, 44, 70, .2); transform: rotateX(-90deg) translateZ(calc(var(--game-die-size) / 2)); }
+.game-die-face.is-result { --game-die-shade: transparent; }
+
+.game-die-pips { display: grid; grid-template: repeat(3, 1fr) / repeat(3, 1fr); inset: 17%; place-items: center; position: absolute; }
+
+/* Engraved, not embossed: dark rim inside the top of the pit, reflected light at
+   the bottom, and a highlight just below the pit on the die surface. */
+.game-die-pip {
+    background: radial-gradient(circle at 50% 76%, #526079 0%, #1a2336 55%, #101827 100%);
+    border-radius: 50%;
+    box-shadow:
+        inset 0 1.5px 2px rgba(0, 0, 0, .8),
+        inset 0 -1px 1.5px rgba(168, 190, 224, .35),
+        0 1px 0 rgba(255, 255, 255, .78);
+    height: 68%;
+    width: 68%;
+}
+
+/* The hit glow must avoid `transform`: the roll animation owns that property on
+   both the shell and the cube, and a Web Animations keyframe outranks CSS. */
+.game-die.is-hit { animation: game-die-hit 520ms ease-out forwards; }
+.game-die.is-hit .game-die-stage { animation: game-die-hit-pop 320ms ease-out; }
+
+
+.game-die-face.is-front .game-die-pip { background: radial-gradient(circle at 50% 75%, #ef666e, #c32342 65%, #81162c); width: 90%; height: 90%; }
+.game-die.is-hit { filter: drop-shadow(0 0 5px #83ffed); }
+
+@keyframes game-cup-shake { 0%, 100% { transform: rotate(-12deg) translateY(0); } 35% { transform: rotate(12deg) translateY(-6px); } 70% { transform: rotate(-16deg) translateY(-3px); } }
+@keyframes game-card-turn { from { transform: rotateY(0deg); } to { transform: rotateY(180deg); } }
+@keyframes game-card-wait { 50% { transform: rotate(10deg) translateY(-5px); } }
+@keyframes game-pawn-wait { 50% { translate: 0 -7px; } }
+@keyframes game-result-in { from { opacity: 0; transform: translateY(5px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes game-die-hit { from { filter: drop-shadow(0 0 0 transparent); } to { filter: drop-shadow(0 0 6px #83ffed); } }
+@keyframes game-die-hit-pop { 50% { scale: 1.08; } }
+@media (hover: hover) {
+    .game-tile:hover { transform: translateY(-3px);  }
+    .game-tile:hover img { transform: rotate(-3deg) scale(1.04); }
+    .ladder-paths button:not(:disabled):hover { border-color: var(--game-accent); }
+}
+
+@container (max-width: 370px) {
+    .game-header { padding-inline: 14px; }
+    .game-scroll { padding: 16px 12px 24px; }
+    .game-nav { padding-inline: 14px; gap: 20px; }
+    .dice-table, .dice-showdown { padding: 20px 12px 14px; border-radius: 20px; }
+    .dice-builder { padding: 16px 12px; }
+    .dice-face-picker button { padding: 8px; }
+    .dice-face-picker .game-die { --game-die-size: 27px; }
+    .game-dice-row { gap: 12px; }
+    .game-dice-row .game-die { --game-die-size: 36px; }
+    .dice-hidden-count { display: none; }
+    .dice-open-cup { padding-inline: 12px; }
+    .game-result { padding: 22px 14px 16px; }
+    .game-result button { padding-inline: 10px; }
+    .game-record { gap: 9px; }
+    .dice-record .game-die { --game-die-size: 25px; }
+    .room-actions { flex-direction: column; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .game-app *, .game-app *::before, .game-app *::after { animation: none !important; transition: none !important; }
+}

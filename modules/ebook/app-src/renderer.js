@@ -1636,7 +1636,6 @@ export function renderSettingsDialog(state = {}) {
                         isBusy: state.isBusy,
                         canDeletePreset: (state.config?.presetNames || []).length > 1,
                         configLoadError: state.configLoadError,
-                        configExternalChangePending: state.configExternalChangePending,
                     })}
                 </div>
             </div>

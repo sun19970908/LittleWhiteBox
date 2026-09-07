@@ -4,7 +4,7 @@ const { createHash } = require('node:crypto');
 
 const MAX_DRAW_RUNS_GLOBAL = 50;
 const MAX_DRAW_RUNS_PER_OWNER = 8;
-const MAX_CONCURRENT_PLANNERS_PER_OWNER = 1;
+const MAX_CONCURRENT_PLANNERS_PER_OWNER = 2;
 const MAX_CONCURRENT_PLANNERS_GLOBAL = 4;
 const MAX_TOTAL_ENVELOPE_BYTES = 32 * 1024 * 1024;
 const RUN_ERROR_RETENTION_MS = 60 * 60 * 1000;
@@ -108,19 +108,27 @@ function buildDisplayMetadata(artifact = {}) {
 }
 
 function createProgressDiagnostic(onUpdate) {
-    const record = { stage: 'planning', attempt: 0, maxAttempts: 3 };
+    const record = {
+        stage: 'planning',
+        attempt: 0,
+        maxAttempts: 3,
+        validationFailures: [],
+    };
     const apply = (patch = {}) => {
         if (typeof patch.stage === 'string') record.stage = patch.stage;
         if (Number.isInteger(patch.attemptCount)) record.attempt = patch.attemptCount;
         if (Number.isInteger(patch.progress?.total)) record.maxAttempts = patch.progress.total;
-        onUpdate({ ...record });
+        if (Array.isArray(patch.validationFailures)) {
+            record.validationFailures = cloneJson(patch.validationFailures) || [];
+        }
+        onUpdate(cloneJson(record));
     };
     return Object.freeze({
         update: apply,
         applyProviderConfig() {},
         succeed: apply,
         fail(_error, patch = {}) { apply(patch); },
-        snapshot() { return { ...record }; },
+        snapshot() { return cloneJson(record); },
     });
 }
 
@@ -350,7 +358,12 @@ class DrawRunManager {
         const controller = new AbortController();
         run.abortController = controller;
         run.state = 'planning';
-        run.progress = { stage: 'planning', attempt: 0, maxAttempts: 3 };
+        run.progress = {
+            stage: 'planning',
+            attempt: 0,
+            maxAttempts: 3,
+            validationFailures: [],
+        };
         run.updatedAt = this.now();
         const diagnostic = createProgressDiagnostic((progress) => {
             if (!this.runs.has(run.key)) return;
@@ -494,7 +507,7 @@ class DrawRunManager {
             state: run.state,
             sourceHash: run.sourceHash,
             provider: run.provider,
-            progress: { ...run.progress },
+            progress: cloneJson(run.progress),
             childJobId: run.childJobId,
             handoffManifest: cloneJson(run.handoffManifest),
             createdAt: run.createdAt,

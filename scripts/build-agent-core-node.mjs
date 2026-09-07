@@ -194,7 +194,7 @@ function buildLicensesDocument(packages) {
         ...item.licenseFiles.flatMap(file => [
             `License file: ${file.name}`,
             '',
-            file.text,
+            file.text.replace(/\r\n?/g, '\n'),
         ]),
     ].join('\n'));
     return [

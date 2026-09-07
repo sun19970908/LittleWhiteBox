@@ -184,7 +184,6 @@ export function semanticFingerprint(document: TavernMapDocument): unknown {
             viewBox: document.meta.viewBox,
             theme: document.meta.theme,
             status: document.meta.status,
-            hint: document.meta.hint,
         },
         elements,
     });

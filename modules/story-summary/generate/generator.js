@@ -17,6 +17,7 @@ import {
     parseSummaryJson,
 } from "./llm.js";
 import { filterText } from "../vector/utils/text-filter.js";
+import { getSummarySourceEnd } from './source-boundary.js';
 
 const MODULE_ID = 'summaryGenerator';
 const SUMMARY_SESSION_ID = 'xb9';
@@ -197,7 +198,7 @@ export function buildIncrementalSlice(targetMesId, lastSummarizedMesId, maxPerRu
     const { chat, name1, name2 } = getContext();
 
     const start = Math.max(0, (lastSummarizedMesId ?? -1) + 1);
-    const rawEnd = Math.min(targetMesId, chat.length - 1);
+    const rawEnd = getSummarySourceEnd(chat, targetMesId);
     const end = Math.min(rawEnd, start + maxPerRun - 1);
 
     if (start > end) return { text: "", count: 0, range: "", endMesId: -1 };
@@ -253,7 +254,9 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     const slice = buildIncrementalSlice(mesId, lastSummarized, maxPerRun);
 
     if (slice.count === 0) {
-        onStatus?.("没有新的对话需要总结");
+        const { chat } = getContext();
+        onStatus?.(getSummarySourceEnd(chat, mesId) < Math.min(mesId, chat.length - 1)
+            ? "末尾对话仍在更新，将在后续剧情开始后纳入总结" : "没有新的对话需要总结");
         return { success: true, noContent: true };
     }
 

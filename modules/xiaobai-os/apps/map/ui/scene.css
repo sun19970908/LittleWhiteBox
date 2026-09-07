@@ -1,0 +1,45 @@
+.map-scene-viewport {
+    --scene-material-mix: 10%;
+    --scene-highlight: #fff8e5;
+    --scene-shadow: #48503b;
+    --scene-edge: #747e67;
+    --scene-soft-edge: #a6af93;
+    --scene-wall: #d4d6bd;
+    --scene-ground: #dfe4d2;
+    --scene-object: #bbc2b1;
+    --scene-road: #e2d4b1;
+    --scene-water: #96c2ba;
+    --scene-water-edge: #8eaaa0;
+    --scene-leaf: #91ae7b;
+    --scene-leaf-light: #d0dcaf;
+    --scene-leaf-dark: #60815d;
+    background: radial-gradient(ellipse at 40% 30%, var(--scene-glow), transparent 70%), var(--map-canvas-bg);
+}
+.theme-dark .map-scene-viewport {
+    --scene-material-mix: 56%;
+    --scene-highlight: #d5dfcf;
+    --scene-shadow: #111e19;
+    --scene-edge: #93a48d;
+    --scene-soft-edge: #5d715c;
+    --scene-wall: #71816c;
+    --scene-ground: #3d4b3c;
+    --scene-object: #53614f;
+    --scene-road: #838466;
+    --scene-water: #517873;
+    --scene-water-edge: #73918a;
+    --scene-leaf: #4f7458;
+    --scene-leaf-light: #98b487;
+    --scene-leaf-dark: #2b4c3d;
+}
+.scene-object { overflow: hidden; }
+.scene-object-edge, .scene-object-inset, .scene-object-shine, .scene-object-seam { vector-effect: non-scaling-stroke; stroke-linejoin: round; }
+.scene-object-edge { stroke: var(--scene-edge); stroke-width: 1.3; }
+.scene-object-inset { stroke: var(--scene-shadow); stroke-opacity: .3; stroke-width: .7; }
+.scene-object-shine { fill: none; stroke: var(--scene-highlight); stroke-width: .8; stroke-opacity: .6; }
+.scene-object-seam { fill: none; stroke: var(--scene-shadow); stroke-width: .8; stroke-opacity: .46; }
+.map-scene-element.is-inferred .scene-object-edge { stroke-dasharray: 8 6; }
+.map-scene-element.is-unknown .scene-object-edge { stroke-dasharray: 3 7; }
+.scene-labels { pointer-events: none; }
+.map-scene-viewport .map-scene-label { font-size: calc(11px * var(--scene-unit-scale)); stroke-width: calc(3px * var(--scene-unit-scale)); }
+.map-scene-viewport .map-scene-label.is-primary { font-size: calc(13px * var(--scene-unit-scale)); }
+.map-scene-viewport .scene-player-halo { fill: var(--map-accent); stroke: none; opacity: .16; }

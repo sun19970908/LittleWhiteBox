@@ -14,7 +14,7 @@ export function getUnsupportedManagedFeatures({
         ['message preview/purge', settings.preview?.enabled],
         ['story-outline floor tools', settings.storyOutline?.enabled],
         ['TTS floor tools', settings.tts?.enabled],
-        ['fourth-wall floor tools', settings.fourthWall?.enabled],
+        ['Xiaobai OS', settings.xiaobaiOs?.enabled],
         ['draw provider', isDrawProviderActive()],
         ['custom template iframe', hasActiveCustomTemplate()],
     ].filter(([, enabled]) => enabled).map(([name]) => name);

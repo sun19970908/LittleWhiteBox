@@ -21,18 +21,26 @@ Files:
 
 - `../agent-core/config.js`
 - `../agent-core/provider-config.js`
+- `../agent-core/provider-resolution.js`
+- `../agent-core/settings-repository.js`
+- `../agent-core/reasoning-capabilities.js`
+- `../agent-core/reasoning-config.js`
 - `../agent-core/ui/settings-panel.js`
 - `../agent-core/ui/settings-markup.js`
 - `../agent-core/current-plans.js`
 - `../agent-core/plan-ledger.js`
 - `../agent-core/runtime/delegate-runner.js`
+- `../agent-core/runtime/protocol.js`
+- `../agent-core/runtime/context-tokens.js`
+- `../agent-core/runtime/light-brake.js`
 - `../agent-core/adapters/*`
 - `../agent-core/tools/*`
+- `../agent-core/tavily-search.js`
 
 Responsibilities:
 
-- 提供所有 Agent App 共用的模型配置、配置面板逻辑/markup、provider 适配器、`Plan*` 账本、`[Current plans]` 注入和 `DelegateRun`
-- 不拥有 DOM、iframe、host window、具体工具域、`local/` 工作区或 `book/` 书库
+- 提供所有 Agent App 共用的模型配置、配置面板逻辑/markup、provider 解析与适配、推理能力判定、`Plan*` 账本、`[Current plans]` 注入、`DelegateRun`、通用协议与工具原语
+- 不拥有任何具体 App 的页面、iframe、host window、具体工具域、`local/` 工作区或 `book/` 书库；可拥有跨 App 复用且不含业务状态的 UI 原语
 - 需要持久化表时由具体 App 显式传入，例如 assistant 传 `LittleWhiteBox_Assistant.plans`，ebook 传 `LittleWhiteBox_Ebook.plans`
 
 Rule:
@@ -169,10 +177,12 @@ Files:
 - `../agent-core/adapters/openai-compatible.js`
 - `../agent-core/adapters/openai-responses.js`
 - `../agent-core/adapters/sillytavern-openai-compatible.js`
+- `../agent-core/adapters/sillytavern-claude.js`
+- `../agent-core/adapters/sillytavern-google.js`
 
 Responsibilities:
 
-- 把统一 runtime 请求翻译成不同 provider 的实际 API 调用
+- 把统一 runtime 请求翻译成直连 provider，或 SillyTavern 已配置的 OpenAI-compatible、Claude、Google 后端调用
 - 保留 provider 原生 payload，供后续工具轮继续回放
 - 在支持的 provider 上复用 session tool loop 语义
 
@@ -194,13 +204,32 @@ Responsibilities:
 - 记忆区文件标准化
 - `local/` 工作区工具运行时与共享 mutation 规则
 
+`shared/`同时包含助手专属的 workspace / local sources / session 实现，及少数迁移壳。只有明确 re-export `agent-core` 的文件是迁移壳；其余仍由小白助手拥有。
+
 这些模块应该保持“工作区能力”定位，不反向依赖 host window 或模型适配器。
+
+### 10. JS API Boundary
+
+Files:
+
+- `runtime-src/jsapi-runtime.js`
+- `st-jsapi-manifest.json`
+- `dist/jsapi-runtime.js`
+- `assistant.js`
+
+Responsibilities:
+
+- `runtime-src/jsapi-runtime.js` owns the source for the browser-side JS API analysis and validation runtime.
+- `st-jsapi-manifest.json` is the generated manifest consumed by the host bridge; `dist/jsapi-runtime.js` is its generated runtime artifact.
+- `assistant.js` is the host-side owner that loads the manifest/runtime and routes JS API requests. The iframe only renders their observable results.
+
+JS API remains assistant-specific. It must not move into `agent-core`, and it must not become a generic host-tool backdoor.
 
 ## Dependency Direction
 
 Preferred direction:
 
-- `agent-core/*` -> 无 UI、无具体工具域的通用 Agent 能力；assistant/ebook 都可以依赖它
+- `agent-core/*` -> 无具体 App UI、无具体工具域的通用 Agent 能力；assistant/ebook 都可以依赖它
 - `agent-core/tools/*` -> 无 `local/...` / `book/...` 认知的工具原语，例如 patch 和文本文件类型判断
 - `assistant.js` -> 宿主桥接、窗口控制、host tool / storage / runtime 接线
 - `main.js` -> iframe app 装配、状态 wiring、前缀注入与渲染调度

@@ -1,0 +1,180 @@
+.agent-api-app {
+    --bg-primary: #0d1117;
+    --bg-secondary: #161b22;
+    --bg-tertiary: #21262d;
+    --bg-input: rgba(0, 0, 0, .25);
+    --text-primary: #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted: #484f58;
+    --border: rgba(255, 255, 255, .1);
+    --border-focus: rgba(212, 165, 116, .5);
+    --accent: #d4a574;
+    --accent-soft: rgba(212, 165, 116, .15);
+    --success: #3fb950;
+    --danger: #f85149;
+    --warning: #d29922;
+    height: 100%;
+    color: var(--text-primary);
+    background: var(--bg-primary);
+    color-scheme: dark;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-size: 14px;
+    line-height: 1.5;
+    overflow: hidden;
+}
+
+.agent-api-scroll {
+    height: 100%;
+    padding: 56px 24px 32px;
+    overflow: hidden auto;
+    scrollbar-color: var(--border-focus) transparent;
+}
+
+.agent-api-content {
+    width: 100%;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.agent-api-header {
+    margin-bottom: 20px;
+}
+
+.agent-api-header h1 {
+    margin: 0 0 4px;
+    font-size: 20px;
+    font-weight: 600;
+    line-height: 1.5;
+}
+
+.agent-api-header p {
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 13px;
+}
+
+.agent-api-panel [hidden] {
+    display: none !important;
+}
+
+.agent-api-state {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    min-height: 84px;
+    padding: 20px;
+    color: var(--text-secondary);
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+
+.agent-api-state strong,
+.agent-api-state span {
+    display: block;
+}
+
+.agent-api-state span {
+    margin-top: 4px;
+    color: var(--text-muted);
+    font-size: 11px;
+    overflow-wrap: anywhere;
+}
+
+.agent-api-state.is-error strong {
+    color: var(--danger);
+}
+
+.agent-api-state button,
+.agent-api-connection button {
+    flex: 0 0 auto;
+    min-height: 40px;
+    padding: 10px 16px;
+    color: var(--text-primary);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font: inherit;
+    font-size: 13px;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color .16s ease, border-color .16s ease, background .16s ease;
+}
+
+.agent-api-state button:hover,
+.agent-api-state button:focus-visible,
+.agent-api-connection button:hover:not(:disabled),
+.agent-api-connection button:focus-visible {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--border-focus);
+    outline: none;
+}
+
+.agent-api-connection {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    margin-top: 16px;
+    padding: 20px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+}
+
+.agent-api-connection p {
+    min-width: 0;
+    margin: 0;
+    color: var(--text-secondary);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.agent-api-connection.is-success {
+    border-color: color-mix(in srgb, var(--success) 42%, var(--border));
+}
+
+.agent-api-connection.is-success p {
+    color: var(--success);
+}
+
+.agent-api-connection.is-error {
+    border-color: color-mix(in srgb, var(--danger) 48%, var(--border));
+}
+
+.agent-api-connection.is-error p {
+    color: var(--danger);
+}
+
+.agent-api-connection button:disabled,
+.agent-api-state button:disabled {
+    opacity: .42;
+    cursor: not-allowed;
+}
+
+@media (max-width: 560px) {
+    .agent-api-scroll {
+        padding-right: 16px;
+        padding-left: 16px;
+    }
+
+    .agent-api-state,
+    .agent-api-connection {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .agent-api-state button,
+    .agent-api-connection button {
+        width: 100%;
+    }
+}
+
+@media (max-width: 760px), (pointer: coarse) and (max-height: 760px) {
+    .agent-api-scroll {
+        padding-top: calc(24px + env(safe-area-inset-top));
+        padding-bottom: calc(28px + env(safe-area-inset-bottom));
+    }
+}

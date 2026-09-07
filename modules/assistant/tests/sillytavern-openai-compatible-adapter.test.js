@@ -2097,9 +2097,43 @@ test('host stream generation preserves HTML service errors with their HTTP statu
         await assert.rejects(
             async () => streamHostChatCompletion({ messages: [] }, () => {}),
             (error) => {
-                assert.match(error.message, /HTTP 503 Service Unavailable/);
-                assert.match(error.message, /Service temporarily unavailable/);
+                assert.equal(
+                    error.message,
+                    '酒馆后端返回了非 JSON 的 HTML 页面（HTTP 503 Service Unavailable）：Service temporarily unavailable',
+                );
                 assert.doesNotMatch(error.message, /CSRF token 已失效/);
+                return true;
+            },
+        );
+    } finally {
+        globalThis.fetch = originalFetch;
+    }
+});
+
+test('host stream generation extracts provider JSON errors instead of exposing the response body', async () => {
+    const originalFetch = globalThis.fetch;
+    const rawBody = JSON.stringify({
+        error: {
+            message: '无效的令牌，请检查 API Key。',
+            type: 'new_api_error',
+        },
+    });
+    globalThis.fetch = async () => ({
+        ok: false,
+        status: 401,
+        statusText: 'Unauthorized',
+        headers: { get: () => 'application/json' },
+        text: async () => rawBody,
+    });
+
+    try {
+        await assert.rejects(
+            async () => streamHostChatCompletion({ messages: [] }, () => {}),
+            (error) => {
+                assert.equal(error.message, '无效的令牌，请检查 API Key。');
+                assert.equal(error.status, 401);
+                assert.equal(error.body, rawBody);
+                assert.doesNotMatch(error.message, /new_api_error|\{"error"/);
                 return true;
             },
         );

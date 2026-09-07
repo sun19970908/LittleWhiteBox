@@ -6,9 +6,20 @@ import { EventCenter } from "./core/event-manager.js";
 import { initPluginUpdate } from "./modules/plugin-update/plugin-update.js";
 import { initTasks } from "./modules/scheduled-tasks/scheduled-tasks.js";
 import { initMessagePreview, addHistoryButtonsDebounced, configureMessagePreviewRuntime, removeOwnedHistoryButtons } from "./modules/message-preview.js";
+import {
+    cleanupChatMessageImages,
+    initChatMessageImages,
+    refreshChatMessageImages,
+} from './modules/draw/shared/chat-message-images.js';
 import { initImmersiveMode } from "./modules/immersive-mode.js";
 import { hasActiveCustomTemplate, hasCustomTemplateForMessage, initTemplateEditor } from "./modules/template-editor/template-editor.js";
-import { initFourthWall, initFourthWallFloorTools, refreshFourthWallFloorTools, closeFourthWall, openFourthWall } from "./modules/fourth-wall/fourth-wall.js";
+import {
+    cleanupXiaobaiOs,
+    createDefaultXiaobaiOsSettings,
+    initXiaobaiOs,
+    prepareXiaobaiOsSettings,
+    setXiaobaiOsEnabled,
+} from "./modules/xiaobai-os/dist/xiaobai-os-host.js";
 import { configureButtonCollapseRuntime, initButtonCollapse } from "./widgets/button-collapse.js";
 import { initVariablesPanel, cleanupVariablesPanel, configureVariablesPanelRuntime } from "./modules/variables/variables-panel.js";
 import { initStreamingGeneration } from "./modules/streaming-generation.js";
@@ -59,7 +70,7 @@ extension_settings[EXT_ID] = extension_settings[EXT_ID] || {
     tasks: { enabled: true, globalTasks: [], processedMessages: [], character_allowed_tasks: [] },
     preview: { enabled: false },
     immersive: { enabled: false },
-    fourthWall: { enabled: false },
+    xiaobaiOs: createDefaultXiaobaiOsSettings(),
     audio: { enabled: true },
     variablesPanel: { enabled: false },
     variablesCore: { enabled: true },
@@ -78,7 +89,13 @@ extension_settings[EXT_ID] = extension_settings[EXT_ID] || {
 };
 
 const settings = extension_settings[EXT_ID];
-if (settings.dynamicPrompt && !settings.fourthWall) settings.fourthWall = settings.dynamicPrompt;
+let xiaobaiOsSettingsError = null;
+const xiaobaiOsSettingsReady = prepareXiaobaiOsSettings().catch((error) => {
+    xiaobaiOsSettingsError = error;
+    console.error('[LittleWhiteBox] 准备小白 OS 设置失败:', error);
+    return null;
+});
+
 settings.audio ||= {};
 settings.audio.enabled = true;
 settings.wrapperIframe = true;
@@ -529,7 +546,7 @@ function toggleSettingsControls(enabled) {
     const controls = [
         'xiaobaix_recorded_enabled', 'xiaobaix_preview_enabled',
         'scheduled_tasks_enabled', 'xiaobaix_template_enabled',
-        'xiaobaix_immersive_enabled', 'xiaobaix_fourth_wall_open_settings',
+        'xiaobaix_immersive_enabled', 'xiaobaix_os_enabled',
         'xiaobaix_variables_panel_enabled',
         'xiaobaix_use_blob', 'xiaobaix_variables_core_enabled', 'xiaobaix_variables_mode', 'xiaobaix_render_enabled',
         'xiaobaix_max_rendered', 'xiaobaix_story_outline_enabled', 'xiaobaix_story_summary_enabled',
@@ -572,12 +589,6 @@ function syncFeatureActionButtons() {
         tavernButton.disabled = !isXiaobaixEnabled;
         tavernButton.classList.toggle('disabled-action', !isXiaobaixEnabled);
     }
-    const fourthWallButton = document.getElementById('xiaobaix_fourth_wall_open_settings');
-    if (fourthWallButton) {
-        fourthWallButton.disabled = !isXiaobaixEnabled;
-        fourthWallButton.classList.toggle('disabled-action', !isXiaobaixEnabled);
-    }
-
     const drawButton = document.getElementById('xiaobaix_draw_open_settings');
     if (drawButton) {
         drawButton.disabled = !isXiaobaixEnabled;
@@ -588,6 +599,7 @@ function syncFeatureActionButtons() {
 
 async function toggleAllFeatures(enabled) {
     if (enabled) {
+        await xiaobaiOsSettingsReady;
         toggleSettingsControls(true);
         try { window.XB_applyPrevStates && window.XB_applyPrevStates(); } catch (e) { }
         saveSettingsDebounced();
@@ -620,9 +632,15 @@ async function toggleAllFeatures(enabled) {
                 console.error('[LittleWhiteBox] 初始化画图 provider 失败:', e);
             }
             initImageJobRecoveryRuntime();
-            try { initFourthWallFloorTools(); } catch (e) { }
-            if (extension_settings[EXT_ID].fourthWall?.enabled) {
-                try { initFourthWall(); } catch (e) { }
+            try {
+                initChatMessageImages();
+                registerModuleCleanup('chatMessageImages', cleanupChatMessageImages);
+            } catch (e) {
+                console.error('[LittleWhiteBox] 初始化聊天图片失败:', e);
+            }
+            if (!xiaobaiOsSettingsError && settings.xiaobaiOs?.enabled) {
+                await initXiaobaiOs();
+                registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
             }
         }
         if (extension_settings[EXT_ID].preview?.enabled || extension_settings[EXT_ID].recorded?.enabled) {
@@ -647,9 +665,10 @@ async function toggleAllFeatures(enabled) {
         $(document).trigger('xiaobaix:enabled:toggle', [true]);
     } else {
         try { window.XB_captureAndStoreStates && window.XB_captureAndStoreStates(); } catch (e) { }
+        cleanupXiaobaiOs();
+        cleanupChatMessageImages();
         cleanupAllResources();
         if (window.messagePreviewCleanup) try { window.messagePreviewCleanup(); } catch (e) { }
-        if (window.fourthWallCleanup) try { window.fourthWallCleanup(); } catch (e) { }
         if (window.buttonCollapseCleanup) try { window.buttonCollapseCleanup(); } catch (e) { }
         try { cleanupVariablesPanel(); } catch (e) { }
         try { cleanupVariablesCore(); } catch (e) { }
@@ -697,6 +716,38 @@ async function setupSettings() {
 
         if (!settings.enabled) toggleSettingsControls(false);
 
+        $("#xiaobaix_os_enabled").prop("checked", settings.xiaobaiOs?.enabled === true).on("change", async function () {
+            if (!isXiaobaixEnabled || CHAT_SURFACE_MANAGED) return;
+            const enabled = $(this).prop('checked') === true;
+            const previous = settings.xiaobaiOs?.enabled === true;
+            this.disabled = true;
+            try {
+                const current = await setXiaobaiOsEnabled(enabled);
+                xiaobaiOsSettingsError = null;
+                settings.xiaobaiOs = current;
+                if (enabled) {
+                    try {
+                        const initialized = await initXiaobaiOs();
+                        if (!initialized) throw new Error('xiaobai_os_initialization_cancelled');
+                    } catch (error) {
+                        settings.xiaobaiOs = await setXiaobaiOsEnabled(previous);
+                        throw error;
+                    }
+                    registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
+                } else {
+                    cleanupXiaobaiOs();
+                    moduleCleanupFunctions.delete('xiaobaiOs');
+                }
+            } catch (error) {
+                $(this).prop('checked', settings.xiaobaiOs?.enabled === true);
+                console.error('[LittleWhiteBox] 切换小白 OS 失败:', error);
+                toastr.error(`切换小白 OS 失败：${error?.message || error}`);
+            } finally {
+                this.disabled = !isXiaobaixEnabled;
+                syncFeatureActionButtons();
+            }
+        });
+
         const moduleConfigs = [
             { id: 'xiaobaix_recorded_enabled', key: 'recorded' },
             { id: 'xiaobaix_immersive_enabled', key: 'immersive', init: initImmersiveMode },
@@ -731,9 +782,6 @@ async function setupSettings() {
                 }
                 if (!enabled && cleanup) cleanup();
                 if (enabled && init) await init();
-                if (enabled && key === 'tts') {
-                    try { refreshFourthWallFloorTools(); } catch { }
-                }
                 if (key === 'storySummary') {
                     $(document).trigger('xiaobaix:storySummary:toggle', [enabled]);
                 }
@@ -765,7 +813,7 @@ async function setupSettings() {
                 } finally {
                     notifyTavernDrawStatusChanged();
                 }
-                try { refreshFourthWallFloorTools(); } catch { }
+                try { refreshChatMessageImages(); } catch { }
                 syncFeatureActionButtons();
             });
         syncFeatureActionButtons();
@@ -842,15 +890,6 @@ async function setupSettings() {
             await openTavernSafely();
         });
 
-        $("#xiaobaix_fourth_wall_open_settings").on("click", function () {
-            if (!isXiaobaixEnabled) return;
-            try {
-                openFourthWall();
-            } catch (e) {
-                toastr.warning('四次元壁初始化失败');
-            }
-        });
-
         $("#xiaobaix_use_blob").prop("checked", !!settings.useBlob).on("change", async function () {
             if (!isXiaobaixEnabled) return;
             settings.useBlob = $(this).prop("checked");
@@ -906,11 +945,13 @@ async function setupSettings() {
                 templateEditor: 'xiaobaix_template_enabled',
                 variablesPanel: 'xiaobaix_variables_panel_enabled',
                 variablesCore: 'xiaobaix_variables_core_enabled',
+                storySummary: 'xiaobaix_story_summary_enabled',
+                storyOutline: 'xiaobaix_story_outline_enabled',
                 tts: 'xiaobaix_tts_enabled',
                 enaPlanner: 'xiaobaix_ena_planner_enabled'
             };
             const ON = ['templateEditor', 'tasks', 'variablesCore', 'storySummary', 'recorded'];
-            const OFF = ['preview', 'immersive', 'variablesPanel', 'fourthWall', 'storyOutline', 'tts', 'enaPlanner'];
+            const OFF = ['preview', 'immersive', 'variablesPanel', 'storyOutline', 'tts', 'enaPlanner'];
             function setChecked(id, val) {
                 const el = document.getElementById(id);
                 if (el) {
@@ -920,16 +961,23 @@ async function setupSettings() {
             }
             ON.forEach(k => setChecked(MAP[k], true));
             OFF.forEach(k => setChecked(MAP[k], false));
-            settings.fourthWall ||= {};
-            settings.fourthWall.enabled = false;
-            extension_settings[EXT_ID].fourthWall = settings.fourthWall;
-            try { closeFourthWall(); } catch { }
+            const osToggle = document.getElementById('xiaobaix_os_enabled');
+            if (osToggle) osToggle.checked = false;
+            try {
+                settings.xiaobaiOs = await setXiaobaiOsEnabled(false);
+                cleanupXiaobaiOs();
+                moduleCleanupFunctions.delete('xiaobaiOs');
+            } catch (error) {
+                if (osToggle) osToggle.checked = settings.xiaobaiOs?.enabled === true;
+                console.error('[LittleWhiteBox] 重置小白 OS 失败:', error);
+            }
             const previousDrawProvider = settings.drawProvider;
             drawProviderTransitionGeneration++;
             settings.drawProvider = 'disabled';
             extension_settings[EXT_ID].drawProvider = 'disabled';
             $('#xiaobaix_draw_provider').val('disabled');
             await cleanupDrawProvider(previousDrawProvider);
+            refreshChatMessageImages();
             notifyTavernDrawStatusChanged();
             syncFeatureActionButtons();
             setChecked('xiaobaix_use_blob', false);
@@ -1001,6 +1049,7 @@ window.registerModuleCleanup = registerModuleCleanup;
 jQuery(async () => {
     try {
         cleanupDeprecatedData();
+        await xiaobaiOsSettingsReady;
         isXiaobaixEnabled = settings.enabled;
         window.isXiaobaixEnabled = isXiaobaixEnabled;
 
@@ -1069,9 +1118,15 @@ jQuery(async () => {
             }
             if (!CHAT_SURFACE_MANAGED) {
                 initImageJobRecoveryRuntime();
-                try { initFourthWallFloorTools(); } catch (e) { }
-                if (settings.fourthWall?.enabled) {
-                    try { initFourthWall(); } catch (e) { }
+                try {
+                    initChatMessageImages();
+                    registerModuleCleanup('chatMessageImages', cleanupChatMessageImages);
+                } catch (e) {
+                    console.error('[LittleWhiteBox] 初始化聊天图片失败:', e);
+                }
+                if (!xiaobaiOsSettingsError && settings.xiaobaiOs?.enabled) {
+                    await initXiaobaiOs();
+                    registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
                 }
             }
 
@@ -1093,7 +1148,9 @@ jQuery(async () => {
                 if (isXiaobaixEnabled) processExistingMessages();
             }, 30000);
         }
-    } catch (err) { }
+    } catch (err) {
+        console.error('[LittleWhiteBox] 初始化失败:', err);
+    }
 });
 
 export { executeSlashCommand };

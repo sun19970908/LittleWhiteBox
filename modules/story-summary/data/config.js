@@ -20,6 +20,7 @@ export const DEFAULT_SUMMARY_SYSTEM_PROMPT = `Story Analyst: This task involves 
 <task_settings>
 Incremental_Summary_Requirements:
   - Incremental_Only: 只提取新对话中的新增要素，绝不重复已有总结
+  - Output_Language: 所有自由文本总结字段使用本批新对话的主要语言；混合语言时跟随主要叙事语言，并保留原文人名、专名和引语。JSON 键、事件 type/weight、关系 trend 及其他协议固定值保持规定值，不翻译
   - Event_Granularity: 记录有叙事价值的事件，而非剧情梗概
   - Memory_Album_Style: 形成有细节、有温度、有记忆点的回忆册
   - Retrieval_Readiness: event.summary 必须面向未来召回，不得写成泛化剧情概括

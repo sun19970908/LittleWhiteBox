@@ -23,7 +23,7 @@ test('trusted map patch replay clears old shape fields when modify switches shap
 
 test('trusted map patch replay reaches the same end state as canonical transaction history', () => {
     const seed: TavernMapDocument = {
-        meta: { name: null, theme: 'parchment', viewBox: null, status: 'uninitialized', hint: 'seed' },
+        meta: { name: null, theme: 'parchment', viewBox: null, status: 'uninitialized' },
         elements: [],
     };
 

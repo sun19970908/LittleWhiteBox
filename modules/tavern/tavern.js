@@ -5,8 +5,7 @@ import { extensionFolderPath } from "../../core/constants.js";
 import { createFirstPartyIframeOverlay, loadFirstPartyIframeCacheKey } from "../../core/first-party-iframe-app.js";
 import { isTrustedMessage, postToIframe } from "../../core/iframe-messaging.js";
 import { replaceXbGetVarInString } from "../variables/var-commands.js";
-import { buildTavernFrameConfig, loadTavernAgentConfigPayload, saveTavernAgentConfig } from "./host/agent-config.js";
-import { subscribeSharedAgentSettingsChanged } from "../agent-core/settings-repository.js";
+import { buildTavernFrameConfig, saveTavernAgentConfig } from "./host/agent-config.js";
 import {
   getTavernChatPresetBundle,
   listTavernChatPresetBundles,
@@ -52,7 +51,6 @@ let frameBootReady = false;
 let pendingMessages = [];
 let initialConfigPromise = null;
 let messageHandlerInstalled = false;
-let unsubscribeSharedAgentSettingsChanged = null;
 let overlayResizeHandler = null;
 let overlayResizeFrame = 0;
 let overlayKeyboardSettleHandler = null;
@@ -285,9 +283,6 @@ async function sendInitialConfigToFrame() {
 async function sendConfigToFrame(options = {}) {
   postToFrame("xb-tavern:config", await buildFrameConfigPayload(options));
 }
-async function sendAgentConfigToFrame() {
-  postToFrame("xb-tavern:agent-config", await loadTavernAgentConfigPayload());
-}
 async function refreshContext(options = {}) {
   postToFrame("xb-tavern:context", await buildTavernContext(options));
 }
@@ -326,7 +321,6 @@ async function saveConfigFromFrame(payload = {}) {
     requestId,
     ok: result.ok,
     config: result.config,
-    conflict: result.conflict === true,
     error: result.error || ""
   });
   if (result.ok) {
@@ -1333,9 +1327,6 @@ function handleFrameMessage(event) {
     case "xb-tavern:save-config":
       void saveConfigFromFrame(data.payload || {});
       break;
-    case "xb-tavern:reload-config":
-      void sendAgentConfigToFrame();
-      break;
     case "xb-tavern:get-host-request-headers":
       handleHostRequestHeaders(data.payload || {});
       break;
@@ -1441,16 +1432,6 @@ function installMessageHandler() {
 }
 async function initTavern() {
   installMessageHandler();
-  unsubscribeSharedAgentSettingsChanged?.();
-  unsubscribeSharedAgentSettingsChanged = subscribeSharedAgentSettingsChanged((detail) => {
-    if (String(detail?.source || "") === "tavern") {
-      return;
-    }
-    if (!frameReady) {
-      return;
-    }
-    void sendAgentConfigToFrame();
-  });
   window.xiaobaixTavern = {
     open: openTavern,
     close: closeTavern,
@@ -1460,8 +1441,6 @@ async function initTavern() {
   };
 }
 function cleanupTavern() {
-  unsubscribeSharedAgentSettingsChanged?.();
-  unsubscribeSharedAgentSettingsChanged = null;
   closeTavern();
 }
 export {

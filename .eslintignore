@@ -4,5 +4,5 @@ libs/**
 modules/agent-core/dist/**
 modules/assistant/dist/**
 modules/ebook/dist/**
-modules/fourth-wall/dist/**
+modules/xiaobai-os/dist/**
 modules/tavern/dist/**

@@ -2,7 +2,6 @@ import { getRequestHeaders } from '../../../../../../script.js';
 import { extensionFolderPath } from '../../core/constants.js';
 import { isTrustedMessage, postToIframe } from '../../core/iframe-messaging.js';
 import { buildEbookFrameConfig, saveEbookAgentConfig } from './host/assistant-config.js';
-import { subscribeSharedAgentSettingsChanged } from '../agent-core/settings-repository.js';
 import { buildImportMaterial } from './host/import-materials.js';
 import {
     exportPortablePreviewsForSlots,
@@ -19,7 +18,6 @@ const BUILD_INFO_PATH = `${extensionFolderPath}/modules/ebook/dist/ebook-build.j
 
 let ebookCacheKey = '';
 let initialConfigPromise = null;
-let unsubscribeSharedAgentSettingsChanged = null;
 
 async function loadEbookCacheKey() {
     if (ebookCacheKey) return ebookCacheKey;
@@ -144,11 +142,8 @@ async function sendInitialConfigToFrame() {
     postToFrame('xb-ebook:config', await promise);
 }
 
-async function sendConfigToFrame(options = {}) {
-    postToFrame('xb-ebook:config', {
-        ...await buildEbookFrameConfig(),
-        externalChange: options.externalChange === true,
-    });
+async function sendConfigToFrame() {
+    postToFrame('xb-ebook:config', await buildEbookFrameConfig());
 }
 
 function revealEbookSettings() {
@@ -313,7 +308,6 @@ async function handleSaveConfig(payload = {}) {
     replyHostResult(requestId, {
         ok: false,
         error: result.error || 'save_config_failed',
-        conflict: result.conflict === true,
         config: result.config,
     });
 }
@@ -551,9 +545,6 @@ function handleFrameMessage(event) {
         case 'xb-ebook:save-config':
             void handleSaveConfig(payload);
             break;
-        case 'xb-ebook:reload-config':
-            void sendConfigToFrame({ externalChange: payload?.preserveDraft === true });
-            break;
         case 'xb-ebook:get-host-request-headers':
             handleHostRequestHeaders(payload);
             break;
@@ -599,11 +590,6 @@ function installMessageHandler() {
 
 export async function initEbook() {
     installMessageHandler();
-    unsubscribeSharedAgentSettingsChanged?.();
-    unsubscribeSharedAgentSettingsChanged = subscribeSharedAgentSettingsChanged((detail) => {
-        if (String(detail?.source || '') === 'ebook') return;
-        void sendConfigToFrame({ externalChange: true });
-    });
     window.xiaobaixEbook = {
         open: openEbook,
         openSettings: openEbookSettings,
@@ -613,8 +599,6 @@ export async function initEbook() {
 }
 
 export function cleanupEbook() {
-    unsubscribeSharedAgentSettingsChanged?.();
-    unsubscribeSharedAgentSettingsChanged = null;
     closeEbook();
 }
 

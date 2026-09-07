@@ -17,7 +17,6 @@ export function createEbookState() {
         configLoadError: '',
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         books: [],
         book: null,
         files: [],

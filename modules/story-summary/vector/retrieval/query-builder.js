@@ -31,6 +31,7 @@ import { getSummaryStore } from '../../data/store.js';
 import { filterText } from '../utils/text-filter.js';
 import { tokenizeForIndex as tokenizerTokenizeForIndex } from '../utils/tokenizer.js';
 import { buildBoundedRerankQuery } from './rerank-query.js';
+import { boundRecallEmbeddingSegment } from './recall-query-bounds.js';
 import { resolveFocusCharacters } from './event-recall-classification.js';
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -333,7 +334,7 @@ export function buildQueryBundle(lastMessages, pendingUserMessage, store = null,
     for (let i = 0; i < contextEntries.length; i++) {
         const weightIdx = Math.max(0, CONTEXT_BASE_WEIGHTS.length - contextEntries.length + i);
         querySegments.push({
-            text: contextEntries[i].text,
+            text: boundRecallEmbeddingSegment(contextEntries[i].text),
             baseWeight: CONTEXT_BASE_WEIGHTS[weightIdx] || CONTEXT_BASE_WEIGHTS[0],
             charCount: contextEntries[i].charCount,
         });
@@ -341,7 +342,7 @@ export function buildQueryBundle(lastMessages, pendingUserMessage, store = null,
 
     if (focusEntry) {
         querySegments.push({
-            text: focusEntry.text,
+            text: boundRecallEmbeddingSegment(focusEntry.text),
             baseWeight: FOCUS_BASE_WEIGHT,
             charCount: focusEntry.charCount,
         });

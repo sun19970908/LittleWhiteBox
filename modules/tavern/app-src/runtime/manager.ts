@@ -8,7 +8,8 @@ import {
 } from '../../../agent-core/runtime/protocol.js';
 import { isTavilyConfigured, runTavilySearchTool, TAVILY_TOOL_NAME } from '../../../agent-core/tavily-search.js';
 import type { XbTavernContext, XbTavernMessage } from '../../shared/message-assembler';
-import { buildTavernManagerSystemPrompt, type TavernAssistantPreset } from '../../shared/assistant-presets';
+import type { TavernAssistantPreset } from '../../shared/assistant-presets';
+import { buildTavernManagerSystemPrompt } from '../../shared/manager/prompt';
 import {
     ensureTavernMemoryDefaultsInitialized,
     executeTavernSourceFileTool,
@@ -53,7 +54,8 @@ import {
     type TavernMessageRecord,
 } from '../../shared/session-db';
 import { TAVERN_MANAGER_HEARTBEAT_INTERVAL_MS } from '../../shared/manager-run-liveness';
-import { executeTavernStateTool, getTavernAtlasStateForSession, TAVERN_STATE_TOOL_NAMES, type TavernStateToolResult } from '../../shared/structured-state';
+import { executeTavernStateTool, getTavernAtlasStateForSession, TAVERN_STATE_TOOL_NAMES, type TavernAtlasDocument, type TavernStateToolResult } from '../../shared/structured-state';
+import { atlasToolDocument, projectMapToolResult } from '../../shared/map/tool-projection';
 import {
     describeStatusStateRollbackImpactForMessageRange,
     executeTavernStatusTool,
@@ -226,6 +228,7 @@ function isStateWritingTool(toolName = ''): boolean {
         TAVERN_SOURCE_FILE_TOOL_NAMES.EDIT,
         TAVERN_STATE_TOOL_NAMES.PATCH,
         TAVERN_STATE_TOOL_NAMES.EDIT_SCENE,
+        TAVERN_STATE_TOOL_NAMES.EDIT_ATLAS,
         TAVERN_STATUS_TOOL_NAMES.INIT,
         TAVERN_STATUS_TOOL_NAMES.PATCH,
     ].includes(name as never);
@@ -254,10 +257,10 @@ function serializeToolResult(value: unknown): string {
 
 function getManagerToolArgumentSchemaHint(toolName = ''): string {
     if (toolName === TAVERN_STATE_TOOL_NAMES.EDIT_SCENE) {
-        return 'Expected MapSceneEdit arguments: {"scene":"酒馆大厅","playerHere":true,"viewBox":[0,0,360,240],"elements":[{"id":"outer-wall","cat":"wall","shape":"rect","geo":{"at":[20,20],"size":[300,180]},"label":"大厅"},{"id":"player","cat":"actor","actorKey":"player","shape":"circle","geo":{"at":[160,120],"radius":8},"label":"玩家"}]}.';
+        return 'MapSceneEdit expects scene and element patches, for example {"scene":"酒馆大厅","elements":[{"id":"table","cat":"furniture","shape":"rect","geo":{"center":[100,100],"size":[60,40]},"label":"桌子"}]}. Omit unchanged fields; retry only failed elements.';
     }
-    if (toolName === TAVERN_STATE_TOOL_NAMES.PATCH) {
-        return 'MapPatch is advanced/internal. Prefer MapSceneEdit with scene + elements using shape/geo/label. If you must use MapPatch, arguments must be a valid JSON object with an ops array.';
+    if (toolName === TAVERN_STATE_TOOL_NAMES.EDIT_ATLAS) {
+        return 'MapAtlasEdit expects locations, links or removeLinks arrays, for example {"locations":[{"key":"harbor","name":"港口","scale":"district"}]}.';
     }
     if (toolName === TAVERN_STATUS_TOOL_NAMES.INIT) {
         return 'Expected StatusInit arguments: {"document":{"meta":{"activeSubject":"user"},"subjects":[{"id":"user","name":"角色","tabs":[{"id":"overview","label":"概览","blocks":[{"id":"stats","title":"属性","form":"gauge","fields":[{"id":"san","name":"理智","value":62,"max":99}]}]}]}]}}.';
@@ -365,10 +368,10 @@ function buildCharacterMemoryFilenameListBlock(memoryFiles: Array<{ path: string
     ].join('\n');
 }
 
-function buildAtlasWorldBlock(atlasDocument: unknown): string {
+function buildAtlasWorldBlock(atlasDocument: TavernAtlasDocument | null): string {
     return [
         '[Map atlas world]',
-        safeJson(atlasDocument || null),
+        safeJson(atlasDocument ? atlasToolDocument(atlasDocument) : null),
     ].join('\n');
 }
 
@@ -492,7 +495,7 @@ function summarizeToolResult(result: TavernMemoryToolResult | TavernStateToolRes
 }
 
 function isStateToolName(name = ''): boolean {
-    return Object.values(TAVERN_STATE_TOOL_NAMES).includes(name as typeof TAVERN_STATE_TOOL_NAMES[keyof typeof TAVERN_STATE_TOOL_NAMES]);
+    return [TAVERN_STATE_TOOL_NAMES.READ_ATLAS, TAVERN_STATE_TOOL_NAMES.EDIT_ATLAS, TAVERN_STATE_TOOL_NAMES.READ_SCENE, TAVERN_STATE_TOOL_NAMES.EDIT_SCENE].some(tool => tool === name);
 }
 
 function isStatusToolName(name = ''): boolean {
@@ -996,10 +999,13 @@ export async function runSharedManagerToolLoop(input: {
                 traceEntry.elapsedMs = Math.max(0, Number(traceEntry.finishedAt) - Number(traceEntry.startedAt));
             }
             emitManagerProgress();
+            const modelToolResult = parsedArguments.ok && isStateToolName(toolCall.name)
+                ? projectMapToolResult(toolCall.name, args, toolResult as TavernStateToolResult)
+                : toolResult;
             const toolMessage = buildProviderToolResultMessage({
                 toolCallId: toolCall.id,
                 toolName: toolCall.name,
-                content: serializeToolResult(toolResult),
+                content: serializeToolResult(modelToolResult),
             }) as unknown as XbTavernMessage;
             toolMessage.toolCallId = String(toolCall.id || '');
             toolMessage.toolDisplay = {
@@ -1016,7 +1022,7 @@ export async function runSharedManagerToolLoop(input: {
             toolResponses.push({
                 id: toolCall.id,
                 name: toolCall.name,
-                response: toolResult,
+                response: modelToolResult,
                 ...(Object.prototype.hasOwnProperty.call(toolCall, 'providerId')
                     ? { providerId: String((toolCall as Record<string, unknown>).providerId || '') }
                     : {}),

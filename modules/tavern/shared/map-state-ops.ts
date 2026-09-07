@@ -94,7 +94,7 @@ export function applyTrustedMapPatchOps(
     source: TavernMapDocument,
     ops: Array<Record<string, unknown>>,
 ): TavernMapDocument {
-    let document = cloneJson(source);
+    const document = cloneJson(source);
     ops.forEach((op) => {
         const opName = String(op.op || '').trim();
         if (opName === 'meta') {
@@ -108,9 +108,6 @@ export function applyTrustedMapPatchOps(
                     document.meta as unknown as Record<string, unknown>,
                     set,
                 ) as unknown as TavernMapDocumentMeta;
-                if (document.meta.status !== 'uninitialized') {
-                    delete document.meta.hint;
-                }
             }
             return;
         }
@@ -144,19 +141,6 @@ export function applyTrustedMapPatchOps(
                 ? mergeMapElementPatch(element, set as TavernMapElementPatchSet)
                 : element);
             return;
-        }
-        if (opName === 'init' || opName === 'reset') {
-            const next = op.document;
-            if (next && isPlainObject(next)) {
-                document = cloneJson(next as unknown as TavernMapDocument);
-            }
-            return;
-        }
-        if (opName === 'replace') {
-            const id = String(op.id || '').trim();
-            const element = op.element;
-            if (!id || !element || !isPlainObject(element)) {return;}
-            document.elements = document.elements.map((item) => item.id === id ? cloneJson(element as unknown as TavernMapElement) : item);
         }
     });
     return document;

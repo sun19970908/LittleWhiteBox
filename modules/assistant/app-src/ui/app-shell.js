@@ -22,7 +22,6 @@ export function buildAppMarkup(state) {
                         activePage: state.configPage,
                         runtimeText: '',
                         configLoadError: state.configLoadError,
-                        configExternalChangePending: state.configExternalChangePending,
                     })}
                 </div>
             </aside>

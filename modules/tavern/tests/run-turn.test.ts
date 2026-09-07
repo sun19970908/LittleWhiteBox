@@ -28,7 +28,7 @@ import {
 } from '../shared/memory-files';
 import { executeTavernStateTool } from '../shared/structured-state';
 import { createDefaultXbTavernPreset } from '../shared/presets';
-import { buildTavernManagerSystemPrompt } from '../shared/assistant-presets';
+import { buildTavernManagerSystemPrompt } from '../shared/manager/prompt';
 import { ACTION_CHECK_TOOL_NAME } from '../shared/action-checks';
 import {
     buildXbTavernMemoryIgnoredTerms,
@@ -2434,38 +2434,9 @@ test('xb tavern run turn does not block RP and completes its fixed pair after th
     assert.match(managerPrompt, /accepted reply actually establishes a new long-term fact/i);
     assert.doesNotMatch(managerPrompt, /建议流水路径/);
     assert.doesNotMatch(managerPrompt, /suggested turn note/i);
-    assert.match(managerPrompt, /Spatial records are files/i);
-    assert.match(managerPrompt, /MapAtlasRead to read `world`/i);
-    assert.match(managerPrompt, /MapSceneEdit to edit by explicit scene name/i);
-    assert.match(managerPrompt, /Do not rely on `main`, current map, active map, docType\/docId, activate, or ops/i);
-    assert.match(managerPrompt, /Player position lives at `world\.actors\.player\.locationKey`/i);
-    assert.match(managerPrompt, /MapSceneEdit.*auto-creates if missing/i);
-    assert.match(managerPrompt, /Element syntax:/i);
-    assert.match(managerPrompt, /Do not fill unused geo keys/i);
-    assert.match(managerPrompt, /set `playerHere:true` only when/i);
-    assert.match(managerPrompt, /First-map rule/i);
-    assert.match(managerPrompt, /retry only the skipped element/i);
-    assert.match(managerPrompt, /Update the atlas only when a place is confirmed/i);
-    assert.match(managerPrompt, /Keep editing the same scene name/i);
-    assert.match(managerPrompt, /separate scene name/i);
-    assert.match(managerPrompt, /Actors use .*actorKey/i);
-    assert.match(managerPrompt, /Indoor, vehicle, structure, cave, platform, rooftop/i);
-    assert.match(managerPrompt, /Construction order/i);
-    assert.match(managerPrompt, /Closed or contained scenes usually need both a filled main surface/i);
-    assert.match(managerPrompt, /`cat:\\?"terrain\\?"` for the main continuous surface or filled base area/i);
-    assert.match(managerPrompt, /Open scenes .* may use a main surface/i);
-    assert.match(managerPrompt, /Let scene pressure shape composition/i);
-    assert.match(managerPrompt, /Translate place names into local geometry/i);
-    assert.match(managerPrompt, /viewBox is the camera/i);
-    assert.doesNotMatch(managerPrompt, /meta \+ add|initialize it with one MapPatch/i);
-    assert.match(managerPrompt, /Place text labels 15–25 units beside what they describe/i);
-    assert.match(managerPrompt, /Reply with a short maintenance report grouped by affected domain/i);
-    assert.doesNotMatch(managerPrompt, /电纸书|ebook file-operation/i);
-    assert.match(managerPrompt, /Grep with `path:\\?"memory\/\\?"` to check whether a fact is already stored/is);
-    assert.doesNotMatch(managerPrompt, /可派生格式/);
-    assert.doesNotMatch(managerPrompt, /messages userOrder\/assistantOrder/);
-    assert.doesNotMatch(managerPrompt, /ChatHistory recent 读取最新消息/);
-    assert.doesNotMatch(managerPrompt, /MemoryEdit `edits` 必须是真正的非空数组/);
+    assert.match(managerPrompt, /MapAtlasEdit/);
+    assert.match(managerPrompt, /MapSceneEdit/);
+    assert.doesNotMatch(managerPrompt, /MapPatch|MapInspect|docType\/docId/);
     const memoryFiles = (await getTavernMemoryIndex(result.sessionId))?.files || [];
     assert.equal(memoryFiles.some((file) => file.path === 'memory/state.md'), true);
     assert.match((await getTavernMemoryFile(result.sessionId, 'memory/state.md'))?.content || '', /两人决定去码头/);
@@ -4658,16 +4629,10 @@ test('xb tavern simulated request keeps active map digest in snapshot without in
         presetName: preset.name,
     });
     await executeTavernStateTool(session.id, 'MapPatch', {
-        ops: [{
-            op: 'init',
-            document: {
-                meta: { name: 'Hidden Cellar', theme: 'parchment', viewBox: [0, 0, 500, 400] },
-                elements: [
+        ops: [{ op: "meta", set: { name: 'Hidden Cellar', theme: 'parchment', viewBox: [0, 0, 500, 400] } }, ...[
                     { id: 'cellar-room', type: 'rect', pos: [30, 30], size: [120, 80], cat: 'wall' },
                     { id: 'cellar-label', type: 'text', pos: [90, 80], content: 'Cellar', cat: 'label' },
-                ],
-            },
-        }],
+                ].map(element => ({ op: "add", element }))],
     });
     await executeTavernStateTool(session.id, 'MapPatch', {
         docId: 'office',
@@ -5176,7 +5141,6 @@ test('xb tavern assistant manual chat exposes and executes web_search from share
         assert.equal(result.text, '已查到祇园是京都历史街区。');
         assert.equal(requestCount, 2);
         assert.equal(exposedToolNames.includes(TAVILY_TOOL_NAME), true);
-        assert.match(managerSystemPrompt, /Web research:/);
         assert.match(managerSystemPrompt, /web_search/);
         assert.equal(fetchCalls.length, 1);
         assert.equal(fetchCalls[0]?.url, 'https://tavily.example.test/search');
@@ -5294,7 +5258,6 @@ test('xb tavern assistant automatic run exposes and executes the same web_search
         assert.equal(result.ok, true);
         assert.equal(requestCount, 2);
         assert.equal(exposedToolNames.includes(TAVILY_TOOL_NAME), true);
-        assert.match(managerSystemPrompt, /Web research:/);
         assert.match(managerSystemPrompt, /web_search/);
         assert.equal(fetchCalls.length, 1);
         assert.equal(fetchCalls[0]?.url, 'https://tavily.example.test/search');

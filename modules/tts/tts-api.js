@@ -130,6 +130,7 @@ export async function synthesizeV3(params, authHeaders = {}) {
         method: 'POST',
         headers: authHeaders,
         body: JSON.stringify(body),
+        signal: params.signal,
     });
 
     const logid = resp.headers.get('X-Tt-Logid') || '';
@@ -144,31 +145,37 @@ export async function synthesizeV3(params, authHeaders = {}) {
     let usage = null;
     let buffer = '';
 
-    while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-            if (!line.trim()) continue;
-            try {
-                const json = JSON.parse(line);
-                if (json.data) {
-                    const binary = atob(json.data);
-                    const bytes = new Uint8Array(binary.length);
-                    for (let i = 0; i < binary.length; i++) {
-                        bytes[i] = binary.charCodeAt(i);
-                    }
-                    audioChunks.push(bytes);
+    const readLine = (line) => {
+        if (!line.trim()) return;
+        try {
+            const json = JSON.parse(line);
+            if (json.data) {
+                const binary = atob(json.data);
+                const bytes = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) {
+                    bytes[i] = binary.charCodeAt(i);
                 }
-                if (json.code === 20000000 && json.usage) {
-                    usage = json.usage;
-                }
-            } catch {}
+                audioChunks.push(bytes);
+            }
+            if (json.code === 20000000 && json.usage) usage = json.usage;
+        } catch {}
+    };
+    try {
+        while (true) {
+            params.signal?.throwIfAborted();
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+            for (const line of lines) readLine(line);
         }
+        params.signal?.throwIfAborted();
+        readLine(buffer + decoder.decode());
+    } finally {
+        await reader.cancel().catch(() => {});
+        reader.releaseLock();
     }
 
     if (audioChunks.length === 0) {
@@ -343,4 +350,3 @@ export async function synthesizeFreeV1(params, options = {}) {
 
     return { audioBase64: data.data };
 }
-

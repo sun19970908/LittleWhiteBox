@@ -35,11 +35,10 @@ export async function loadTavernAgentConfigPayload(): Promise<{
 
 export async function saveTavernAgentConfig(patch: Record<string, unknown> = {}, options: {
     silent?: boolean;
-} = {}): Promise<{ ok: boolean; conflict?: boolean; config: Record<string, unknown> | null; error?: string }> {
+} = {}): Promise<{ ok: boolean; config: Record<string, unknown> | null; error?: string }> {
     return await saveSharedAgentSettings(patch, {
         storage: AssistantStorage,
         silent: options.silent !== false,
-        source: 'tavern',
     });
 }
 

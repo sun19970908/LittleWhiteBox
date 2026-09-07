@@ -16,9 +16,8 @@ export async function saveEbookAgentConfig(patch = {}, options = {}) {
     const result = await saveSharedAgentSettings(patch, {
         storage: AssistantStorage,
         silent: options.silent !== false,
-        source: 'ebook',
     });
-    if ((result.ok || result.conflict) && result.config) {
+    if (result.ok && result.config) {
         settingsCache = result.config;
     }
     return result;

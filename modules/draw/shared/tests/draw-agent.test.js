@@ -267,6 +267,10 @@ test('scene planner corrects schema failures with canonical provider history in 
     assert.equal(diagnostic.status, 'success');
     assert.equal(diagnostic.attemptCount, 2);
     assert.equal(diagnostic.correctionCount, 1);
+    const failedOutput = JSON.parse(diagnostic.validationFailures[0].modelOutput);
+    assert.equal(failedOutput.toolCalls[0].name, 'submit_scene_plan');
+    assert.equal(failedOutput.toolCalls[0].arguments, '{}');
+    assert.equal(diagnostic.validationFailures[0].modelOutputTruncated, false);
     assert.ok(progress.some(item => item.phase === 'analysis' && item.current === 1 && item.total === 3));
     assert.ok(progress.some(item => item.phase === 'correction' && item.current === 2 && item.total === 3));
 });
@@ -317,6 +321,35 @@ test('scene planner corrects a missing Tool call without inventing Tool history'
     const diagnostic = getLastDrawAgentDiagnostic();
     assert.equal(diagnostic.validationFailures[0].feedbackSent, true);
     assert.equal(diagnostic.terminationReason, 'success');
+});
+
+test('scene planner bounds captured invalid model output before exposing it to diagnostics', async () => {
+    resetDrawAgentRuntimeForTests();
+    let callCount = 0;
+    const oversizedText = 'x'.repeat(20_000);
+    await generateAndParseScenePlan({
+        messageText: '阿璃推开门。',
+        maxImages: 1,
+        expansionOptions: { runtime: { substituteParams: (text) => text } },
+        agentOptions: {
+            dependencies: { getAgentSettings: async () => buildSettings('oversized-diagnostic-model') },
+            loadAgentCore: async () => ({
+                createAgentAdapter: () => ({
+                    chat: async () => {
+                        callCount += 1;
+                        return callCount === 1
+                            ? { text: oversizedText, toolCalls: [], finishReason: 'stop' }
+                            : buildValidScenePlanResult();
+                    },
+                }),
+            }),
+        },
+    });
+
+    const failure = getLastDrawAgentDiagnostic().validationFailures[0];
+    assert.equal(failure.modelOutputTruncated, true);
+    assert.equal(failure.modelOutput.length, 16 * 1024);
+    assert.match(failure.modelOutput, /"text":"xxxx/);
 });
 
 test('Google session correction sends a plain reminder when no Tool was called', async () => {

@@ -1,0 +1,621 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light">
+  <title>小白空间 · 二维场景样稿</title>
+  <style>
+    :root{--paper:#f7f6f0;--ink:#243e35;--muted:#778176;--line:#dde2d7;--accent:#326b55;--serif:"Noto Serif SC","Source Han Serif SC","Songti SC","STSong","SimSun",serif;--sans:"PingFang SC","Microsoft YaHei",sans-serif}
+    *{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:14px}button{font:inherit;color:inherit;cursor:pointer}button:focus-visible,svg:focus-visible{outline:3px solid #619881;outline-offset:4px}button:disabled{opacity:.35;cursor:default}button svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round;flex:none}
+    .app{height:100vh;height:100svh;min-height:620px;display:flex;flex-direction:column}.masthead{min-height:76px;padding:0 34px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid var(--line)}.brand{display:flex;align-items:center;gap:13px;white-space:nowrap}.brand-mark{height:34px;width:34px;color:var(--accent)}.brand-name{font-family:var(--serif);font-size:22px;font-weight:700;letter-spacing:3px}.brand-caption{margin-top:3px;font-size:9px;letter-spacing:3px;color:var(--muted)}.prototype-tag{font-size:10px;color:var(--muted);padding-left:16px;margin-left:5px;border-left:1px solid var(--line);letter-spacing:1px}
+    .scene-switch{display:flex;gap:3px;border:1px solid var(--line);background:#eeefe7;padding:4px;border-radius:12px}.scene-switch button{border:0;background:transparent;padding:9px 20px;border-radius:8px;display:flex;align-items:center;gap:9px;white-space:nowrap;font-size:13px;color:#758072}.scene-switch button[aria-pressed="true"]{background:var(--paper);color:var(--ink);box-shadow:0 1px 5px #273d3210}.scene-switch button:hover{color:var(--accent)}.source-button{display:flex;align-items:center;gap:9px;border:0;background:none;font-size:12px;padding:12px 0 12px 15px;white-space:nowrap}.source-button:hover{color:#639171}
+    .scene-heading{padding:24px 36px 20px;display:flex;align-items:flex-end;justify-content:space-between;gap:20px}.breadcrumb{font-size:11px;color:var(--muted);letter-spacing:1.5px;display:flex;gap:10px;align-items:center}.breadcrumb i{font-style:normal;opacity:.45}h1{font-family:var(--serif);font-size:30px;font-weight:600;letter-spacing:3px;margin:8px 0 0;line-height:1.25}.scene-caption{font-size:12px;color:#7a8276;margin:0 1px 2px;text-align:right;line-height:1.8}.scene-caption span{display:block;font-size:10px;letter-spacing:1.5px;color:#9a9e90}
+    .map-stage{position:relative;isolation:isolate;flex:1;min-height:370px;margin:0 22px;border:1px solid #d5ddcf;border-radius:18px;overflow:hidden;background:#e9eddf}.map-stage::after{content:"";position:absolute;inset:0;box-shadow:inset 0 0 70px #465c3010;pointer-events:none;border-radius:inherit}.map-stage[data-scene="valley"]{background:#e5eadc}#map{display:block;width:100%;height:100%;touch-action:none;cursor:grab;user-select:none;-webkit-user-select:none}#map.dragging{cursor:grabbing}.map-label{pointer-events:none;font-family:var(--sans);paint-order:stroke;stroke:#f4f0e2;stroke-width:3px;stroke-linejoin:round;fill:#42543d;font-size:calc(15px * var(--label-scale,1));letter-spacing:2px}.map-label.zone{font-family:var(--serif);font-size:calc(23px * var(--label-scale,1));letter-spacing:5px;fill:#47563c;stroke-width:3.5px;font-weight:600}.map-label.minor{font-size:calc(12px * var(--label-scale,1));letter-spacing:1px;fill:#7e846f;stroke-width:2px}.hide-labels .map-label{display:none}.actor-label{font:12px var(--sans);letter-spacing:1px}
+    .compass{position:absolute;top:24px;right:27px;display:grid;justify-items:center;gap:5px;color:#657660;pointer-events:none}.compass span{font-family:Georgia,serif;font-size:12px}.compass svg{width:30px;height:49px}.map-caption{position:absolute;top:25px;left:27px;pointer-events:none;background:#f6f7ecdf;border:1px solid #fffff350;padding:12px 15px;border-radius:5px}.map-caption .overline{font-size:9px;letter-spacing:2.5px;color:#839078}.map-caption p{font-family:var(--serif);font-size:15px;letter-spacing:2px;margin:8px 0 0;color:#576b50}.map-caption p::before{content:"";display:inline-block;width:16px;height:1px;vertical-align:middle;background:#97a187;margin-right:10px}
+    .map-legend{position:absolute;left:24px;bottom:23px;display:flex;align-items:center;gap:17px;pointer-events:none;background:#f8f8efda;border:1px solid #fff9;border-radius:8px;padding:9px 12px;font-size:10px;color:#6d7766}.legend-item{display:flex;align-items:center;gap:6px}.legend-dot{height:6px;width:6px;border-radius:50%;background:#bf7958}.legend-line{height:2px;width:15px;background:#879379}.legend-dash{height:0;width:15px;border-top:2px dashed #879379}.map-tools{position:absolute;left:50%;bottom:20px;transform:translateX(-50%);display:flex;align-items:center;gap:3px;padding:6px;border:1px solid #e0e5d8;background:#fafbf5f5;box-shadow:0 5px 20px #263e3010;border-radius:12px}.map-tools button{height:36px;min-width:36px;display:flex;align-items:center;justify-content:center;gap:7px;border:0;background:none;border-radius:7px;padding:0 9px;font-size:11px}.map-tools button:hover{background:#e8eedf}.map-tools button[aria-pressed="false"]{color:#9da497}.tool-divider{height:17px;width:1px;background:var(--line);margin:0 3px}#zoom-readout{font-size:10px;color:#7f8979;min-width:35px;text-align:center;font-variant-numeric:tabular-nums}.gesture-hint{position:absolute;right:23px;bottom:34px;font-size:10px;letter-spacing:.5px;color:#7c8770;pointer-events:none}
+    .page-footer{min-height:36px;padding:9px 28px 10px;display:flex;align-items:center;justify-content:space-between;gap:14px;color:#8b9385;font-size:10px;letter-spacing:.6px}.page-footer .footer-brand{font-family:Georgia,serif;font-style:italic;letter-spacing:1px}.data-dialog{color:var(--ink);background:var(--paper);border:1px solid var(--line);border-radius:18px;width:min(780px,calc(100% - 28px));max-height:calc(100svh - 40px);padding:0;box-shadow:0 25px 100px #152e352b}.data-dialog::backdrop{background:#19332955;backdrop-filter:blur(5px)}.dialog-heading{padding:25px 27px 15px;display:flex;justify-content:space-between;align-items:center;gap:20px}.dialog-heading h2{font-family:var(--serif);font-size:22px;letter-spacing:2px;margin:0}.close-button{border:0;background:#e9ece1;width:34px;height:34px;border-radius:50%;font-size:23px;line-height:1}.dialog-copy{padding:0 27px;margin:0 0 15px;line-height:1.9;font-size:12px;color:#6d7869}.data-meta{display:flex;gap:14px;flex-wrap:wrap;padding:0 27px 16px;font-size:11px;color:#55734f}.data-dialog pre{margin:0;padding:23px 27px;max-height:50svh;overflow:auto;border-top:1px solid var(--line);background:#eef0e7;color:#435a46;tab-size:2;font:11px/1.7 "Cascadia Code",Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.dialog-foot{padding:13px 27px;font-size:11px;color:#77836e;line-height:1.6}
+    @media(min-width:1700px){.scene-heading{padding-top:30px;padding-bottom:27px}h1{font-size:36px}.map-stage{margin:0 30px}}
+    @media(max-width:900px){.prototype-tag{display:none}.masthead{padding:0 22px}.scene-heading{padding:21px 27px 19px}.gesture-hint{display:none}.map-legend{bottom:77px;left:17px}.map-caption{left:19px;top:20px}.compass{right:20px;top:20px}.map-tools{bottom:17px}}
+    @media(max-width:580px){.app{min-height:570px}.masthead{min-height:114px;padding:15px 18px 12px;flex-wrap:wrap;gap:11px}.brand-mark{height:29px;width:29px}.brand{gap:9px}.brand-name{font-size:19px;letter-spacing:2px}.brand-caption{font-size:8px;letter-spacing:2px}.source-button{font-size:11px;padding:7px 0}.source-button svg{width:16px}.scene-switch{order:3;width:100%;border-radius:9px;padding:3px}.scene-switch button{flex:1;justify-content:center;padding:7px 8px;font-size:12px;border-radius:6px}.scene-switch button svg{width:15px;height:15px}.scene-heading{padding:20px 20px 17px;align-items:center}.breadcrumb{font-size:9px;letter-spacing:.5px;gap:7px}h1{font-size:26px;letter-spacing:2px;margin-top:8px}.scene-caption{display:none}.map-stage{margin:0 10px;border-radius:13px;min-height:330px}.map-caption{top:17px;left:16px}.map-caption .overline{font-size:8px;letter-spacing:1.5px}.map-caption p{font-size:12px;margin-top:6px;letter-spacing:1px}.compass{top:15px;right:16px}.compass svg{width:24px;height:39px}.compass span{font-size:10px}.map-legend{font-size:9px;gap:11px;bottom:73px;left:13px;padding:6px 8px;background:#f8f8efee}.map-tools{padding:4px;bottom:13px;gap:1px;white-space:nowrap}.map-tools button{min-width:33px;height:35px;padding:0 7px;gap:5px}.map-tools button svg{width:16px;height:16px}.tool-divider{margin:0 2px}#zoom-readout{min-width:31px;font-size:9px}.page-footer{padding:8px 15px;min-height:34px;font-size:9px;letter-spacing:0}.footer-brand{display:none}.dialog-heading{padding:20px 20px 13px}.dialog-copy{padding:0 20px}.data-meta{padding:0 20px 13px}.data-dialog pre{padding:18px 20px;font-size:10px}.dialog-foot{padding:12px 20px}}
+    @media(prefers-reduced-motion:no-preference){button{transition:background .15s,color .15s}.data-dialog[open]{animation:enter .18s ease-out}@keyframes enter{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}}
+  </style>
+</head>
+<body>
+<div class="app">
+  <header class="masthead">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 40 40" fill="none" aria-hidden="true"><path d="m20 2 17 9v18l-17 9L3 29V11Z" stroke="currentColor" stroke-width="1.4"/><path d="m3 11 17 9 17-9M20 20v18M11.5 6.5l17 9v9l-17 9v-18l17-9" stroke="currentColor" stroke-width="1.1"/><path d="m20 12 8 4.2v8.6L20 29l-8-4.2v-8.6Z" fill="currentColor" opacity=".12"/></svg>
+      <div><div class="brand-name">小白空间</div><div class="brand-caption">A WORLD TO BE IN</div></div>
+      <span class="prototype-tag">二维场景 · 视觉样稿</span>
+    </div>
+    <nav class="scene-switch" aria-label="示例场景">
+      <button type="button" data-scene="tavern" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 10 9-6 9 6M5 9v12h14V9M9 21v-7h6v7M9 10h6"/></svg>室内 · 松灯酒馆</button>
+      <button type="button" data-scene="valley" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m3 19 6-11 4 7 3-5 5 9ZM8 5l2-3 2 3M3 22h18"/></svg>自然 · 苔桥溪谷</button>
+    </nav>
+    <button type="button" class="source-button" id="show-data"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 6-6 6 6 6m8-12 6 6-6 6M14 3l-4 18"/></svg>查看场景数据</button>
+  </header>
+  <section class="scene-heading" aria-label="当前场所">
+    <div><div class="breadcrumb"><span id="region-name">雾杉镇</span><i>/</i><span id="area-name">旧街区</span><i>/</i><span>当前场景</span></div><h1 id="scene-name">松灯酒馆</h1></div>
+    <p class="scene-caption" id="scene-caption">穿过门廊，木地板将壁炉与吧台连成一个温暖的地方。<span>看见所在，也看见周围。</span></p>
+  </section>
+  <main class="map-stage" id="stage" data-scene="tavern">
+    <svg id="map" xmlns="http://www.w3.org/2000/svg" tabindex="0" role="img" aria-labelledby="map-title map-description"></svg>
+    <div class="map-caption" aria-hidden="true"><div class="overline" id="map-overline">LOCAL SCENE / 01</div><p id="map-note">木与石围合的日常</p></div>
+    <div class="compass" aria-label="上方为北"><span>N</span><svg viewBox="0 0 30 49" fill="none" aria-hidden="true"><path d="m15 2 8 32-8-6-8 6Z" stroke="currentColor" stroke-width="1"/><path d="m15 2 8 32-8-6Z" fill="currentColor"/><path d="M15 31v15M11 42h8" stroke="currentColor" stroke-width=".8"/></svg></div>
+    <div class="map-legend"><span class="legend-item"><i class="legend-dot"></i>你的位置</span><span class="legend-item"><i class="legend-line"></i>已知布局</span><span class="legend-item"><i class="legend-dash"></i>合理补全</span></div>
+    <div class="map-tools" role="group" aria-label="地图操作">
+      <button type="button" id="zoom-out" title="缩小" aria-label="缩小"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+      <output id="zoom-readout" aria-label="缩放比例">100%</output>
+      <button type="button" id="zoom-in" title="放大" aria-label="放大"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+      <span class="tool-divider"></span>
+      <button type="button" id="fit-map" title="显示完整场景"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg>总览</button>
+      <button type="button" id="locate-player" title="回到人物位置"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg>定位</button>
+      <span class="tool-divider"></span>
+      <button type="button" id="toggle-labels" aria-label="显示地名" aria-pressed="true" title="显示或隐藏地名"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 20 7-16h2l7 16M7 14h10"/></svg></button>
+    </div>
+    <span class="gesture-hint">拖动探索 · 滚轮或双指缩放</span>
+  </main>
+  <footer class="page-footer"><span>独立视觉样稿 · 手写示例数据，模拟工具输出 · 不连接真实聊天</span><span class="footer-brand">Little White Space — a living atlas.</span></footer>
+</div>
+<dialog class="data-dialog" id="data-dialog" aria-labelledby="data-title">
+  <div class="dialog-heading"><h2 id="data-title">画面背后的空间</h2><button type="button" class="close-button" id="close-data" aria-label="关闭场景数据">×</button></div>
+  <p class="dialog-copy">下面是当前画面的全部场景输入，手工编写，用于模拟候选工具输出；<strong>不是现有 MapSceneEdit 格式，也不是模型实测结果。</strong>位置、占地、材质和边界来自这些数据；木纹、家具细节、林地内部的示意树冠由同一套本地绘制规则生成。示意树冠不代表逐棵树的位置或数量。</p>
+  <div class="data-meta" id="data-meta"></div><pre id="data-output" tabindex="0" aria-label="候选场景输入 JSON"></pre>
+  <div class="dialog-foot">此页仅验证表达方式。没有模型请求、图片服务、外部素材、持久化或生产代码改动。正式工具仍需真实模型生成与更新验证。</div>
+</dialog>
+
+<!-- Candidate scene vocabulary, not a production schema. Stable ids identify facts;
+     each scene is independent. Presentation metadata belongs to the demo UI below.
+     No generated tree, texture mark, bevel or label styling is stored in the scene. -->
+<script type="application/json" id="scene-data">
+{
+  "tavern": {
+    "id": "pine-lantern-inn",
+    "name": "松灯酒馆",
+    "bounds": [40, 85, 1320, 815],
+    "surfaces": [
+      {"id":"yard","material":"gravel","outline":[[560,720],[840,720],[865,900],[525,900]],"certainty":"inferred"},
+      {"id":"floor","material":"wood","outline":[[150,180],[1060,180],[1060,340],[1210,340],[1210,730],[150,730]]},
+      {"id":"hearth-stone","material":"stone","outline":[[170,196],[410,196],[410,340],[170,340]]},
+      {"id":"east-tiles","material":"tile","outline":[[1000,357],[1195,357],[1195,714],[1000,714]],"certainty":"inferred"},
+      {"id":"lounge-rug","material":"woven","outline":[[197,426],[434,426],[434,672],[197,672]],"certainty":"inferred"}
+    ],
+    "boundaries": [
+      {"id":"outer-west","material":"stone","points":[[650,730],[150,730],[150,180],[1060,180],[1060,340],[1210,340],[1210,730],[750,730]]},
+      {"id":"window-west","material":"glass","points":[[150,455],[150,585]]},
+      {"id":"window-east","material":"glass","points":[[1210,420],[1210,560]]}
+    ],
+    "routes": [],
+    "objects": [
+      {"id":"fireplace","type":"hearth","at":[290,225],"size":[172,66],"material":"stone","lit":true},
+      {"id":"wood-basket","type":"logs","at":[398,248],"size":[30,50],"material":"wood","certainty":"inferred"},
+      {"id":"bar","type":"counter","at":[794,316],"size":[388,64],"material":"wood"},
+      {"id":"bar-return","type":"counter","at":[977,265],"size":[22,55],"material":"wood"},
+      {"id":"shelf","type":"shelf","at":[793,211],"size":[354,30],"material":"wood","certainty":"inferred"},
+      {"id":"stool-1","type":"stool","at":[638,372],"size":[28,28],"material":"wood","certainty":"inferred"},
+      {"id":"stool-2","type":"stool","at":[718,372],"size":[28,28],"material":"wood","certainty":"inferred"},
+      {"id":"stool-3","type":"stool","at":[798,372],"size":[28,28],"material":"wood","certainty":"inferred"},
+      {"id":"stool-4","type":"stool","at":[878,372],"size":[28,28],"material":"wood","certainty":"inferred"},
+      {"id":"lounge-seat","type":"sofa","at":[245,550],"size":[53,180],"angle":0,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"lounge-table","type":"table","at":[344,551],"size":[97,118],"material":"wood","certainty":"inferred"},
+      {"id":"lounge-chair-1","type":"chair","at":[412,518],"size":[28,32],"angle":270,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"lounge-chair-2","type":"chair","at":[412,583],"size":[28,32],"angle":270,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"table-north","type":"round-table","at":[480,353],"size":[102,102],"material":"wood"},
+      {"id":"north-chair-1","type":"chair","at":[480,282],"size":[31,34],"angle":180,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"north-chair-2","type":"chair","at":[408,353],"size":[31,34],"angle":90,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"north-chair-3","type":"chair","at":[553,353],"size":[31,34],"angle":270,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"table-main","type":"table","at":[595,554],"size":[110,158],"material":"wood"},
+      {"id":"main-chair-1","type":"chair","at":[513,510],"size":[30,34],"angle":90,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"main-chair-2","type":"chair","at":[513,588],"size":[30,34],"angle":90,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"main-chair-3","type":"chair","at":[677,510],"size":[30,34],"angle":270,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"main-chair-4","type":"chair","at":[677,588],"size":[30,34],"angle":270,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"table-east","type":"round-table","at":[900,534],"size":[109,109],"material":"wood"},
+      {"id":"east-chair-1","type":"chair","at":[900,458],"size":[31,34],"angle":180,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"east-chair-2","type":"chair","at":[975,534],"size":[31,34],"angle":270,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"east-chair-3","type":"chair","at":[900,610],"size":[31,34],"angle":0,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"window-bench","type":"sofa","at":[1156,499],"size":[48,175],"angle":180,"material":"sage-fabric","certainty":"inferred"},
+      {"id":"window-table","type":"round-table","at":[1086,499],"size":[64,64],"material":"wood","certainty":"inferred"},
+      {"id":"plant-north","type":"plant","at":[1023,216],"size":[43,43],"material":"foliage","certainty":"inferred"},
+      {"id":"plant-south","type":"plant","at":[1160,671],"size":[49,49],"material":"foliage","certainty":"inferred"},
+      {"id":"plant-west","type":"plant","at":[186,684],"size":[39,39],"material":"foliage","certainty":"inferred"},
+      {"id":"entrance","type":"threshold","at":[700,730],"size":[100,23],"material":"stone"},
+      {"id":"entry-mat","type":"mat","at":[700,699],"size":[100,34],"material":"woven","certainty":"inferred"},
+      {"id":"garden-west","type":"tree","at":[351,826],"size":[122,112],"material":"foliage","certainty":"inferred"},
+      {"id":"garden-east","type":"tree","at":[1020,822],"size":[105,98],"material":"foliage","certainty":"inferred"},
+      {"id":"bar-tray","type":"tray","at":[847,317],"size":[58,30],"material":"wood","certainty":"inferred"},
+      {"id":"bar-pitcher","type":"vessel","at":[840,313],"size":[15,18],"material":"ceramic","certainty":"inferred"},
+      {"id":"bar-cup","type":"vessel","at":[861,320],"size":[11,12],"material":"ceramic","certainty":"inferred"},
+      {"id":"north-vase","type":"vessel","at":[480,353],"size":[15,19],"material":"ceramic","certainty":"inferred"},
+      {"id":"lounge-book","type":"book","at":[338,526],"size":[33,26],"angle":-12,"material":"paper","certainty":"inferred"},
+      {"id":"lounge-cup","type":"vessel","at":[356,577],"size":[13,14],"material":"ceramic","certainty":"inferred"},
+      {"id":"main-pitcher","type":"vessel","at":[595,554],"size":[18,21],"material":"ceramic","certainty":"inferred"}
+    ],
+    "zones": [
+      {"name":"壁炉","at":[289,309],"style":"small"},
+      {"name":"吧台","at":[788,263],"style":"small"},
+      {"name":"靠窗小憩","at":[310,470],"certainty":"inferred","style":"small"},
+      {"name":"酒馆大厅","at":[683,436]},
+      {"name":"临街窗座","at":[1093,611],"certainty":"inferred","style":"small"},
+      {"name":"旧街区","at":[697,829],"style":"small"}
+    ],
+    "actors": [{"id":"player","name":"你","at":[767,600]}]
+  },
+  "valley": {
+    "id":"mossbridge-valley",
+    "name":"苔桥溪谷",
+    "bounds":[0,0,1400,960],
+    "surfaces": [
+      {"id":"meadow","material":"grass","outline":[[-600,-600],[2000,-600],[2000,1560],[-600,1560]]},
+      {"id":"west-woods","material":"forest","shape":"curve","outline":[[-55,26],[208,-25],[460,44],[582,171],[536,309],[426,360],[302,270],[159,319],[-20,230]]},
+      {"id":"east-woods","material":"forest","shape":"curve","outline":[[1063,-60],[1407,-25],[1450,347],[1301,406],[1160,355],[1047,287],[1090,175],[1003,70]]},
+      {"id":"south-woods","material":"forest","shape":"curve","outline":[[-60,557],[124,530],[263,635],[311,758],[447,784],[511,960],[-40,1030]]},
+      {"id":"east-meadow","material":"heath","shape":"curve","outline":[[970,613],[1101,551],[1284,557],[1438,667],[1399,949],[1133,1011],[1012,858]],"certainty":"inferred"},
+      {"id":"north-rocks","material":"rock","shape":"curve","outline":[[556,-45],[787,-50],[791,117],[731,213],[627,212],[574,126]]},
+      {"id":"ruin-floor","material":"stone","outline":[[300,337],[393,306],[469,349],[484,435],[426,485],[330,464],[289,405]]}
+    ],
+    "boundaries": [],
+    "routes": [
+      {"id":"trail-west","type":"trail","points":[[567,1010],[550,817],[593,677],[607,546],[744,484],[870,484],[1011,437],[1134,460],[1450,493]],"width":35},
+      {"id":"trail-ruin","type":"trail","points":[[612,578],[528,536],[475,482],[418,443]],"width":22,"certainty":"inferred"},
+      {"id":"stream","type":"river","points":[[917,-70],[880,112],[808,274],[823,412],[780,532],[810,704],[879,823],[956,1050]],"width":104}
+    ],
+    "objects": [
+      {"id":"bridge","type":"bridge","at":[798,484],"size":[174,55],"angle":0,"material":"wood"},
+      {"id":"ruin-west","type":"wall-remnant","at":[310,380],"size":[29,91],"angle":15,"material":"stone"},
+      {"id":"ruin-north","type":"wall-remnant","at":[374,326],"size":[107,26],"angle":-10,"material":"stone"},
+      {"id":"ruin-east","type":"wall-remnant","at":[469,386],"size":[27,73],"angle":-7,"material":"stone"},
+      {"id":"echo-stone","type":"unfamiliar","name":"回响石","at":[384,395],"size":[50,64],"outline":[[-0.4,-0.5],[0.2,-0.48],[0.48,-0.15],[0.3,0.43],[-0.25,0.5],[-0.5,0.05]],"material":"mineral"},
+      {"id":"rock-1","type":"rock","at":[810,268],"size":[35,44],"material":"stone"},
+      {"id":"rock-2","type":"rock","at":[879,752],"size":[51,32],"angle":25,"material":"stone"},
+      {"id":"rock-3","type":"rock","at":[740,691],"size":[47,38],"material":"stone"},
+      {"id":"rock-4","type":"rock","at":[678,278],"size":[76,48],"angle":-15,"material":"stone","certainty":"inferred"},
+      {"id":"rock-5","type":"rock","at":[467,698],"size":[48,38],"material":"stone","certainty":"inferred"},
+      {"id":"tree-1","type":"tree","at":[164,437],"size":[124,112],"material":"foliage","certainty":"inferred"},
+      {"id":"tree-2","type":"tree","at":[257,533],"size":[104,103],"material":"foliage","certainty":"inferred"},
+      {"id":"tree-3","type":"tree","at":[1045,666],"size":[136,125],"material":"foliage","certainty":"inferred"},
+      {"id":"tree-4","type":"tree","at":[1150,710],"size":[108,98],"material":"foliage","certainty":"inferred"},
+      {"id":"tree-5","type":"tree","at":[1087,814],"size":[118,100],"material":"foliage","certainty":"inferred"}
+    ],
+    "zones": [
+      {"name":"雾杉林","at":[283,187]},
+      {"name":"旧石庭","at":[377,526],"style":"small"},
+      {"name":"苔桥","at":[800,575],"style":"small"},
+      {"name":"浅 滩","at":[958,739],"style":"small"},
+      {"name":"蕨叶坡","at":[1202,867],"certainty":"inferred"},
+      {"name":"溪谷小径","at":[634,821],"style":"small"},
+      {"name":"上游","at":[992,144],"style":"small"}
+    ],
+    "actors":[{"id":"player","name":"你","at":[603,587]}]
+  }
+}
+</script>
+<script>
+'use strict';
+(() => {
+  const scenes = JSON.parse(document.getElementById('scene-data').textContent);
+  const svg = document.getElementById('map');
+  const stage = document.getElementById('stage');
+  const SVG_NS = 'http://www.w3.org/2000/svg';
+  const metadata = {
+    tavern:{region:'雾杉镇',area:'旧街区',caption:'穿过门廊，木地板将壁炉与吧台连成一个温暖的地方。',note:'木与石围合的日常',index:'01'},
+    valley:{region:'雾杉镇近郊',area:'北部溪谷',caption:'溪流穿过林地与旧石庭，一座木桥把两岸的小径接在一起。',note:'沿着溪水，世界展开',index:'02'}
+  };
+  let sceneKey = 'tavern';
+  let camera = {x:0,y:0,w:1400,h:960};
+  let fitWidth = 1400;
+  let defs;
+  let pointerStart = null;
+  let pinchStart = null;
+  const pointers = new Map();
+  let labelsVisible = true;
+
+  function node(tag, attrs = {}, parent = svg) {
+    const el = document.createElementNS(SVG_NS, tag);
+    for (const [key,value] of Object.entries(attrs)) el.setAttribute(key, String(value));
+    parent.appendChild(el);
+    return el;
+  }
+  function text(parent, value, x, y, attrs = {}) {
+    const el = node('text', {x,y,'text-anchor':'middle',...attrs}, parent);
+    el.textContent = value;
+    return el;
+  }
+  function rect(parent, x,y,width,height,fill,rx=0,extra={}) {return node('rect',{x,y,width,height,fill,rx,...extra},parent);}
+  function line(parent,x1,y1,x2,y2,stroke,width=1,extra={}) {return node('line',{x1,y1,x2,y2,stroke,'stroke-width':width,...extra},parent);}
+  function ellipse(parent,cx,cy,rx,ry,fill,extra={}) {return node('ellipse',{cx,cy,rx,ry,fill,...extra},parent);}
+  function path(parent,d,fill,extra={}) {return node('path',{d,fill,...extra},parent);}
+  function poly(points) {return points.map(p=>p.join(',')).join(' ');}
+  function polygonPath(points) {return 'M'+points.map(p=>p.join(',')).join('L')+'Z';}
+  function seedOf(value) {let n=2166136261;for(const c of value)n=Math.imul(n^c.charCodeAt(0),16777619);return n>>>0;}
+  function random(seed) {let s=seed;return ()=>{s=(Math.imul(1664525,s)+1013904223)>>>0;return s/4294967296;};}
+  function smooth(points) {
+    let d='M'+points[0].join(',');
+    for(let i=0;i<points.length-1;i++){
+      const a=points[i-1]||points[i],b=points[i],c=points[i+1],e=points[i+2]||c;
+      d+=`C${b[0]+(c[0]-a[0])/6},${b[1]+(c[1]-a[1])/6} ${c[0]-(e[0]-b[0])/6},${c[1]-(e[1]-b[1])/6} ${c[0]},${c[1]}`;
+    }
+    return d;
+  }
+  function closedCurve(points){
+    let d='M'+points[0].join(',');
+    for(let i=0;i<points.length;i++){
+      const a=points[(i+points.length-1)%points.length],b=points[i],c=points[(i+1)%points.length],e=points[(i+2)%points.length];
+      d+=`C${b[0]+(c[0]-a[0])/6},${b[1]+(c[1]-a[1])/6} ${c[0]-(e[0]-b[0])/6},${c[1]-(e[1]-b[1])/6} ${c[0]},${c[1]}`;
+    }
+    return d+'Z';
+  }
+  function inside(x,y,points) {
+    let result=false;
+    for(let i=0,j=points.length-1;i<points.length;j=i++){
+      const a=points[i],b=points[j];
+      if((a[1]>y)!==(b[1]>y)&&x<(b[0]-a[0])*(y-a[1])/(b[1]-a[1])+a[0])result=!result;
+    }
+    return result;
+  }
+  function box(points){const xs=points.map(p=>p[0]),ys=points.map(p=>p[1]);return {x:Math.min(...xs),y:Math.min(...ys),w:Math.max(...xs)-Math.min(...xs),h:Math.max(...ys)-Math.min(...ys)};}
+
+  function definitions() {
+    defs=node('defs');
+    const gradient=(id,stops,attrs={})=>{
+      const g=node('linearGradient',{id,x1:0,y1:0,x2:1,y2:1,...attrs},defs);
+      for(const [offset,color] of stops)node('stop',{offset,'stop-color':color},g);
+    };
+    gradient('wood-surface',[['0%','#d2b98e'],['52%','#c3a579'],['100%','#b89a70']]);
+    gradient('table-top',[['0%','#d7b582'],['50%','#c39a67'],['100%','#b78c59']]);
+    gradient('cushion',[['0%','#a5b299'],['55%','#82967c'],['100%','#6e8366']]);
+    gradient('stone-face',[['0%','#d4d6c0'],['65%','#aaafa0'],['100%','#8e9989']]);
+    gradient('river-color',[['0%','#afcebd'],['40%','#82b9b0'],['75%','#96c6b9'],['100%','#b0d3be']]);
+    gradient('crystal-face',[['0%','#b8d0c1'],['50%','#85a697'],['100%','#627f75']]);
+    const leafColors=[['#bbcca1','#8eaa7d','#658968'],['#acc398','#7e9e75','#527a61'],['#cfdaae','#a3b78b','#7d9b74'],['#b5cba2','#8aaa86','#608569']];
+    leafColors.forEach((colors,i)=>{
+      const g=node('radialGradient',{id:'leaf-'+i,cx:'.33',cy:'.28',r:'.8'},defs);
+      colors.forEach((color,j)=>node('stop',{offset:j/2,'stop-color':color},g));
+    });
+    const pattern=(id,w,h)=>node('pattern',{id,width:w,height:h,patternUnits:'userSpaceOnUse'},defs);
+    let p=pattern('paper',73,61);rect(p,0,0,73,61,'#e9eddf');
+    for(let i=0;i<28;i++){const x=(i*37)%73,y=(i*23)%61;ellipse(p,x,y,.45,.45,i%3?'#899b78':'#fff',{'opacity':.2});}
+    p=pattern('wood',158,32);rect(p,0,0,158,32,'url(#wood-surface)');
+    line(p,0,0,158,0,'#856f4c',1,{opacity:.33});line(p,0,2,158,2,'#f9edc6',1,{opacity:.36});line(p,78,0,78,32,'#937650',.8,{opacity:.22});
+    path(p,'M4 10C30 7 41 13 74 9M85 23C101 18 118 25 153 21M2 25C24 22 42 28 70 25','none',{stroke:'#806744','stroke-width':.6,opacity:.18});
+    p=pattern('stone',64,45);rect(p,0,0,64,45,'#c9c8b4');path(p,'M0 0H64V45H0ZM32 0V23M0 23H64M13 23V45','none',{stroke:'#a1a692','stroke-width':1.4});path(p,'M3 3H29M35 3H61M16 26H61','none',{stroke:'#edf0db',opacity:.65,'stroke-width':1});
+    p=pattern('tile',43,43);rect(p,0,0,43,43,'#c7c9b5');rect(p,2,2,39,39,'#d9dac8',0,{stroke:'#abb39c','stroke-width':.8});path(p,'M21.5 11 32 21.5 21.5 32 11 21.5Z','none',{stroke:'#a2ad93','stroke-width':.7});
+    p=pattern('woven',16,16);rect(p,0,0,16,16,'#9da389');path(p,'M0 4H16M0 12H16M4 0V16M12 0V16','none',{stroke:'#dee0bb','stroke-width':1,opacity:.25});
+    p=pattern('gravel',54,44);rect(p,0,0,54,44,'#d6d2bb');path(p,'M5 9 16 4 23 10 16 19 4 17ZM30 26 41 22 50 28 44 38 32 36Z','none',{stroke:'#a4ad94','stroke-width':.8,opacity:.55});
+    p=pattern('grass',86,74);rect(p,0,0,86,74,'#dce4ca');
+    path(p,'M9 21l-2-5m2 5 3-4M53 51l-1-6m1 6 4-4M75 10l-2-4M22 64l3-5','none',{stroke:'#9daa81','stroke-width':1,opacity:.48});ellipse(p,43,18,12,6,'#cedcb7',{opacity:.3});
+    p=pattern('heath',67,51);rect(p,0,0,67,51,'#c9d6ae');path(p,'M11 29q-6-9-3-12m3 12q6-11 4-15M47 44q-7-10-5-17m5 17q5-11 5-14','none',{stroke:'#8d9f73',opacity:.5,'stroke-width':1.5});
+    p=pattern('rock',64,50);rect(p,0,0,64,50,'#c5ccba');path(p,'M-4 14 21 4 48 12 67 3M-4 34 22 23 50 34 70 21M12 50 35 40 60 45','none',{stroke:'#a2ad99','stroke-width':1.2,opacity:.65});
+    p=pattern('water-lines',85,45);path(p,'M8 9q11 4 23 0M50 31q12 3 23-1','none',{stroke:'#e6f3df',opacity:.55,'stroke-width':1.3});
+    // Reuse visual variants rather than thousands of repeated SVG nodes.
+    for(let i=0;i<6;i++){
+      const symbol=node('symbol',{id:'tree-'+i,viewBox:'-50 -50 100 100'},defs);
+      treeRecipe(symbol,317+i*97);
+    }
+  }
+
+  // A tree recipe stays inside its footprint. Forest crowns below are decorative
+  // density marks clipped to a known forest region, not additional scene objects.
+  function treeRecipe(parent,seed) {
+    const rand=random(seed),outline=[];
+    for(let i=0;i<28;i++){const a=i/28*Math.PI*2,r=41+(i%2?4:-1)*rand();outline.push([Math.cos(a)*r,Math.sin(a)*r]);}
+    path(parent,closedCurve(outline),'url(#leaf-1)',{stroke:'#62815f','stroke-width':.7});
+    for(let i=0;i<11;i++){
+      const a=i/11*Math.PI*2,r=18+rand()*10,cx=Math.cos(a)*r,cy=Math.sin(a)*r,s=12+rand()*9;
+      ellipse(parent,cx,cy,s,s*(.8+rand()*.2),`url(#leaf-${i%4})`);
+      path(parent,`M${cx-s*.6} ${cy-s*.2}q${s*.25} ${-s*.65} ${s*.9} ${-s*.45}`,'none',{stroke:'#dfe7bf','stroke-width':.7,opacity:.45});
+    }
+    ellipse(parent,-2,-4,20,19,'url(#leaf-0)');
+    path(parent,'M-15-10q8-12 23-9M-7 4l-6 7M8 0l9 4','none',{stroke:'#e2e7bd','stroke-width':.8,opacity:.5});
+  }
+  function tree(parent,x,y,w,h,seed) {
+    return node('use',{href:'#tree-'+(seed%6),x:x-w/2,y:y-h/2,width:w,height:h},parent);
+  }
+
+  function drawSurface(surface,parent) {
+    const d=surface.shape==='curve'?closedCurve(surface.outline):polygonPath(surface.outline),g=node('g',{'data-surface':surface.id},parent);
+    if(surface.material==='forest'){
+      path(g,d,'#a9ba92',{stroke:'#b6c6a0','stroke-width':11,'stroke-linejoin':'round'});
+      const clip=node('clipPath',{id:'clip-'+surface.id},defs);path(clip,d,'white');
+      const crowns=node('g',{'clip-path':`url(#clip-${surface.id})`},g);
+      const b=box(surface.outline),rand=random(seedOf(surface.id));
+      for(let y=b.y-24;y<b.y+b.h+44;y+=47){
+        for(let x=b.x-24;x<b.x+b.w+44;x+=52){
+          const tx=x+(rand()-.5)*32,ty=y+(rand()-.5)*30;
+          if(inside(tx,ty,surface.outline))tree(crowns,tx,ty,73+rand()*27,67+rand()*22,Math.floor(rand()*100000));
+        }
+      }
+      return;
+    }
+    path(g,d,`url(#${surface.material})`,{stroke:surface.material==='wood'?'#897b5d':'#adb59b','stroke-width':surface.material==='wood'?2:.8,'stroke-linejoin':'round'});
+    if(surface.material==='woven'){
+      const b=box(surface.outline);
+      rect(g,b.x+8,b.y+8,b.w-16,b.h-16,'none',0,{stroke:'#e0dab0','stroke-width':2});
+      rect(g,b.x+14,b.y+14,b.w-28,b.h-28,'none',0,{stroke:'#637861','stroke-width':1});
+      const cx=b.x+b.w/2,cy=b.y+b.h/2;
+      path(g,`M${cx} ${cy-58}l45 58-45 58-45-58Z`,'none',{stroke:'#dfdab6','stroke-width':2,opacity:.5});
+    }
+  }
+  function drawRoute(route,parent) {
+    const d=smooth(route.points),g=node('g',{'data-route':route.id},parent);
+    if(route.type==='river'){
+      path(g,d,'none',{stroke:'#c6ccb0','stroke-width':route.width+22,'stroke-linecap':'round','stroke-linejoin':'round'});
+      path(g,d,'none',{stroke:'#e7dfbd','stroke-width':route.width+10,'stroke-linecap':'round'});
+      path(g,d,'none',{stroke:'url(#river-color)','stroke-width':route.width,'stroke-linecap':'round'});
+      path(g,d,'none',{stroke:'url(#water-lines)','stroke-width':route.width-10,'stroke-linecap':'round'});
+      path(g,d,'none',{stroke:'#d3e9d2','stroke-width':route.width*.46,opacity:.18});
+    }else{
+      path(g,d,'none',{stroke:'#b7bb9a','stroke-width':route.width+5,'stroke-linecap':'round',opacity:.65});
+      path(g,d,'none',{stroke:'#e6d9b5','stroke-width':route.width,'stroke-linecap':'round'});
+      path(g,d,'none',{stroke:'#f3e9cd','stroke-width':route.width-7,'stroke-linecap':'round',opacity:.65});
+      path(g,d,'none',{stroke:'#a69875','stroke-width':1,'stroke-dasharray':'2 13',opacity:.42});
+    }
+  }
+  function drawBoundary(boundary,parent) {
+    const d='M'+boundary.points.map(p=>p.join(',')).join('L');
+    if(boundary.material==='glass'){
+      path(parent,d,'none',{stroke:'#859482','stroke-width':13});
+      path(parent,d,'none',{stroke:'#dbe7d7','stroke-width':8});
+      path(parent,d,'none',{stroke:'#778675','stroke-width':1.5,'stroke-dasharray':'1 23'});
+    }else{
+      // Boundary strokes communicate an edge; these are not physical wall widths.
+      path(parent,d,'none',{stroke:'#727a64','stroke-width':17,'stroke-linejoin':'round'});
+      path(parent,d,'none',{stroke:'#c2c6ae','stroke-width':12,'stroke-linejoin':'round'});
+      path(parent,d,'none',{stroke:'#e2e1c7','stroke-width':7,'stroke-linejoin':'round'});
+      path(parent,d,'none',{stroke:'#969f87','stroke-width':7,'stroke-dasharray':'1 27',opacity:.75});
+    }
+  }
+
+  function drawObject(o,parent) {
+    const [w,h]=o.size,g=node('g',{transform:`translate(${o.at[0]} ${o.at[1]}) rotate(${o.angle||0})`,'data-object':o.id},parent);
+    const edge='#7c6545',inferred=o.certainty==='inferred';
+    const slab=(fill,rx=3,base=edge)=>{
+      rect(g,-w/2,-h/2,w,h,base,rx);
+      rect(g,-w/2+3,-h/2+3,w-6,h-6,fill,Math.max(0,rx-1),{stroke:'#ead3a4','stroke-width':.7});
+      line(g,-w/2+6,h/2-6,w/2-6,h/2-6,'#896c46',1.3,{opacity:.5});
+    };
+    if(o.type==='table'||o.type==='counter'){
+      slab('url(#table-top)',o.type==='counter'?3:7);
+      const rand=random(seedOf(o.id));
+      for(let y=-h/2+13;y<h/2-7;y+=12){
+        path(g,`M${-w/2+9} ${y}C${-w/4} ${y-3-rand()*3} ${w/5} ${y+4} ${w/2-9} ${y}`,'none',{stroke:'#825e3d','stroke-width':.7,opacity:.23});
+      }
+      if(o.type==='counter')rect(g,-w/2+7,-h/2+7,w-14,h-14,'none',2,{stroke:'#e3c797','stroke-width':1});
+    }else if(o.type==='round-table'||o.type==='stool'){
+      ellipse(g,0,0,w/2,h/2,edge);
+      ellipse(g,0,-1,w/2-3,h/2-3,'url(#table-top)',{stroke:'#e8cda0','stroke-width':1});
+      ellipse(g,0,-1,w/2-7,h/2-7,'none',{stroke:'#8b6a46','stroke-width':.7,opacity:.5});
+      if(o.type==='round-table'){
+        const clip=node('clipPath',{id:'clip-'+o.id},defs);ellipse(clip,0,-1,w/2-8,h/2-8,'white');
+        const grain=node('g',{'clip-path':`url(#clip-${o.id})`},g);
+        for(let y=-h/2;y<h/2;y+=12)path(grain,`M${-w/2} ${y}Q0 ${y+4} ${w/2} ${y-1}`,'none',{stroke:'#8b653f','stroke-width':.7,opacity:.24});
+      }
+    }else if(o.type==='chair'){
+      rect(g,-w/2,-h/2,w,h,'#716d52',4);
+      rect(g,-w/2+3,-h/2+3,w-6,h-9,'url(#cushion)',3,{stroke:'#bec9a5','stroke-width':.8});
+      rect(g,-w/2,-h/2+h-7,w,7,'#586d50',2,{stroke:'#bdc3a0','stroke-width':.7});
+      line(g,-w/2+5,h/2-4,w/2-5,h/2-4,'#97a082',1);
+    }else if(o.type==='sofa'){
+      rect(g,-w/2,-h/2,w,h,'#657a60',6,{stroke:'#55664b','stroke-width':1.3});
+      rect(g,-w/2+5,-h/2+7,w-10,h-14,'url(#cushion)',4);
+      for(let y=-h/2+13;y<h/2-17;y+=Math.max(28,(h-26)/3)){
+        rect(g,-w/2+12,y,w-19,(h-26)/3-4,'url(#cushion)',5,{stroke:'#b5c09c','stroke-width':.7});
+      }
+      rect(g,-w/2+2,-h/2+5,8,h-10,'#61785a',4,{stroke:'#9dac88','stroke-width':.6});
+      rect(g,-w/2+3,-h/2+2,w-6,9,'#788e6e',3);rect(g,-w/2+3,h/2-11,w-6,9,'#788e6e',3);
+    }else if(o.type==='shelf'){
+      slab('#ad9268',2);
+      for(let x=-w/2+44;x<w/2-8;x+=44)rect(g,x,-h/2+3,3,h-6,'#e0c298');
+      line(g,-w/2+5,0,w/2-5,0,'#8d7755',1.5);
+    }else if(o.type==='hearth'){
+      rect(g,-w/2,-h/2,w,h,'#858b78',3);
+      rect(g,-w/2+3,-h/2+3,w-6,h-6,'url(#stone)',2);
+      rect(g,-w/2+23,-h/2+13,w-46,h-21,'#716c55',2);
+      rect(g,-w/2+28,-h/2+17,w-56,h-28,'#504f41',2);
+      for(let x=-w/2+34;x<w/2-25;x+=17)line(g,x,-h/2+22,x,h/2-14,'#918c6e',2);
+      // A lit hearth is explicit input, never inferred from a warm visual theme.
+      if(o.lit===true){
+        ellipse(g,0,3,w*.2,h*.18,'#cc955e',{opacity:.55});
+        for(let x=-w*.21;x<w*.24;x+=19){
+          path(g,`M${x-6} 8Q${x-11} 0 ${x+1} -10Q${x-1} 0 ${x+7} 3Q${x+9} 13 ${x-6} 8`,'#d4a465');
+          ellipse(g,x+1,7,3.5,2,'#edc78a');
+        }
+      }
+    }else if(o.type==='logs'){
+      rect(g,-w/2,-h/2,w,h,'#a89468',3);
+      for(let y=-h/2+5;y<h/2-3;y+=9){rect(g,-w/2+3,y,w-6,7,'#8a7353',3);line(g,-w/2+5,y+2,w/2-5,y+2,'#ceb187',1);}
+    }else if(o.type==='plant'){
+      ellipse(g,0,0,w*.25,h*.25,'#9a7d5a',{stroke:'#d5c7a4','stroke-width':2});
+      for(let i=0;i<7;i++){
+        const leaf=node('g',{transform:`rotate(${i*51.43})`},g);
+        path(leaf,`M0 0Q${-w*.3} ${-h*.23} 0 ${-h*.49}Q${w*.25} ${-h*.2} 0 0`,i%2?'#7e996f':'#668563',{stroke:'#4f7655','stroke-width':.6});
+        line(leaf,0,-2,0,-h*.36,'#b6c49a',.9);
+      }
+    }else if(o.type==='tree'){
+      tree(g,0,0,w,h,seedOf(o.id));
+    }else if(o.type==='threshold'){
+      rect(g,-w/2,-h/2,w,h,'url(#stone)',1,{stroke:'#9ba48b','stroke-width':1});
+      line(g,-w/2,-h/2,w/2,-h/2,'#f1eed7',2);
+    }else if(o.type==='mat'){
+      rect(g,-w/2,-h/2,w,h,'url(#woven)',2);
+      rect(g,-w/2+3,-h/2+3,w-6,h-6,'none',1,{stroke:'#dad1a8','stroke-width':1});
+    }else if(o.type==='bridge'){
+      rect(g,-w/2,-h/2,w,h,'#756e4c',2);
+      for(let x=-w/2+2;x<w/2-2;x+=12){
+        rect(g,x,-h/2+3,10,h-6,'url(#table-top)',1,{stroke:'#9c865c','stroke-width':.6});
+        line(g,x+3,-h/2+7,x+4,h/2-7,'#e1c79a',.7);
+      }
+      rect(g,-w/2,-h/2,w,5,'#8b7953',1);rect(g,-w/2,h/2-5,w,5,'#8b7953',1);
+      for(const x of [-w/2+4,w/2-4])for(const y of [-h/2+1,h/2-1])ellipse(g,x,y,4,4,'#6d694b',{stroke:'#d3bd8d','stroke-width':1});
+    }else if(o.type==='wall-remnant'){
+      slab('url(#stone)',2,'#919c85');
+    }else if(o.type==='tray'){
+      rect(g,-w/2,-h/2,w,h,'#8d7551',h*.3,{stroke:'#e2c393','stroke-width':1});
+      rect(g,-w/2+3,-h/2+3,w-6,h-6,'#b59566',h*.23,{stroke:'#725d41','stroke-width':.7});
+    }else if(o.type==='vessel'){
+      ellipse(g,w*.34,0,w*.15,h*.22,'none',{stroke:'#e7dfbd','stroke-width':2});
+      ellipse(g,-w*.06,0,w*.37,h*.45,'#dedac1',{stroke:'#978d6f','stroke-width':.7});
+      ellipse(g,-w*.06,-h*.025,w*.24,h*.3,'#96866a',{stroke:'#f3ead3','stroke-width':1});
+    }else if(o.type==='book'){
+      rect(g,-w/2,-h/2,w,h,'#707f62',2);
+      rect(g,-w/2+3,-h/2+2,w-6,h-4,'#e4ddbb',1);
+      line(g,0,-h/2+2,0,h/2-2,'#a49c7b',1);
+      for(let y=-h/2+7;y<h/2-3;y+=4){line(g,-w/2+6,y,-3,y,'#b7af8d',.6);line(g,3,y,w/2-6,y,'#b7af8d',.6);}
+    }else if(o.type==='rock'||o.outline){
+      const outline=o.outline||[[-.5,-.14],[-.3,-.46],[.14,-.5],[.44,-.2],[.5,.18],[.18,.44],[-.25,.5]];
+      const points=outline.map(([x,y])=>[x*w,y*h]);
+      node('polygon',{points:poly(points),fill:o.material==='mineral'?'url(#crystal-face)':'url(#stone-face)',stroke:'#849181','stroke-width':1.2},g);
+      // Surface facets, entirely within the supplied footprint; no inferred shape.
+      path(g,`M${points[0].join(',')}L0,0L${points[2].join(',')}M0,0L${points[points.length-2].join(',')}`,'none',{stroke:'#e1e7ce','stroke-width':1.2,opacity:.6});
+    }else{
+      // Unrecognised object kinds remain visible without choosing a fake familiar model.
+      rect(g,-w/2,-h/2,w,h,'url(#stone-face)',2,{stroke:'#87947e','stroke-width':1});
+    }
+    if(inferred)g.setAttribute('data-certainty','inferred');
+  }
+
+  function drawActor(actor,parent) {
+    const anchor=node('g',{transform:`translate(${actor.at[0]} ${actor.at[1]})`},parent);
+    const g=node('g',{class:'actor-symbol'},anchor);
+    ellipse(g,0,0,27,27,'#fbf7e6',{opacity:.42});
+    ellipse(g,0,0,20,20,'#fff9e8',{stroke:'#cdb690','stroke-width':1});
+    ellipse(g,0,0,14.5,14.5,'#b97755');
+    text(g,actor.name,0,4.5,{fill:'#fff8e9','font-size':12,'font-family':'sans-serif'});
+    const label=node('g',{transform:'translate(0 42)'},g);
+    rect(label,-40,-12,80,24,'#fffaf0',7,{stroke:'#cfcbb5','stroke-width':.8});
+    text(label,'你在这里',0,4,{class:'actor-label',fill:'#7b654c'});
+  }
+
+  function renderScene() {
+    const scene=scenes[sceneKey],meta=metadata[sceneKey];
+    svg.replaceChildren();
+    const title=node('title',{id:'map-title'});title.textContent=scene.name+'俯视场景地图';
+    const description=node('desc',{id:'map-description'});description.textContent=meta.caption+'可拖动、缩放，使用方向键平移，使用总览或定位按钮返回。';
+    definitions();
+    rect(svg,-5000,-5000,10000,10000,'url(#paper)');
+    const surfaces=node('g',{'data-layer':'surfaces'});
+    for(const surface of scene.surfaces)drawSurface(surface,surfaces);
+    const routes=node('g',{'data-layer':'routes'});
+    for(const route of [...scene.routes].sort((a,b)=>(a.type==='river')-(b.type==='river')))drawRoute(route,routes);
+    const boundaries=node('g',{'data-layer':'boundaries'});
+    for(const boundary of scene.boundaries)drawBoundary(boundary,boundaries);
+    const objects=node('g',{'data-layer':'objects'});
+    for(const object of scene.objects)drawObject(object,objects);
+    const labels=node('g',{'data-layer':'labels'});
+    for(const zone of scene.zones){
+      text(labels,zone.name,zone.at[0],zone.at[1],{class:'map-label '+(zone.style==='small'?'':'zone')});
+      if(zone.certainty==='inferred')line(labels,zone.at[0]-16,zone.at[1]+9,zone.at[0]+16,zone.at[1]+9,'#829173',1.2,{'stroke-dasharray':'3 3',class:'map-label'});
+    }
+    for(const object of scene.objects){if(object.name)text(labels,object.name,object.at[0],object.at[1]+object.size[1]/2+22,{class:'map-label minor'});}
+    const actors=node('g',{'data-layer':'actors'});
+    for(const actor of scene.actors)drawActor(actor,actors);
+    stage.dataset.scene=sceneKey;
+    document.getElementById('scene-name').textContent=scene.name;
+    document.getElementById('region-name').textContent=meta.region;
+    document.getElementById('area-name').textContent=meta.area;
+    const caption=document.getElementById('scene-caption');caption.replaceChildren(document.createTextNode(meta.caption));
+    const detail=document.createElement('span');detail.textContent='看见所在，也看见周围。';caption.appendChild(detail);
+    document.getElementById('map-overline').textContent='LOCAL SCENE / '+meta.index;
+    document.getElementById('map-note').textContent=meta.note;
+    document.querySelectorAll('.scene-switch button').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.scene===sceneKey)));
+    fitMap();
+    // On a narrow screen start closer to the player; full extent remains one tap away.
+    if(stage.clientWidth<580){camera.w=Math.min(800,fitWidth);camera.h=camera.w/stageRatio();centerPlayer();}
+    updateData();
+  }
+
+  function stageRatio(){return Math.max(1,stage.clientWidth)/Math.max(1,stage.clientHeight);}
+  function updateCamera(){
+    const bounds=scenes[sceneKey].bounds;
+    // Keep a generous but finite browsing envelope; panning never changes scene facts.
+    const cx=Math.max(bounds[0]-150,Math.min(bounds[0]+bounds[2]+150,camera.x+camera.w/2));
+    const cy=Math.max(bounds[1]-150,Math.min(bounds[1]+bounds[3]+150,camera.y+camera.h/2));
+    camera.x=cx-camera.w/2;camera.y=cy-camera.h/2;
+    svg.setAttribute('viewBox',`${camera.x} ${camera.y} ${camera.w} ${camera.h}`);
+    svg.style.setProperty('--label-scale',Math.max(1,camera.w/stage.clientWidth*.8));
+    svg.querySelectorAll('.actor-symbol').forEach(el=>el.setAttribute('transform',`scale(${Math.max(1,camera.w/stage.clientWidth*.85)})`));
+    const ratio=fitWidth/camera.w;
+    document.getElementById('zoom-readout').textContent=Math.round(ratio*100)+'%';
+    document.getElementById('zoom-in').disabled=ratio>=4.99;
+    document.getElementById('zoom-out').disabled=ratio<=.651;
+  }
+  function fitMap(){
+    const [x,y,w,h]=scenes[sceneKey].bounds,ratio=stageRatio();
+    fitWidth=Math.max(w,h*ratio);
+    camera={x:x+w/2-fitWidth/2,y:y+h/2-fitWidth/ratio/2,w:fitWidth,h:fitWidth/ratio};
+    updateCamera();
+  }
+  function centerPlayer(){const p=scenes[sceneKey].actors[0].at;camera.x=p[0]-camera.w/2;camera.y=p[1]-camera.h/2;updateCamera();}
+  function zoom(factor,anchor){
+    const next=Math.max(fitWidth/5,Math.min(fitWidth/.65,camera.w/factor));
+    const p=anchor||{x:camera.x+camera.w/2,y:camera.y+camera.h/2};
+    const fx=(p.x-camera.x)/camera.w,fy=(p.y-camera.y)/camera.h;
+    camera.w=next;camera.h=next/stageRatio();camera.x=p.x-camera.w*fx;camera.y=p.y-camera.h*fy;
+    updateCamera();
+  }
+  function worldPoint(clientX,clientY){const point=svg.createSVGPoint();point.x=clientX;point.y=clientY;return point.matrixTransform(svg.getScreenCTM().inverse());}
+  function updateData(){
+    const scene=scenes[sceneKey];
+    document.getElementById('data-output').textContent=JSON.stringify({tool:'MapSceneEdit (候选结构示意)',arguments:scene},null,2);
+    const bytes=new TextEncoder().encode(JSON.stringify(scene)).length;
+    document.getElementById('data-meta').textContent=`${scene.surfaces.length} 片表面 / ${scene.boundaries.length} 条边界 / ${scene.routes.length} 条路径 / ${scene.objects.length} 个物件 / 紧凑 JSON ${(bytes/1024).toFixed(1)} KB`;
+  }
+  document.querySelectorAll('.scene-switch button').forEach(button=>button.addEventListener('click',()=>{
+    if(sceneKey===button.dataset.scene)return;
+    sceneKey=button.dataset.scene;pointers.clear();pointerStart=null;pinchStart=null;svg.classList.remove('dragging');renderScene();
+  }));
+  document.getElementById('zoom-in').addEventListener('click',()=>zoom(1.25));
+  document.getElementById('zoom-out').addEventListener('click',()=>zoom(1/1.25));
+  document.getElementById('fit-map').addEventListener('click',fitMap);
+  document.getElementById('locate-player').addEventListener('click',()=>{camera.w=Math.min(fitWidth,stage.clientWidth<580?650:1000);camera.h=camera.w/stageRatio();centerPlayer();});
+  document.getElementById('toggle-labels').addEventListener('click',event=>{labelsVisible=!labelsVisible;stage.classList.toggle('hide-labels',!labelsVisible);event.currentTarget.setAttribute('aria-pressed',String(labelsVisible));});
+  svg.addEventListener('wheel',event=>{event.preventDefault();zoom(Math.exp(-Math.max(-100,Math.min(100,event.deltaY))*.003),worldPoint(event.clientX,event.clientY));},{passive:false});
+  svg.addEventListener('pointerdown',event=>{
+    if(event.pointerType==='mouse'&&event.button!==0)return;
+    svg.setPointerCapture(event.pointerId);pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});svg.classList.add('dragging');
+    if(pointers.size===1)pointerStart={x:event.clientX,y:event.clientY,camera:{...camera}};
+    if(pointers.size===2){const [a,b]=[...pointers.values()];pinchStart={distance:Math.hypot(a.x-b.x,a.y-b.y),camera:{...camera},anchor:worldPoint((a.x+b.x)/2,(a.y+b.y)/2)};pointerStart=null;}
+  });
+  svg.addEventListener('pointermove',event=>{
+    if(!pointers.has(event.pointerId))return;
+    pointers.set(event.pointerId,{x:event.clientX,y:event.clientY});
+    if(pointers.size===2&&pinchStart){
+      const [a,b]=[...pointers.values()],distance=Math.hypot(a.x-b.x,a.y-b.y);
+      camera={...pinchStart.camera};zoom(distance/Math.max(1,pinchStart.distance),pinchStart.anchor);
+    }else if(pointerStart&&pointers.size===1){
+      camera.x=pointerStart.camera.x-(event.clientX-pointerStart.x)*camera.w/stage.clientWidth;
+      camera.y=pointerStart.camera.y-(event.clientY-pointerStart.y)*camera.h/stage.clientHeight;updateCamera();
+    }
+  });
+  function releasePointer(event){
+    pointers.delete(event.pointerId);pinchStart=null;pointerStart=null;
+    if(pointers.size===1){const p=[...pointers.values()][0];pointerStart={x:p.x,y:p.y,camera:{...camera}};}
+    if(!pointers.size)svg.classList.remove('dragging');
+  }
+  svg.addEventListener('pointerup',releasePointer);svg.addEventListener('pointercancel',releasePointer);svg.addEventListener('lostpointercapture',event=>{if(pointers.has(event.pointerId))releasePointer(event);});
+  svg.addEventListener('keydown',event=>{
+    const step=camera.w*.075;
+    if(event.key==='ArrowLeft')camera.x-=step;else if(event.key==='ArrowRight')camera.x+=step;
+    else if(event.key==='ArrowUp')camera.y-=step;else if(event.key==='ArrowDown')camera.y+=step;
+    else if(event.key==='+'||event.key==='='){zoom(1.25);event.preventDefault();return;}
+    else if(event.key==='-'){zoom(.8);event.preventDefault();return;}
+    else if(event.key==='Home'){fitMap();event.preventDefault();return;}else return;
+    event.preventDefault();updateCamera();
+  });
+  const dialog=document.getElementById('data-dialog');
+  document.getElementById('show-data').addEventListener('click',()=>dialog.showModal());
+  document.getElementById('close-data').addEventListener('click',()=>dialog.close());
+  dialog.addEventListener('click',event=>{if(event.target===dialog){const r=dialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)dialog.close();}});
+  let previousSize='';
+  new ResizeObserver(()=>{
+    const size=stage.clientWidth+':'+stage.clientHeight;if(size===previousSize)return;
+    const wasFitted=Math.abs(camera.w-fitWidth)<.5;previousSize=size;
+    if(wasFitted){fitMap();return;}
+    const cy=camera.y+camera.h/2;camera.h=camera.w/stageRatio();camera.y=cy-camera.h/2;
+    const b=scenes[sceneKey].bounds;fitWidth=Math.max(b[2],b[3]*stageRatio());updateCamera();
+  }).observe(stage);
+  renderScene();
+})();
+</script>
+</body>
+</html>

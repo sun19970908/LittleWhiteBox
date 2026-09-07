@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 280" fill="none">
+  <style>
+    :root { --sky-top: #dcedff; --sky-bottom: #f5faff; --sea-top: #b5d9f2; --sea-bottom: #e4f1fa; --light: #fffdf1; --near: #759dc1; --far: #8bb6d3; --glint: #fff; }
+    @media (prefers-color-scheme: dark) {
+      :root { --sky-top: #172a43; --sky-bottom: #304e74; --sea-top: #416185; --sea-bottom: #243b56; --light: #dcecff; --near: #233d5d; --far: #345573; --glint: #89b9e1; }
+    }
+  </style>
+  <defs>
+    <linearGradient id="sky" x1="500" y1="0" x2="500" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="var(--sky-top)"/><stop offset="1" stop-color="var(--sky-bottom)"/>
+    </linearGradient>
+    <linearGradient id="sea" x1="500" y1="172" x2="500" y2="280" gradientUnits="userSpaceOnUse">
+      <stop stop-color="var(--sea-top)"/><stop offset="1" stop-color="var(--sea-bottom)"/>
+    </linearGradient>
+  </defs>
+  <path fill="url(#sky)" d="M0 0h1000v280H0z"/>
+  <circle cx="735" cy="81" r="27" fill="var(--light)"/>
+  <path d="M0 174c193-10 338 2 510-5s336-5 490 4v107H0Z" fill="url(#sea)"/>
+  <path d="M0 173c202-9 353 3 509-4s335-5 491 4" stroke="var(--glint)" stroke-width="1.5"/>
+  <path d="M0 260c91-17 130-56 225-57 131-1 176 77 323 77H0Z" fill="var(--near)"/>
+  <path d="M695 280c119-44 196-30 305-71v71Z" fill="var(--far)"/>
+  <path d="m661 200 153 1m-188 16h216m-235 18h279" stroke="var(--glint)" stroke-opacity=".55"/>
+</svg>

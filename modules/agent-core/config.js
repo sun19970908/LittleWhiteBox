@@ -36,7 +36,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         temperature: 1,
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
-        toolMode: 'native',
+        toolMode: 'tagged-json',
     },
     'sillytavern-openai-compatible': {
         baseUrl: '',
@@ -45,7 +45,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         temperature: 1,
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
-        toolMode: 'native',
+        toolMode: 'tagged-json',
     },
     'sillytavern-claude': {
         baseUrl: '',
@@ -308,7 +308,6 @@ export function normalizeAgentSettings(saved = {}, options = {}) {
     const tavilySettings = resolveGlobalTavilySettings(saved, legacyPresetName, currentPresetName);
 
     return {
-        enabled: !!saved.enabled,
         workspaceFileName: normalizeWorkspaceName(saved.workspaceFileName || defaultWorkspaceFileName),
         jsApiPermission: normalizeJsApiPermission(saved.jsApiPermission),
         currentPresetName,

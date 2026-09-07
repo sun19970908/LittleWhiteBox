@@ -883,7 +883,7 @@ AgentCore Adapter 是四个现有 Agent 消费者的共享源码，修改后必�
 - `npm run build:agent-core`
 - `npm run build:assistant`
 - `npm run build:ebook`
-- `npm run build:fourth-wall`
+- `npm run build:xiaobai-os`
 - `npm run build:tavern`
 
 不能只生成新的 AgentCore browser bundle；否则源码和四个已提交 dist 会处于不同协议版本。

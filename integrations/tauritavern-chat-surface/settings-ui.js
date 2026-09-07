@@ -5,7 +5,7 @@ const LOCKED_CONTROL_IDS = Object.freeze([
 'xiaobaix_enabled', 'xiaobaix_recorded_enabled', 'xiaobaix_preview_enabled',
     'xiaobaix_template_enabled', 'xiaobaix_immersive_enabled',
     'xiaobaix_variables_panel_enabled', 'xiaobaix_story_summary_enabled',
-    'xiaobaix_story_outline_enabled', 'xiaobaix_fourth_wall_open_settings',
+    'xiaobaix_story_outline_enabled', 'xiaobaix_os_enabled',
     'xiaobaix_draw_provider', 'xiaobaix_draw_open_settings',
     'xiaobaix_tts_enabled', 'xiaobaix_tts_open_settings',
     'xiaobaix_render_enabled', 'xiaobaix_max_rendered', 'xiaobaix_reset_btn',

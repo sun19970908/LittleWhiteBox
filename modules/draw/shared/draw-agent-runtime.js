@@ -14,6 +14,7 @@ import {
 
 const DEFAULT_SCENE_PLANNER_TIMEOUT_MS = 10 * 60 * 1000;
 const MAX_SCENE_PLANNER_ATTEMPTS = 3;
+const MAX_DIAGNOSTIC_MODEL_OUTPUT_CHARS = 16 * 1024;
 
 let lastDrawAgentDiagnostic = null;
 let diagnosticSequence = 0;
@@ -119,10 +120,44 @@ function buildCorrectionTurn({ result, providerConfig, error, attempt, sessionLo
     };
 }
 
+function captureDiagnosticModelOutput(result) {
+    const toolCalls = (Array.isArray(result?.toolCalls) ? result.toolCalls : []).map((toolCall) => ({
+        name: String(toolCall?.name || ''),
+        arguments: (() => {
+            try {
+                return cloneJson(toolCall?.arguments) ?? String(toolCall?.arguments ?? '');
+            } catch {
+                return String(toolCall?.arguments ?? '');
+            }
+        })(),
+    }));
+    let serialized;
+    try {
+        serialized = JSON.stringify({
+            toolCalls,
+            text: String(result?.text || ''),
+            finishReason: String(result?.finishReason || ''),
+            model: String(result?.model || ''),
+            provider: String(result?.provider || ''),
+        });
+    } catch (error) {
+        serialized = JSON.stringify({
+            captureError: String(error?.message || 'model output could not be serialized'),
+            text: String(result?.text || ''),
+        });
+    }
+    const truncated = serialized.length > MAX_DIAGNOSTIC_MODEL_OUTPUT_CHARS;
+    return {
+        modelOutput: serialized.slice(0, MAX_DIAGNOSTIC_MODEL_OUTPUT_CHARS),
+        modelOutputTruncated: truncated,
+    };
+}
+
 function buildValidationFailureRecord({ result, error, attempt, feedbackSent = false }) {
     return {
         attempt,
         errorCode: String(error?.code || ''),
+        errorMessage: String(error?.message || ''),
         errorPath: String(error?.details?.path || ''),
         errorRule: String(error?.details?.rule || ''),
         received: cloneJson(error?.details?.received),
@@ -131,6 +166,7 @@ function buildValidationFailureRecord({ result, error, attempt, feedbackSent = f
         toolNames: (Array.isArray(result?.toolCalls) ? result.toolCalls : [])
             .map((toolCall) => String(toolCall?.name || '')),
         feedbackSent,
+        ...captureDiagnosticModelOutput(result),
     };
 }
 

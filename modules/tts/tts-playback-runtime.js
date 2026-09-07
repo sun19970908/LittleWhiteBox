@@ -5,6 +5,7 @@ let currentObjectUrl = null;
 let currentAbort = null;
 let currentRequestId = null;
 let currentNotify = null;
+let currentOwnership = null;
 
 /**
  * 合成并播放一条临时语音。新请求会停止旧请求，适用于消息气泡等即时播放入口。
@@ -34,12 +35,16 @@ export function playTransientVoice(text, emotion, callbacks) {
     notify('loading');
 
     const run = async () => {
-        const synthesize = window.xiaobaixTts?.synthesize;
-        if (typeof synthesize !== 'function') {
+        const facade = window.xiaobaixTts;
+        if (!facade?.isEnabled()) {
             throw new Error('请先启用 TTS 模块');
         }
+        currentOwnership = facade.acquirePlayback(() => {
+            if (currentRequestId === requestId) stopTransientVoice();
+        });
+        if (!currentOwnership.acquire(true)) { releaseTransientVoice(requestId); return; }
 
-        const blob = await synthesize(text, {
+        const blob = await facade.synthesize(text, {
             emotion: normalizeEmotion(emotion || ''),
             signal: abortController.signal,
         });
@@ -54,7 +59,7 @@ export function playTransientVoice(text, emotion, callbacks) {
 
         audio.onloadedmetadata = () => {
             if (currentRequestId !== requestId) return;
-            notify('playing', { duration: audio.duration || 0 });
+            notify('metadata', { duration: audio.duration || 0 });
         };
         audio.onended = () => {
             if (currentRequestId !== requestId) return;
@@ -68,6 +73,7 @@ export function playTransientVoice(text, emotion, callbacks) {
         };
 
         await audio.play();
+        notify('playing', { duration: audio.duration || 0 });
     };
 
     run().catch((error) => {
@@ -90,6 +96,8 @@ export function stopTransientVoice() {
     }
 
     cleanupPlaybackResources();
+    currentOwnership?.dispose();
+    currentOwnership = null;
     currentAbort = null;
     currentRequestId = null;
     currentNotify = null;
@@ -114,6 +122,8 @@ function cleanupPlaybackResources() {
 function releaseTransientVoice(requestId) {
     if (currentRequestId !== requestId) return;
     cleanupPlaybackResources();
+    currentOwnership?.dispose();
+    currentOwnership = null;
     currentAbort = null;
     currentRequestId = null;
     currentNotify = null;

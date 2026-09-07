@@ -238,6 +238,79 @@ test('Draw Run dispatch is idempotent and hands off a deterministic child manife
     );
 });
 
+test('a later floor can dispatch images while an earlier floor is still planning', async (t) => {
+    let releaseEarlierPlanner;
+    const plannerStarts = [];
+    const runtime = createRuntime({
+        async executePreparedScenePlanner(prepared) {
+            const label = prepared.planner.prompt.systemPrompt;
+            plannerStarts.push(label);
+            if (label === 'earlier') {
+                await new Promise(resolve => { releaseEarlierPlanner = resolve; });
+            }
+            return [{ scene: label, chars: [], placement: { insertAfter: 1 } }];
+        },
+    });
+    const { manager, imageJobService } = createManager({ runtime });
+    t.after(() => manager.close());
+
+    const earlier = createEnvelope('run-earlier-floor');
+    earlier.planner.prompt.systemPrompt = 'earlier';
+    const later = createEnvelope('run-later-floor');
+    later.planner.prompt.systemPrompt = 'later';
+
+    manager.create('alice', earlier, {});
+    manager.create('alice', later, {});
+
+    const laterDispatched = await waitFor(() => {
+        const run = manager.get('alice', later.runId);
+        return run?.state === 'dispatched' ? run : null;
+    });
+    assert.deepEqual(plannerStarts, ['earlier', 'later']);
+    assert.equal(manager.get('alice', earlier.runId).state, 'planning');
+    assert.equal(laterDispatched.childJobId, `draw-run:${later.runId}`);
+    assert.ok(imageJobService.get('alice', `draw-run:${later.runId}`));
+    assert.equal(imageJobService.get('alice', `draw-run:${earlier.runId}`), null);
+
+    releaseEarlierPlanner();
+    await waitFor(() => manager.get('alice', earlier.runId)?.state === 'dispatched');
+});
+
+test('Draw Run exposes bounded Planner validation diagnostics to its owner', async (t) => {
+    const validationFailure = {
+        attempt: 1,
+        errorCode: 'TOOL_ARGUMENTS_SCHEMA_INVALID',
+        errorMessage: 'images[0].characters must be an array',
+        errorPath: 'images[0].characters',
+        errorRule: 'must be an array',
+        received: 'none',
+        expected: [],
+        modelOutput: '{"toolCalls":[{"name":"submit_scene_plan","arguments":"bad"}]}',
+        modelOutputTruncated: false,
+    };
+    const runtime = createRuntime({
+        async executePreparedScenePlanner(_prepared, { diagnostic }) {
+            diagnostic.update({
+                stage: 'correction',
+                attemptCount: 1,
+                progress: { total: 3 },
+                validationFailures: [validationFailure],
+            });
+            return [{ scene: 'portrait', chars: [], placement: { insertAfter: 1 } }];
+        },
+    });
+    const { manager } = createManager({ runtime });
+    t.after(() => manager.close());
+
+    manager.create('alice', createEnvelope('run-diagnostic'), {});
+    const dispatched = await waitFor(() => {
+        const run = manager.get('alice', 'run-diagnostic');
+        return run?.state === 'dispatched' ? run : null;
+    });
+
+    assert.deepEqual(dispatched.progress.validationFailures, [validationFailure]);
+});
+
 test('pre-child cancellation aborts planning, disposes hosted credentials, and creates no image job', async (t) => {
     let planningStarted;
     const started = new Promise(resolve => { planningStarted = resolve; });

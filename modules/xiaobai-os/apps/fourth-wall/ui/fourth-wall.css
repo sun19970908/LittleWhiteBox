@@ -1,0 +1,526 @@
+.fourth-wall-app {
+    --fw-accent: #7567d8;
+    --fw-accent-deep: #5649bc;
+    --fw-ai: color-mix(in srgb, var(--xiaobai-os-surface) 96%, #eef0ff);
+    --fw-line: var(--xiaobai-os-divider);
+    background:
+        radial-gradient(circle at 92% 8%, color-mix(in srgb, var(--fw-accent) 12%, transparent), transparent 28%),
+        var(--xiaobai-os-screen);
+    color: var(--xiaobai-os-ink);
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    height: 100%;
+    overflow: hidden;
+    padding-top: 38px;
+    position: relative;
+}
+
+.fourth-wall-app button,
+.fourth-wall-app input,
+.fourth-wall-app select,
+.fourth-wall-app textarea {
+    color: inherit;
+}
+
+.fourth-wall-header {
+    align-items: center;
+    border-bottom: 1px solid var(--fw-line);
+    display: flex;
+    justify-content: space-between;
+    min-height: 58px;
+    padding: 8px 14px;
+}
+
+.fourth-wall-heading,
+.fourth-wall-header-actions,
+.fourth-wall-session-row,
+.fourth-wall-modal footer {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+}
+
+.fourth-wall-heading > span {
+    background: linear-gradient(145deg, #9589ed, var(--fw-accent-deep));
+    border-radius: 12px;
+    box-shadow: 0 5px 14px color-mix(in srgb, var(--fw-accent) 30%, transparent);
+    color: #fff;
+    display: grid;
+    font-family: Georgia, serif;
+    font-size: 14px;
+    height: 36px;
+    place-items: center;
+    width: 36px;
+}
+
+.fourth-wall-heading div {
+    display: grid;
+}
+
+.fourth-wall-heading strong {
+    font-size: 15px;
+}
+
+.fourth-wall-heading small,
+.fourth-wall-message-stack time {
+    color: var(--xiaobai-os-muted);
+    font-size: 10px;
+}
+
+.fourth-wall-header-actions button,
+.fourth-wall-settings button,
+.fourth-wall-modal button {
+    background: color-mix(in srgb, var(--xiaobai-os-surface) 88%, transparent);
+    border: 1px solid var(--fw-line);
+    border-radius: 10px;
+    cursor: pointer;
+    min-height: 34px;
+    padding: 5px 10px;
+}
+
+.fourth-wall-header-actions button {
+    border-radius: 50%;
+    display: grid;
+    font-size: 16px;
+    height: 34px;
+    padding: 0;
+    place-items: center;
+    line-height: 1;
+    width: 34px;
+}
+
+.fourth-wall-header-actions button svg {
+    display: block;
+    fill: none;
+    height: 17px;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+    width: 17px;
+}
+
+.fourth-wall-app button:disabled {
+    cursor: default;
+    opacity: .4;
+}
+
+.fourth-wall-error {
+    align-items: center;
+    background: color-mix(in srgb, #b94d53 12%, var(--xiaobai-os-surface));
+    border-bottom: 1px solid color-mix(in srgb, #b94d53 26%, transparent);
+    color: #a43c44;
+    display: flex;
+    font-size: 12px;
+    justify-content: space-between;
+    padding: 8px 13px;
+}
+
+.fourth-wall-error button {
+    background: none;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font-size: 18px;
+}
+
+.fourth-wall-conversation {
+    display: flex;
+    flex-direction: column;
+    gap: 13px;
+    min-height: 0;
+    overflow: auto;
+    overscroll-behavior: contain;
+    padding: 15px 12px 20px;
+    scrollbar-width: thin;
+}
+
+.fourth-wall-earlier {
+    align-self: center;
+    background: transparent;
+    border: 0;
+    color: var(--xiaobai-os-muted);
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.fourth-wall-empty {
+    align-items: center;
+    color: var(--xiaobai-os-muted);
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: center;
+    min-height: 220px;
+    text-align: center;
+}
+
+.fourth-wall-empty > span {
+    border: 1px solid color-mix(in srgb, var(--fw-accent) 35%, transparent);
+    border-radius: 50%;
+    color: var(--fw-accent);
+    display: grid;
+    font-family: Georgia, serif;
+    font-size: 22px;
+    height: 58px;
+    margin-bottom: 12px;
+    place-items: center;
+    width: 58px;
+}
+
+.fourth-wall-empty strong {
+    color: var(--xiaobai-os-ink);
+}
+
+.fourth-wall-empty p {
+    font-size: 12px;
+    margin: 6px 0;
+}
+
+.fourth-wall-message {
+    align-items: flex-end;
+    display: flex;
+    gap: 8px;
+    max-width: 92%;
+}
+
+.fourth-wall-message.is-user {
+    align-self: flex-end;
+    flex-direction: row-reverse;
+}
+
+.fourth-wall-message.is-ai {
+    align-self: flex-start;
+}
+
+.fourth-wall-avatar {
+    background: color-mix(in srgb, var(--fw-accent) 18%, var(--xiaobai-os-surface));
+    border: 1px solid var(--fw-line);
+    border-radius: 50%;
+    flex: 0 0 auto;
+    height: 28px;
+    object-fit: cover;
+    width: 28px;
+}
+
+.fourth-wall-avatar.is-placeholder::after {
+    content: '·';
+}
+
+.fourth-wall-message-stack {
+    align-items: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+}
+
+.fourth-wall-message.is-user .fourth-wall-message-stack {
+    align-items: flex-end;
+}
+
+.fourth-wall-bubble {
+    background: var(--fw-ai);
+    border: 1px solid var(--fw-line);
+    border-radius: 17px 17px 17px 5px;
+    box-shadow: 0 6px 18px rgba(28, 24, 48, .07);
+    font-size: 13px;
+    line-height: 1.58;
+    max-width: 100%;
+    min-width: 52px;
+    padding: 9px 11px;
+    position: relative;
+    word-break: break-word;
+}
+
+.fourth-wall-message.is-user .fourth-wall-bubble {
+    background: linear-gradient(145deg, #8073df, var(--fw-accent-deep));
+    border: 0;
+    border-radius: 17px 17px 5px 17px;
+    color: #fff;
+}
+
+.fourth-wall-message-text {
+    white-space: pre-wrap;
+}
+
+.fourth-wall-message-actions {
+    display: flex;
+    gap: 4px;
+    justify-content: flex-end;
+    margin-top: 6px;
+    opacity: .55;
+}
+
+.fourth-wall-message-actions button {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    font-size: 10px;
+    padding: 0 3px;
+}
+
+.fourth-wall-thinking {
+    background: color-mix(in srgb, var(--fw-accent) 7%, var(--xiaobai-os-surface));
+    border: 1px solid var(--fw-line);
+    border-radius: 10px;
+    font-size: 11px;
+    max-width: 100%;
+    padding: 6px 9px;
+    white-space: pre-wrap;
+}
+
+.fourth-wall-thinking summary {
+    color: var(--xiaobai-os-muted);
+    cursor: pointer;
+}
+
+.fourth-wall-thinking div {
+    margin-top: 6px;
+}
+
+.fourth-wall-edit {
+    background: transparent;
+    border: 0;
+    color: inherit;
+    min-width: min(230px, 58vw);
+    outline: 0;
+    resize: vertical;
+    width: 100%;
+}
+
+.fourth-wall-image-card {
+    margin: 7px 0 0;
+    max-width: 260px;
+    overflow: hidden;
+}
+
+.fourth-wall-image-card img {
+    border-radius: 12px;
+    display: block;
+    max-height: 320px;
+    object-fit: cover;
+    width: 100%;
+}
+
+.fourth-wall-image-card div,
+.fourth-wall-image-card button {
+    background: color-mix(in srgb, var(--xiaobai-os-muted) 8%, transparent);
+    border: 1px dashed currentColor;
+    border-radius: 10px;
+    color: inherit;
+    display: grid;
+    font-size: 10px;
+    gap: 4px;
+    padding: 10px;
+    text-align: left;
+    width: 100%;
+}
+
+.fourth-wall-image-card small,
+.fourth-wall-voice small {
+    opacity: .65;
+}
+
+.fourth-wall-voice {
+    align-items: center;
+    background: color-mix(in srgb, currentColor 8%, transparent);
+    border: 0;
+    border-radius: 999px;
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    gap: 7px;
+    margin-top: 7px;
+    max-width: 100%;
+    padding: 7px 10px;
+    text-align: left;
+}
+
+.fourth-wall-unsaved {
+    color: #c94d55;
+    display: block;
+    font-size: 10px;
+    margin-top: 5px;
+}
+
+.fourth-wall-composer {
+    align-items: flex-end;
+    background: color-mix(in srgb, var(--xiaobai-os-surface) 95%, transparent);
+    border-top: 1px solid var(--fw-line);
+    display: flex;
+    gap: 8px;
+    padding: 10px 12px 11px;
+}
+
+.fourth-wall-composer textarea {
+    background: color-mix(in srgb, var(--xiaobai-os-screen) 58%, var(--xiaobai-os-surface));
+    border: 1px solid var(--fw-line);
+    border-radius: 18px;
+    flex: 1;
+    max-height: 110px;
+    min-height: 40px;
+    padding: 9px 13px;
+    resize: none;
+}
+
+.fourth-wall-composer textarea:focus {
+    border-color: var(--fw-accent);
+    outline: 2px solid color-mix(in srgb, var(--fw-accent) 18%, transparent);
+}
+
+.fourth-wall-composer button {
+    background: var(--fw-accent);
+    border: 0;
+    border-radius: 50%;
+    color: #fff;
+    cursor: pointer;
+    flex: 0 0 auto;
+    font-size: 18px;
+    height: 40px;
+    width: 40px;
+}
+
+.fourth-wall-composer button.is-stop {
+    background: #ad4e59;
+}
+
+.fourth-wall-settings {
+    background: var(--xiaobai-os-screen);
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    inset: 38px 0 0;
+    position: absolute;
+    z-index: 8;
+}
+
+.fourth-wall-settings > header,
+.fourth-wall-modal > header {
+    align-items: center;
+    border-bottom: 1px solid var(--fw-line);
+    display: flex;
+    justify-content: space-between;
+    padding: 12px 15px;
+}
+
+.fourth-wall-settings-scroll,
+.fourth-wall-prompt-fields {
+    display: grid;
+    gap: 12px;
+    overflow: auto;
+    padding: 13px;
+}
+
+.fourth-wall-settings-section {
+    background: var(--xiaobai-os-surface);
+    border: 1px solid var(--fw-line);
+    border-radius: 14px;
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+}
+
+.fourth-wall-settings-section h3 {
+    font-size: 12px;
+    letter-spacing: .08em;
+    margin: 0;
+    text-transform: uppercase;
+}
+
+.fourth-wall-settings-section label,
+.fourth-wall-prompt-fields label {
+    color: var(--xiaobai-os-muted);
+    display: grid;
+    font-size: 11px;
+    gap: 5px;
+}
+
+.fourth-wall-settings-section label.is-toggle {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+}
+
+.fourth-wall-settings input,
+.fourth-wall-settings select,
+.fourth-wall-modal textarea {
+    background: var(--xiaobai-os-screen);
+    border: 1px solid var(--fw-line);
+    border-radius: 9px;
+    min-height: 36px;
+    padding: 7px 9px;
+    width: 100%;
+}
+
+.fourth-wall-settings input[type='checkbox'] {
+    accent-color: var(--fw-accent);
+    min-height: 18px;
+    width: 18px;
+}
+
+.fourth-wall-session-row select {
+    flex: 1;
+    min-width: 0;
+}
+
+.fourth-wall-settings button.is-primary,
+.fourth-wall-modal button.is-primary {
+    background: var(--fw-accent);
+    color: #fff;
+}
+
+.fourth-wall-settings button.is-danger,
+.fourth-wall-modal button.is-danger {
+    color: #bd4a54;
+}
+
+.fourth-wall-settings-section.is-actions {
+    grid-template-columns: 1fr 1fr;
+}
+
+.fourth-wall-modal-backdrop {
+    align-items: center;
+    background: rgba(8, 9, 14, .55);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    padding: 12px;
+    position: absolute;
+    z-index: 12;
+}
+
+.fourth-wall-modal {
+    background: var(--xiaobai-os-screen);
+    border: 1px solid var(--fw-line);
+    border-radius: 17px;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr) auto;
+    max-height: 94%;
+    overflow: hidden;
+    width: 100%;
+}
+
+.fourth-wall-modal textarea {
+    resize: vertical;
+}
+
+.fourth-wall-modal footer {
+    border-top: 1px solid var(--fw-line);
+    justify-content: flex-end;
+    padding: 11px 14px;
+}
+
+@media (max-width: 760px), (pointer: coarse) and (max-height: 760px) {
+    .fourth-wall-app {
+        padding-top: env(safe-area-inset-top);
+    }
+
+    .fourth-wall-settings {
+        inset: env(safe-area-inset-top) 0 0;
+    }
+
+    .fourth-wall-composer {
+        padding-bottom: 10px;
+    }
+}

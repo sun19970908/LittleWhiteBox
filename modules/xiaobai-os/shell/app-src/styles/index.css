@@ -1,0 +1,500 @@
+:root {
+    color-scheme: light dark;
+    font-family: "MiSans", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+    font-synthesis: none;
+
+    /* Shared shell palette. Feature-specific geometry and identity stay with
+       the app that owns them. */
+    --xiaobai-os-accent: #3b6ef5;
+    --xiaobai-os-screen: #eef0f5;
+    --xiaobai-os-surface: #fff;
+    --xiaobai-os-ink: #12151c;
+    --xiaobai-os-muted: #767d8c;
+    --xiaobai-os-divider: rgba(16, 20, 32, .09);
+    --os-radius-card: 22px;
+    --os-radius-control: 13px;
+    --os-shadow-card: 0 4px 18px rgb(49 34 20 / 5%), 0 1px 2px rgb(49 34 20 / 4%);
+    --os-ease: cubic-bezier(.22, 1, .36, 1);
+    --os-status-height: 42px;
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    width: 100%;
+}
+
+button,
+input,
+textarea {
+    font: inherit;
+}
+
+button {
+    -webkit-tap-highlight-color: transparent;
+}
+
+.xiaobai-os-shell {
+    align-items: center;
+    background:
+        radial-gradient(circle at 50% 38%, rgba(94, 118, 156, .2), transparent 35%),
+        rgba(4, 5, 7, .72);
+    backdrop-filter: blur(14px) saturate(.72);
+    color: var(--xiaobai-os-ink);
+    display: flex;
+    inset: 0;
+    justify-content: center;
+    outline: none;
+    overflow: hidden;
+    padding: max(11px, env(safe-area-inset-top)) 14px max(11px, env(safe-area-inset-bottom));
+    position: fixed;
+}
+
+.xiaobai-os-shell.theme-dark {
+    --xiaobai-os-accent: #6b8dff;
+    --xiaobai-os-screen: #0e1014;
+    --xiaobai-os-surface: #191c22;
+    --xiaobai-os-ink: #f2f4f8;
+    --xiaobai-os-muted: #838b9a;
+    --xiaobai-os-divider: rgba(255, 255, 255, .1);
+}
+
+.xiaobai-os-device {
+    background: linear-gradient(145deg, #4b4d50, #202225 18%, #090a0c 68%, #303236);
+    border: 1px solid rgba(255, 255, 255, .18);
+    border-radius: 48px;
+    box-shadow: 0 32px 80px rgba(0, 0, 0, .58), inset 0 1px rgba(255, 255, 255, .2);
+    height: min(824px, calc(100dvh - 22px));
+    max-height: 96dvh;
+    padding: 6px;
+    position: relative;
+    width: min(398px, calc(100vw - 28px));
+}
+
+.xiaobai-os-glass {
+    background: var(--xiaobai-os-screen);
+    border-radius: 41px;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .72);
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    height: 100%;
+    overflow: hidden;
+    position: relative;
+}
+
+.xiaobai-os-side-key {
+    background: linear-gradient(#45474b, #111216, #383a3e);
+    border-radius: 0 3px 3px 0;
+    height: 112px;
+    position: absolute;
+    right: -5px;
+    top: 142px;
+    width: 4px;
+}
+
+.xiaobai-os-stage {
+    min-height: 0;
+    overflow: hidden;
+    position: relative;
+}
+
+.xiaobai-os-app-loading,
+.xiaobai-os-app-failure {
+    align-items: center;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    justify-content: center;
+    padding: 32px;
+    text-align: center;
+}
+
+.xiaobai-os-app-loading {
+    color: var(--xiaobai-os-muted);
+    gap: 14px;
+}
+
+.xiaobai-os-app-loading > span {
+    animation: xiaobai-os-app-loading-spin .8s linear infinite;
+    border: 2px solid color-mix(in srgb, var(--app-accent, var(--xiaobai-os-accent)) 24%, transparent);
+    border-radius: 50%;
+    border-top-color: var(--app-accent, var(--xiaobai-os-accent));
+    height: 28px;
+    width: 28px;
+}
+
+.xiaobai-os-app-route {
+    height: 100%;
+    min-height: 0;
+    overflow: hidden;
+}
+
+.xiaobai-os-app-failure-mark {
+    align-items: center;
+    background: color-mix(in srgb, var(--app-accent, #d95151) 14%, transparent);
+    border-radius: 18px;
+    color: var(--app-accent, #d95151);
+    display: flex;
+    font-size: 26px;
+    font-weight: 700;
+    height: 58px;
+    justify-content: center;
+    width: 58px;
+}
+
+.xiaobai-os-app-failure h1 {
+    font-size: 19px;
+    margin: 20px 0 8px;
+}
+
+.xiaobai-os-app-failure p {
+    color: var(--xiaobai-os-muted);
+    line-height: 1.55;
+    margin: 0;
+    max-width: 270px;
+    overflow-wrap: anywhere;
+}
+
+.xiaobai-os-app-failure-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 24px;
+}
+
+.xiaobai-os-app-failure-actions button {
+    background: var(--xiaobai-os-surface);
+    border: 1px solid var(--xiaobai-os-divider);
+    border-radius: 999px;
+    color: var(--xiaobai-os-ink);
+    cursor: pointer;
+    padding: 9px 15px;
+}
+
+.xiaobai-os-app-failure-actions button:first-child {
+    background: var(--app-accent, var(--xiaobai-os-accent));
+    border-color: transparent;
+    color: #fff;
+}
+
+@keyframes xiaobai-os-app-loading-spin {
+    to { transform: rotate(1turn); }
+}
+
+.xiaobai-os-system-bar {
+    align-items: center;
+    color: var(--xiaobai-os-ink);
+    display: flex;
+    height: 42px;
+    justify-content: space-between;
+    left: 0;
+    padding: 0 15px;
+    pointer-events: none;
+    position: absolute;
+    right: 0;
+    top: 0;
+    z-index: 5;
+}
+
+.xiaobai-os-system-bar.is-home {
+    color: #fff;
+}
+
+.xiaobai-os-system-mark {
+    font-size: 11px;
+    font-weight: 720;
+    letter-spacing: .08em;
+}
+
+.xiaobai-os-home {
+    background:
+        radial-gradient(circle at 22% 14%, rgba(111, 142, 170, .58), transparent 42%),
+        radial-gradient(circle at 82% 62%, rgba(126, 93, 81, .46), transparent 44%),
+        linear-gradient(150deg, #26313c, #171d25 48%, #101318);
+    color: #fff;
+    height: 100%;
+    overflow: hidden auto;
+    padding: 64px 21px 18px;
+    position: relative;
+}
+
+.xiaobai-os-home-background {
+    /* Clip the oversized wallpaper without blocking genuine desktop scrolling. */
+    inset: 0;
+    overflow: hidden;
+    pointer-events: none;
+    position: absolute;
+}
+
+.xiaobai-os-wallpaper {
+    filter: blur(15px) saturate(.72) brightness(.58);
+    height: calc(100% + 30px);
+    inset: -15px;
+    object-fit: cover;
+    object-position: center 24%;
+    opacity: .76;
+    position: absolute;
+    transform: scale(1.12);
+    width: calc(100% + 30px);
+}
+
+.xiaobai-os-home-wash {
+    background: linear-gradient(rgba(10, 13, 18, .2), rgba(5, 6, 9, .76));
+    inset: 0;
+    position: absolute;
+}
+
+.xiaobai-os-app-grid {
+    display: grid;
+    gap: 23px 13px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    position: relative;
+    z-index: 1;
+}
+
+.xiaobai-os-app-tile {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: #fff;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+    min-width: 0;
+    padding: 0;
+}
+
+.xiaobai-os-app-icon {
+    align-items: center;
+    border-radius: 16px;
+    box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 1px 2px rgba(0, 0, 0, .1);
+    display: grid;
+    height: 64px;
+    place-items: center;
+    transition: filter 160ms ease, transform 160ms ease;
+    width: 64px;
+}
+
+.xiaobai-os-app-icon img {
+    display: block;
+    height: 100%;
+    width: 100%;
+}
+
+.xiaobai-os-app-name {
+    font-size: 12px;
+    font-weight: 620;
+    line-height: 1.15;
+    max-width: 74px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-shadow: 0 1px 4px rgba(0, 0, 0, .78);
+    white-space: nowrap;
+}
+
+.xiaobai-os-app-tile:hover .xiaobai-os-app-icon {
+    filter: brightness(1.08) saturate(1.08);
+    transform: translateY(-3px) scale(1.015);
+}
+
+.xiaobai-os-app-tile:active .xiaobai-os-app-icon {
+    transform: translateY(1px) scale(.9);
+}
+
+.xiaobai-os-navigation {
+    align-items: center;
+    background: #0b0d11;
+    border-top: 1px solid rgba(255, 255, 255, .08);
+    color: #fff;
+    display: grid;
+    grid-template-columns: 44px 1fr 44px;
+    height: 54px;
+    padding: 0 10px;
+    position: relative;
+    z-index: 7;
+}
+
+.xiaobai-os-navigation.is-home {
+    background: #0b0d11;
+    border-color: rgba(255, 255, 255, .08);
+    color: #fff;
+}
+
+.xiaobai-os-nav-button {
+    align-items: center;
+    background: transparent;
+    border: 0;
+    color: inherit;
+    cursor: pointer;
+    display: flex;
+    height: 44px;
+    justify-content: center;
+    padding: 0;
+}
+
+.xiaobai-os-nav-button:disabled {
+    opacity: .18;
+}
+
+.xiaobai-os-nav-button svg {
+    fill: none;
+    height: 22px;
+    stroke: currentColor;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    stroke-width: 1.8;
+    width: 22px;
+}
+
+.xiaobai-os-home-button {
+    border-radius: 16px;
+    justify-self: center;
+    position: relative;
+    width: 56px;
+}
+
+.xiaobai-os-home-button i {
+    background: currentColor;
+    border-radius: 2px;
+    bottom: 4px;
+    height: 2.5px;
+    position: absolute;
+    width: 16px;
+}
+
+.xiaobai-os-close-button span {
+    align-items: center;
+    background: color-mix(in srgb, currentColor 10%, transparent);
+    border-radius: 50%;
+    display: flex;
+    height: 30px;
+    justify-content: center;
+    width: 30px;
+}
+
+.xiaobai-os-close-button svg {
+    height: 16px;
+    width: 16px;
+}
+
+.xiaobai-os-nav-button:active:not(:disabled) {
+    transform: scale(.9);
+}
+
+.xiaobai-os-nav-button:focus-visible,
+.xiaobai-os-app-tile:focus-visible {
+    outline: 2px solid var(--xiaobai-os-accent);
+    outline-offset: 2px;
+}
+
+.xiaobai-os-error,
+.xiaobai-os-loading {
+    background: rgba(15, 17, 21, .9);
+    border: 1px solid rgba(255, 255, 255, .12);
+    border-radius: 12px;
+    color: #fff;
+    left: 50%;
+    max-width: min(340px, calc(100vw - 32px));
+    padding: 12px 16px;
+    position: fixed;
+    top: max(20px, env(safe-area-inset-top));
+    transform: translateX(-50%);
+    z-index: 20;
+}
+
+.xiaobai-os-error {
+    color: #ffd2ce;
+}
+
+.xiaobai-os-route-enter-active,
+.xiaobai-os-route-leave-active {
+    transition: opacity 180ms ease, transform 240ms cubic-bezier(.16, 1, .3, 1);
+}
+
+.xiaobai-os-route-enter-from {
+    opacity: 0;
+    transform: translateX(18px);
+}
+
+.xiaobai-os-route-leave-to {
+    opacity: 0;
+    transform: translateX(-12px);
+}
+
+@media (max-width: 760px), (pointer: coarse) and (max-height: 760px) {
+    .xiaobai-os-shell {
+        --os-status-height: env(safe-area-inset-top, 0px);
+        backdrop-filter: none;
+        padding: 0;
+    }
+
+    .xiaobai-os-device {
+        background: transparent;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        height: 100dvh;
+        max-height: none;
+        padding: 0;
+        width: 100vw;
+    }
+
+    .xiaobai-os-glass {
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    .xiaobai-os-side-key,
+    .xiaobai-os-system-bar {
+        display: none;
+    }
+
+    .xiaobai-os-home {
+        padding: calc(28px + env(safe-area-inset-top)) 22px 16px;
+    }
+
+    .xiaobai-os-navigation {
+        height: calc(58px + env(safe-area-inset-bottom));
+        padding-bottom: env(safe-area-inset-bottom);
+    }
+
+    input,
+    textarea {
+        font-size: 16px;
+    }
+}
+
+@media (max-width: 380px), (max-height: 690px) {
+    .xiaobai-os-home {
+        padding: calc(22px + env(safe-area-inset-top)) 16px 14px;
+    }
+
+    .xiaobai-os-app-grid {
+        gap: 20px 10px;
+    }
+
+    .xiaobai-os-app-icon {
+        border-radius: 14px;
+        height: 54px;
+        width: 54px;
+    }
+
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important;
+        scroll-behavior: auto !important;
+        transition-duration: .01ms !important;
+    }
+}

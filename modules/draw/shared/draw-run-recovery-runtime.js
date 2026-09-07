@@ -46,6 +46,7 @@ import {
 import { consumePageFarewell } from './page-farewell.js';
 import { hashSceneSource, normalizeMessageSceneSourceText } from './scene-source.js';
 import { isMessageBeingEdited, syncRenderedMessageFromState } from './draw-common.js';
+import { logDrawRunPlannerFailures } from './draw-run-debug.js';
 
 function collectCurrentDrawRunMarkers(ctx) {
     const chatId = String(ctx?.chatId || '');
@@ -484,6 +485,7 @@ export async function runDrawRunRecoveryPass({
 
     for (const entry of plan) {
         try {
+            if (entry.run) logDrawRunPlannerFailures(entry.run);
             if (entry.run && entry.runFarewell) consumePageFarewell(entry.runFarewell);
             if (entry.markerEntry && entry.run
                 && entry.action !== DrawRunRecoveryAction.REQUEST_CANCEL) {

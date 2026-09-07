@@ -38,7 +38,6 @@ import { createPlanLedger, isPlanToolName } from "../agent-core/plan-ledger.js";
 import {
     loadSharedAgentSettings,
     saveSharedAgentSettings,
-    subscribeSharedAgentSettingsChanged,
 } from "../agent-core/settings-repository.js";
 import { plansTable as assistantPlansTable } from "./shared/session-db.js";
 import {
@@ -114,7 +113,6 @@ const activeToolControllers = new Map();
 const activeSkillProposalTokens = new Map();
 let settingsCache = null;
 let settingsLoaded = false;
-let unsubscribeSharedAgentSettingsChanged = null;
 let localSourcesCache = [];
 let editorContextCache = null;
 let localSourcesToolRuntime = null;
@@ -197,7 +195,6 @@ function handleAssistantEditorContextEvent(event) {
 }
 
 async function persistAssistantSettings(settings, { silent = true } = {}) {
-    const expectedUpdatedAt = Number(settings?.expectedUpdatedAt);
     const next = normalizeAssistantSettings({
         ...settings,
         updatedAt: Date.now(),
@@ -206,25 +203,20 @@ async function persistAssistantSettings(settings, { silent = true } = {}) {
         defaultWorkspaceFileName: DEFAULT_WORKSPACE_FILE,
         normalizeWorkspaceName,
     });
-    const result = await saveSharedAgentSettings({
-        ...next,
-        ...(Number.isFinite(expectedUpdatedAt) ? { expectedUpdatedAt } : {}),
-    }, {
+    const result = await saveSharedAgentSettings(next, {
         storage: AssistantStorage,
         silent,
-        source: 'assistant',
         normalizeOptions: {
             defaultWorkspaceFileName: DEFAULT_WORKSPACE_FILE,
             normalizeWorkspaceName,
         },
     });
-    if ((result.ok || result.conflict) && result.config) {
+    if (result.ok && result.config) {
         settingsCache = result.config;
         settingsLoaded = true;
     }
     return {
         ok: result.ok,
-        conflict: result.conflict === true,
         settings: result.config,
         error: result.error,
     };
@@ -259,7 +251,6 @@ function buildRuntimeConfig() {
     const settings = getAssistantSettings();
     const currentPreset = settings.presets?.[settings.currentPresetName] || buildDefaultPreset();
     return {
-        enabled: !!settings.enabled,
         updatedAt: Number(settings.updatedAt) || 0,
         provider: currentPreset.provider || 'openai-compatible',
         workspaceFileName: settings.workspaceFileName || DEFAULT_WORKSPACE_FILE,
@@ -3490,6 +3481,7 @@ function getAssistantHostWindow() {
 
 function openAssistant() {
     if (!getAssistantHostWindow().open()) return;
+    settingsLoaded = false;
 
     // Guarded inside handleIframeMessage via isTrustedIframeEvent.
     // eslint-disable-next-line no-restricted-syntax
@@ -3516,7 +3508,6 @@ async function pushAssistantConfigToIframe(options = {}) {
             hostRequestHeaders: getRequestHeaders(),
             ...(config ? { config } : {}),
             configLoadError,
-            externalChange: options.externalChange === true,
             runtime: {
                 ...runtimePayload,
                 workspace: {
@@ -3617,10 +3608,7 @@ async function handleIframeMessage(event) {
                 normalizeWorkspaceName,
             });
 
-            const result = await persistAssistantSettings({
-                ...next,
-                expectedUpdatedAt: patch.expectedUpdatedAt,
-            }, { silent: false });
+            const result = await persistAssistantSettings(next, { silent: false });
             if (result.ok) {
                 postToIframe(iframe, {
                     type: CONFIG_SAVED,
@@ -3635,8 +3623,6 @@ async function handleIframeMessage(event) {
                     payload: {
                         requestId,
                         error: result.error || '保存失败',
-                        conflict: result.conflict === true,
-                        ...(result.conflict ? { config: buildRuntimeConfig() } : {}),
                     },
                 });
             }
@@ -3646,12 +3632,6 @@ async function handleIframeMessage(event) {
             replyAssistantHostResult(String(payload?.requestId || ''), {
                 ok: true,
                 hostRequestHeaders: getRequestHeaders(),
-            });
-            break;
-        case 'xb-assistant:reload-config':
-            await pushAssistantConfigToIframe({
-                force: true,
-                externalChange: payload?.preserveDraft === true,
             });
             break;
         case WORKSPACE_MESSAGE_TYPES.HYDRATE:
@@ -3775,14 +3755,8 @@ export async function initAssistant() {
     try {
         await loadAssistantSettings();
     } catch {
-        // The settings surface reports the read failure and offers an explicit retry.
+        // Opening the settings surface will retry the shared read.
     }
-    unsubscribeSharedAgentSettingsChanged?.();
-    unsubscribeSharedAgentSettingsChanged = subscribeSharedAgentSettingsChanged((detail) => {
-        if (String(detail?.source || '') === 'assistant') return;
-        settingsLoaded = false;
-        void pushAssistantConfigToIframe({ force: true, externalChange: true });
-    });
     document.addEventListener('xb-assistant:editor-context', handleAssistantEditorContextEvent);
     window.xiaobaixAssistant = {
         openSettings: openAssistantSettings,
@@ -3798,8 +3772,6 @@ export async function initAssistant() {
 }
 
 export function cleanupAssistant() {
-    unsubscribeSharedAgentSettingsChanged?.();
-    unsubscribeSharedAgentSettingsChanged = null;
     document.removeEventListener('xb-assistant:editor-context', handleAssistantEditorContextEvent);
     closeAssistant();
     delete window.xiaobaixAssistant;

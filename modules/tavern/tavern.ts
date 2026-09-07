@@ -4,8 +4,7 @@ import { extensionFolderPath } from '../../core/constants.js';
 import { createFirstPartyIframeOverlay, loadFirstPartyIframeCacheKey } from '../../core/first-party-iframe-app.js';
 import { isTrustedMessage, postToIframe } from '../../core/iframe-messaging.js';
 import { replaceXbGetVarInString } from '../variables/var-commands.js';
-import { buildTavernFrameConfig, loadTavernAgentConfigPayload, saveTavernAgentConfig } from './host/agent-config.js';
-import { subscribeSharedAgentSettingsChanged } from '../agent-core/settings-repository.js';
+import { buildTavernFrameConfig, saveTavernAgentConfig } from './host/agent-config.js';
 import {
     getTavernChatPresetBundle,
     listTavernChatPresetBundles,
@@ -109,7 +108,6 @@ let frameBootReady = false;
 let pendingMessages: PendingFrameMessage[] = [];
 let initialConfigPromise: Promise<Record<string, unknown>> | null = null;
 let messageHandlerInstalled = false;
-let unsubscribeSharedAgentSettingsChanged: (() => void) | null = null;
 let overlayResizeHandler: EventListener | null = null;
 let overlayResizeFrame = 0;
 let overlayKeyboardSettleHandler: EventListener | null = null;
@@ -394,9 +392,6 @@ async function sendConfigToFrame(options: Record<string, unknown> = {}): Promise
     postToFrame('xb-tavern:config', await buildFrameConfigPayload(options));
 }
 
-async function sendAgentConfigToFrame(): Promise<void> {
-    postToFrame('xb-tavern:agent-config', await loadTavernAgentConfigPayload());
-}
 
 async function refreshContext(options: Record<string, unknown> = {}): Promise<void> {
     postToFrame('xb-tavern:context', await buildTavernContext(options) as unknown as Record<string, unknown>);
@@ -444,7 +439,6 @@ async function saveConfigFromFrame(payload: Record<string, unknown> = {}): Promi
         requestId,
         ok: result.ok,
         config: result.config,
-        conflict: result.conflict === true,
         error: result.error || '',
     });
     if (result.ok) {
@@ -1481,9 +1475,6 @@ function handleFrameMessage(event: MessageEvent): void {
         case 'xb-tavern:save-config':
             void saveConfigFromFrame(data.payload || {});
             break;
-        case 'xb-tavern:reload-config':
-            void sendAgentConfigToFrame();
-            break;
         case 'xb-tavern:get-host-request-headers':
             handleHostRequestHeaders(data.payload || {});
             break;
@@ -1591,12 +1582,6 @@ function installMessageHandler(): void {
 
 export async function initTavern(): Promise<void> {
     installMessageHandler();
-    unsubscribeSharedAgentSettingsChanged?.();
-    unsubscribeSharedAgentSettingsChanged = subscribeSharedAgentSettingsChanged((detail) => {
-        if (String(detail?.source || '') === 'tavern') {return;}
-        if (!frameReady) {return;}
-        void sendAgentConfigToFrame();
-    });
     window.xiaobaixTavern = {
         open: openTavern,
         close: closeTavern,
@@ -1607,8 +1592,6 @@ export async function initTavern(): Promise<void> {
 }
 
 export function cleanupTavern(): void {
-    unsubscribeSharedAgentSettingsChanged?.();
-    unsubscribeSharedAgentSettingsChanged = null;
     closeTavern();
 }
 

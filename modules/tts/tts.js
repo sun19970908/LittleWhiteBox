@@ -8,7 +8,17 @@ import { TtsStorage } from "../../core/server-storage.js";
 import { initAfterAiGate, notifyAfterAiHint, registerAfterAiHandler } from "../../core/after-ai-gate.js";
 import { extractSpeakText, parseTtsSegments, DEFAULT_SKIP_TAGS, normalizeEmotion, splitTtsSegmentsForFree } from "./tts-text.js";
 import { TtsPlayer } from "./tts-player.js";
-import { playTransientVoice, stopTransientVoice } from "./tts-playback-runtime.js";
+import { createTtsPlaybackOwnership } from './tts-playback-ownership.js';
+import { createTtsExternalSynthesis, readTtsVoices, ttsRequestSettings } from './tts-external.js';
+import { playTransientVoice } from "./tts-playback-runtime.js";
+import {
+    cleanupMessageVoiceUi,
+    enhanceMessageVoiceTextNodes,
+    hasMessageVoiceMarker,
+    hydrateMessageVoiceBubbles,
+    initMessageVoiceUi,
+    stopMessageVoicePlayback,
+} from './tts-message-voice.js';
 import { synthesizeV3, FREE_DEFAULT_VOICE } from "./tts-api.js";
 import { 
     ensureTtsPanel, 
@@ -43,6 +53,8 @@ const MODULE_ID = 'tts';
 const OVERLAY_ID = 'xiaobaix-tts-overlay';
 const HTML_PATH = `${extensionFolderPath}/modules/tts/tts-overlay.html`;
 const TTS_DIRECTIVE_REGEX = /\[tts:([^\]]*)\]/gi;
+let playbackOwnership = null;
+let externalSpeech = null;
 
 const FREE_VOICE_KEYS = new Set([
     'female_1', 'female_2', 'female_3', 'female_4',
@@ -72,11 +84,8 @@ function scheduleNdRerender(mesText) {
         
         for (const el of pending) {
             if (!el.isConnected) continue;
-            TTS_DIRECTIVE_REGEX.lastIndex = 0;
-            // Tests existing message HTML only.
-            // eslint-disable-next-line no-unsanitized/property
-            if (TTS_DIRECTIVE_REGEX.test(el.innerHTML)) {
-                enhanceTtsDirectives(el);
+            if (hasTtsMessageMarkup(el)) {
+                enhanceTtsMessageContent(el);
             }
         }
     }, 50);
@@ -155,11 +164,8 @@ function setupDirectiveObserver() {
                 continue;
             }
             
-            TTS_DIRECTIVE_REGEX.lastIndex = 0;
-            // Tests existing message HTML only.
-            // eslint-disable-next-line no-unsanitized/property
-            if (TTS_DIRECTIVE_REGEX.test(mesText.innerHTML)) {
-                enhanceTtsDirectives(mesText);
+            if (hasTtsMessageMarkup(mesText)) {
+                enhanceTtsMessageContent(mesText);
             }
             processedDirectives.add(mesText);
             directiveObserver.unobserve(mesText);
@@ -175,11 +181,8 @@ function observeDirective(mesText) {
     // 已在视口附近，立即处理
     const rect = mesText.getBoundingClientRect();
     if (rect.top < window.innerHeight + 300 && rect.bottom > -300) {
-        TTS_DIRECTIVE_REGEX.lastIndex = 0;
-        // Tests existing message HTML only.
-        // eslint-disable-next-line no-unsanitized/property
-        if (TTS_DIRECTIVE_REGEX.test(mesText.innerHTML)) {
-            enhanceTtsDirectives(mesText);
+        if (hasTtsMessageMarkup(mesText)) {
+            enhanceTtsMessageContent(mesText);
         }
         processedDirectives.add(mesText);
         return;
@@ -586,9 +589,9 @@ async function handleMessagePlayClick(messageId) {
     
     if (player?.currentItem?.messageId === messageId && player?.currentAudio) {
         if (player.currentAudio.paused) {
-            player.currentAudio.play().catch(() => {});
+            player.resume();
         } else {
-            player.currentAudio.pause();
+            player.pause();
         }
         return;
     }
@@ -659,7 +662,11 @@ async function speakMessage(messageId, { mode = 'manual' } = {}) {
     }
 
     const batchId = generateBatchId();
-    if (mode === 'manual') clearMessageFromQueue(messageId);
+    if (mode === 'manual') {
+        clearMessageFromQueue(messageId);
+        if (player.currentAudio) player.resume();
+        else player.activate();
+    }
 
     const hasFree = resolvedSegments.some(s => s.resolvedSource === 'free');
     const hasAuth = resolvedSegments.some(s => s.resolvedSource === 'auth');
@@ -800,24 +807,45 @@ function buildTtsTagHtml(parsed, rawParams) {
 
 function enhanceTtsDirectives(container) {
     if (!container) return;
-    
-    // Rewrites already-rendered message HTML; no new HTML source is introduced here.
-    // eslint-disable-next-line no-unsanitized/property
-    const html = container.innerHTML;
-    TTS_DIRECTIVE_REGEX.lastIndex = 0;
-    if (!TTS_DIRECTIVE_REGEX.test(html)) return;
-    
-    TTS_DIRECTIVE_REGEX.lastIndex = 0;
-    const enhanced = html.replace(TTS_DIRECTIVE_REGEX, (match, params) => {
-        const parsed = parseDirectiveParams(params);
-        return buildTtsTagHtml(parsed, params);
+
+    const documentTarget = container.ownerDocument;
+    if (!documentTarget?.createTreeWalker) return;
+    const textNodes = [];
+    const walker = documentTarget.createTreeWalker(container, 4);
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+    textNodes.forEach((node) => {
+        if (node.parentElement?.closest('code, pre, script, style, textarea, .xb-tts-tag, .xb-voice-bubble')) return;
+        const current = node.nodeValue || '';
+        const candidates = current.matchAll(/\[tts:([^\]]*)\]/gi);
+        const replacement = documentTarget.createDocumentFragment();
+        let cursor = 0;
+        let changed = false;
+        for (const candidate of candidates) {
+            replacement.append(documentTarget.createTextNode(current.slice(cursor, candidate.index)));
+            const template = documentTarget.createElement('template');
+            const params = candidate[1] || '';
+            // Only fixed markup generated from this exact TTS directive is parsed as HTML.
+            // eslint-disable-next-line no-unsanitized/property
+            template.innerHTML = buildTtsTagHtml(parseDirectiveParams(params), params);
+            replacement.append(template.content.cloneNode(true));
+            cursor = candidate.index + candidate[0].length;
+            changed = true;
+        }
+        if (!changed) return;
+        replacement.append(documentTarget.createTextNode(current.slice(cursor)));
+        node.replaceWith(replacement);
     });
-    
-    if (enhanced !== html) {
-        // Replaces existing message HTML with enhanced tokens only.
-        // eslint-disable-next-line no-unsanitized/property
-        container.innerHTML = enhanced;
-    }
+}
+
+function hasTtsMessageMarkup(container) {
+    TTS_DIRECTIVE_REGEX.lastIndex = 0;
+    return TTS_DIRECTIVE_REGEX.test(container?.textContent || '') || hasMessageVoiceMarker(container);
+}
+
+function enhanceTtsMessageContent(container) {
+    enhanceTtsDirectives(container);
+    enhanceMessageVoiceTextNodes(container, isModuleEnabled());
+    hydrateMessageVoiceBubbles(container);
 }
 
 function enhanceAllTtsDirectives() {
@@ -856,6 +884,11 @@ function onGenerationEnd() {
 
 function renderExistingMessageUIs() {
     if (!isModuleEnabled()) return;
+
+    document.querySelectorAll('#chat .mes .mes_text').forEach((mesText) => {
+        enhanceMessageVoiceTextNodes(mesText, true);
+        hydrateMessageVoiceBubbles(mesText);
+    });
     
     const context = getContext();
     const chat = context.chat || [];
@@ -889,7 +922,7 @@ function prepareCharacterMessageUi(messageId) {
 
     const mesText = messageEl.querySelector('.mes_text');
     if (mesText) {
-        enhanceTtsDirectives(mesText);
+        enhanceTtsMessageContent(mesText);
         processedDirectives.add(mesText);
     }
 
@@ -939,6 +972,7 @@ function onChatChanged() {
     messageStateMap.clear();
     removeAllTtsPanels();
     resetFloatingState();
+    stopMessageVoicePlayback();
     
     setTimeout(() => {
         if (!isCurrentLifecycle(operationEpoch)) return;
@@ -1293,14 +1327,20 @@ export async function initTts() {
     } catch {
         return false;
     }
-    player = new TtsPlayer();
+    const ownership = createTtsPlaybackOwnership();
+    playbackOwnership = ownership;
+    player = new TtsPlayer({ ownership });
+    externalSpeech = createTtsExternalSynthesis({ isEnabled: isModuleEnabled, synthesize: synthesizeForExternal });
     initTtsPanelStyles();
     moduleInitialized = true;
+    initMessageVoiceUi({ isEnabled: isModuleEnabled });
     initAfterAiGate();
     afterAiGateDispose?.();
     afterAiGateDispose = registerAfterAiHandler(MODULE_ID, ({ chatId, messageId }) => {
         if (!isModuleEnabled()) return;
         if (String(getContext()?.chatId || '') !== String(chatId || '')) return;
+        const message = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
+        if (message) enhanceTtsMessageContent(message);
         if (!config?.autoSpeak) return;
         void speakMessage(messageId, { mode: 'auto' });
     });
@@ -1422,6 +1462,8 @@ export async function initTts() {
     };
 
     events.on(event_types.CHARACTER_MESSAGE_RENDERED, onCharacterMessageRendered);
+    events.on(event_types.MESSAGE_RECEIVED, data => notifyTtsAfterAi(data, 'message_received'));
+    events.on(event_types.USER_MESSAGE_RENDERED, handleDirectiveEnhance);
     events.on(event_types.CHAT_CHANGED, onChatChanged);
     events.on(event_types.MESSAGE_EDITED, handleDirectiveEnhance);
     events.on(event_types.MESSAGE_UPDATED, handleDirectiveEnhance);
@@ -1442,7 +1484,16 @@ export async function initTts() {
         openSettings,
         closeSettings,
         player,
-        synthesize: synthesizeForExternal,
+        synthesize: externalSpeech.synthesize,
+        getVoices: () => readTtsVoices(config),
+        createPlayer: () => {
+            if (!isCurrentLifecycle(initEpoch) || !isModuleEnabled()) throw new Error('TTS 模块未启用');
+            return new TtsPlayer({ ownership });
+        },
+        acquirePlayback: (interrupt) => {
+            if (!isCurrentLifecycle(initEpoch) || !isModuleEnabled()) throw new Error('TTS 模块未启用');
+            return ownership.register(interrupt);
+        },
         playTransient: playTransientVoice,
         speak: async (text, options = {}) => {
             if (!isModuleEnabled()) return;
@@ -1504,6 +1555,7 @@ async function synthesizeForExternal(text, options = {}) {
     }
 
     const { emotion, speaker, signal, resourceId } = options;
+    const request = ttsRequestSettings(config, options);
 
     const mySpeakers = config.volc?.mySpeakers || [];
     const defaultSpeaker = config.volc?.defaultSpeaker || FREE_DEFAULT_VOICE;
@@ -1514,18 +1566,18 @@ async function synthesizeForExternal(text, options = {}) {
     const normalizedEmotion = emotion ? normalizeEmotion(emotion) : '';
 
     if (resolved.source === 'free') {
-        return await synthesizeFreeBlob(trimmed, resolved.value, normalizedEmotion, signal);
+        return await synthesizeFreeBlob(trimmed, resolved.value, normalizedEmotion, signal, request.speed);
     }
 
     if (!isAuthConfigured()) {
         throw new Error('鉴权音色需要配置 API');
     }
 
-    return await synthesizeAuthBlob(trimmed, resolved, normalizedEmotion, signal, resourceId);
+    return await synthesizeAuthBlob(trimmed, resolved, normalizedEmotion, signal, resourceId, request);
 }
 
-async function synthesizeFreeBlob(text, voiceKey, emotion, signal) {
-    const freeSpeed = normalizeSpeed(config?.volc?.speechRate);
+async function synthesizeFreeBlob(text, voiceKey, emotion, signal, speed) {
+    const freeSpeed = normalizeSpeed(speed);
 
     const cacheParams = {
         providerMode: 'free',
@@ -1536,10 +1588,12 @@ async function synthesizeFreeBlob(text, voiceKey, emotion, signal) {
     };
 
     const cacheHit = await tryLoadLocalCache(cacheParams);
+    signal?.throwIfAborted();
     if (cacheHit?.entry?.blob) return cacheHit.entry.blob;
 
     const { synthesizeFreeV1 } = await import('./tts-api.js');
     const { audioBase64 } = await synthesizeFreeV1({ text, voiceKey, speed: freeSpeed, emotion: emotion || null }, { signal });
+    signal?.throwIfAborted();
 
     const byteString = atob(audioBase64);
     const bytes = new Uint8Array(byteString.length);
@@ -1552,7 +1606,7 @@ async function synthesizeFreeBlob(text, voiceKey, emotion, signal) {
     return blob;
 }
 
-async function synthesizeAuthBlob(text, resolved, emotion, signal, explicitResourceId) {
+async function synthesizeAuthBlob(text, resolved, emotion, signal, explicitResourceId, request) {
     const resourceId = inferResourceIdBySpeaker(resolved.value, explicitResourceId || resolved.resourceId);
     const params = {
         providerMode: 'auth',
@@ -1563,10 +1617,10 @@ async function synthesizeAuthBlob(text, resolved, emotion, signal, explicitResou
         text,
         format: 'mp3',
         sampleRate: 24000,
-        speechRate: speedToV3SpeechRate(config.volc.speechRate),
+        speechRate: speedToV3SpeechRate(request.speed),
         loudnessRate: 0,
         emotionScale: config.volc.emotionScale,
-        explicitLanguage: config.volc.explicitLanguage,
+        explicitLanguage: request.language,
         disableMarkdownFilter: config.volc.disableMarkdownFilter,
         disableEmojiFilter: config.volc.disableEmojiFilter,
         enableLanguageDetector: config.volc.enableLanguageDetector,
@@ -1579,11 +1633,13 @@ async function synthesizeAuthBlob(text, resolved, emotion, signal, explicitResou
     if (resourceId === 'seed-tts-1.0' && config.volc.useTts11 !== false) { params.model = 'seed-tts-1.1'; }
     if (config.volc.serverCacheEnabled) { params.cacheConfig = { text_type: 1, use_cache: true }; }
 
+    const headers = buildV3Headers(resourceId, config);
     const cacheHit = await tryLoadLocalCache(params);
+    signal?.throwIfAborted();
     if (cacheHit?.entry?.blob) return cacheHit.entry.blob;
 
-    const headers = buildV3Headers(resourceId, config);
     const result = await synthesizeV3(params, headers);
+    signal?.throwIfAborted();
 
     const cacheKey = buildCacheKey(params);
     storeLocalCache(cacheKey, result.audioBlob, { text: text.slice(0, 200), textLength: text.length, speaker: resolved.value, resourceId, usage: result.usage || null }).catch(() => {});
@@ -1594,6 +1650,10 @@ async function synthesizeAuthBlob(text, resolved, emotion, signal, explicitResou
 export function cleanupTts() {
     lifecycleEpoch++;
     moduleInitialized = false;
+    externalSpeech?.dispose();
+    externalSpeech = null;
+    playbackOwnership?.dispose();
+    playbackOwnership = null;
     configLoaded = false;
     config = null;
     
@@ -1601,11 +1661,11 @@ export function cleanupTts() {
     afterAiGateDispose?.();
     afterAiGateDispose = null;
     clearAllFreeQueues();
-    stopTransientVoice();
+    cleanupMessageVoiceUi();
     cleanupNovelDrawObserver();
     cleanupDirectiveObserver();
     if (player) {
-        player.clear();
+        player.dispose();
         player.onStateChange = null;
         player = null;
     }
@@ -1621,4 +1681,3 @@ export function cleanupTts() {
     cacheCounters.misses = 0;
     delete window.xiaobaixTts;
 }
-

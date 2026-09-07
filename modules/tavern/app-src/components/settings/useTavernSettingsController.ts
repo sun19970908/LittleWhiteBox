@@ -526,7 +526,6 @@ export function useTavernSettingsController(options: TavernSettingsControllerOpt
         config: {},
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: apiConfigSave.value,
@@ -1950,15 +1949,8 @@ export function useTavernSettingsController(options: TavernSettingsControllerOpt
     }
     function syncApiSettingsConfigFromAgentConfig() {
         apiSettingsPanelState.config = normalizeAgentConfig(options.agentConfig.value || {});
-        if (apiSettingsPanelState.configDirty === true) {
-            apiSettingsPanelState.configExternalChangePending = true;
-            apiSettingsPanelState.configFormSyncPending = true;
-            apiConfigStatus.value = '共享 API 配置已在其他页面更新；当前未保存编辑已保留。';
-            return;
-        }
         apiSettingsPanelState.configDraft = null;
         apiSettingsPanelState.configDirty = false;
-        apiSettingsPanelState.configExternalChangePending = false;
         apiSettingsPanelState.configFormSyncPending = true;
     }
     function beginApiConfigSave(requestId = '') {
@@ -2037,9 +2029,6 @@ export function useTavernSettingsController(options: TavernSettingsControllerOpt
                     apiConfigStatus.value = String(message || '');
                 },
                 saveConfig: handleApiConfigSave,
-                reloadConfig: () => {
-                    options.postToHost('xb-tavern:reload-config');
-                },
                 getRuntimeSummaryText: () => apiRuntimeLine.value,
             });
         }
@@ -2057,7 +2046,6 @@ export function useTavernSettingsController(options: TavernSettingsControllerOpt
             isBusy: options.isRunning.value,
             canDeletePreset: Object.keys((apiSettingsPanelState.config as Record<string, unknown>)?.presets || {}).length > 1,
             configLoadError: agentConfigLoadError.value,
-            configExternalChangePending: apiSettingsPanelState.configExternalChangePending === true,
         });
         apiSettingsPanel.syncConfigToForm(root);
         apiSettingsPanel.bindSettingsPanelEvents(root);
@@ -2068,14 +2056,9 @@ export function useTavernSettingsController(options: TavernSettingsControllerOpt
             options.agentConfig.value = payload.config as Record<string, unknown> || options.agentConfig.value;
             agentConfigLoadError.value = '';
             apiSettingsPanelState.configDirty = false;
-            apiSettingsPanelState.configExternalChangePending = false;
             syncApiSettingsConfigFromAgentConfig();
             completeApiConfigSave(String(payload.requestId || ''), { ok: true });
             return;
-        }
-        if (payload.conflict === true && payload.config && typeof payload.config === 'object') {
-            options.agentConfig.value = payload.config as Record<string, unknown>;
-            syncApiSettingsConfigFromAgentConfig();
         }
         completeApiConfigSave(String(payload.requestId || ''), {
             ok: false,

@@ -589,11 +589,21 @@ export function buildNativeMessages(task, model = '') {
     });
 
     const systemPrompt = String(task.systemPrompt || '').trim();
-    if (systemPrompt && normalizedMessages[0]?.role !== 'system') {
-        normalizedMessages.unshift({
-            role: 'system',
-            content: systemPrompt,
-        });
+    if (systemPrompt) {
+        if (normalizedMessages[0]?.role === 'system') {
+            const firstSystemContent = String(normalizedMessages[0].content || '').trim();
+            normalizedMessages[0] = {
+                ...normalizedMessages[0],
+                content: [systemPrompt, firstSystemContent === systemPrompt ? '' : firstSystemContent]
+                    .filter(Boolean)
+                    .join('\n\n'),
+            };
+        } else {
+            normalizedMessages.unshift({
+                role: 'system',
+                content: systemPrompt,
+            });
+        }
     }
 
     return normalizeFinalClaudeLikeMessageRole(normalizedMessages, model);
@@ -693,12 +703,14 @@ export function buildTaggedMessages(task, model = '') {
             content: buildTaggedProtocolPrompt(task),
         });
     } else {
+        const firstSystemContent = String(messages[0].content || '').trim();
+        const staticSystemPrompt = String(task.systemPrompt || '').trim();
         messages[0] = {
             ...messages[0],
-            content: buildTaggedProtocolPrompt({
-                ...task,
-                systemPrompt: messages[0].content || task.systemPrompt,
-            }),
+            content: [
+                buildTaggedProtocolPrompt(task),
+                firstSystemContent === staticSystemPrompt ? '' : firstSystemContent,
+            ].filter(Boolean).join('\n\n'),
         };
     }
 
@@ -920,6 +932,22 @@ async function readSseEventsFromResponse(response, onEvent) {
     }
 }
 
+function describeOpenAICompatibleHttpError(rawText, status) {
+    const source = String(rawText || '').trim();
+    if (source && (source.startsWith('{') || source.startsWith('['))) {
+        try {
+            const payload = JSON.parse(source);
+            const message = payload?.error?.message || payload?.message;
+            if (typeof message === 'string' && message.trim()) {
+                return message.trim();
+            }
+        } catch {
+            // Keep the provider response below when it is not valid JSON.
+        }
+    }
+    return source || `OpenAI 兼容流式请求失败（HTTP ${status}）`;
+}
+
 export class OpenAICompatibleAdapter {
     constructor(config) {
         this.config = config;
@@ -1014,8 +1042,9 @@ export class OpenAICompatibleAdapter {
 
         if (!response.ok) {
             const errorText = await response.text().catch(() => '');
-            const error = new Error(errorText || `openai_compatible_stream_http_${response.status}`);
+            const error = new Error(describeOpenAICompatibleHttpError(errorText, response.status));
             error.status = response.status;
+            error.body = errorText;
             throw error;
         }
         const assistantSnapshot = {

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { createEnaPlannerInterceptor } from '../ena-planner-interceptor.js';
+import { createEnaPlannerSendInterceptor } from '../ena-planner-interceptor.js';
 
 function deferred() {
     let resolve;
@@ -13,217 +13,366 @@ function deferred() {
     return { promise, reject, resolve };
 }
 
-function createFixture(plan, settings = { enabled: true, skipIfPlotPresent: true }, overrides = {}) {
-    const message = {
-        is_user: true,
-        is_system: false,
-        mes: '原始用户消息',
-        extra: { display_text: '楼层显示文本' },
+function flush() {
+    return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function createClassList() {
+    const values = new Set();
+    return {
+        add: value => values.add(value),
+        contains: value => values.has(value),
+        remove: value => values.delete(value),
     };
-    const chat = [
-        { is_system: true, is_user: false, mes: '被 coreChat 过滤的系统楼层' },
-        { is_user: false, mes: '上一条回复' },
-        message,
-    ];
-    const coreChat = [
-        { is_user: false, index: 0, mes: '宿主处理后的上一条回复' },
-        { is_user: true, is_system: false, index: 1, mes: '宿主正则与附件后的用户消息' },
-    ];
-    let context = {
-        chatId: 'chat-a',
-        chat,
-        chatMetadata: { scenario: 'old-chat' },
-        characterId: 0,
-        characters: [{ name: '旧角色', avatar: 'old.png' }],
-        groupId: null,
+}
+
+function createEventTarget() {
+    const listeners = new Map();
+    return {
+        addEventListener(type, listener) {
+            const entries = listeners.get(type) || [];
+            entries.push(listener);
+            listeners.set(type, entries);
+        },
+        dispatch(type, event) {
+            for (const listener of [...(listeners.get(type) || [])]) {
+                listener(event);
+                if (event.immediatePropagationStopped) break;
+            }
+        },
+        removeEventListener(type, listener) {
+            const entries = listeners.get(type) || [];
+            listeners.set(type, entries.filter(entry => entry !== listener));
+        },
     };
-    const updates = [];
+}
+
+function createEvent(target, overrides = {}) {
+    return {
+        altKey: false,
+        ctrlKey: false,
+        defaultPrevented: false,
+        immediatePropagationStopped: false,
+        isComposing: false,
+        key: '',
+        shiftKey: false,
+        target,
+        preventDefault() { this.defaultPrevented = true; },
+        stopImmediatePropagation() { this.immediatePropagationStopped = true; },
+        ...overrides,
+    };
+}
+
+function createFixture(plan, overrides = {}) {
+    const eventTarget = createEventTarget();
+    const textarea = { disabled: false, value: overrides.input ?? '原始用户消息' };
+    const attributes = new Map();
+    const button = {
+        classList: createClassList(),
+        isConnected: true,
+        contains: target => target === button,
+        getAttribute: name => attributes.has(name) ? attributes.get(name) : null,
+        removeAttribute: name => attributes.delete(name),
+        setAttribute: (name, value) => attributes.set(name, String(value)),
+    };
+    const settings = overrides.settings || {
+        enabled: true,
+        api: { stream: true },
+    };
     const errors = [];
-    const aborts = [];
     const notices = [];
     const noticeCancellations = [];
-    const dispatchController = new AbortController();
-    const interceptor = createEnaPlannerInterceptor({
-        getContext: () => context,
+    const sentTexts = [];
+    let chatIdentity = 'character:0:chat-a';
+    let summaryReads = 0;
+
+    const dispatchClick = () => {
+        const event = createEvent(button);
+        eventTarget.dispatch('click', event);
+        if (!event.defaultPrevented && !event.immediatePropagationStopped) {
+            sentTexts.push(textarea.value);
+        }
+        return event;
+    };
+    button.click = dispatchClick;
+
+    const interceptor = createEnaPlannerSendInterceptor({
+        eventTarget,
+        getChatIdentity: () => chatIdentity,
         getSettings: () => settings,
+        getTextarea: () => textarea,
+        getSendButton: () => button,
+        shouldSendOnEnter: () => overrides.sendOnEnter !== false,
+        readStorySummary: () => {
+            summaryReads++;
+            return '当前规范总结';
+        },
         plan,
-        updateMessageBlock: (...args) => updates.push(args),
+        filterPreview: value => String(value || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim(),
         scheduleNotice: () => {
             notices.push(true);
-            overrides.scheduleNotice?.();
             return () => noticeCancellations.push(true);
         },
         onError: error => errors.push(error),
     });
-    const runContext = {
-        abort: immediately => aborts.push(immediately),
-        results: new Map([['story-summary', {
-            text: '本轮共享召回',
-            recallLogText: '本轮召回日志',
-        }]]),
-        signal: dispatchController.signal,
-    };
+    interceptor.install();
 
     return {
-        aborts,
-        abortDispatch: () => dispatchController.abort(),
-        chat,
-        coreChat,
+        button,
+        click: dispatchClick,
         errors,
         interceptor,
-        message,
+        keydown: overridesForEvent => {
+            const event = createEvent(textarea, { key: 'Enter', ...overridesForEvent });
+            eventTarget.dispatch('keydown', event);
+            return event;
+        },
         noticeCancellations,
         notices,
-        runContext,
-        setContext: value => { context = value; },
-        updates,
+        sentTexts,
+        setChatIdentity: value => { chatIdentity = value; },
+        settings,
+        summaryReads: () => summaryReads,
+        textarea,
     };
 }
 
-test('normal generation reuses Story Summary and appends one plan to coreChat and the real floor', async () => {
+test('click streams the plan into the draft and performs exactly one final SillyTavern send', async () => {
     let request = null;
+    const streamedValues = [];
     const fixture = createFixture(async (raw, options) => {
         request = { raw, options };
-        return { filtered: '<plot>同一份规划</plot>' };
+        options.onDelta('片段', '<plot>流式规划');
+        streamedValues.push(fixture.textarea.value);
+        return { filtered: '<plot>最终规划</plot>' };
     });
 
-    const result = await fixture.interceptor.run(
-        fixture.coreChat,
-        0,
-        () => {},
-        'normal',
-        fixture.runContext,
-    );
+    const event = fixture.click();
+    assert.equal(event.defaultPrevented, true);
+    await flush();
 
     assert.equal(request.raw, '原始用户消息');
-    assert.equal(request.options.storyMemoryText, '本轮共享召回');
-    assert.equal(request.options.recallLogText, '本轮召回日志');
-    assert.equal(fixture.coreChat[1].mes, '宿主正则与附件后的用户消息\n\n<plot>同一份规划</plot>');
-    assert.equal(fixture.message.mes, '原始用户消息\n\n<plot>同一份规划</plot>');
-    assert.equal(fixture.message.extra.display_text, '楼层显示文本\n\n<plot>同一份规划</plot>');
-    assert.deepEqual(result, { messageId: 2, text: '<plot>同一份规划</plot>' });
-    assert.equal(fixture.updates.length, 1);
-    assert.deepEqual(fixture.updates[0], [2, fixture.message]);
-    assert.equal(fixture.noticeCancellations.length, 1);
-    assert.deepEqual(fixture.errors, []);
-});
-
-test('eligible normal generation schedules and cancels its slow notice around planning', async () => {
-    const order = [];
-    const fixture = createFixture(
-        async () => {
-            order.push('plan');
-            return { filtered: '<plot>提示后规划</plot>' };
-        },
-        { enabled: true, skipIfPlotPresent: true },
-        { scheduleNotice: () => order.push('notice') },
-    );
-
-    await fixture.interceptor.run(fixture.coreChat, 0, () => {}, 'normal', fixture.runContext);
-
-    assert.deepEqual(order, ['notice', 'plan']);
+    assert.equal(request.options.storyMemoryText, '当前规范总结');
+    assert.equal(fixture.summaryReads(), 1);
+    assert.deepEqual(streamedValues, ['原始用户消息\n\n<plot>流式规划']);
+    assert.deepEqual(fixture.sentTexts, ['原始用户消息\n\n<plot>最终规划</plot>']);
+    assert.equal(fixture.textarea.disabled, false);
     assert.equal(fixture.notices.length, 1);
     assert.equal(fixture.noticeCancellations.length, 1);
+    assert.deepEqual(fixture.errors, []);
+    fixture.interceptor.cleanup();
 });
 
-test('swipe, regenerate, and continue never run or append planning', async () => {
-    for (const type of ['swipe', 'regenerate', 'continue']) {
+test('eligible Enter follows SillyTavern send-on-enter semantics', async () => {
+    let calls = 0;
+    const fixture = createFixture(async () => {
+        calls++;
+        return { filtered: '<plot>键盘规划</plot>' };
+    });
+
+    const event = fixture.keydown();
+    assert.equal(event.defaultPrevented, true);
+    await flush();
+    assert.equal(calls, 1);
+    assert.deepEqual(fixture.sentTexts, ['原始用户消息\n\n<plot>键盘规划</plot>']);
+    fixture.interceptor.cleanup();
+
+    for (const modifiers of [
+        { isComposing: true },
+        { shiftKey: true },
+        { altKey: true },
+        { ctrlKey: true, altKey: true },
+    ]) {
+        let modifiedCalls = 0;
+        const modified = createFixture(async () => {
+            modifiedCalls++;
+            return { filtered: '<plot>不应规划</plot>' };
+        });
+        const modifiedEvent = modified.keydown(modifiers);
+        await flush();
+        assert.equal(modifiedEvent.defaultPrevented, false);
+        assert.equal(modifiedCalls, 0);
+        modified.interceptor.cleanup();
+    }
+
+    let controlCalls = 0;
+    const control = createFixture(async () => {
+        controlCalls++;
+        return { filtered: '<plot>Ctrl+Enter 规划</plot>' };
+    });
+    assert.equal(control.keydown({ ctrlKey: true }).defaultPrevented, true);
+    await flush();
+    assert.equal(controlCalls, 1);
+    assert.deepEqual(control.sentTexts, ['原始用户消息\n\n<plot>Ctrl+Enter 规划</plot>']);
+    control.interceptor.cleanup();
+
+    let disabledCalls = 0;
+    const disabled = createFixture(async () => {
+        disabledCalls++;
+        return { filtered: '<plot>不应规划</plot>' };
+    }, { sendOnEnter: false });
+    assert.equal(disabled.keydown().defaultPrevented, false);
+    await flush();
+    assert.equal(disabledCalls, 0);
+    disabled.interceptor.cleanup();
+});
+
+test('disabled Ena, slash commands, and existing plots pass through untouched', async () => {
+    const cases = [
+        {
+            input: '普通输入',
+            settings: { enabled: false, api: { stream: true } },
+        },
+        { input: '  /echo hello  ' },
+        { input: '继续剧情\n<plot>已有规划</plot>' },
+    ];
+
+    for (const testCase of cases) {
         let calls = 0;
         const fixture = createFixture(async () => {
             calls++;
-            return { filtered: '<plot>不应出现</plot>' };
-        });
-
-        await fixture.interceptor.run(fixture.coreChat, 0, () => {}, type, fixture.runContext);
-
-        assert.equal(calls, 0, type);
-        assert.equal(fixture.message.mes, '原始用户消息', type);
-        assert.equal(fixture.updates.length, 0, type);
-        assert.equal(fixture.notices.length, 0, type);
-        assert.equal(fixture.noticeCancellations.length, 0, type);
+            return { filtered: '<plot>不应规划</plot>' };
+        }, testCase);
+        const event = fixture.click();
+        await flush();
+        assert.equal(event.defaultPrevented, false);
+        assert.equal(calls, 0);
+        assert.equal(fixture.summaryReads(), 0);
+        assert.deepEqual(fixture.sentTexts, [testCase.input]);
+        fixture.interceptor.cleanup();
     }
+
+
+    let busyCalls = 0;
+    const busy = createFixture(async () => {
+        busyCalls++;
+        return { filtered: '<plot>不应规划</plot>' };
+    });
+    busy.textarea.disabled = true;
+    const busyEvent = busy.click();
+    await flush();
+    assert.equal(busyEvent.defaultPrevented, false);
+    assert.equal(busyCalls, 0);
+    assert.equal(busy.summaryReads(), 0);
+    busy.interceptor.cleanup();
 });
 
-test('planning failure is fail-open and leaves both message copies unchanged', async () => {
+test('repeated sends are blocked while one planning request owns the draft', async () => {
+    const gate = deferred();
+    let calls = 0;
+    const fixture = createFixture(async () => {
+        calls++;
+        return await gate.promise;
+    });
+
+    const first = fixture.click();
+    const second = fixture.click();
+    assert.equal(first.defaultPrevented, true);
+    assert.equal(second.defaultPrevented, true);
+    assert.equal(calls, 1);
+    assert.equal(fixture.textarea.disabled, true);
+    assert.deepEqual(fixture.sentTexts, []);
+
+    gate.resolve({ filtered: '<plot>唯一规划</plot>' });
+    await flush();
+    assert.deepEqual(fixture.sentTexts, ['原始用户消息\n\n<plot>唯一规划</plot>']);
+    fixture.interceptor.cleanup();
+});
+
+test('planning failure restores the exact draft and never sends it', async () => {
     const expected = new Error('planner unavailable');
-    const fixture = createFixture(async () => { throw expected; });
+    const fixture = createFixture(async (_raw, options) => {
+        options.onDelta('片段', '<plot>未完成');
+        throw expected;
+    }, { input: '  保留两侧空格  ' });
 
-    await fixture.interceptor.run(fixture.coreChat, 0, () => {}, 'normal', fixture.runContext);
+    fixture.click();
+    await flush();
 
-    assert.equal(fixture.coreChat[1].mes, '宿主正则与附件后的用户消息');
-    assert.equal(fixture.message.mes, '原始用户消息');
-    assert.equal(fixture.updates.length, 0);
-    assert.equal(fixture.noticeCancellations.length, 1);
+    assert.equal(fixture.textarea.value, '  保留两侧空格  ');
+    assert.equal(fixture.textarea.disabled, false);
+    assert.deepEqual(fixture.sentTexts, []);
     assert.deepEqual(fixture.errors, [expected]);
+    fixture.interceptor.cleanup();
 });
 
-test('generation stop aborts the request and a late result cannot modify the floor', async () => {
+test('an empty filtered plan restores the exact draft and never sends it', async () => {
+    const fixture = createFixture(async (_raw, options) => {
+        options.onDelta('片段', '<think>只有思考</think>');
+        return { filtered: '   ' };
+    }, { input: '  等待有效规划  ' });
+
+    fixture.click();
+    await flush();
+
+    assert.equal(fixture.textarea.value, '  等待有效规划  ');
+    assert.equal(fixture.textarea.disabled, false);
+    assert.deepEqual(fixture.sentTexts, []);
+    assert.equal(fixture.errors.length, 1);
+    assert.equal(fixture.errors[0].message, 'Ena 未生成有效的剧情规划');
+    fixture.interceptor.cleanup();
+});
+
+test('chat changes and explicit cancellation prevent late results from touching or sending the draft', async () => {
     const gate = deferred();
     let requestSignal = null;
     const fixture = createFixture(async (_raw, options) => {
         requestSignal = options.signal;
+        options.onDelta('片段', '<plot>旧聊天规划');
         return await gate.promise;
     });
 
-    const pending = fixture.interceptor.run(
-        fixture.coreChat,
-        0,
-        () => {},
-        'normal',
-        fixture.runContext,
-    );
-    await Promise.resolve();
-    fixture.interceptor.cancel('generation-stopped');
-    assert.equal(fixture.noticeCancellations.length, 1);
-    gate.resolve({ filtered: '<plot>迟到规划</plot>' });
-    await pending;
-
+    fixture.click();
+    assert.equal(fixture.textarea.value, '原始用户消息\n\n<plot>旧聊天规划');
+    fixture.setChatIdentity('character:0:chat-b');
+    fixture.textarea.value = '新聊天草稿';
+    fixture.interceptor.cancel('chat-changed');
     assert.equal(requestSignal.aborted, true);
-    assert.deepEqual(fixture.aborts, [true]);
-    assert.equal(fixture.coreChat[1].mes, '宿主正则与附件后的用户消息');
-    assert.equal(fixture.message.mes, '原始用户消息');
-    assert.equal(fixture.updates.length, 0);
-    assert.equal(fixture.noticeCancellations.length, 1);
+    assert.equal(fixture.textarea.disabled, false);
+
+    gate.resolve({ filtered: '<plot>迟到结果</plot>' });
+    await flush();
+    assert.equal(fixture.textarea.value, '新聊天草稿');
+    assert.deepEqual(fixture.sentTexts, []);
     assert.deepEqual(fixture.errors, []);
+    fixture.interceptor.cleanup();
 });
 
-test('dispatcher abort cancels the notice even when planning ignores its signal', async () => {
+test('disabling or unloading Ena restores its owned preview and removes interception', async () => {
     const gate = deferred();
-    const fixture = createFixture(async () => await gate.promise);
-    const pending = fixture.interceptor.run(
-        fixture.coreChat,
-        0,
-        () => {},
-        'normal',
-        fixture.runContext,
-    );
-    await Promise.resolve();
+    const fixture = createFixture(async (_raw, options) => {
+        options.onDelta('片段', '<plot>临时预览');
+        return await gate.promise;
+    });
 
-    fixture.abortDispatch();
-    assert.equal(fixture.noticeCancellations.length, 1);
+    fixture.click();
+    assert.equal(fixture.textarea.value, '原始用户消息\n\n<plot>临时预览');
+    fixture.interceptor.cancel('disabled');
+    assert.equal(fixture.textarea.value, '原始用户消息');
+    assert.equal(fixture.textarea.disabled, false);
 
-    gate.resolve({ filtered: '<plot>迟到规划</plot>' });
-    await pending;
-    assert.equal(fixture.message.mes, '原始用户消息');
-    assert.equal(fixture.noticeCancellations.length, 1);
+    gate.resolve({ filtered: '<plot>迟到结果</plot>' });
+    await flush();
+    assert.deepEqual(fixture.sentTexts, []);
+
+    fixture.interceptor.cleanup();
+    const event = fixture.click();
+    assert.equal(event.defaultPrevented, false);
+    assert.deepEqual(fixture.sentTexts, ['原始用户消息']);
 });
 
-test('a chat switch invalidates an otherwise successful late result', async () => {
+test('a missing final send control keeps the completed text for manual sending', async () => {
     const gate = deferred();
     const fixture = createFixture(async () => await gate.promise);
-    const pending = fixture.interceptor.run(
-        fixture.coreChat,
-        0,
-        () => {},
-        'normal',
-        fixture.runContext,
-    );
-    await Promise.resolve();
-    fixture.setContext({ chatId: 'chat-b', chat: [] });
-    gate.resolve({ filtered: '<plot>旧聊天规划</plot>' });
-    await pending;
 
-    assert.equal(fixture.message.mes, '原始用户消息');
-    assert.equal(fixture.updates.length, 0);
-    assert.equal(fixture.noticeCancellations.length, 1);
+    fixture.click();
+    fixture.button.isConnected = false;
+    gate.resolve({ filtered: '<plot>已完成规划</plot>' });
+    await flush();
+
+    assert.equal(fixture.textarea.value, '原始用户消息\n\n<plot>已完成规划</plot>');
+    assert.equal(fixture.textarea.disabled, false);
+    assert.deepEqual(fixture.sentTexts, []);
+    assert.equal(fixture.errors.length, 1);
+    fixture.interceptor.cleanup();
 });

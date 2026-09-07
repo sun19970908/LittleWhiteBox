@@ -4836,7 +4836,8 @@ export async function deleteTavernAssistantPreset(
 
 export async function ensureDefaultTavernAssistantPreset(): Promise<TavernAssistantPresetRecord> {
     const existing = await tavernAssistantPresetsTable.get(DEFAULT_TAVERN_ASSISTANT_PRESET_ID);
-    if (existing?.version === DEFAULT_TAVERN_ASSISTANT_PRESET_VERSION) {return existing;}
+    // Saving an edited built-in marks it user-owned. Updating shipped defaults must not overwrite it.
+    if (existing && (existing.isBuiltIn === false || existing.version === DEFAULT_TAVERN_ASSISTANT_PRESET_VERSION)) {return existing;}
     return saveTavernAssistantPreset(createDefaultTavernAssistantPreset(), { isBuiltIn: true });
 }
 

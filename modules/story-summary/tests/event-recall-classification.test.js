@@ -62,18 +62,18 @@ test('代词不会自动加入 USER 名或角色卡名', () => {
 test('name2 属于可信人物且在查询窗口被显式提到时进入焦点人物', () => {
     const cardName = '跨服饲养';
 
-    assert.deepEqual(resolveFocusCharacters([cardName], new Set(), ['蓝袖']), []);
+    assert.deepEqual(resolveFocusCharacters([cardName], new Set(), ['白帝']), []);
     assert.deepEqual(
-        resolveFocusCharacters([cardName], new Set([cardName]), ['蓝袖']),
+        resolveFocusCharacters([cardName], new Set([cardName]), ['白帝']),
         [cardName],
     );
 });
 
 test('USER 名即使出现在确认集合中也永不进入焦点人物', () => {
-    const trusted = new Set(['蓝袖', '林月']);
-    const focusCharacters = resolveFocusCharacters(['蓝袖', '林月'], trusted, ['蓝袖']);
+    const trusted = new Set(['白帝', '林月']);
+    const focusCharacters = resolveFocusCharacters(['白帝', '林月'], trusted, ['白帝']);
 
     assert.deepEqual(focusCharacters, ['林月']);
-    assert.equal(classifyEventRecall(eventWithParticipants('蓝袖'), new Set(focusCharacters), 0.9).recallType, 'RELATED');
+    assert.equal(classifyEventRecall(eventWithParticipants('白帝'), new Set(focusCharacters), 0.9).recallType, 'RELATED');
     assert.equal(classifyEventRecall(eventWithParticipants('林月'), new Set(focusCharacters), 0.1).recallType, 'DIRECT');
 });

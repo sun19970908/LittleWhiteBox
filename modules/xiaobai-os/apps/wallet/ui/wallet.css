@@ -1,0 +1,56 @@
+.wallet-pocket { position: relative; padding-top: 20px; margin: 4px 0 0; isolation: isolate; }
+.wallet-pocket-cards { position: absolute; inset: 0 17px auto; height: 65px; z-index: -1; }
+.wallet-pocket-cards span { position: absolute; inset: 9px 0 0; border: 1px solid #e2d2af; border-radius: 15px 15px 0 0; background: linear-gradient(110deg, #e3c897, #faf0d1); transform: rotate(-3deg); }
+.wallet-pocket-cards span:last-child { inset: 0 7px 0 42px; background: linear-gradient(120deg, #e7eddf, #c6d7bf); border-color: #bbcdb2; transform: rotate(3deg); }
+.wallet-balance { position: relative; display: grid; gap: 21px; padding: 24px 24px 19px; border-radius: 20px 20px 26px 26px; background: radial-gradient(ellipse at 20% 0, #4c9980, transparent 75%), linear-gradient(120deg, #2a745e, #205244); color: #f2f3df; box-shadow: 0 12px 22px rgb(27 67 47 / 16%), inset 0 1px 1px rgb(255 255 255 / 35%); }
+.wallet-balance::after { content: ''; position: absolute; inset: 7px; border: 1px dashed rgb(223 238 208 / 27%); border-radius: 15px 15px 21px 21px; pointer-events: none; }
+.wallet-balance header { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12px; }
+.wallet-balance-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; color: #d1e1c9; }
+.wallet-balance-chip i { width: 5px; height: 5px; background: #c9dca7; border-radius: 50%; }
+.wallet-balance-chip i:not(.is-ready) { background: #f2c486; }
+.wallet-balance-value { display: flex; gap: 8px; align-items: baseline; }
+.wallet-balance-value small { font-size: 22px; opacity: .7; }
+.wallet-balance-value strong { min-width: 0; overflow-wrap: anywhere; font: 550 46px/1.2 "DIN Alternate", Bahnschrift, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -.025em; }
+.wallet-balance footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 10px; color: #d1e1c9; }
+.wallet-pocket-clasp { display: grid; place-items: center; width: 50px; height: 34px; margin-right: -24px; border-radius: 9px 0 0 9px; border: 1px solid rgb(192 221 189 / 25%); border-right: 0; background: #245443; box-shadow: -2px 3px 5px rgb(0 0 0 / 13%); }
+.wallet-pocket-clasp .wallet-icon { width: 17px; height: 17px; color: #dbd1a2; }
+.wallet-notice { margin-top: 18px; }
+.wallet-ledger { margin-top: 29px; }
+.wallet-filters { display: flex; gap: 8px; }
+.wallet-filters button { flex: 1; border: 1px solid var(--wallet-line); background: transparent; color: var(--wallet-muted); min-height: 39px; border-radius: 12px; font-size: 12px; }
+.wallet-filters button[aria-pressed="true"] { background: var(--wallet-ink); color: var(--wallet-bg); border-color: transparent; }
+.wallet-day-group { margin-top: 23px; }
+.wallet-day-group h3 { color: var(--wallet-muted); font-size: 11px; font-weight: 500; margin: 0 0 10px 3px; }
+.wallet-row { display: grid; align-items: center; gap: 11px; grid-template-columns: 38px minmax(0, 1fr) minmax(60px, auto); width: 100%; padding: 18px 15px; border: 0; background: transparent; text-align: left; }
+.wallet-row-mark { display: grid; place-items: center; width: 38px; height: 40px; border-radius: 13px; background: var(--wallet-tint); color: var(--wallet-accent); flex: 0 0 auto; }
+.wallet-row.is-expense .wallet-row-mark { color: #ad7751; background: #f2e9dc; }
+.theme-dark .wallet-row.is-expense .wallet-row-mark { color: #d5b28d; background: #3b3428; }
+.wallet-row.is-transfer .wallet-row-mark { background: var(--wallet-bg); color: var(--wallet-muted); }
+.wallet-row-copy { min-width: 0; }
+.wallet-row-copy strong { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; font-size: 13px; font-weight: 650; }
+.wallet-row-copy small { display: block; color: var(--wallet-muted); font-size: 10px; margin-top: 5px; overflow-wrap: anywhere; }
+.wallet-row-value { text-align: right; max-width: 115px; min-width: 0; overflow-wrap: anywhere; }
+.wallet-row-value strong { font: 600 18px/1.35 "DIN Alternate", Bahnschrift, sans-serif; font-variant-numeric: tabular-nums; }
+.wallet-row-value small { display: block; color: var(--wallet-muted); font-size: 9px; margin-top: 5px; }
+.wallet-row.is-income .wallet-row-value strong { color: var(--wallet-accent); }
+.wallet-ledger-caption { color: var(--wallet-muted); font-size: 11px; line-height: 1.8; }
+.wallet-ledger-foot { display: grid; justify-items: center; margin-top: 20px; }
+.wallet-ledger-end { color: var(--wallet-muted); font-size: 10px; }
+.wallet-load-error { color: var(--wallet-danger); font-size: 12px; text-align: center; }
+.wallet-receipt { width: min(352px, calc(100vw - 30px)); max-height: calc(100dvh - 40px); padding: 17px 23px 22px; background: var(--wallet-panel); color: var(--wallet-ink); border: 1px solid var(--wallet-line); border-radius: 25px; box-shadow: 0 25px 70px rgb(0 0 0 / 25%); overflow: auto; }
+.wallet-receipt > header { display: flex; align-items: center; justify-content: space-between; gap: 10px; color: var(--wallet-muted); font-size: 12px; }
+.wallet-receipt-hero { display: flex; flex-direction: column; align-items: center; text-align: center; padding: 13px 0 24px; border-bottom: 1px dashed var(--wallet-line); }
+.wallet-receipt-hero .wallet-row-mark { width: 46px; height: 48px; }
+.wallet-receipt-hero h2 { font-size: 17px; margin: 15px 0 9px; overflow-wrap: anywhere; width: 100%; }
+.wallet-receipt-hero > strong { font: 600 34px/1.4 "DIN Alternate", Bahnschrift, sans-serif; overflow-wrap: anywhere; max-width: 100%; }
+.wallet-receipt-hero.is-income > strong { color: var(--wallet-accent); }
+.wallet-receipt-hero > strong small { display: block; color: var(--wallet-muted); font: 11px/1.7 "MiSans", "Microsoft YaHei UI", sans-serif; }
+.wallet-receipt-hero > span:last-child { color: var(--wallet-muted); font-size: 11px; margin-top: 7px; }
+.wallet-receipt dl { margin: 17px 0; }
+.wallet-receipt dl > div { display: flex; justify-content: space-between; gap: 14px; font-size: 12px; line-height: 1.8; padding: 7px 0; }
+.wallet-receipt dt { flex: 0 0 auto; color: var(--wallet-muted); }
+.wallet-receipt dd { margin: 0; text-align: right; overflow-wrap: anywhere; min-width: 0; }
+.wallet-receipt .wallet-receipt-note { display: block; }
+.wallet-receipt-note dd { text-align: left; margin-top: 7px; white-space: pre-wrap; }
+.wallet-receipt footer { border-top: 1px dashed var(--wallet-line); padding-top: 17px; text-align: center; font-size: 10px; color: var(--wallet-muted); }
+@media (max-width: 360px) { .wallet-balance { padding-inline: 20px; } .wallet-pocket-clasp { margin-right: -20px; } .wallet-balance-value strong { font-size: 40px; } .wallet-row { gap: 9px; grid-template-columns: 34px minmax(0, 1fr) minmax(55px, auto); padding-right: 12px; } .wallet-row-mark { width: 34px; height: 36px; } }

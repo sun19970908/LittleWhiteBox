@@ -78,7 +78,7 @@ function resolveToolResources(toolName = '', args: Record<string, unknown> = {})
     if (name === TAVERN_STATE_TOOL_NAMES.PATCH) {
         return [{ kind: 'state-domain', key: 'structured-state' }];
     }
-    if (name === TAVERN_STATE_TOOL_NAMES.EDIT_SCENE) {
+    if (name === TAVERN_STATE_TOOL_NAMES.EDIT_SCENE || name === TAVERN_STATE_TOOL_NAMES.EDIT_ATLAS) {
         return [{ kind: 'state-domain', key: 'structured-state' }];
     }
     if ([TAVERN_STATUS_TOOL_NAMES.INIT, TAVERN_STATUS_TOOL_NAMES.PATCH].includes(name as never)) {

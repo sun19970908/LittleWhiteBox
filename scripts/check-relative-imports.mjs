@@ -6,6 +6,11 @@ import { parse } from 'acorn';
 const ROOT_DIR = process.cwd();
 const CHECK_EXTENSIONS = new Set(['.js', '.mjs', '.cjs']);
 const RESOLVE_EXTENSIONS = ['.js', '.mjs', '.cjs', '.json', '.html', '.css'];
+const TYPESCRIPT_SOURCE_EXTENSIONS = new Map([
+    ['.js', ['.ts', '.tsx']],
+    ['.mjs', ['.mts']],
+    ['.cjs', ['.cts']],
+]);
 const IGNORE_DIRS = new Set(['.git', 'node_modules', 'dist', 'coverage']);
 const IGNORE_FILES = new Set(['package-lock.json']);
 
@@ -61,6 +66,11 @@ function resolveExistingImport(fromFile, specifier) {
     const cleanSpecifier = stripResourceSuffix(specifier);
     const basePath = path.resolve(path.dirname(fromFile), cleanSpecifier);
     const candidates = [basePath];
+    const sourceExtensions = TYPESCRIPT_SOURCE_EXTENSIONS.get(path.extname(basePath)) || [];
+
+    for (const extension of sourceExtensions) {
+        candidates.push(`${basePath.slice(0, -path.extname(basePath).length)}${extension}`);
+    }
 
     if (!path.extname(basePath)) {
         for (const extension of RESOLVE_EXTENSIONS) {
@@ -188,7 +198,8 @@ function checkFile(filePath) {
             continue;
         }
 
-        if (!hasExactSpecifierPathCase(filePath, specifier)) {
+        const resolvedSpecifier = toPosix(path.relative(path.dirname(filePath), resolvedImport));
+        if (!hasExactSpecifierPathCase(filePath, resolvedSpecifier)) {
             problems.push(`${relativePath}:${line}:${column} import path case mismatch "${specifier}"`);
         }
     }

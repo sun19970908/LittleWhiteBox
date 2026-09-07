@@ -22,7 +22,7 @@ function createSettings(overrides = {}) {
         preview: { enabled: false },
         storyOutline: { enabled: false },
         tts: { enabled: false },
-        fourthWall: { enabled: false },
+        xiaobaiOs: { enabled: false },
         ...overrides,
     };
 }
@@ -133,6 +133,16 @@ test('unsupported enabled features reject managed ownership before registration'
     assert.equal(registered, false);
 });
 
+test('managed ownership rejects an enabled Xiaobai OS', () => {
+    const settings = createSettings({ xiaobaiOs: { enabled: true } });
+
+    assert.deepEqual(getUnsupportedManagedFeatures({
+        settings,
+        hasActiveCustomTemplate: () => false,
+        isDrawProviderActive: () => false,
+    }), ['Xiaobai OS']);
+});
+
 test('a disabled LittleWhiteBox still registers its required participant identity', () => {
     let registered = false;
     const settings = createSettings({
@@ -219,7 +229,7 @@ test('message decorator mount failure rolls back partial managed UI', () => {
     assert.deepEqual(calls, ['first:release', 'container:release']);
 });
 
-test('managed settings lock includes the X button position control', () => {
+test('managed settings lock includes the X button position and Xiaobai OS controls', () => {
     const attributes = new Map();
     const classes = new Set();
     const requestedIds = [];
@@ -231,13 +241,14 @@ test('managed settings lock includes the X button position control', () => {
     const root = {
         getElementById(id) {
             requestedIds.push(id);
-            return id === 'xiaobaix_xposition_btn' ? control : null;
+            return ['xiaobaix_xposition_btn', 'xiaobaix_os_enabled'].includes(id) ? control : null;
         },
     };
 
     applyTauriTavernChatSurfaceSettingsLock(root);
 
     assert.equal(requestedIds.includes('xiaobaix_xposition_btn'), true);
+    assert.equal(requestedIds.includes('xiaobaix_os_enabled'), true);
     assert.equal(control.disabled, true);
     assert.equal(attributes.get('aria-disabled'), 'true');
     assert.equal(classes.has('disabled-control'), true);

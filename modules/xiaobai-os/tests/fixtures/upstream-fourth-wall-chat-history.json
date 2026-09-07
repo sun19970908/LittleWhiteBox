@@ -1,0 +1,32 @@
+{
+    "group-chat-b": {
+        "extensions": {
+            "LittleWhiteBox": {
+                "fw": {
+                    "settings": {
+                        "maxChatLayers": 9999,
+                        "maxMetaTurns": 8,
+                        "stream": true
+                    },
+                    "history": [
+                        {
+                            "role": "user",
+                            "content": "legacy root history",
+                            "ts": 1700000000000
+                        },
+                        {
+                            "role": "ai",
+                            "content": "legacy reply [img:night city]",
+                            "thinking": "legacy thought",
+                            "ts": 1700000001000,
+                            "type": "commentary"
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "unrelatedMetadata": {
+        "keep": true
+    }
+}

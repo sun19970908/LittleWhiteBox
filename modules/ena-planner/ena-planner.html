@@ -68,13 +68,6 @@
               </select>
             </div>
             <div class="form-group">
-              <label class="form-label">跳过已有规划的输入</label>
-              <select id="ep_skip_plot" class="input">
-                <option value="true">是</option>
-                <option value="false">否</option>
-              </select>
-            </div>
-            <div class="form-group">
               <label class="form-label">合并连续 system</label>
               <select id="ep_merge_system_msgs" class="input">
                 <option value="false">关闭</option>
@@ -82,7 +75,7 @@
               </select>
             </div>
           </div>
-          <p class="form-hint">输入中已有 &lt;plot&gt; 标签时跳过自动规划。开启“合并连续 system”后，会把相邻的 system 消息折叠为一条，不跨过 user / assistant。</p>
+          <p class="form-hint">输入中已有 &lt;plot&gt; 标签时会直接发送。开启“合并连续 system”后，会把相邻的 system 消息折叠为一条，不跨过 user / assistant。</p>
         </section>
 
         <section class="card">
@@ -688,7 +681,6 @@
       logs = Array.isArray(cfg.logs) ? cfg.logs : [];
 
       $('ep_enabled').value = String(toBool(cfg.enabled, true));
-      $('ep_skip_plot').value = String(toBool(cfg.skipIfPlotPresent, true));
       $('ep_merge_system_msgs').value = String(toBool(cfg.mergeConsecutiveSystemMessages, false));
 
       const api = cfg.api || {};
@@ -728,7 +720,6 @@
       const p = {};
 
       p.enabled = toBool($('ep_enabled').value, true);
-      p.skipIfPlotPresent = toBool($('ep_skip_plot').value, true);
       p.mergeConsecutiveSystemMessages = toBool($('ep_merge_system_msgs').value, false);
 
       p.api = {

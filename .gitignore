@@ -10,5 +10,6 @@ scripts/story-summary-replay.samples/
 scripts/story-summary-replay-output/
 scripts/.story-summary-replay-cache/
 
-# Local browser acceptance artifacts
+# Local browser verification artifacts and isolated UI preview
+.playwright-cli/
 output/playwright/

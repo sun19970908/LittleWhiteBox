@@ -8,15 +8,11 @@ import {
 } from '../agent-settings-surface.js';
 import { normalizeAgentConfig } from '../../../agent-core/config.js';
 import { createAgentSettingsPanel } from '../../../agent-core/ui/settings-panel.js';
-import {
-    buildAgentSettingsPanelMarkup,
-    syncAgentSettingsPanelFeedback,
-} from '../../../agent-core/ui/settings-markup.js';
+import { buildAgentSettingsPanelMarkup } from '../../../agent-core/ui/settings-markup.js';
 import {
     loadSharedAgentSettings,
     loadSharedAgentSettingsResult,
     mergeSharedAgentSettings,
-    publishSharedAgentSettingsChanged,
     saveSharedAgentSettings,
 } from '../../../agent-core/settings-repository.js';
 import {
@@ -158,7 +154,6 @@ test('shared Agent reasoning controls follow the selected Provider and model wit
         config: normalizeAgentConfig(stored),
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: { status: 'idle', requestId: '', error: '' },
@@ -239,7 +234,6 @@ test('shared Agent Provider switching keeps each Provider model and Reasoning dr
         config: normalizeAgentConfig(stored),
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: { status: 'idle', requestId: '', error: '' },
@@ -296,7 +290,6 @@ test('shared Agent settings keep explicit Reasoning usable for a custom OpenAI-c
         config: normalizeAgentConfig(stored),
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: { status: 'idle', requestId: '', error: '' },
@@ -355,7 +348,6 @@ test('shared Agent settings validate hidden preset Reasoning before saving', () 
         config: normalizeAgentConfig(stored),
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: { status: 'idle', requestId: '', error: '' },
@@ -406,7 +398,6 @@ test('preset deletion runs full Reasoning validation before committing', () => {
         config: normalizeAgentConfig(stored),
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: { status: 'idle', requestId: '', error: '' },
@@ -457,7 +448,6 @@ test('shared Agent settings validate delegate Reasoning before saving', () => {
         config: normalizeAgentConfig(stored),
         configDraft: null,
         configDirty: false,
-        configExternalChangePending: false,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: { status: 'idle', requestId: '', error: '' },
@@ -486,56 +476,38 @@ test('shared Agent settings validate delegate Reasoning before saving', () => {
     }
 });
 
-test('shared Agent API panel disables failed loads, retries, and keeps partial markup safe', () => {
+test('shared Agent API panel keeps load failures out of the form header', () => {
     const dom = installDom();
     const root = dom.document.querySelector('#root');
     const state = {
         config: normalizeAgentConfig(buildStoredSettings()),
         configDraft: null,
         configDirty: true,
-        configExternalChangePending: true,
         configFormSyncPending: true,
         configPage: 'main',
         configSave: { status: 'idle', requestId: '', error: '' },
         modelOptionsByProvider: {},
         pullStateByProvider: {},
     };
-    let retries = 0;
-    let renders = 0;
     try {
         // First-party markup under test.
         // eslint-disable-next-line no-unsanitized/property
         root.innerHTML = buildAgentSettingsPanelMarkup({
             configLoadError: '<读取失败>',
-            configExternalChangePending: true,
         });
         root.querySelector('#xb-assistant-base-url')?.remove();
         root.querySelector('#xb-assistant-tool-mode')?.remove();
         root.querySelector('#xb-assistant-reasoning-mode')?.remove();
         const panel = createAgentSettingsPanel({
             state,
-            render: () => { renders += 1; },
-            reloadConfig: () => { retries += 1; },
         });
         assert.doesNotThrow(() => panel.syncConfigToForm(root));
         assert.doesNotThrow(() => panel.bindSettingsPanelEvents(root));
         assert.equal(root.querySelector('[data-xb-agent-config-fields]').hasAttribute('disabled'), true);
-        assert.equal(root.querySelector('[data-xb-agent-config-load-error-message]').textContent, '<读取失败>');
-
-        root.querySelector('[data-xb-agent-config-retry]').click();
-        assert.equal(retries, 1);
-        syncAgentSettingsPanelFeedback(root, {
-            configLoadError: '',
-            configExternalChangePending: true,
-        });
-        assert.equal(root.querySelector('[data-xb-agent-config-fields]').hasAttribute('disabled'), false);
-        assert.equal(root.querySelector('[data-xb-agent-config-conflict]').hidden, false);
-
-        root.querySelector('[data-xb-agent-config-reload]').click();
-        assert.equal(state.configDraft, null);
-        assert.equal(state.configDirty, false);
-        assert.equal(state.configExternalChangePending, false);
-        assert.equal(renders, 1);
+        assert.equal(root.querySelector('#xb-assistant-toast').textContent, '<读取失败>');
+        assert.equal(root.querySelector('[data-xb-agent-config-retry]'), null);
+        assert.equal(root.querySelector('[data-xb-agent-config-reload]'), null);
+        assert.equal(root.querySelector('[data-xb-agent-config-conflict]'), null);
     } finally {
         dom.restore();
     }
@@ -571,7 +543,6 @@ test('draw Agent API performs a real DOM mount, edit, save, and local feedback r
     const savedPatches = [];
     const surface = createDrawAgentSettingsSurface({
         getRoot: () => root,
-        eventTarget: dom.window,
         saveStateResetMs: 5,
         loadSettings: async () => stored,
         saveSettings: async (patch) => {
@@ -596,7 +567,6 @@ test('draw Agent API performs a real DOM mount, edit, save, and local feedback r
         await flushTasks();
 
         assert.equal(savedPatches.length, 1);
-        assert.equal(savedPatches[0].expectedUpdatedAt, 100);
         assert.equal(stored.presets.主配置.modelConfigs['openai-compatible'].model, 'new-model');
         assert.equal(surface.getState().configDirty, false);
         assert.equal(root.querySelector('.xb-assistant-config'), panel);
@@ -634,55 +604,7 @@ test('draw Agent API registers host request headers for its model pull client', 
     }
 });
 
-test('external changes refresh a clean surface but preserve a dirty draft until explicit reload', async () => {
-    const dom = installDom();
-    const root = dom.document.querySelector('#root');
-    let stored = buildStoredSettings();
-    const surface = createDrawAgentSettingsSurface({
-        getRoot: () => root,
-        eventTarget: dom.window,
-        source: 'draw-test',
-        loadSettings: async () => stored,
-    });
-
-    try {
-        await surface.refresh();
-        const modelInput = root.querySelector('#xb-assistant-model');
-        modelInput.value = 'local-draft';
-        modelInput.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
-        stored = buildStoredSettings({
-            updatedAt: 300,
-            presets: {
-                ...stored.presets,
-                主配置: {
-                    ...stored.presets.主配置,
-                    modelConfigs: {
-                        'openai-compatible': { model: 'external-model', apiKey: 'old-key' },
-                    },
-                },
-            },
-        });
-        publishSharedAgentSettingsChanged({ source: 'assistant', updatedAt: 300 }, {
-            eventTarget: dom.window,
-        });
-        await flushTasks();
-
-        assert.equal(root.querySelector('#xb-assistant-model').value, 'local-draft');
-        assert.equal(surface.getState().externalChangePending, true);
-        assert.equal(root.querySelector('[data-draw-agent-settings-conflict]').hidden, false);
-
-        root.querySelector('[data-draw-agent-settings-reload]').click();
-        await flushTasks();
-        await flushTasks();
-        assert.equal(root.querySelector('#xb-assistant-model').value, 'external-model');
-        assert.equal(surface.getState().externalChangePending, false);
-    } finally {
-        surface.destroy();
-        dom.restore();
-    }
-});
-
-test('shared Agent API persistence is atomic and rejects stale revisions', async () => {
+test('shared Agent API persistence uses the canonical settings document and atomic storage write', async () => {
     const cache = { settings: buildStoredSettings(), anotherFeature: { enabled: true } };
     const calls = [];
     const storage = {
@@ -695,14 +617,12 @@ test('shared Agent API persistence is atomic and rejects stale revisions', async
     };
 
     const success = await saveSharedAgentSettings({
-        expectedUpdatedAt: 100,
         currentPresetName: '主配置',
         presets: cache.settings.presets,
     }, {
         storage,
         silent: false,
         now: () => 5678,
-        eventTarget: new EventTarget(),
     });
 
     assert.equal(success.ok, true);
@@ -711,10 +631,10 @@ test('shared Agent API persistence is atomic and rejects stale revisions', async
     assert.equal(cache.settings.updatedAt, 5678);
     assert.deepEqual(calls, [{ key: 'settings', options: { silent: false } }]);
 
-    const stale = await saveSharedAgentSettings({ expectedUpdatedAt: 100 }, { storage });
-    assert.equal(stale.ok, false);
-    assert.equal(stale.conflict, true);
-    assert.equal(calls.length, 1);
+    const later = await saveSharedAgentSettings({}, { storage, now: () => 5679 });
+    assert.equal(later.ok, true);
+    assert.equal(calls.length, 2);
+    assert.equal(cache.settings.updatedAt, 5679);
 
     const original = buildStoredSettings();
     const failed = await saveSharedAgentSettings({}, {
@@ -772,33 +692,6 @@ test('shared Agent settings prefer strict storage reads and expose load failures
     assert.equal(result.config, null);
     assert.match(result.error, /共享 Agent API 配置读取失败：backend unavailable/);
     assert.equal(fallbackRead, false);
-});
-
-test('simultaneous shared Agent saves serialize before checking their revision', async () => {
-    const cache = { settings: buildStoredSettings() };
-    const storage = {
-        async get(key) { return cache[key]; },
-        async setAndSave(key, value) {
-            await flushTasks(2);
-            cache[key] = value;
-            return true;
-        },
-    };
-    const [first, second] = await Promise.all([
-        saveSharedAgentSettings({ expectedUpdatedAt: 100 }, {
-            storage,
-            now: () => 101,
-        }),
-        saveSharedAgentSettings({ expectedUpdatedAt: 100 }, {
-            storage,
-            now: () => 102,
-        }),
-    ]);
-
-    assert.equal(first.ok, true);
-    assert.equal(second.ok, false);
-    assert.equal(second.conflict, true);
-    assert.equal(cache.settings.updatedAt, 101);
 });
 
 test('draw Agent API load failures are escaped and retryable', () => {

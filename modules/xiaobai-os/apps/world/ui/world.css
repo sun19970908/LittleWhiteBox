@@ -1,0 +1,108 @@
+.world-app {
+    --world-paper: #fdfefd; --world-surface: #ffffff; --world-ink: #252c33; --world-muted: #616c77;
+    --world-rule: #e6ebef; --world-accent: #326da7; --world-soft: #f0f5fa;
+    --world-error: #a34439; --world-error-soft: #fff2ef; --world-gutter: 24px;
+    display: flex; flex-direction: column; height: 100%; min-height: 0;
+    background: var(--world-paper); color: var(--world-ink); font-family: inherit;
+    padding-top: var(--os-status-height, 42px); line-height: 1.6; overflow: hidden; container-type: inline-size; color-scheme: light;
+}
+.theme-dark .world-app {
+    --world-paper: #13171d; --world-surface: #1c222c; --world-ink: #edf2f6; --world-muted: #a5b2c0;
+    --world-rule: #2c3541; --world-accent: #9bc6f0; --world-soft: #202d3c;
+    --world-error: #ffb3a5; --world-error-soft: #342522; color-scheme: dark;
+}
+.world-app *, .world-app *::before, .world-app *::after { box-sizing: border-box; }
+.world-app button, .world-app summary { color: inherit; cursor: pointer; }
+.world-app button { font: inherit; border: 0; background: none; }
+.world-app button:disabled, .world-app input:disabled { opacity: .46; cursor: default; }
+.world-app :is(button, summary, input, h1):focus-visible { outline: 2px solid var(--world-accent); outline-offset: 3px; }
+.world-app h1, .world-app h2, .world-app p { margin: 0; }
+.world-toolbar {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 4px var(--world-gutter) 10px; flex-shrink: 0; position: relative; z-index: 3;
+}
+.world-toolbar-title { font-size: 22px; line-height: 1.4; font-weight: 600; letter-spacing: .08em; }
+.world-tools { display: flex; align-items: center; gap: 0; flex-shrink: 0; }
+.world-icon-button, .world-menu summary { width: 40px; height: 44px; display: grid; place-items: center; border-radius: 8px; transition: background .18s; }
+.world-icon-button svg, .world-menu summary svg { width: 19px; height: 19px; }
+.world-menu { position: relative; }
+.world-menu summary { list-style: none; }
+.world-menu summary::-webkit-details-marker { display: none; }
+.world-menu[open] summary { background: var(--world-soft); }
+.world-menu-sheet {
+    position: absolute; right: 0; top: 48px; width: min(272px, calc(100vw - 48px));
+    max-width: calc(100cqw - 48px); max-height: 60dvh; overflow-y: auto; padding: 16px;
+    border-radius: 12px; background: var(--world-surface); border: 1px solid var(--world-rule);
+    box-shadow: 0 10px 32px #0d223018; z-index: 5;
+}
+.world-menu-sheet button, .world-menu-sheet label { display: flex; align-items: center; justify-content: space-between; gap: 12px; width: 100%; min-height: 44px; font-size: 14px; padding: 0; }
+.world-menu-sheet p { font-size: 12px; color: var(--world-muted); line-height: 1.8; padding: 2px 0 14px; }
+.world-menu-sheet p:last-child { padding-bottom: 0; }
+.world-menu-sheet label { border-top: 1px solid var(--world-rule); padding-top: 12px; }
+.world-menu-sheet input { accent-color: var(--world-accent); width: 17px; height: 17px; flex-shrink: 0; }
+.world-back, .world-bottom-back { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0; font-size: 13px; }
+.world-back svg, .world-bottom-back svg, .world-overview-toggle svg { width: 18px; height: 18px; flex-shrink: 0; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.world-scroll { overflow-y: auto; overscroll-behavior: contain; min-height: 0; flex: 1; scrollbar-width: thin; scrollbar-color: var(--world-rule) transparent; }
+.world-listing { padding-bottom: 32px; }
+.world-horizon {
+    height: 130px; overflow: hidden; margin: 0 12px; border-radius: 4px;
+    background-image: var(--world-cover-image, none), url('./horizon.svg');
+    background-position: center; background-size: cover; background-repeat: no-repeat;
+}
+.world-overview { display: flex; gap: 12px; align-items: flex-start; margin: 20px var(--world-gutter) 10px; padding-bottom: 22px; border-bottom: 1px solid var(--world-rule); }
+.world-overview-text { flex: 1; min-width: 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; font-size: 13px; line-height: 1.85; color: var(--world-muted); overflow-wrap: anywhere; white-space: pre-wrap; }
+.world-overview-text.is-expanded { display: block; }
+.world-overview-toggle { flex-shrink: 0; display: grid; place-items: center; width: 32px; min-height: 44px; padding: 0; color: var(--world-muted) !important; border-radius: 6px; }
+.world-overview-toggle svg { transition: transform .2s; }
+.world-overview-toggle svg.is-expanded { transform: rotate(180deg); }
+.world-news-list { padding: 0 var(--world-gutter); }
+.world-news-item + .world-news-item { border-top: 1px solid var(--world-rule); }
+.world-news-item button { display: block; text-align: left; width: 100%; padding: 18px 0 20px; }
+.world-item-text { display: block; min-width: 0; }
+.world-item-text h2 { font-size: 16px; line-height: 1.65; font-weight: 550; overflow-wrap: anywhere; }
+.world-item-text h2, .world-item-summary { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.world-item-summary { margin-top: 7px; font-size: 13px; color: var(--world-muted); line-height: 1.85; overflow-wrap: anywhere; }
+.world-news-item button:active { opacity: .7; }
+.world-empty { padding: 38px var(--world-gutter); }
+.world-empty h2 { font-size: 16px; font-weight: 500; line-height: 1.6; color: var(--world-muted); margin-bottom: 24px; }
+.world-empty .world-primary { background: var(--world-accent); color: var(--world-paper); min-height: 44px; padding: 10px 22px; border-radius: 8px; font-size: 13px; }
+.world-empty small { display: block; margin-top: 12px; font-size: 12px; color: var(--world-muted); }
+.world-notice { flex-shrink: 0; margin: 0 var(--world-gutter) 12px; font-size: 12px; line-height: 1.8; color: var(--world-muted); overflow-wrap: anywhere; max-height: 30%; overflow-y: auto; }
+.world-notice.is-error { padding: 10px 12px; border-left: 2px solid var(--world-error); background: var(--world-error-soft); color: var(--world-error); }
+.world-notice button, .world-article-update button { display: inline-block; min-height: 44px; color: inherit; font-weight: 500; text-decoration: underline; text-underline-offset: 4px; padding: 2px 8px; }
+.world-reading { padding: 22px var(--world-gutter) 36px; }
+.world-article h1 { margin: 0 0 30px; font-size: 23px; line-height: 1.6; font-weight: 600; letter-spacing: -.01em; overflow-wrap: anywhere; }
+.world-article-body { font-size: 15px; line-height: 2; overflow-wrap: anywhere; }
+.world-article-body p + p { margin-top: 1.4em; }
+.world-article-update { display: flex; flex-wrap: wrap; align-items: center; font-size: 12px; gap: 4px; margin-bottom: 22px; padding: 8px 12px; background: var(--world-soft); color: var(--world-accent); }
+.world-app .world-bottom-back { margin-top: 32px; color: var(--world-accent); border-top: 1px solid var(--world-rule); border-radius: 0; width: 100%; padding-top: 16px; }
+.world-spinning { animation: world-turn 1.8s linear infinite; }
+@keyframes world-turn { to { transform: rotate(360deg); } }
+@media (hover: hover) {
+    .world-icon-button:not(:disabled):hover, .world-menu summary:hover, .world-overview-toggle:hover { background: var(--world-soft); }
+    .world-news-item button:hover h2 { color: var(--world-accent); }
+}
+@container (min-width: 640px) {
+    .world-toolbar { --world-gutter: 32px; }
+    .world-listing { padding-inline: 36px; }
+    .world-opening, .world-news-list, .world-empty { max-width: 960px; margin-inline: auto; }
+    .world-horizon { height: 185px; margin: 0; }
+    .world-overview { margin: 24px 0 0; }
+    .world-overview-text { max-width: 740px; }
+    .world-overview-toggle { margin-left: auto; }
+    .world-news-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 40px; padding: 6px 0 0; }
+    .world-news-item:nth-child(2) { border-top: 0; }
+    .world-news-item button { padding: 24px 0; }
+    .world-reading { padding: 32px max(40px, calc((100% - 680px) / 2)) 48px; }
+    .world-article h1 { font-size: 26px; }
+    .world-article-body { font-size: 16px; }
+    .world-empty { padding-left: 0; }
+}
+@container (max-width: 340px) {
+    .world-toolbar, .world-news-list, .world-reading, .world-empty, .world-overview { --world-gutter: 20px; }
+    .world-horizon { margin-inline: 10px; height: 115px; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .world-spinning { animation: none; }
+    .world-app *, .world-app *::after { transition: none; }
+}

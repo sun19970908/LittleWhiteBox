@@ -217,9 +217,9 @@ req.socket.server.address() // 唯一可信的监听地址与端口
 调研事实（已核实）：
 
 - 7 个 adapter 注册于 `modules/agent-core/provider-config.js:13-35`；agent-core 核心与全部 adapter 零浏览器依赖（仅同构 SDK openai / @anthropic-ai/sdk / @google/genai + 内部纯模块），唯一浏览器耦合在 `agent-core/ui/`，核心路径不经过。Node entry 可直接 import 源码，不走 `dist/agent-core-browser.js`。
-- 全局单例 header provider 在 `shared/host-llm/chat-completions/client.js:14`，浏览器侧有 5 个模块设置它（draw、assistant、ebook、fourth-wall、ena-planner）。
+- 全局单例 header provider 在 `shared/host-llm/chat-completions/client.js:14`，浏览器侧有 5 个模块设置它（draw、assistant、ebook、xiaobai-os/fourth-wall、ena-planner）。
 
-Host Client 收窄方案（不碰 assistant / ebook / fourth-wall / ENA）：
+Host Client 收窄方案（不碰 assistant / ebook / xiaobai-os/fourth-wall / ENA）：
 
 - 保留浏览器默认 Host Client 和现有 setter。
 - `createAgentAdapter()` 增加可选 `hostClient` 注入。

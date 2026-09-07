@@ -6,12 +6,8 @@ import {
 } from './config.js';
 
 export const SHARED_AGENT_SETTINGS_KEY = 'settings';
-export const SHARED_AGENT_SETTINGS_CHANGED_EVENT = 'xiaobaix:agent-config-changed';
 
 let assistantStoragePromise = null;
-// This queue serializes callers that share this JavaScript realm. Cross-realm
-// writers still require the revision check below (or a future host-owned writer).
-let saveQueue = Promise.resolve();
 
 function describeError(error) {
     return error instanceof Error ? error.message : String(error || 'unknown_error');
@@ -35,31 +31,6 @@ async function readSettingsValue(storage) {
     return await storage.get(SHARED_AGENT_SETTINGS_KEY, null);
 }
 
-function getEventTarget(eventTarget) {
-    return eventTarget || globalThis.window || null;
-}
-
-export function publishSharedAgentSettingsChanged(detail = {}, options = {}) {
-    const eventTarget = getEventTarget(options.eventTarget);
-    const CustomEventClass = eventTarget?.CustomEvent || globalThis.CustomEvent;
-    if (!eventTarget?.dispatchEvent || typeof CustomEventClass !== 'function') return false;
-    eventTarget.dispatchEvent(new CustomEventClass(SHARED_AGENT_SETTINGS_CHANGED_EVENT, {
-        detail: {
-            source: String(detail.source || 'unknown'),
-            updatedAt: Number(detail.updatedAt) || 0,
-        },
-    }));
-    return true;
-}
-
-export function subscribeSharedAgentSettingsChanged(listener, options = {}) {
-    const eventTarget = getEventTarget(options.eventTarget);
-    if (!eventTarget?.addEventListener || typeof listener !== 'function') return () => {};
-    const handleChange = (event) => listener(event?.detail || {});
-    eventTarget.addEventListener(SHARED_AGENT_SETTINGS_CHANGED_EVENT, handleChange);
-    return () => eventTarget.removeEventListener?.(SHARED_AGENT_SETTINGS_CHANGED_EVENT, handleChange);
-}
-
 export function mergeSharedAgentSettings(current = {}, patch = {}, options = {}) {
     const normalizeOptions = options.normalizeOptions || {};
     const normalizedCurrent = normalizeAgentSettings(current || {}, normalizeOptions);
@@ -70,7 +41,6 @@ export function mergeSharedAgentSettings(current = {}, patch = {}, options = {})
     );
     return normalizeAgentSettings({
         ...normalizedCurrent,
-        enabled: typeof patch.enabled === 'boolean' ? patch.enabled : normalizedCurrent.enabled,
         workspaceFileName: patch.workspaceFileName ?? normalizedCurrent.workspaceFileName,
         jsApiPermission: normalizeJsApiPermission(patch.jsApiPermission ?? normalizedCurrent.jsApiPermission),
         tavilyApiKey: patch.tavilyApiKey ?? normalizedCurrent.tavilyApiKey,
@@ -118,7 +88,7 @@ export async function loadSharedAgentSettingsResult(options = {}) {
     }
 }
 
-async function performSharedAgentSettingsSave(patch = {}, options = {}) {
+export async function saveSharedAgentSettings(patch = {}, options = {}) {
     const storage = await resolveStorage(options.storage);
     const normalizeOptions = options.normalizeOptions || {};
     let current;
@@ -127,24 +97,11 @@ async function performSharedAgentSettingsSave(patch = {}, options = {}) {
     } catch (error) {
         return {
             ok: false,
-            conflict: false,
             config: null,
             error: `共享 Agent API 配置读取失败：${describeError(error)}`,
         };
     }
     const normalizedCurrent = normalizeAgentSettings(current || {}, normalizeOptions);
-    const expectedUpdatedAt = Number(patch.expectedUpdatedAt);
-    if (Number.isFinite(expectedUpdatedAt)
-        && expectedUpdatedAt >= 0
-        && expectedUpdatedAt !== Number(normalizedCurrent.updatedAt || 0)) {
-        return {
-            ok: false,
-            conflict: true,
-            config: normalizedCurrent,
-            error: '共享 Agent API 配置已在其他页面更新，请重新载入后再保存。',
-        };
-    }
-
     const next = mergeSharedAgentSettings(normalizedCurrent, patch, options);
     try {
         if (typeof storage.setAndSave !== 'function') {
@@ -154,28 +111,16 @@ async function performSharedAgentSettingsSave(patch = {}, options = {}) {
             silent: options.silent !== false,
         });
         if (saved !== true) throw new Error('共享 Agent API 配置保存失败');
-        publishSharedAgentSettingsChanged({
-            source: options.source,
-            updatedAt: next.updatedAt,
-        }, options);
-        return { ok: true, conflict: false, config: next };
+        return { ok: true, config: next };
     } catch (error) {
         return {
             ok: false,
-            conflict: false,
             config: normalizedCurrent,
             error: describeError(error),
         };
     }
 }
 
-export function saveSharedAgentSettings(patch = {}, options = {}) {
-    const task = saveQueue.then(() => performSharedAgentSettingsSave(patch, options));
-    saveQueue = task.then(() => undefined, () => undefined);
-    return task;
-}
-
 export function resetSharedAgentSettingsRepositoryForTests() {
     assistantStoragePromise = null;
-    saveQueue = Promise.resolve();
 }

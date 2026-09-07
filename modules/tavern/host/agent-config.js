@@ -27,8 +27,7 @@ async function loadTavernAgentConfigPayload() {
 async function saveTavernAgentConfig(patch = {}, options = {}) {
   return await saveSharedAgentSettings(patch, {
     storage: AssistantStorage,
-    silent: options.silent !== false,
-    source: "tavern"
+    silent: options.silent !== false
   });
 }
 async function buildTavernFrameConfig(contextPayload = {}, options = {}) {

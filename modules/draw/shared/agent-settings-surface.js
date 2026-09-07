@@ -3,7 +3,6 @@ import { getProviderLabel } from '../../agent-core/provider-resolution.js';
 import {
     loadSharedAgentSettings,
     saveSharedAgentSettings,
-    subscribeSharedAgentSettingsChanged,
 } from '../../agent-core/settings-repository.js';
 import { createAgentSettingsPanel } from '../../agent-core/ui/settings-panel.js';
 import {
@@ -52,12 +51,7 @@ export function buildDrawAgentSettingsSurfaceMarkup(state = {}) {
     if (state.loadError) {
         return `<div class="draw-agent-settings-state is-error"><i class="fa-solid fa-triangle-exclamation"></i><span>${escapeHtml(state.loadError)}</span><button type="button" data-draw-agent-settings-retry>重新读取</button></div>`;
     }
-    return `
-        <div class="draw-agent-settings-conflict" data-draw-agent-settings-conflict hidden>
-            <span>共享配置已在其他页面更新。当前未保存编辑仍保留；重新载入后才能继续保存。</span>
-            <button type="button" data-draw-agent-settings-reload>重新载入</button>
-        </div>
-        ${buildAgentSettingsPanelMarkup({
+    return buildAgentSettingsPanelMarkup({
             configSave: state.configSave,
             runtimeText: '',
             inlineToastText: state.inlineToastText,
@@ -67,12 +61,11 @@ export function buildDrawAgentSettingsSurfaceMarkup(state = {}) {
             activePage: 'main',
             isBusy: state.configSave?.status === 'saving',
             canDeletePreset: Object.keys(state.config?.presets || {}).length > 1,
-        })}`;
+        });
 }
 
 export function createDrawAgentSettingsSurface(options = {}) {
     const getRoot = options.getRoot;
-    const source = String(options.source || 'draw-agent-settings');
     setHostChatCompletionsRequestHeadersProvider(
         options.requestHeadersProvider || getHostRequestHeaders,
     );
@@ -80,10 +73,7 @@ export function createDrawAgentSettingsSurface(options = {}) {
         ? Math.max(0, Number(options.saveStateResetMs))
         : SAVE_STATE_RESET_MS;
     const loadSettings = options.loadSettings || (() => loadSharedAgentSettings(options));
-    const persistSettings = options.saveSettings || ((patch) => saveSharedAgentSettings(patch, {
-        ...options,
-        source,
-    }));
+    const persistSettings = options.saveSettings || ((patch) => saveSharedAgentSettings(patch, options));
     const state = {
         config: normalizeAgentConfig({}),
         configDraft: null,
@@ -94,7 +84,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
         pullStateByProvider: {},
         modelOptionsByProvider: {},
         inlineToastText: '',
-        externalChangePending: false,
         loading: true,
         loadError: '',
     };
@@ -112,14 +101,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
         saveConfig: async ({ requestId, payload }) => {
             beginSave(requestId);
             state.configDirty = true;
-            if (state.externalChangePending) {
-                completeSave(requestId, {
-                    ok: false,
-                    error: '共享配置已变化，请先重新载入。',
-                });
-                return { ok: false };
-            }
-
             let result;
             try {
                 result = await persistSettings(payload);
@@ -128,7 +109,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
                 return { ok: false };
             }
             if (!result?.ok) {
-                if (result?.conflict) state.externalChangePending = true;
                 completeSave(requestId, {
                     ok: false,
                     error: String(result?.error || '共享 Agent API 配置保存失败'),
@@ -139,7 +119,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
             state.config = normalizeAgentConfig(result.config || payload || {});
             state.configDraft = null;
             state.configDirty = false;
-            state.externalChangePending = false;
             state.configFormSyncPending = true;
             completeSave(requestId, { ok: true });
             options.onSaved?.(state.config);
@@ -147,16 +126,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
         },
         getRuntimeSummaryText: buildRuntimeSummary,
     });
-
-    const unsubscribeSettingsChanged = subscribeSharedAgentSettingsChanged((detail) => {
-        if (destroyed || String(detail?.source || '') === source) return;
-        if (state.configDirty || state.configSave.status === 'saving') {
-            state.externalChangePending = true;
-            syncTransientUi();
-            return;
-        }
-        void refresh({ background: true }).catch(() => {});
-    }, options);
 
     function clearResetTimer() {
         if (!resetTimer) return;
@@ -206,10 +175,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
     function handleRootClick(event) {
         if (event?.target?.closest?.('[data-draw-agent-settings-retry]')) {
             void refresh({ force: true }).catch(() => {});
-            return;
-        }
-        if (event?.target?.closest?.('[data-draw-agent-settings-reload]')) {
-            void refresh({ force: true }).catch(() => {});
         }
     }
 
@@ -233,8 +198,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
             isBusy: state.configSave.status === 'saving',
             canDeletePreset: Object.keys(state.config?.presets || {}).length > 1,
         });
-        const conflict = root.querySelector?.('[data-draw-agent-settings-conflict]');
-        conflict?.toggleAttribute?.('hidden', !state.externalChangePending);
     }
 
     function render() {
@@ -275,7 +238,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
         const background = refreshOptions.background === true && !state.loading && !state.loadError;
         if (force) {
             state.configDirty = false;
-            state.externalChangePending = false;
         }
         if (!background) {
             state.loading = true;
@@ -286,15 +248,9 @@ export function createDrawAgentSettingsSurface(options = {}) {
         try {
             const config = normalizeAgentConfig(await loadSettings());
             if (destroyed || sequence !== refreshSequence) return null;
-            if (background && state.configDirty) {
-                state.externalChangePending = true;
-                syncTransientUi();
-                return state.config;
-            }
             state.config = config;
             state.configDraft = null;
             state.configDirty = false;
-            state.externalChangePending = false;
             state.configFormSyncPending = true;
             state.loading = false;
             state.loadError = '';
@@ -318,7 +274,6 @@ export function createDrawAgentSettingsSurface(options = {}) {
     function destroy() {
         destroyed = true;
         clearResetTimer();
-        unsubscribeSettingsChanged();
         boundRoot?.removeEventListener?.('click', handleRootClick);
         boundRoot?.removeEventListener?.('input', markConfigDirty, true);
         boundRoot?.removeEventListener?.('change', markConfigDirty, true);

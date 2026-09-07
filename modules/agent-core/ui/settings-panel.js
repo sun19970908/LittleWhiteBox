@@ -288,7 +288,7 @@ async function tryCandidateFetches({ urls, requestOptionsList, extractModels, pr
     throw new Error(`${providerLabel} 拉取模型失败：未获取到模型列表。`);
 }
 
-async function pullSillyTavernClaudeModels(providerConfig) {
+async function pullSillyTavernClaudeModels(providerConfig, options = {}) {
     const apiKey = String(providerConfig.apiKey || '').trim();
     const customBaseUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
     const baseUrl = normalizeBaseUrl(
@@ -305,6 +305,7 @@ async function pullSillyTavernClaudeModels(providerConfig) {
                         'anthropic-version': '2023-06-01',
                         Accept: 'application/json',
                     },
+                    signal: options.signal,
                 }],
                 extractModels: extractAnthropicModels,
                 providerLabel: 'Anthropic',
@@ -321,19 +322,20 @@ async function pullSillyTavernClaudeModels(providerConfig) {
     return [...SILLYTAVERN_CLAUDE_FALLBACK_MODELS];
 }
 
-export async function pullModelsForProvider(providerConfig) {
+export async function pullModelsForProvider(providerConfig, options = {}) {
     const provider = providerConfig.provider;
     const baseUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
     const apiKey = String(providerConfig.apiKey || '').trim();
 
     if (provider === 'sillytavern-claude') {
-        return filterModels(await pullSillyTavernClaudeModels(providerConfig));
+        return filterModels(await pullSillyTavernClaudeModels(providerConfig, options));
     }
 
     if (isSillyTavernProvider(provider)) {
         return filterModels(await fetchHostChatCompletionsModels(
             providerConfig,
             getSillyTavernChatCompletionSource(provider),
+            { signal: options.signal },
         ));
     }
 
@@ -353,17 +355,20 @@ export async function pullModelsForProvider(providerConfig) {
                         Accept: 'application/json',
                         'x-goog-api-key': apiKey,
                     },
+                    signal: options.signal,
                 },
                 {
                     headers: {
                         Accept: 'application/json',
                         Authorization: `Bearer ${apiKey}`,
                     },
+                    signal: options.signal,
                 },
                 {
                     headers: {
                         Accept: 'application/json',
                     },
+                    signal: options.signal,
                 },
             ],
             extractModels: extractGoogleModels,
@@ -380,6 +385,7 @@ export async function pullModelsForProvider(providerConfig) {
                     'anthropic-version': '2023-06-01',
                     Accept: 'application/json',
                 },
+                signal: options.signal,
             }],
             extractModels: extractAnthropicModels,
             providerLabel: 'Anthropic',
@@ -393,6 +399,7 @@ export async function pullModelsForProvider(providerConfig) {
                 Authorization: `Bearer ${apiKey}`,
                 Accept: 'application/json',
             },
+            signal: options.signal,
         }],
         extractModels: extractOpenAIModels,
         providerLabel: provider === 'openai-responses' ? 'OpenAI Responses' : 'OpenAI-Compatible',
@@ -410,7 +417,7 @@ export function createAgentSettingsPanel(deps = {}) {
         showToast,
         createRequestId = (prefix = 'req') => `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         saveConfig,
-        reloadConfig,
+        pullModels = pullModelsForProvider,
         describeError = defaultDescribeError,
         getRuntimeSummaryText,
     } = deps;
@@ -632,7 +639,9 @@ export function createAgentSettingsPanel(deps = {}) {
             reasoningEffort: providerConfig.reasoning.effort || '',
             reasoningBudgetTokens: providerConfig.reasoning.budgetTokens,
             toolMode: providerConfig.toolMode || draft.toolMode || 'native',
-            tavilyApiKey: root.querySelector('#xb-assistant-tavily-api-key')?.value.trim() || '',
+            tavilyApiKey: root.querySelector('#xb-assistant-tavily-api-key')?.value.trim()
+                ?? draft.tavilyApiKey
+                ?? '',
             tavilyBaseUrl: normalizeTavilyBaseUrl(draft.tavilyBaseUrl || DEFAULT_TAVILY_BASE_URL),
             permissionMode: normalizePermissionMode(root.querySelector('#xb-assistant-permission-mode')?.value || draft.permissionMode),
             jsApiPermission: normalizeJsApiPermission(root.querySelector('#xb-assistant-jsapi-permission')?.value || draft.jsApiPermission),
@@ -1045,7 +1054,6 @@ export function createAgentSettingsPanel(deps = {}) {
 
     function buildConfigSavePayload(config) {
         return {
-            expectedUpdatedAt: Number(config?.updatedAt) || 0,
             workspaceFileName: config?.workspaceFileName || '',
             jsApiPermission: normalizeJsApiPermission(config?.jsApiPermission),
             tavilyApiKey: String(config?.tavilyApiKey || ''),
@@ -1196,16 +1204,6 @@ export function createAgentSettingsPanel(deps = {}) {
     }
 
     function bindSettingsPanelEvents(root) {
-        root?.querySelector?.('[data-xb-agent-config-retry]')?.addEventListener('click', () => {
-            reloadConfig?.();
-        });
-        root?.querySelector?.('[data-xb-agent-config-reload]')?.addEventListener('click', () => {
-            state.configDraft = null;
-            state.configDirty = false;
-            state.configExternalChangePending = false;
-            requestConfigFormSync();
-            render?.();
-        });
         if (!root?.querySelector?.('#xb-assistant-provider')) return;
 
         root.querySelector('#xb-assistant-provider')?.addEventListener('change', (event) => {
@@ -1414,7 +1412,7 @@ export function createAgentSettingsPanel(deps = {}) {
             setPullState(providerConfig.provider, { status: 'loading', message: '正在拉取模型列表…' });
             render?.();
             try {
-                const models = await pullModelsForProvider(providerConfig);
+                const models = await pullModels(providerConfig);
                 setProviderModels(providerConfig.provider, models);
                 setPullState(providerConfig.provider, {
                     status: 'success',
@@ -1438,7 +1436,7 @@ export function createAgentSettingsPanel(deps = {}) {
             setPullState(providerConfig.provider, { status: 'loading', message: '正在拉取模型列表…' }, 'delegate');
             render?.();
             try {
-                const models = await pullModelsForProvider(providerConfig);
+                const models = await pullModels(providerConfig);
                 setProviderModels(providerConfig.provider, models, 'delegate');
                 setPullState(providerConfig.provider, {
                     status: 'success',
@@ -1481,6 +1479,10 @@ export function createAgentSettingsPanel(deps = {}) {
 
     return {
         getActiveProviderConfig,
+        getActiveProviderConfigFromForm(root, options = {}) {
+            state.configDraft = readDraftFromForm(root);
+            return getActiveProviderConfig(options);
+        },
         syncConfigToForm,
         bindSettingsPanelEvents,
     };
