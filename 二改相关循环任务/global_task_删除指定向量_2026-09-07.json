@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-07T01:32:34.175Z",
+    "tasks": [
+        {
+            "id": "task_1788744636336_d2a9oip",
+            "name": "删除指定向量",
+            "interval": 0,
+            "floorType": "all",
+            "triggerTiming": "after_ai",
+            "disabled": false,
+            "buttonActivated": true,
+            "createdAt": "2026-09-07T01:30:36.336Z",
+            "commands": "<<taskjs>>\n// ====== 删除从指定楼层起的 L0 + L1（可独立设置） ======\n// 创建手动触发循环任务，将此代码完整放入命令框。\n// 修改下方 L0_FROM_FLOOR / L1_FROM_FLOOR 变量，点击任务按钮即可生效（0-base，含此楼）。\n// 设 -1 表示跳过对应层的删除。\n\n(async () => {\n    // ====== 修改这里 =====\n    const L0_FROM_FLOOR = -1;  // L0（atoms / index / state vectors）从这一楼起删除（含此楼，0-base）；-1 跳过\n    const L1_FROM_FLOOR = -1;  // L1（chunks / chunk vectors）从这一楼起删除（含此楼，0-base）；-1 跳过\n    // =====================\n\n    const { getContext } = await import('/scripts/extensions.js');\n    const { chatId } = getContext();\n    if (!chatId) {\n        window.toastr?.error('❌ 未打开聊天');\n        return;\n    }\n\n    const chunkStore = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/storage/chunk-store.js');\n    const stateStore = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/storage/state-store.js');\n\n    const metaBefore = await chunkStore.getMeta(chatId);\n    const lastChunkFloor = metaBefore?.lastChunkFloor ?? -1;\n    const statsBefore = await chunkStore.getStorageStats(chatId);\n\n    const skipL0 = L0_FROM_FLOOR < 0;\n    const skipL1 = L1_FROM_FLOOR < 0;\n\n    // L1: 删 chunks + chunk vectors\n    if (!skipL1) {\n        await chunkStore.deleteChunksFromFloor(chatId, L1_FROM_FLOOR);\n    }\n\n    // L0: 删 atoms + L0 index + state vectors\n    if (!skipL0) {\n        stateStore.deleteStateAtomsFromFloor(L0_FROM_FLOOR);\n        stateStore.deleteL0IndexFromFloor(L0_FROM_FLOOR);\n        await stateStore.deleteStateVectorsFromFloor(chatId, L0_FROM_FLOOR);\n    }\n\n    // 更新 meta.lastChunkFloor：L1_FROM_FLOOR ≤ lastChunkFloor 时把进度截断到 L1_FROM_FLOOR-1\n    if (!skipL1 && L1_FROM_FLOOR <= lastChunkFloor) {\n        await chunkStore.updateMeta(chatId, { lastChunkFloor: L1_FROM_FLOOR - 1 });\n    }\n\n    const statsAfter = await chunkStore.getStorageStats(chatId);\n\n    const l0Label = skipL0 ? '跳过' : `${L0_FROM_FLOOR}`;\n    const l1Label = skipL1 ? '跳过' : `${L1_FROM_FLOOR}`;\n    const lastChunkFloorAfter = skipL1 ? lastChunkFloor : Math.min(L1_FROM_FLOOR - 1, lastChunkFloor);\n\n    window.toastr?.success(\n        `✅ L0/L1 删除完成\\n` +\n        `L0 (atoms/index/state vectors) from floor: ${l0Label}\\n` +\n        `L1 (chunks/chunk vectors)    from floor: ${l1Label}\\n` +\n        `L1 chunks: ${statsBefore.chunks} → ${statsAfter.chunks}\\n` +\n        `Chunk vectors: ${statsBefore.chunkVectors} → ${statsAfter.chunkVectors}\\n` +\n        `lastChunkFloor: ${lastChunkFloor} → ${lastChunkFloorAfter}`,\n        'L0/L1 删除',\n        { timeOut: 6000 }\n    );\n\n    console.info(\n        `[task] L0/L1 删除: L0 from ${l0Label}, L1 from ${l1Label}. ` +\n        `chunks ${statsBefore.chunks}→${statsAfter.chunks}, ` +\n        `chunkVectors ${statsBefore.chunkVectors}→${statsAfter.chunkVectors}`\n    );\n})();\n<</taskjs>>"
+        }
+    ]
+}
