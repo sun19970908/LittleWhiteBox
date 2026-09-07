@@ -121,6 +121,7 @@ import {
     syncOnMessageDeleted,
     syncOnMessageSwiped,
 } from "./vector/pipeline/chunk-builder.js";
+import { findStaleTextHashFloors } from "./vector/pipeline/text-hash-reconcile.js";
 import { runAnchorPreparation } from "./vector/pipeline/anchor-workflow.js";
 import {
     incrementalExtractAtoms,
@@ -3820,6 +3821,51 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
         notifyStorySummaryChatState();
         await executeSlashCommand('/echo severity=error 剧情总结无法安全回滚，已停止使用旧总结；请导出当前总结，修正后重新导入，或清空总结数据');
         return;
+    }
+
+    // textHash 对账（仅检测，不重建）。覆盖多设备编辑漂移：Device B 拿到新聊天
+    // 文件但 ST 不会逐条重发 MESSAGE_EDITED，本机 chunks 跟正文漂移但向量仍有效。
+    // L1 textHash 一致即说明源文本未变，L0 atom 派生自同源文本，无需重复对账。
+    // 重建中跳过（重建产物自然带正确 hash），失败也只 toast，不影响主流程。
+    if (
+        !isChatStale(scheduledChatId)
+        && !guard.isAnyRunning('summary', 'vector', 'anchor')
+    ) {
+        try {
+            const driftMeta = await getMeta(scheduledChatId);
+            const driftLastFloor = driftMeta?.lastChunkFloor ?? -1;
+            if (driftLastFloor >= 0 && Array.isArray(chat) && chat.length > 0) {
+                const driftFloors = await findStaleTextHashFloors(
+                    scheduledChatId,
+                    chat,
+                    driftLastFloor,
+                );
+                if (driftFloors.length > 0 && !isChatStale(scheduledChatId)) {
+                    const firstFloor = driftFloors[0];
+                    const driftMsg = `检测到聊天正文与向量缓存不一致（从下标 ${firstFloor} 起，共 ${driftFloors.length} 处）。可能由多设备编辑、文本过滤规则变更、LWB 插图替换 scene 占位符等原因引起。请打开剧情总结面板运行"完整重建"或向量维护任务。`;
+                    // 常驻 toast：timeOut=0 + extendedTimeOut=0 让 toastr 不自动消失，用户手动关闭
+                    if (typeof toastr !== "undefined") {
+                        toastr.warning(driftMsg, "向量漂移", {
+                            timeOut: 0,
+                            extendedTimeOut: 0,
+                            closeButton: true,
+                            preventDuplicates: true,
+                        });
+                    } else {
+                        await executeSlashCommand(`/echo severity=warning ${driftMsg}`);
+                    }
+                    console.info(
+                        `[story-summary] textHash 对账失败：drift 下标（0-based）=[${driftFloors.join(', ')}]，共 ${driftFloors.length} 处`,
+                    );
+                } else if (!isChatStale(scheduledChatId)) {
+                    console.info(
+                        `[story-summary] textHash 对账通过：扫了下标 0..${driftLastFloor}，未发现漂移`,
+                    );
+                }
+            }
+        } catch (e) {
+            console.warn('[story-summary] textHash 对账失败（已跳过）', e);
+        }
     }
 
     const store = getSummaryStore();
