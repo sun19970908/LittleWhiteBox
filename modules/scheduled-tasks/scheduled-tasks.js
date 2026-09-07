@@ -25,6 +25,30 @@ import { TasksStorage } from "../../core/server-storage.js";
 const TASKS_MODULE_NAME = "xiaobaix-tasks";
 const defaultSettings = { enabled: true, globalTasks: [], processedMessages: [], character_allowed_tasks: [] };
 const CONFIG = { MAX_PROCESSED: 20, MAX_COOLDOWN: 10, CLEANUP_INTERVAL: 30000, TASK_COOLDOWN: 50 };
+
+// ── 自动补全 <<taskjs>> 包裹 开关 ─────────────────────────────
+// 默认关闭：保存时 textarea 内容原样写入。
+// 打开后：输入框里没有 <<taskjs>> 标签时，自动用 <<taskjs>>\n...\n<</taskjs>> 包裹整段内容，
+//        方便直接写 JS 而不必手敲标签。
+const AUTO_WRAP_TASKJS_KEY = "autoWrapTaskJs";
+
+export function isAutoWrapTaskJsEnabled() {
+    const v = extension_settings?.[EXT_ID]?.scheduledTasks?.[AUTO_WRAP_TASKJS_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function setAutoWrapTaskJs(enabled) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.scheduledTasks ??= {};
+    root.scheduledTasks[AUTO_WRAP_TASKJS_KEY] = enabled === true;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isAutoWrapTaskJsEnabled();
+}
+
+export function toggleAutoWrapTaskJs() {
+    return setAutoWrapTaskJs(!isAutoWrapTaskJsEnabled());
+}
+
 const events = createModuleEvents('scheduledTasks');
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1379,11 +1403,16 @@ async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
             }
 
             const base = task ? structuredClone(task) : {};
+            const rawCommands = String(editorTemplate.find('.task_commands_edit').val() || '').trim();
+            // 自动补全 <<taskjs>> 包裹（开关控制，默认关闭）
+            const commands = rawCommands && isAutoWrapTaskJsEnabled() && !/<<taskjs>>/i.test(rawCommands)
+                ? `<<taskjs>>\n${rawCommands}\n<</taskjs>>`
+                : rawCommands;
             const newTask = {
                 ...base,
                 id: base.id || `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
                 name: uniqueName,
-                commands: String(editorTemplate.find('.task_commands_edit').val() || '').trim(),
+                commands: commands,
                 interval: parseInt(String(editorTemplate.find('.task_interval_edit').val() || '0'), 10) || 0,
                 floorType: editorTemplate.find('.task_floor_type_edit').val() || 'all',
                 triggerTiming: editorTemplate.find('.task_trigger_timing_edit').val() || 'after_ai',
