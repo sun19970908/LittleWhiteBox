@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-08T14:40:54.290Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-08T14:35:13.174Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788878113174_bry91i8",
+            "interval": 0,
+            "name": "向量漂移",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n// ====== 向量漂移检查 开关（toggle） ======\n// 创建手动触发循环任务，将此代码完整放入命令框。\n// 默认 OFF，按钮点一下切到 ON，再点切回 OFF。\n// 切到 ON 后：每次切聊天跑 drift 对账，命中时弹常驻 toastr.warning。\n// 切到 OFF 后：跳过对账，CHAT_CHANGED 流程无额外开销。\n\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/story-summary.js');\n    const on = mod.toggleDriftCheckEnabled();\n    window.toastr?.success('✅ 向量漂移检查: ' + (on ? 'ON' : 'OFF'));\n})();\n<</taskjs>>"
+        }
+    ]
+}

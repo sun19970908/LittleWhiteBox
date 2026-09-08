@@ -231,6 +231,28 @@ export function isStorySummaryConsumableForCurrentChat() {
     );
 }
 
+// ── textHash drift 检查 开关 ─────────────────────────────
+// 默认 OFF（opt-in）：新装用户不开启对账，避免每次切聊天被 toast 打扰；
+// 想要多设备漂移检测的用户通过循环任务（向量漂移检查开关）一键开启。
+const DRIFT_CHECK_KEY = "driftCheckEnabled";
+
+export function isDriftCheckEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[DRIFT_CHECK_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function setDriftCheckEnabled(flag) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[DRIFT_CHECK_KEY] = flag === true;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isDriftCheckEnabled();
+}
+
+export function toggleDriftCheckEnabled() {
+    return setDriftCheckEnabled(!isDriftCheckEnabled());
+}
+
 function notifyStorySummaryChatState() {
     const state = getStorySummaryChatState();
     postToFrame({ type: "CHAT_SUMMARY_STATE", state });
@@ -3865,7 +3887,8 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
     // L1 textHash 一致即说明源文本未变，L0 atom 派生自同源文本，无需重复对账。
     // 重建中跳过（重建产物自然带正确 hash），失败也只 toast，不影响主流程。
     if (
-        !isChatStale(scheduledChatId)
+        isDriftCheckEnabled()
+        && !isChatStale(scheduledChatId)
         && !guard.isAnyRunning('summary', 'vector', 'anchor')
     ) {
         try {
