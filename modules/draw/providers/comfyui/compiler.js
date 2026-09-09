@@ -1,4 +1,5 @@
 import { assembleCharacterPrompts, joinTags } from '../../shared/character-prompts.js';
+import { convertNovelEmphasisToComfy } from './prompt-emphasis.js';
 
 export const COMFY_REQUEST_DELAY_MS = 1000;
 
@@ -303,9 +304,15 @@ export function buildComfyImageRequest({ prompt, negativePrompt = '', params = {
     const effective = requireObject(params, 'ComfyUI params');
     const generationRecipe = requireObject(recipe, 'ComfyUI generationRecipe');
     const normalizedSeed = normalizeSeed(seed);
-    const positive = String(prompt || '').trim();
-    const negative = String(negativePrompt || '').trim();
+    // 必经之路：把 NovelAI emphasis 转为 ComfyUI (tag:N) 语法，负权重统一推进 negative。
+    // 转换是幂等的——上游已转换过的 prompt 再次跑不会破坏。
+    const extractedNegatives = [];
+    const positive = convertNovelEmphasisToComfy(String(prompt || '').trim(), { negativeSink: extractedNegatives }).positive;
+    const negativeBase = convertNovelEmphasisToComfy(String(negativePrompt || '').trim()).positive;
     if (!positive) throw new Error('Prompt 不能为空');
+    const negative = extractedNegatives.length > 0
+        ? joinTags(negativeBase, extractedNegatives.join(', '))
+        : negativeBase;
     const width = clampNumber(effective.width, 1024, 64, 2048);
     const height = clampNumber(effective.height, 1024, 64, 2048);
 
@@ -346,6 +353,8 @@ export function buildComfyImageRequest({ prompt, negativePrompt = '', params = {
 }
 
 export function compileComfyPromptForTask(task, recipe = {}) {
+    // characterPrompts 保持原始 NAI emphasis 格式，用于预览显示与编辑；
+    // 最终 NovelAI → ComfyUI 转换由 buildComfyImageRequest 统一处理。
     const characterPrompts = Array.isArray(task?.characterPrompts)
         ? task.characterPrompts.filter(Boolean)
         : assembleCharacterPrompts(task?.chars || [], recipe.knownCharacters || [], {
