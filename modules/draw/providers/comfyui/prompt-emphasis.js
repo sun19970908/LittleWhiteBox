@@ -14,7 +14,8 @@
  *   第二层 extractWeightedTokens —— 处理段落内 brace/bracket 位置权重
  *                            brace 字符不进 buffer，每个 tag 记录出现位置的 braceFactor
  *
- * 段落权重 × brace 因子 = 最终权重。weight<0 推 negativeSink；weight===1 不加括号。
+ * 段落权重 × brace 因子 = 最终权重。weight<0 推 negativeSink（取绝对值保留权重，
+ * 因为 negative 槽位里权重越大压制越强）；weight===1 不加括号。
  */
 
 const WEIGHT_STEP = 0.05;
@@ -57,6 +58,15 @@ function computeBraceFactor(multiplyCount, divideCount) {
 
 function cleanTag(s) {
     return s.trim().replace(/^,+|,+$/g, '').trim();
+}
+
+/**
+ * 剥掉「整体包裹」的权重壳：`(tag:1.4)` → `tag`。
+ * 只匹配整体包裹，tag 内部的转义括号 `\(` `\)` 不受影响；不是权重壳则原样返回。
+ */
+function stripWeightShell(entry) {
+    const m = /^\((.*):-?\d+(?:\.\d+)?\)$/s.exec(String(entry).trim());
+    return m ? cleanTag(m[1]) : String(entry).trim();
 }
 
 /**
@@ -207,7 +217,13 @@ export function convertNovelEmphasisToComfy(text, options = {}) {
         for (const { tag, braceFactor } of tokens) {
             const weight = section.weight * braceFactor;
             if (weight < 0) {
-                if (!negatives.includes(tag)) negatives.push(tag);
+                // 保留权重：负权重取绝对值送进 negative 槽位。
+                // 在 negative 里「权重越大 = 压制越强」，所以 -1.4 的"强烈不要"
+                // 对应 (tag:1.4)；绝对值恰为 1 时不加括号，与正面侧 weight===1 一致。
+                const strength = Math.abs(weight);
+                const entry = strength === 1 ? tag : `(${tag}:${formatWeight(strength)})`;
+                // 去重按 tag 名（首次出现的权重胜出），与改动前"同名只留一条"的语义一致
+                if (!negatives.some(item => stripWeightShell(item) === tag)) negatives.push(entry);
                 continue;
             }
             if (weight === 1 && !section.isExplicit) {
