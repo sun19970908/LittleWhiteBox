@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-09T12:10:26.543Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-09T00:47:24.106Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788914844106_67a2lj4",
+            "interval": 0,
+            "name": "l2空洞",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const { getSummaryStore } = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/data/store.js');\n    const store = getSummaryStore();\n    if (!store) { window.toastr?.info('ℹ️ L2 空洞检查：无 chatId'); return; }\n    const events = Array.isArray(store?.json?.events) ? store.json.events : [];\n    const last = Number(store?.lastSummarizedMesId ?? -1);\n    if (last < 0) { window.toastr?.info('ℹ️ L2 空洞检查：还没有总结数据'); return; }\n\n    const parenRe = /\\([^)]*\\)/g;\n    const numRe = /\\d+/g;\n    const extract = (s) => {\n        if (!s) return [];\n        // 全角括号归一（split-join 避免嵌套回调）\n        const str = String(s).split('（').join('(').split('）').join(')');\n        const parens = str.match(parenRe) || [];\n        const out = [];\n        for (let i = 0; i < parens.length; i++) {\n            const nums = parens[i].match(numRe) || [];\n            for (let j = 0; j < nums.length; j += 2) {\n                const a = Math.max(0, Number(nums[j]) - 1);\n                const b = Math.max(a, Number(nums[j + 1] || nums[j]) - 1);\n                out.push([a, b]);\n            }\n        }\n        return out;\n    };\n\n    const covered = new Set();\n    let parsedCount = 0, unparsedCount = 0;\n    const unparsedSamples = [];\n    for (let h = 0; h < events.length; h++) {\n        const segs = extract(events[h]?.summary);\n        if (segs.length === 0) {\n            unparsedCount++;\n            if (unparsedSamples.length < 5) {\n                unparsedSamples.push({ id: events[h]?.id || '?', tail: (events[h]?.summary || '').slice(-50) });\n            }\n        } else {\n            parsedCount++;\n        }\n        for (let k = 0; k < segs.length; k++) {\n            const s = segs[k][0];\n            const en = segs[k][1];\n            for (let i = Math.max(s, 0); i <= Math.min(en, last); i++) covered.add(i);\n        }\n    }\n    const gaps = [];\n    for (let i = 0; i <= last; i++) if (!covered.has(i)) gaps.push(i);\n    const evenGaps = gaps.filter(x => x % 2 === 0);\n    const oddGaps  = gaps.filter(x => x % 2 === 1);\n\n    if (gaps.length === 0) {\n        window.toastr?.success('✅ L2 覆盖：' + (last + 1) + ' 楼全覆盖 ' + events.length + ' 事件');\n    } else {\n        window.toastr?.warning('⚠️ L2 空洞：' + gaps.length + ' 楼 ｜ 偶 ' + evenGaps.length + ' + 奇 ' + oddGaps.length + ' ｜ 解析 ' + parsedCount + '/' + events.length);\n        if (unparsedSamples.length) {\n            console.info('[L2 未解析 marker 样本] 共 ' + unparsedCount + ' 个：');\n            console.table(unparsedSamples);\n        }\n        console.info('[L2 空洞] 偶数共 ' + evenGaps.length + ' 楼：' + evenGaps.join(', '));\n        console.info('[L2 空洞] 奇数共 ' + oddGaps.length + ' 楼：' + oddGaps.join(', '));\n    }\n})().catch(err => window.toastr?.error('❌ L2 空洞检查失败: ' + (err?.message || err)));\n<</taskjs>>"
+        }
+    ]
+}
