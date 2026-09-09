@@ -239,3 +239,58 @@ export function convertNovelEmphasisToComfy(text, options = {}) {
         negativesExtracted: negatives,
     };
 }
+
+/**
+ * 按顶层逗号切分（括号计数，避免切坏 `(a, b:1.2)`）。
+ * 反斜杠转义的字符（A1111 的 `\(` `\)`）连同下一个字符原样带过，不参与计数。
+ */
+function splitTopLevelTags(text) {
+    const out = [];
+    let buffer = '';
+    let depth = 0;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (ch === '\\') {
+            buffer += ch;
+            if (i + 1 < text.length) buffer += text[++i];
+            continue;
+        }
+        if (ch === '(') depth++;
+        else if (ch === ')') depth = Math.max(0, depth - 1);
+        else if (ch === ',' && depth === 0) {
+            out.push(buffer);
+            buffer = '';
+            continue;
+        }
+        buffer += ch;
+    }
+    out.push(buffer);
+    return out;
+}
+
+/**
+ * krea2 适配：把一段（负面）提示词全部转成 `(tag:-1)` 形式，权重一律 -1。
+ *
+ * krea2 / flux 系工作流没有可用的 negative 输入，负面约束只能写进正面提示词，
+ * 用 A1111 负权重语法表达。原权重一律丢弃——只保留"不要"这个方向。
+ *
+ * 处理链：convertNovelEmphasisToComfy 归一（复用两层解析，NAI `::` / `{}` / `[]`
+ * 全部展开）→ 顶层逗号切分 → 剥掉整体包裹的权重壳 → 统一输出 -1。
+ * 顺序去重；幂等（`(x:-1)` 再跑一次仍是 `(x:-1)`）。
+ *
+ * @param {string} text 任意提示词串（已归一或含 NAI 语法均可）
+ * @returns {string} 形如 `(bad hands:-1), (lowres:-1)`；无内容返回 ''
+ */
+export function toNegativeOneTags(text) {
+    const normalized = convertNovelEmphasisToComfy(String(text || '').trim()).positive;
+    if (!normalized) return '';
+    const seen = new Set();
+    const out = [];
+    for (const raw of splitTopLevelTags(normalized)) {
+        const tag = stripWeightShell(cleanTag(raw));
+        if (!tag || seen.has(tag)) continue;
+        seen.add(tag);
+        out.push(`(${tag}:-1)`);
+    }
+    return out.join(', ');
+}

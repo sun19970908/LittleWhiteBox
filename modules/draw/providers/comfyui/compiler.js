@@ -1,5 +1,5 @@
 import { assembleCharacterPrompts, joinTags } from '../../shared/character-prompts.js';
-import { convertNovelEmphasisToComfy } from './prompt-emphasis.js';
+import { convertNovelEmphasisToComfy, toNegativeOneTags } from './prompt-emphasis.js';
 
 export const COMFY_REQUEST_DELAY_MS = 1000;
 
@@ -307,12 +307,19 @@ export function buildComfyImageRequest({ prompt, negativePrompt = '', params = {
     // 必经之路：把 NovelAI emphasis 转为 ComfyUI (tag:N) 语法，负权重统一推进 negative。
     // 转换是幂等的——上游已转换过的 prompt 再次跑不会破坏。
     const extractedNegatives = [];
-    const positive = convertNovelEmphasisToComfy(String(prompt || '').trim(), { negativeSink: extractedNegatives }).positive;
+    const basePositive = convertNovelEmphasisToComfy(String(prompt || '').trim(), { negativeSink: extractedNegatives }).positive;
     const negativeBase = convertNovelEmphasisToComfy(String(negativePrompt || '').trim()).positive;
-    if (!positive) throw new Error('Prompt 不能为空');
-    const negative = extractedNegatives.length > 0
+    if (!basePositive) throw new Error('Prompt 不能为空');
+    const mergedNegative = extractedNegatives.length > 0
         ? joinTags(negativeBase, extractedNegatives.join(', '))
         : negativeBase;
+    // krea2 / flux 系工作流没有可用的 negative 输入：开关打开时把 negative 侧全部
+    // 以 (tag:-1) 追加进 positive，negative 字段置空。开关来自 recipe，编译器保持纯函数。
+    const mergeNegativeIntoPositive = generationRecipe.mergeNegativeIntoPositive === true;
+    const positive = mergeNegativeIntoPositive
+        ? joinTags(basePositive, toNegativeOneTags(mergedNegative))
+        : basePositive;
+    const negative = mergeNegativeIntoPositive ? '' : mergedNegative;
     const width = clampNumber(effective.width, 1024, 64, 2048);
     const height = clampNumber(effective.height, 1024, 64, 2048);
 

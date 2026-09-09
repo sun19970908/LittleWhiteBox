@@ -1,8 +1,8 @@
 // comfy-draw.js
 
-import { getContext } from "../../../../../../../extensions.js";
+import { getContext, extension_settings } from "../../../../../../../extensions.js";
 import { saveBase64AsFile } from "../../../../../../../utils.js";
-import { getRequestHeaders, syncMesToSwipe } from "../../../../../../../../script.js";
+import { getRequestHeaders, syncMesToSwipe, saveSettingsDebounced } from "../../../../../../../../script.js";
 import { extensionFolderPath } from "../../../../core/constants.js";
 import { createModuleEvents, event_types } from "../../../../core/event-manager.js";
 import { ComfyDrawStorage } from "../../../../core/server-storage.js";
@@ -135,6 +135,45 @@ const DRAW_RUN_PROVIDER = 'comfyui';
 const HTML_PATH = `${extensionFolderPath}/modules/draw/providers/comfyui/comfy-draw.html`;
 const DANBOORU_DATA_PATH = `${extensionFolderPath}/modules/draw/shared/data/danbooru-chars.dat`;
 const SERVER_FILE_KEY = 'config';
+
+// ── 负面提示词合入正面 (tag:-1) 开关（krea2 适配）─────────────────────
+// krea2 / flux 系工作流没有可用的 negative 输入，负面约束只能以负权重写进正面。
+// 打开后：negative 侧全部转成 (tag:-1) 追加进 positive，negative 字段置空。
+// 默认关闭 = 行为与改动前逐字节一致。
+//
+// 开关值经 createComfyGenerationRecipe 塞进 recipe 传给 compiler.js —— compiler.js
+// 被 node-entry.js 与 shared/tests/provider-compilers.test.js 在 Node 环境直接引用，
+// ⛔ 禁止在那边 import extensions.js/script.js，所以读设置必须留在本文件。
+const EXT_ID = "LittleWhiteBox";
+const MERGE_NEGATIVE_KEY = "mergeNegativeIntoPositive";
+
+export function isMergeNegativeIntoPositiveEnabled() {
+    const v = extension_settings?.[EXT_ID]?.[MODULE_KEY]?.[MERGE_NEGATIVE_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function setMergeNegativeIntoPositive(enabled) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root[MODULE_KEY] ??= {};
+    root[MODULE_KEY][MERGE_NEGATIVE_KEY] = enabled === true;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isMergeNegativeIntoPositiveEnabled();
+}
+
+export function toggleMergeNegativeIntoPositive() {
+    return setMergeNegativeIntoPositive(!isMergeNegativeIntoPositiveEnabled());
+}
+
+/**
+ * 给「裸 settings 当 recipe 用」的调用点补上开关字段。
+ * 已经带了该字段的（createComfyGenerationRecipe 产出的 recipe）原样返回，
+ * 避免用当前设置覆盖掉出图任务开跑时快照下来的值。
+ */
+function withMergeNegativeFlag(recipe) {
+    if (!recipe || typeof recipe !== 'object') return recipe;
+    if (recipe.mergeNegativeIntoPositive !== undefined) return recipe;
+    return { ...recipe, mergeNegativeIntoPositive: isMergeNegativeIntoPositiveEnabled() };
+}
 
 const DEFAULT_COMFY_DRAW_SETTINGS = {
     host: '',
@@ -742,6 +781,7 @@ export function createComfyGenerationRecipe({
         promptOverride: String(promptOverride || ''),
         negativePromptOverride: String(negativePromptOverride || ''),
         seeds: Array.from({ length: Math.max(0, Math.floor(Number(itemCount) || 0)) }, createComfySeed),
+        mergeNegativeIntoPositive: isMergeNegativeIntoPositiveEnabled(),
     };
 }
 
@@ -1098,7 +1138,7 @@ async function requestComfyImage({ prompt, negativePrompt = '', params = {}, pre
         prompt,
         negativePrompt,
         params: effective,
-        recipe: settings,
+        recipe: withMergeNegativeFlag(settings),
         seed: seed ?? createComfySeed(),
     });
     const requestBody = { prompt: JSON.stringify({ prompt: request.workflow }) };
@@ -1138,7 +1178,7 @@ async function runComfyImageBatch({
             return request.prepared || buildComfyImageRequest({
                 ...request,
                 params: effective,
-                recipe: settings,
+                recipe: withMergeNegativeFlag(settings),
                 seed: request.seed ?? createComfySeed(),
             });
         });

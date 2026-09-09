@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-09T22:09:43.918Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-09T22:01:49.763Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788991309763_shlke3i",
+            "interval": 0,
+            "name": "负面提示词合流",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/comfyui/comfy-draw.js');\n    const on = mod.toggleMergeNegativeIntoPositive();\n    window.toastr?.success(\n        on\n            ? '✅ 负面提示词合流 ON —— negative 置空，全部以 (tag:-1) 并入 positive'\n            : '⚪ 负面提示词合流 OFF —— negative 照常下发'\n    );\n})();\n<</taskjs>>"
+        }
+    ]
+}
