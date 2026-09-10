@@ -164,15 +164,45 @@ export function toggleMergeNegativeIntoPositive() {
     return setMergeNegativeIntoPositive(!isMergeNegativeIntoPositiveEnabled());
 }
 
+// ── 权重全改 1（剥离所有强调权重）开关 ────────────────────────────────
+// 打开后：正面/负面两侧的提示词都不再带 (tag:N) 权重，只下发裸 tag。
+// 负权重 tag 在归一阶段就已被分流进 negative，不参与剥离，所以不存在
+// 「把不要翻成要」的反转；krea2 合流产生的 (tag:-1) 生成于剥离之后，同样不受影响。
+// 默认关闭 = 行为与改动前逐字节一致。
+const FLATTEN_WEIGHTS_KEY = "flattenEmphasisWeights";
+
+export function isFlattenEmphasisWeightsEnabled() {
+    const v = extension_settings?.[EXT_ID]?.[MODULE_KEY]?.[FLATTEN_WEIGHTS_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function setFlattenEmphasisWeights(enabled) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root[MODULE_KEY] ??= {};
+    root[MODULE_KEY][FLATTEN_WEIGHTS_KEY] = enabled === true;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isFlattenEmphasisWeightsEnabled();
+}
+
+export function toggleFlattenEmphasisWeights() {
+    return setFlattenEmphasisWeights(!isFlattenEmphasisWeightsEnabled());
+}
+
 /**
  * 给「裸 settings 当 recipe 用」的调用点补上开关字段。
  * 已经带了该字段的（createComfyGenerationRecipe 产出的 recipe）原样返回，
  * 避免用当前设置覆盖掉出图任务开跑时快照下来的值。
  */
-function withMergeNegativeFlag(recipe) {
+function withEmphasisFlags(recipe) {
     if (!recipe || typeof recipe !== 'object') return recipe;
-    if (recipe.mergeNegativeIntoPositive !== undefined) return recipe;
-    return { ...recipe, mergeNegativeIntoPositive: isMergeNegativeIntoPositiveEnabled() };
+    const next = { ...recipe };
+    if (next.mergeNegativeIntoPositive === undefined) {
+        next.mergeNegativeIntoPositive = isMergeNegativeIntoPositiveEnabled();
+    }
+    if (next.flattenEmphasisWeights === undefined) {
+        next.flattenEmphasisWeights = isFlattenEmphasisWeightsEnabled();
+    }
+    return next;
 }
 
 const DEFAULT_COMFY_DRAW_SETTINGS = {
@@ -782,6 +812,7 @@ export function createComfyGenerationRecipe({
         negativePromptOverride: String(negativePromptOverride || ''),
         seeds: Array.from({ length: Math.max(0, Math.floor(Number(itemCount) || 0)) }, createComfySeed),
         mergeNegativeIntoPositive: isMergeNegativeIntoPositiveEnabled(),
+        flattenEmphasisWeights: isFlattenEmphasisWeightsEnabled(),
     };
 }
 
@@ -1138,7 +1169,7 @@ async function requestComfyImage({ prompt, negativePrompt = '', params = {}, pre
         prompt,
         negativePrompt,
         params: effective,
-        recipe: withMergeNegativeFlag(settings),
+        recipe: withEmphasisFlags(settings),
         seed: seed ?? createComfySeed(),
     });
     const requestBody = { prompt: JSON.stringify({ prompt: request.workflow }) };
@@ -1178,7 +1209,7 @@ async function runComfyImageBatch({
             return request.prepared || buildComfyImageRequest({
                 ...request,
                 params: effective,
-                recipe: withMergeNegativeFlag(settings),
+                recipe: withEmphasisFlags(settings),
                 seed: request.seed ?? createComfySeed(),
             });
         });

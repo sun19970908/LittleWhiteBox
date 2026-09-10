@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-10T16:29:13.000Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-10T16:29:13.000Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1789057752691_w8flt1",
+            "interval": 0,
+            "name": "权重全改1",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/comfyui/comfy-draw.js');\n    const on = mod.toggleFlattenEmphasisWeights();\n    window.toastr?.success(\n        on\n            ? '✅ 权重全改1 ON —— 提示词剥掉所有 (tag:N)，只下发裸 tag'\n            : '⚪ 权重全改1 OFF —— 权重照常下发'\n    );\n})();\n<</taskjs>>"
+        }
+    ]
+}

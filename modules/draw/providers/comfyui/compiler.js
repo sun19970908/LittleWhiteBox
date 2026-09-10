@@ -1,5 +1,5 @@
 import { assembleCharacterPrompts, joinTags } from '../../shared/character-prompts.js';
-import { convertNovelEmphasisToComfy, toNegativeOneTags } from './prompt-emphasis.js';
+import { convertPromptPair, stripAllWeights, toNegativeOneTags } from './prompt-emphasis.mjs';
 
 export const COMFY_REQUEST_DELAY_MS = 1000;
 
@@ -304,22 +304,27 @@ export function buildComfyImageRequest({ prompt, negativePrompt = '', params = {
     const effective = requireObject(params, 'ComfyUI params');
     const generationRecipe = requireObject(recipe, 'ComfyUI generationRecipe');
     const normalizedSeed = normalizeSeed(seed);
-    // 必经之路：把 NovelAI emphasis 转为 ComfyUI (tag:N) 语法，负权重统一推进 negative。
-    // 转换是幂等的——上游已转换过的 prompt 再次跑不会破坏。
-    const extractedNegatives = [];
-    const basePositive = convertNovelEmphasisToComfy(String(prompt || '').trim(), { negativeSink: extractedNegatives }).positive;
-    const negativeBase = convertNovelEmphasisToComfy(String(negativePrompt || '').trim()).positive;
-    if (!basePositive) throw new Error('Prompt 不能为空');
-    const mergedNegative = extractedNegatives.length > 0
-        ? joinTags(negativeBase, extractedNegatives.join(', '))
-        : negativeBase;
-    // krea2 / flux 系工作流没有可用的 negative 输入：开关打开时把 negative 侧全部
-    // 以 (tag:-1) 追加进 positive，negative 字段置空。开关来自 recipe，编译器保持纯函数。
-    const mergeNegativeIntoPositive = generationRecipe.mergeNegativeIntoPositive === true;
-    const positive = mergeNegativeIntoPositive
-        ? joinTags(basePositive, toNegativeOneTags(mergedNegative))
-        : basePositive;
-    const negative = mergeNegativeIntoPositive ? '' : mergedNegative;
+    // ① 转换 + ② 分流：正面走两步，负面只走转换，分出的负权重并进负面。
+    // ③ 权重全改 1 与 ④ 负面合流都是后置开关，必须排在分流之后 ——
+    // 提前剥壳会连负号一起摘掉，(tag:-1) 会翻转成正权重。
+    let { positive, negative } = convertPromptPair({
+        positive: String(prompt || '').trim(),
+        negative: String(negativePrompt || '').trim(),
+    });
+    if (!positive) throw new Error('Prompt 不能为空');
+
+    // ③ 权重全改 1：只剥壳，不动归属，正负两条各剥一次。
+    if (generationRecipe.flattenEmphasisWeights === true) {
+        positive = stripAllWeights(positive);
+        negative = stripAllWeights(negative);
+    }
+
+    // ④ 负面合流（krea2 / flux 无 negative 槽位）：生成于 ③ 之后，故 (tag:-1) 不受"全改 1"影响
+    // ——它在那边承载的是"不要"的方向，剥掉就会变成正面 tag。
+    if (generationRecipe.mergeNegativeIntoPositive === true) {
+        positive = joinTags(positive, toNegativeOneTags(negative));
+        negative = '';
+    }
     const width = clampNumber(effective.width, 1024, 64, 2048);
     const height = clampNumber(effective.height, 1024, 64, 2048);
 
