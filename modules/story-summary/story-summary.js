@@ -72,6 +72,7 @@ import {
 } from "./data/store.js";
 import { normalizeCharacterAliases } from "./data/character-aliases.js";
 import { stampEditedCharacters } from "./data/character-edits.js";
+import { normalizeEventMemoryRole, projectEditedSummaryEvents } from "./data/events.js";
 import { isRelationFact, parseRelationTarget } from "./data/fact-predicates.js";
 import { formatStorySummaryL2Events } from "./prompt-events.js";
 import { projectStoryCharacters } from "./prompt-characters.js";
@@ -2435,8 +2436,7 @@ function cloneSummaryJsonForPortability(json) {
                 participants: Array.isArray(item?.participants)
                     ? item.participants.map((name) => String(name || "").trim()).filter(Boolean)
                     : [],
-                type: String(item?.type || "").trim(),
-                weight: String(item?.weight || "").trim(),
+                memoryRole: normalizeEventMemoryRole(item?.memoryRole),
                 causedBy: Array.isArray(item?.causedBy)
                     ? item.causedBy.map((id) => String(id || "").trim()).filter(Boolean)
                     : [],
@@ -2574,8 +2574,7 @@ function formatStorySummaryMemoryText(store) {
             const meta = [
                 timeLabel ? `时间：${timeLabel}` : "",
                 participants.length ? `参与者：${participants.join("、")}` : "",
-                event?.type ? `类型：${event.type}` : "",
-                event?.weight ? `权重：${event.weight}` : "",
+                event?.memoryRole ? `记忆作用：${event.memoryRole}` : "",
             ].filter(Boolean).join("；");
             return [
                 `### ${title}`,
@@ -3645,7 +3644,7 @@ async function handleFrameMessage(event) {
             if (VALID_SECTIONS.includes(data.section)) {
                 store.json[data.section] = data.section === "characters"
                     ? stampEditedCharacters(store.json.characters, data.data, getCurrentFloorHint())
-                    : data.data;
+                    : data.section === "events" ? projectEditedSummaryEvents(data.data) : data.data;
             }
             if (data.section === "facts") {
                 store.json.facts = mergeEditedFactsWithTimestamps(oldFacts, data.data, getCurrentFloorHint());
@@ -3660,7 +3659,7 @@ async function handleFrameMessage(event) {
 
             // 同步 L2 检索索引（事件新增、编辑、删除）
             if (data.section === "events" && oldEvents) {
-                syncEventVectorsOnEdit(oldEvents, data.data);
+                syncEventVectorsOnEdit(oldEvents, store.json.events);
             }
             break;
         }

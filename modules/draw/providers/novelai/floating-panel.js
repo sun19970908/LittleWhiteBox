@@ -26,6 +26,7 @@ import {
 import { isDrawRunCancelledError, isDrawRunPendingError } from '../../shared/draw-run-production.js';
 import {
     formatDrawRunProgress,
+    getDrawRunProgressIcon,
     hasDrawRunProgressDetail,
     resolveDrawRunActivityDetail,
     resolveDrawRunUiState,
@@ -155,11 +156,15 @@ const STYLES = `
     width: 100%;
     height: 100%;
     grid-template-areas: "s";
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-columns: minmax(0, 1fr);
     pointer-events: none;
 }
 
 .nd-layer {
     grid-area: s;
+    min-width: 0;
+    min-height: 0;
     display: flex;
     align-items: center;
     width: 100%;
@@ -235,6 +240,8 @@ const STYLES = `
 .nd-float.expanded .nd-arrow { transform: rotate(180deg); }
 
 .nd-layer-active {
+    box-sizing: border-box;
+    padding: 0 6px;
     opacity: 0;
     transform: translateY(100%);
     justify-content: center;
@@ -262,6 +269,8 @@ const STYLES = `
 .nd-float.error .nd-layer-active { color: var(--nd-error); }
 
 .nd-spin { display: inline-block; animation: nd-spin 1.5s linear infinite; }
+.nd-status-icon { flex-shrink: 0; }
+.nd-status-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @keyframes nd-spin { to { transform: rotate(360deg); } }
 
 .nd-countdown { font-variant-numeric: tabular-nums; min-width: 36px; text-align: center; }
@@ -691,7 +700,7 @@ function setFloorState(messageId, state, data = {}) {
         case FloatState.ACCEPTED:
             el.classList.add('working');
             if (!panelData.result.startTime) panelData.result.startTime = Date.now();
-            if (statusIcon) { statusIcon.textContent = '🎨'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.textContent = getDrawRunProgressIcon(data); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = formatDrawRunProgress(data);
             break;
         case FloatState.UNCERTAIN:
@@ -1304,7 +1313,7 @@ function setFloatingState(state, data = {}) {
         case FloatState.ACCEPTED:
             floatingEl.classList.add('working');
             if (!floatingResult.startTime) floatingResult.startTime = Date.now();
-            statusIcon.textContent = '🎨';
+            statusIcon.textContent = getDrawRunProgressIcon(data);
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = formatDrawRunProgress(data);
             break;

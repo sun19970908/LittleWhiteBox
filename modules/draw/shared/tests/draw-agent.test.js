@@ -15,7 +15,7 @@ import {
     resolveDrawAgentContext,
 } from '../draw-agent.js';
 import { generateAndParseScenePlan } from '../scene-planner.js';
-import { createSubmitScenePlanTool } from '../scene-plan-contract.js';
+import { createSubmitScenePlanTool } from '../scene-plan-tool.js';
 
 function buildSettings(model, apiKey = 'main-key') {
     return {
@@ -99,16 +99,7 @@ function buildValidScenePlanResult() {
             arguments: JSON.stringify({
                 mindful_prelude: {
                     user_insight: '开门动作。',
-                    visual_plan: {
-                        moments: [{
-                            moment: '1',
-                            insert_after: 1,
-                            char_count: '0',
-                            known_chars: [],
-                            unknown_chars: [],
-                            composition: '室内中景。',
-                        }],
-                    },
+                    visual_plan: '画剧情中的这一瞬间，放在插图点 1 后，画面无人物，已录入和未录入角色均不出现，采用室内中景。',
                 },
                 images: [{
                     index: 1,
@@ -323,10 +314,14 @@ test('scene planner corrects a missing Tool call without inventing Tool history'
     assert.equal(diagnostic.terminationReason, 'success');
 });
 
-test('scene planner bounds captured invalid model output before exposing it to diagnostics', async () => {
+test('scene planner logs the full invalid return and per-attempt timings directly to F12', async (t) => {
     resetDrawAgentRuntimeForTests();
+    const logs = [];
+    t.mock.method(console, 'log', (label, details) => logs.push({ label, details }));
+    t.mock.timers.enable({ apis: ['Date'], now: 1000 });
     let callCount = 0;
     const oversizedText = 'x'.repeat(20_000);
+    const oversizedArguments = JSON.stringify({ images: oversizedText });
     await generateAndParseScenePlan({
         messageText: '阿璃推开门。',
         maxImages: 1,
@@ -337,8 +332,15 @@ test('scene planner bounds captured invalid model output before exposing it to d
                 createAgentAdapter: () => ({
                     chat: async () => {
                         callCount += 1;
+                        t.mock.timers.tick(20000);
                         return callCount === 1
                             ? { text: oversizedText, toolCalls: [], finishReason: 'stop' }
+                            : callCount === 2
+                                ? {
+                                    toolCalls: [{ name: 'submit_scene_plan', arguments: oversizedArguments }],
+                                    finishReason: 'tool_calls',
+                                    providerPayload: { api_key: 'secret-key', content: oversizedText },
+                                }
                             : buildValidScenePlanResult();
                     },
                 }),
@@ -347,9 +349,16 @@ test('scene planner bounds captured invalid model output before exposing it to d
     });
 
     const failure = getLastDrawAgentDiagnostic().validationFailures[0];
-    assert.equal(failure.modelOutputTruncated, true);
-    assert.equal(failure.modelOutput.length, 16 * 1024);
-    assert.match(failure.modelOutput, /"text":"xxxx/);
+    assert.equal(failure.modelOutputTruncated, false);
+    assert.equal(JSON.parse(failure.modelOutput).text, oversizedText);
+    const log = logs.find(entry => entry.details.event === 'scene_planner_tool_validation_failed');
+    assert.equal(log.details.llmResult.text, oversizedText);
+    assert.equal(log.details.durationMs, 20000);
+    const secondFailure = logs.filter(entry => entry.details.event === 'scene_planner_tool_validation_failed')[1];
+    assert.equal(secondFailure.details.llmResult.toolCalls[0].arguments, oversizedArguments);
+    assert.equal(secondFailure.details.llmResult.providerPayload.content, oversizedText);
+    assert.equal(JSON.stringify(logs).includes('secret-key'), false);
+    assert.deepEqual(getLastDrawAgentDiagnostic().attempts.map(attempt => attempt.durationMs), [20000, 20000, 20000]);
 });
 
 test('Google session correction sends a plain reminder when no Tool was called', async () => {
