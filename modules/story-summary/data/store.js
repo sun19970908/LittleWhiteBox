@@ -7,6 +7,10 @@ import { EXT_ID } from "../../../core/constants.js";
 import { xbLog } from "../../../core/debug-core.js";
 import { clearEventVectors, deleteEventVectorsByIds } from "../vector/storage/chunk-store.js";
 import {
+    saveChatMetadataDebounced,
+    saveChatMetadataNow,
+} from "./chat-metadata-save.js";
+import {
     applyAliasMigrationsForRollback,
     applyCharacterAliasUpdates,
     canonicalizeIncrementalSummaryData,
@@ -369,7 +373,11 @@ export function getSummaryStore() {
 }
 
 export function saveSummaryStore() {
-    saveMetadataDebounced?.();
+    saveChatMetadataDebounced({
+        metadata: chat_metadata,
+        reason: 'summary-store',
+        fallback: () => saveMetadataDebounced?.(),
+    });
 }
 
 export async function saveSummaryStoreImmediately(
@@ -383,7 +391,11 @@ export async function saveSummaryStoreImmediately(
         throw new Error('summary_metadata_save_unavailable');
     }
 
-    await context.saveMetadata();
+    await saveChatMetadataNow({
+        metadata: chat_metadata,
+        reason: 'summary-store-immediate',
+        fallback: () => context.saveMetadata(),
+    });
 }
 
 export function getKeepVisibleCount() {

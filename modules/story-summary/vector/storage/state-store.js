@@ -8,6 +8,10 @@ import { getContext, saveMetadataDebounced } from '../../../../../../../extensio
 import { chat_metadata } from '../../../../../../../../script.js';
 import * as stScript from '../../../../../../../../script.js';
 import { stateVectorsTable } from '../../data/db.js';
+import {
+    isTauriTavernMetadataChannelAvailable,
+    saveChatMetadataNow,
+} from '../../data/chat-metadata-save.js';
 import { EXT_ID } from '../../../../core/constants.js';
 import { xbLog } from '../../../../core/debug-core.js';
 import {
@@ -123,6 +127,53 @@ export function endL0MetadataBatch() {
     }
 }
 
+/**
+ * TauriTavern 通道下的 L0 落盘：直接走 metadata 专用接口（后端仅重写首行），
+ * 不再等待酒馆保存空闲，也不需要探测「是否进入酒馆保存流程」。
+ */
+function flushL0MetadataViaTauriTavern({ reason, versionToSave, attemptedChatId }) {
+    Promise.resolve()
+        .then(() => saveChatMetadataNow({
+            metadata: chat_metadata,
+            reason: `l0:${reason}`,
+            fallback: () => {
+                const ctx = getContext?.();
+                if (typeof ctx?.saveMetadata !== 'function') {
+                    throw new Error('summary_metadata_save_unavailable');
+                }
+                return ctx.saveMetadata();
+            },
+        }))
+        .then(() => {
+            if (getCurrentChatId() === attemptedChatId && l0MetadataDirtyVersion === versionToSave) {
+                l0MetadataDirty = false;
+                l0MetadataDirtyChatId = null;
+                l0MetadataDirtySince = 0;
+                l0MetadataRetryStartedAt = 0;
+                l0MetadataLastWaitLogAt = 0;
+                l0MetadataDirtySources.clear();
+                return;
+            }
+            if (l0MetadataDirty) {
+                scheduleL0MetadataFlush(0);
+            }
+        })
+        .catch(e => {
+            xbLog.warn(MODULE_ID, `L0 metadata 保存失败(TauriTavern): ${e?.message || e}`);
+            if (getCurrentChatId() === attemptedChatId && l0MetadataDirtyVersion === versionToSave) {
+                scheduleL0MetadataFlush(L0_METADATA_FAST_RETRY_MS);
+            } else if (l0MetadataDirty) {
+                scheduleL0MetadataFlush(0);
+            }
+        })
+        .finally(() => {
+            l0MetadataSaveInFlight = false;
+            if (l0MetadataDirty && l0MetadataDirtyVersion !== versionToSave) {
+                scheduleL0MetadataFlush(0);
+            }
+        });
+}
+
 export function flushL0MetadataSave(reason = 'manual') {
     if (!l0MetadataDirty) return false;
     if (l0MetadataSaveInFlight) return false;
@@ -139,6 +190,21 @@ export function flushL0MetadataSave(reason = 'manual') {
         l0MetadataLastWaitLogAt = 0;
         l0MetadataDirtySources.clear();
         return false;
+    }
+
+    // TauriTavern：metadata 走专用接口（后端仅重写首行），既不会进入酒馆保存流程，
+    // 也不需要等待酒馆保存空闲，因此直接落盘并跳过下方的 isChatSaving 等待与 enteredHostSave 探测。
+    if (isTauriTavernMetadataChannelAvailable()) {
+        const sources = [...l0MetadataDirtySources].join(',');
+        clearL0MetadataRetryTimer();
+        l0MetadataSaveInFlight = true;
+        flushL0MetadataViaTauriTavern({
+            reason,
+            versionToSave: l0MetadataDirtyVersion,
+            attemptedChatId: currentChatId,
+        });
+        xbLog.info(MODULE_ID, `L0 metadata 保存已触发(TauriTavern) reason=${reason} sources=${sources || '-'}`);
+        return true;
     }
 
     if (stScript.isChatSaving) {
