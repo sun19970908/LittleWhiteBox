@@ -1,0 +1,18 @@
+{
+    "disabled": false,
+    "findRegex": "/.*/s",
+    "id": "4c104a4a-8acb-4472-b847-bb225b75def7",
+    "markdownOnly": false,
+    "maxDepth": null,
+    "minDepth": 23,
+    "placement": [
+        1,
+        2
+    ],
+    "promptOnly": true,
+    "replaceString": "",
+    "runOnEdit": true,
+    "scriptName": "对AI隐藏远处楼层",
+    "substituteRegex": 0,
+    "trimStrings": []
+}
