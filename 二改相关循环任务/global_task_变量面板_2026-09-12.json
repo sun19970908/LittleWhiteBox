@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-12T17:54:01.337Z",
+    "tasks": [
+        {
+            "id": "task_1789235545447_evtoamb",
+            "name": "变量面板",
+            "interval": 0,
+            "floorType": "all",
+            "triggerTiming": "after_ai",
+            "disabled": false,
+            "buttonActivated": true,
+            "createdAt": "2026-09-12T17:52:25.447Z",
+            "commands": "<<taskjs>>(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/variables/variables-panel.js');\n    const panel = await mod.initVariablesPanel();\n    panel.open();\n})();\n<</taskjs>>"
+        }
+    ]
+}
