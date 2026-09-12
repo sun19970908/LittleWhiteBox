@@ -40,9 +40,6 @@ import {
     setHostChatCompletionsRequestHeadersProvider,
 } from "../../shared/host-llm/chat-completions/client.js";
 
-// metadata 保存通道（TauriTavern 专用接口 / 酒馆降级）
-import { saveChatMetadataNow } from "./data/chat-metadata-save.js";
-
 // config/store
 import {
     BUILTIN_SUMMARY_PROMPTS,
@@ -291,11 +288,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
 
     try {
         notifyStorySummaryChatState();
-        await saveChatMetadataNow({
-            metadata: targetMetadata,
-            reason: 'chat-toggle',
-            fallback: () => context.saveMetadata(),
-        });
+        await context.saveMetadata();
 
         if (getContext()?.chatId === targetChatId && events) {
             await handleChatChanged();
