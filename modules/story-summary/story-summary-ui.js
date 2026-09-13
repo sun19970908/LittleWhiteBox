@@ -346,8 +346,9 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
     let currentTimelineChatId = '';
     const TL_PAGE_SIZE = 20;
     const TL_PAGING_KEY = 'xb-tl-paging';
+    const TL_PAGE_KEY = 'xb-tl-page';
     let tlPagingEnabled = false;
-    let tlCurrentPage = 0;
+    let tlCurrentPage = -1;
     let settingsSaveTimeoutId = null;
     let currentChatSummaryEnabled = true;
     let currentChatSummaryPending = true;
@@ -1409,6 +1410,24 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
         return Math.min(Math.max(0, page | 0), tlTotalPages() - 1);
     }
 
+    function tlLoadPage() {
+        try {
+            const v = JSON.parse(localStorage.getItem(TL_PAGE_KEY))?.[currentTimelineChatId];
+            return Number.isFinite(v) ? v : -1;
+        } catch {
+            return -1;
+        }
+    }
+
+    function tlSavePage() {
+        if (!currentTimelineChatId) return;
+        try {
+            const m = JSON.parse(localStorage.getItem(TL_PAGE_KEY)) || {};
+            m[currentTimelineChatId] = tlCurrentPage;
+            localStorage.setItem(TL_PAGE_KEY, JSON.stringify(m));
+        } catch { /* ignore */ }
+    }
+
     function tlItemHtml(e) {
         const participants = (e.participants || e.characters || []).map(h).join('、');
         return `<div class="tl-item">
@@ -1456,13 +1475,16 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
         const c = $('timeline-list');
         if (!ev?.length) {
             setHtml(c, '<div class="empty">暂无事件记录</div>');
-            tlCurrentPage = 0;
+            tlCurrentPage = -1;
             timelineHasRenderedEvents = false;
             updateTlPager(false);
             return;
         }
         if (tlPagingEnabled) {
-            tlCurrentPage = clampTlPage(options.page != null ? options.page : tlCurrentPage);
+            tlCurrentPage = options.page != null
+                ? clampTlPage(options.page)
+                : (tlCurrentPage < 0 || tlCurrentPage > tlTotalPages() - 1 ? tlTotalPages() - 1 : tlCurrentPage);
+            if (options.page != null) tlSavePage();
             const start = tlCurrentPage * TL_PAGE_SIZE;
             setHtml(c, summaryData.events.slice(start, start + TL_PAGE_SIZE).map(tlItemHtml).join(''));
             c.scrollTop = 0;
@@ -2386,6 +2408,7 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
                     if (nextChatId !== currentTimelineChatId) {
                         currentTimelineChatId = nextChatId;
                         timelineHasRenderedEvents = false;
+                        tlCurrentPage = tlLoadPage();
                     }
                     if (p.keywords) renderKeywords(p.keywords);
                     if (p.events) renderTimeline(p.events);
