@@ -37,7 +37,8 @@
  *
  * 转换之后另有两个互相独立的后置工具，都建立在同一套切分/剥壳语义上：
  *   stripAllWeights    —— 权重全改 1（剥掉所有 (tag:N) / (tag:-N) 外壳）
- *   toNegativeOneTags  —— krea2 负面合流，统一 (tag:-1)
+ *   toNegativeOneTags  —— krea2 负面合流，整条提示词的权重 ×(-1)：
+ *                         (tag:1.4) → (tag:-1.4)，裸 tag 补 -1。入参须是已归一的串。
  * 二者与转换本身一样：只改写权重表达式，不增删任何 tag（不去重）。
  */
 
@@ -97,6 +98,13 @@ function stripWeightShell(entry) {
  * 与 stripWeightShell 的正则差一个 `-`：那个是剥壳用的，这个专门用来认方向。
  */
 const NEGATIVE_SHELL = /^\((.*):-(\d+(?:\.\d+)?)\)$/s;
+
+/**
+ * 「带符号权重的壳」：`(tag:N)` / `(tag:-N)`。组1 是 tag，组2 是**带符号**的权重。
+ * 与 NEGATIVE_SHELL 的差别：那个只认负方向、且捕获的是绝对值；这里要拿到符号，
+ * 直接 `-Number(m[2])` 就是「权重 ×(-1)」。
+ */
+const SIGNED_WEIGHT_SHELL = /^\((.*):(-?\d+(?:\.\d+)?)\)$/s;
 
 /**
  * 第一层：纯段落切分，不做警告判断。
@@ -375,7 +383,7 @@ function splitTopLevelTags(text) {
  *
  * 保持原顺序、原样保留重复，**不做任何去重**——切分只认顶层逗号，
  * 内容一字不改；去重与否交给下游（工作流自身）决定。
- * `toNegativeOneTags` 与 `stripAllWeights` 共用，保证两者切分语义完全一致。
+ * `stripAllWeights` 的唯一入口。
  */
 function collectBareTags(normalized) {
     return splitTopLevelTags(normalized)
@@ -404,24 +412,30 @@ export function stripAllWeights(normalizedText) {
 }
 
 /**
- * krea2 适配：把一段（负面）提示词全部转成 `(tag:-1)` 形式，权重一律 -1。
+ * krea2 适配：把一段负面提示词整体权重 ×(-1)，追加进正面。
  *
- * krea2 / flux 系工作流没有可用的 negative 输入，负面约束只能写进正面提示词，
- * 用 A1111 负权重语法表达。原权重一律丢弃——只保留"不要"这个方向。
+ * krea2 / flux 系工作流没有可用的 negative 输入，负面约束只能以负权重写进正面，
+ * 原强度照原样取反：(blurry:1.4) → (blurry:-1.4)，裸 tag（强度 1）补成 (tag:-1)。
  *
- * 处理链：convertNovelEmphasisToComfy 转换（复用两层解析，NAI `::` / `{}` / `[]`
- * 全部展开）→ 顶层逗号切分 → 剥掉整体包裹的权重壳 → 统一输出 -1。
- * 负权重 tag（`-1.4::watermark` 或 `(watermark:-1.4)`）不会被吞掉：转换把它就地
- * 留在串里，剥壳时连负号一起摘掉，再统一贴上 -1。
- * 不去重（重复 tag 会各输出一条）；幂等（`(x:-1)` 再跑一次仍是 `(x:-1)`）。
+ * 入参**必须已归一**（convertNovelEmphasisToComfy 的产物）—— 不要在这里再转一次：
+ * 调用方④拿到的串上游已经走完 转换 + 分流，里面不会再有 NAI 的 `::` / `{}` / `[]`。
+ * 顶层逗号切分 → 命中权重壳就乘 -1，没壳的裸 tag 补 -1。
+ * 不去重（重复 tag 会各输出一条）。
  *
- * @param {string} text 任意提示词串（已转换或含 NAI 语法均可）
- * @returns {string} 形如 `(bad hands:-1), (lowres:-1)`；无内容返回 ''
+ * @param {string} normalized 已归一的提示词串（不再接受原生 NAI 语法）
+ * @returns {string} 形如 `(bad hands:-1), (blurry:-1.4)`；无内容返回 ''
  */
-export function toNegativeOneTags(text) {
-    const normalized = convertNovelEmphasisToComfy(String(text || '').trim());
-    if (!normalized) return '';
-    return collectBareTags(normalized).map(tag => `(${tag}:-1)`).join(', ');
+export function toNegativeOneTags(normalized) {
+    const text = String(normalized || '').trim();
+    if (!text) return '';
+    return splitTopLevelTags(text)
+        .map(cleanTag)
+        .filter(Boolean)
+        .map((segment) => {
+            const m = SIGNED_WEIGHT_SHELL.exec(segment);
+            return m ? `(${cleanTag(m[1])}:${formatWeight(-Number(m[2]))})` : `(${segment}:-1)`;
+        })
+        .join(', ');
 }
 
 /* ============================================================================
@@ -481,7 +495,7 @@ const CLI_USAGE = `用法:
   echo "<提示词>" | node prompt-emphasis.mjs [选项]
 
 选项:
-  -n, --negative-one   输出 krea2 负权重形式 (tag:-1)
+  -n, --negative-one   输出 krea2 负权重形式 (tag:-N)，原强度 ×(-1)
   -f, --flatten        权重全改 1：剥掉所有 (tag:N) 外壳，只留裸 tag
   -h, --help           显示本帮助
   --                   终止选项解析，其后参数一律当提示词
@@ -550,7 +564,7 @@ async function runCli() {
         return;
     }
     if (negMode) {
-        console.log(toNegativeOneTags(input));
+        console.log(toNegativeOneTags(convertNovelEmphasisToComfy(input)));
         return;
     }
     // 与编译器同构：转换 + 分流拿到两条串；--flatten 只是在其上各剥一次壳

@@ -67,11 +67,9 @@ test('权重全改 1 = 转换 + 分流 + stripAllWeights，负权重仍留在 ne
     assert.equal(stripAllWeights(pair.negative), 'watermark');
 });
 
-test('toNegativeOneTags 在重构后行为不变（回归）', () => {
-    assert.equal(toNegativeOneTags('bad hands, lowres, (worst quality:1.2)'), '(bad hands:-1), (lowres:-1), (worst quality:-1)');
+test('toNegativeOneTags 权重 ×(-1)：保留原强度，裸 tag 补 -1', () => {
+    assert.equal(toNegativeOneTags('bad hands, lowres, (worst quality:1.2)'), '(bad hands:-1), (lowres:-1), (worst quality:-1.2)');
     assert.equal(toNegativeOneTags(''), '');
-    // 幂等
-    assert.equal(toNegativeOneTags(toNegativeOneTags('x, y')), '(x:-1), (y:-1)');
 });
 
 test('权重全改 1 关闭时编译器输出与改动前一致', () => {
@@ -192,7 +190,7 @@ test('回归：A1111 负权重 (tag:-1) 开启「权重全改 1」后不会翻�
     assert.equal(request.workflow.n.inputs.text, 'bad hands, forehead mark, qipao');
 });
 
-test('回归：toNegativeOneTags 不再吞掉负权重 tag', () => {
-    assert.equal(toNegativeOneTags('bad hands, -1.4::watermark'), '(bad hands:-1), (watermark:-1)');
-    assert.equal(toNegativeOneTags('bad hands, (watermark:-1.4)'), '(bad hands:-1), (watermark:-1)');
+test('回归：toNegativeOneTags 不再吞掉负权重 tag（入参先归一）', () => {
+    assert.equal(toNegativeOneTags(convertNovelEmphasisToComfy('bad hands, -1.4::watermark')), '(bad hands:-1), (watermark:1.4)');
+    assert.equal(toNegativeOneTags('bad hands, (watermark:-1.4)'), '(bad hands:-1), (watermark:1.4)');
 });
