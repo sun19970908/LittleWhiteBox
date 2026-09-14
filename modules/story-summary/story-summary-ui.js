@@ -85,7 +85,7 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
         summaryUserJsonFormatPrompt: '',
         summaryAssistantCheckPrompt: '',
         summaryUserConfirmPrompt: '',
-        summaryAssistantPrefillPrompt: '',
+        summaryUserGeneratePrompt: '',
     });
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1263,7 +1263,7 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
         $('summary-user-json-format-prompt').value = builtInSummaryPrompts.summaryUserJsonFormatPrompt;
         $('summary-assistant-check-prompt').value = builtInSummaryPrompts.summaryAssistantCheckPrompt;
         $('summary-user-confirm-prompt').value = builtInSummaryPrompts.summaryUserConfirmPrompt;
-        $('summary-assistant-prefill-prompt').value = builtInSummaryPrompts.summaryAssistantPrefillPrompt;
+        $('summary-user-generate-prompt').value = builtInSummaryPrompts.summaryUserGeneratePrompt;
     }
 
     async function saveSettings() {

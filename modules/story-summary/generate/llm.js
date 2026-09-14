@@ -9,10 +9,9 @@ import {
     DEFAULT_SUMMARY_USER_JSON_FORMAT_PROMPT,
     DEFAULT_SUMMARY_ASSISTANT_CHECK_PROMPT,
     DEFAULT_SUMMARY_USER_CONFIRM_PROMPT,
-    DEFAULT_SUMMARY_ASSISTANT_PREFILL_PROMPT,
+    DEFAULT_SUMMARY_USER_GENERATE_PROMPT,
 } from "../data/config.js";
-import { extension_settings } from "../../../../../../extensions.js";
-import { getRequestHeaders, saveSettingsDebounced } from "../../../../../../../script.js";
+import { getRequestHeaders } from "../../../../../../../script.js";
 import { getStreamingReply } from "../../../../../../../scripts/openai.js";
 import { getDefaultApiPrefix, resolveApiBaseUrl } from "../../../shared/common/openai-url-utils.js";
 import {
@@ -33,35 +32,9 @@ const PROVIDER_MAP = {
     cohere: "cohere",
 };
 
-const JSON_PREFILL = DEFAULT_SUMMARY_ASSISTANT_PREFILL_PROMPT;
 const HOST_GENERATION_PROVIDERS = new Set(['openai']);
 const SUMMARY_GENERATION_TIMEOUT_MS = 180_000;
 const SUMMARY_CANCELLED_CODE = 'summary_generation_cancelled';
-
-// ── 末尾 prefill 合并开关 ─────────────────────────────
-// 默认关闭：prefill（"下面重新生成完整JSON。"）作为最后一条 assistant 消息单独发送（原版行为）；
-// 打开后：prefill 以 user 消息追加，并让后端按 strict 模式做提示词后处理
-// （合并相邻同角色消息、非首位 system 降 user、补占位符保证严格交替），
-// 解决 MiniMax 等严格校验消息角色交替的 API 拒绝请求的问题。
-const EXT_ID = "LittleWhiteBox";
-const MERGE_PREFILL_KEY = "mergePrefillIntoUser";
-
-export function isMergePrefillIntoUserEnabled() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[MERGE_PREFILL_KEY];
-    return v === undefined ? false : v === true;
-}
-
-export function setMergePrefillIntoUser(enabled) {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    root.storySummary[MERGE_PREFILL_KEY] = enabled === true;
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return isMergePrefillIntoUserEnabled();
-}
-
-export function toggleMergePrefillIntoUser() {
-    return setMergePrefillIntoUser(!isMergePrefillIntoUserEnabled());
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 工具函数
@@ -182,7 +155,6 @@ function buildHostMessages(promptData) {
     return [
         ...(Array.isArray(promptData.topMessages) ? promptData.topMessages : []),
         ...(Array.isArray(promptData.bottomMessages) ? promptData.bottomMessages : []),
-        { role: isMergePrefillIntoUserEnabled() ? 'user' : 'assistant', content: promptData.assistantPrefill },
     ].filter(message => String(message?.content || '').trim());
 }
 
@@ -222,9 +194,6 @@ async function callHostSummaryGeneration(promptData, llmApi = {}, genParams = {}
         buildHostMessages(promptData),
         !!useStream,
     ), genParams);
-    if (isMergePrefillIntoUserEnabled()) {
-        payload.custom_prompt_post_processing = 'strict';
-    }
 
     const abortable = createTimeoutSignal(Number(timeout) || SUMMARY_GENERATION_TIMEOUT_MS);
     request.abortController = abortable.controller;
@@ -310,7 +279,7 @@ function buildSummaryMessages(existingSummary, existingFacts, newHistoryText, hi
     const userJsonFormatPrompt = DEFAULT_SUMMARY_USER_JSON_FORMAT_PROMPT;
     const assistantCheckPrompt = DEFAULT_SUMMARY_ASSISTANT_CHECK_PROMPT;
     const userConfirmPrompt = DEFAULT_SUMMARY_USER_CONFIRM_PROMPT;
-    const assistantPrefillPrompt = DEFAULT_SUMMARY_ASSISTANT_PREFILL_PROMPT;
+    const userGeneratePrompt = DEFAULT_SUMMARY_USER_GENERATE_PROMPT;
     const { text: factsText, predicates } = formatFactsForLLM(existingFacts);
 
     const predicatesHint = predicates.length > 0
@@ -339,13 +308,13 @@ function buildSummaryMessages(existingSummary, existingFacts, newHistoryText, hi
     const bottomMessages = [
         { role: 'user', content: metaProtocolStartPrompt + '\n' + jsonFormat },
         { role: 'assistant', content: checkContent },
-        { role: 'user', content: userConfirmPrompt }
+        { role: 'user', content: userConfirmPrompt },
+        { role: 'user', content: userGeneratePrompt }
     ];
 
     return {
         top64: b64UrlEncode(JSON.stringify(topMessages)),
         bottom64: b64UrlEncode(JSON.stringify(bottomMessages)),
-        assistantPrefill: assistantPrefillPrompt,
         topMessages,
         bottomMessages,
     };
@@ -442,7 +411,7 @@ export async function generateSummary(options) {
             if (xbLog.isEnabled()) {
                 xbLog.info("storySummaryLlm", `LLM输出(len=${rawOutput?.length || 0}): ${String(rawOutput || "").slice(0, 1200)}`);
             }
-            return JSON_PREFILL + rawOutput;
+            return rawOutput;
         }
 
         const streamingMod = getStreamingModule();
@@ -451,15 +420,11 @@ export async function generateSummary(options) {
         }
         request.streamingMod = streamingMod;
 
-        const mergeOn = isMergePrefillIntoUserEnabled();
         const args = {
             as: 'user',
             nonstream: useStream ? 'false' : 'true',
             top64: promptData.top64,
             bottom64: promptData.bottom64,
-            ...(mergeOn
-                ? { bottomuser: promptData.assistantPrefill, promptpost: 'strict' }
-                : { bottomassistant: promptData.assistantPrefill }),
             id: sessionId,
         };
 
@@ -500,7 +465,7 @@ export async function generateSummary(options) {
             xbLog.info("storySummaryLlm", `LLM输出(len=${rawOutput?.length || 0}): ${String(rawOutput || "").slice(0, 1200)}`);
         }
 
-        return JSON_PREFILL + rawOutput;
+        return rawOutput;
     } finally {
         signal?.removeEventListener?.('abort', handleAbort);
     }

@@ -287,7 +287,7 @@ All checks passed. Beginning incremental extraction...
 export const DEFAULT_SUMMARY_USER_CONFIRM_PROMPT = `怎么截断了！重新完整生成，只输出JSON，不要任何其他内容，3000字以内
 </Chat_History>`;
 
-export const DEFAULT_SUMMARY_ASSISTANT_PREFILL_PROMPT = '下面重新生成完整JSON。';
+export const DEFAULT_SUMMARY_USER_GENERATE_PROMPT = '下面重新生成完整JSON。';
 export const BUILTIN_SUMMARY_PROMPTS = Object.freeze({
     summarySystemPrompt: DEFAULT_SUMMARY_SYSTEM_PROMPT,
     summaryAssistantDocPrompt: DEFAULT_SUMMARY_ASSISTANT_DOC_PROMPT,
@@ -297,7 +297,7 @@ export const BUILTIN_SUMMARY_PROMPTS = Object.freeze({
     summaryUserJsonFormatPrompt: DEFAULT_SUMMARY_USER_JSON_FORMAT_PROMPT,
     summaryAssistantCheckPrompt: DEFAULT_SUMMARY_ASSISTANT_CHECK_PROMPT,
     summaryUserConfirmPrompt: DEFAULT_SUMMARY_USER_CONFIRM_PROMPT,
-    summaryAssistantPrefillPrompt: DEFAULT_SUMMARY_ASSISTANT_PREFILL_PROMPT,
+    summaryUserGeneratePrompt: DEFAULT_SUMMARY_USER_GENERATE_PROMPT,
 });
 const DEFAULT_VECTOR_PROVIDER = "siliconflow";
 const DEFAULT_L0_URL = "https://api.siliconflow.cn/v1";
