@@ -43,7 +43,8 @@ const BUILD_BATCH_SIZE = 500;
 
 // 词法索引结构/分词器版本。tokenizer 规则、停用词、索引结构任一变更时 +1，
 // 会让所有已存快照失效回退全量重建（安全网）。
-const LEXICAL_INDEX_VERSION = 1;
+// v2: maskEntities 改为两遍法（实体遮蔽坐标修正），分词结果与 v1 不同，必须重建。
+const LEXICAL_INDEX_VERSION = 2;
 
 // 快照重存触发：累计脏变更达到该值，或空闲防抖到期，即触发保存。
 const SNAPSHOT_DIRTY_THRESHOLD = 10;
