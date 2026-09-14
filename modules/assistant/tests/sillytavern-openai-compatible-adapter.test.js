@@ -33,6 +33,24 @@ test.afterEach(() => {
     setHostChatCompletionsRequestHeadersProvider(null);
 });
 
+test('hosted DeepSeek retains required tools because host OpenAI forwarding does not enable thinking', () => {
+    const adapter = new SillyTavernOpenAICompatibleAdapter({ model: 'deepseek-chat' });
+    for (const mode of ['on', 'off', 'inherit']) {
+        const task = {
+            messages: [{ role: 'user', content: 'test' }],
+            tools: [{ type: 'function', function: { name: 'submit_scene_plan', parameters: {} } }],
+            toolChoice: 'required', reasoning: { mode },
+        };
+        const body = adapter.buildPayload(task);
+        assert.equal(body.tool_choice, 'required');
+        assert.deepEqual(body.tools, task.tools);
+        assert.deepEqual(body.thinking, mode === 'inherit' ? undefined : { type: mode === 'on' ? 'enabled' : 'disabled' });
+        const inspection = adapter.buildRequestInspection({ body }, task);
+        assert.equal(inspection.effectiveConfig.toolChoice, body.tool_choice);
+        assert.equal(inspection.effectiveConfig.reasoningEffectiveMode, mode);
+    }
+});
+
 test('SillyTavern hosted Claude and Google always include and deduplicate systemPrompt', () => {
     for (const Adapter of [SillyTavernClaudeAdapter, SillyTavernGoogleAdapter]) {
         const adapter = new Adapter({ model: 'hosted-model' });
@@ -1602,6 +1620,43 @@ test('host clients keep request identity isolated per instance', async () => {
             },
         },
     ]);
+});
+
+test('hosted OpenAI-compatible text tools use the same safe finalization in both transports', async () => {
+    for (const streaming of [false, true]) {
+        const complete = 'Ready.\n<｜｜DSML｜｜ calls><｜｜DSML｜｜ invoke name="PlanList"></｜｜DSML｜｜ invoke></｜｜DSML｜｜ calls>';
+        let content = complete;
+        const hostClient = createHostChatCompletionsClient({
+            requestHeadersProvider: () => ({}),
+            fetch: async () => streaming
+                ? createSseResponse([...content].map(char => ({ choices: [{ delta: { content: char } }] })))
+                : createJsonResponse({ choices: [{ message: { role: 'assistant', content } }] }),
+        });
+        const adapter = new SillyTavernOpenAICompatibleAdapter({ model: 'deepseek-v3.2', toolMode: 'tagged-json' }, hostClient);
+        const progress = [];
+        const task = {
+            messages: [{ role: 'user', content: 'list' }],
+            tools: [{ type: 'function', function: { name: 'PlanList', parameters: { type: 'object' } } }],
+            captureRawAssistantMessage: true,
+            ...(streaming ? { onStreamProgress: snapshot => progress.push(snapshot) } : {}),
+        };
+        const result = await adapter.chat(task);
+        assert.equal(result.text, 'Ready.');
+        assert.deepEqual(result.toolCalls.map(call => call.name), ['PlanList']);
+        assert.equal(progress.some(snapshot => snapshot.text.includes('DSML')), false);
+        content = 'Ready.\n<tool_call>```json\n{"name":"PlanList","arguments":{}}\n```\n</unexpected></tool_call>';
+        const decorated = await adapter.chat(task);
+        assert.deepEqual(decorated.toolCalls, result.toolCalls);
+        assert.equal(decorated.text, 'Ready.');
+        assert.equal(decorated.rawAssistantMessage.content, content);
+        content = complete.replace('</｜｜DSML｜｜ invoke>', '');
+        await assert.rejects(() => adapter.chat(task), error => {
+            assert.equal(error.code, 'DSML_TOOL_CALL_INVALID');
+            assert.equal(error.rawAssistantMessage.content, content);
+            assert.ok(error.requestInspection);
+            return true;
+        });
+    }
 });
 
 test('injected Host Clients isolate concurrent streaming and non-streaming chats', async () => {

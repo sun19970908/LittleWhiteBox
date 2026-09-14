@@ -125,7 +125,6 @@ export function buildReplayConfigFingerprint(config = {}) {
             maxPerRun: config.summaryApi?.maxPerRun ?? null,
             maxTokens: config.summaryApi?.maxTokens ?? null,
             reasoningEffort: config.summaryApi?.reasoningEffort ?? null,
-            prefillMode: config.summaryApi?.prefillMode ?? null,
         },
         wrapperHead: String(config.wrapperHead || ''),
         wrapperTail: String(config.wrapperTail || ''),

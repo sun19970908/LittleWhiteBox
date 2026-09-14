@@ -1,6 +1,10 @@
+import { repairScenePlanArguments } from './scene-plan-arguments.js';
+
 export const SUBMIT_SCENE_PLAN_TOOL_NAME = 'submit_scene_plan';
 
 const REQUIRED_IMAGE_FIELDS = Object.freeze(['insert_after', 'scene', 'characters']);
+// Unknown or interrupted provider finishes must not be promoted into a successful plan.
+const REPAIR_FINISH_REASONS = new Set(['', 'stop', 'completed', 'end_turn', 'tool_use', 'tool_calls', 'function_call']);
 
 export function toSceneCharacterPromptTag(value) {
     const type = String(value || '').trim();
@@ -36,6 +40,8 @@ const INPUT_ERROR_CODES = new Set([
     'IMAGE_LIMIT_EXCEEDED',
 ]);
 const TOOL_PROTOCOL_ERROR_CODES = new Set([
+    'DSML_TOOL_CALL_INVALID',
+    'TAGGED_TOOL_CALL_INVALID',
     'TOOL_CONTRACT_INVALID',
     'TOOL_CALL_MISSING',
     'TOOL_CALL_MULTIPLE',
@@ -332,9 +338,9 @@ function normalizeImages(images, options = {}) {
     return tasks;
 }
 
-function parseArguments(rawArguments) {
+function parseArguments(rawArguments, { allowRepair = true } = {}) {
     if (rawArguments && typeof rawArguments === 'object' && !Array.isArray(rawArguments)) {
-        return rawArguments;
+        return { parameters: rawArguments };
     }
     if (typeof rawArguments !== 'string') {
         throw new ScenePlannerError(
@@ -353,8 +359,10 @@ function parseArguments(rawArguments) {
         if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
             throw new TypeError('root must be an object');
         }
-        return parsed;
+        return { parameters: parsed };
     } catch (error) {
+        const recovered = allowRepair ? repairScenePlanArguments(rawArguments) : null;
+        if (recovered) return recovered;
         throw new ScenePlannerError(
             `submit_scene_plan 参数 JSON 损坏或截断：${error?.message || '无法解析'}`,
             'TOOL_ARGUMENTS_INVALID_JSON',
@@ -412,9 +420,11 @@ export function parseSubmittedScenePlan(result = {}, options = {}) {
             },
         );
     }
-    const parameters = parseArguments(toolCall.arguments);
+    const { parameters, argumentRepair } = parseArguments(toolCall.arguments, {
+        allowRepair: !result.refused && REPAIR_FINISH_REASONS.has(String(result.finishReason || '').toLowerCase()),
+    });
     // Planning notes are model-facing data, not part of the image execution contract.
     if (!Object.hasOwn(parameters, 'images')) failSchema('parameters.images', '是必填字段', undefined);
     const tasks = normalizeImages(parameters.images, options);
-    return { tasks };
+    return { tasks, ...(argumentRepair ? { argumentRepair } : {}) };
 }

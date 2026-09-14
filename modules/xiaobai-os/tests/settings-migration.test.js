@@ -39,6 +39,7 @@ function createCurrentSettings(enabled = true) {
             fourthWall: createFourthWallSettings(),
             map: { autoMaintenance: false },
             tasks: { autoMaintenance: false },
+            messages: { imagePrompt: false, voicePrompt: false },
         },
     };
 }
@@ -54,6 +55,7 @@ test('enables a new OS entry without enabling automatic app features', async () 
         assert.equal(current.apps.fourthWall.commentary.enabled, false);
         assert.equal(current.apps.fourthWall.image.enablePrompt, false);
         assert.equal(current.apps.fourthWall.voice.enabled, false);
+        assert.deepEqual(current.apps.messages, { imagePrompt: false, voicePrompt: false });
         assert.deepEqual(repository.read(), current);
     }
 });
@@ -102,6 +104,30 @@ test('moves the frozen upstream Fourth Wall preferences into OS without changing
     });
     for (const key of repository.legacyKeys) assert.equal(Object.hasOwn(settings, key), false);
     assert.deepEqual(settings.unrelatedSetting, { keep: true });
+});
+
+test('rolls back an unsuccessful settings migration in memory', async () => {
+    const settings = await loadFixture();
+    const before = structuredClone(settings);
+    const repository = createSettingsRepository(createAdapter(settings, () => {
+        throw new Error('offline');
+    }));
+
+    await assert.rejects(() => repository.prepare(), /offline/);
+
+    assert.deepEqual(settings, before);
+    assert.equal(repository.read(), null);
+});
+
+test('rolls back a migration when the host reports an unsuccessful save', async () => {
+    const settings = await loadFixture();
+    const before = structuredClone(settings);
+    const repository = createSettingsRepository(createAdapter(settings, () => false));
+
+    await assert.rejects(() => repository.prepare(), /could not be saved/);
+
+    assert.deepEqual(settings, before);
+    assert.equal(repository.read(), null);
 });
 
 test('uses dynamicPrompt only when the upstream Fourth Wall setting is absent', async () => {
@@ -214,7 +240,7 @@ test('updates OS and automatic-maintenance preferences through the common reposi
     assert.equal(settings.xiaobaiOs.apps.tasks.autoMaintenance, true);
 });
 
-test('installs cancellation fences before publishing the new preference', async () => {
+test('persists a mutation before installing cancellation fences and publishing it', async () => {
     const settings = { xiaobaiOs: createCurrentSettings() };
     const events = [];
     const repository = createSettingsRepository(createAdapter(settings, () => {events.push('save');}));
@@ -224,7 +250,7 @@ test('installs cancellation fences before publishing the new preference', async 
 
     await repository.setMapAutoMaintenance(true);
 
-    assert.deepEqual(events, ['fence', 'publish', 'save']);
+    assert.deepEqual(events, ['save', 'fence', 'publish']);
 });
 
 test('rejects invalid mutation arguments without changing preferences', async () => {
@@ -236,5 +262,34 @@ test('rejects invalid mutation arguments without changing preferences', async ()
     assert.throws(() => repository.setEnabled('yes'), /enabled must be a boolean/);
     assert.throws(() => repository.setMapAutoMaintenance(null), /must be a boolean/);
     assert.throws(() => repository.setTasksAutoMaintenance(1), /must be a boolean/);
+    assert.throws(() => repository.setMessagesCapabilities({ imagePrompt: 'yes', voicePrompt: false }), /must be boolean/);
     assert.deepEqual(settings.xiaobaiOs, before);
+});
+
+test('Messages capability preferences persist independently of Fourth Wall and report save failures', async () => {
+    const settings = { xiaobaiOs: createCurrentSettings() };
+    let saved = structuredClone(settings);
+    let fail = false;
+    const repository = createSettingsRepository(createAdapter(settings, () => {
+        if (fail) {throw new Error('offline');}
+        saved = structuredClone(settings);
+    }));
+    await repository.prepare();
+    const events = [];
+    repository.subscribe(() => {events.push('publish');});
+    repository.subscribeMutationInstalled(() => {events.push('fence');});
+    const fourthWall = repository.read().apps.fourthWall;
+    await repository.setMessagesCapabilities({ imagePrompt: true, voicePrompt: true });
+    const reopened = createSettingsRepository(createAdapter(structuredClone(saved)));
+    assert.deepEqual((await reopened.prepare()).apps.messages, { imagePrompt: true, voicePrompt: true });
+    assert.deepEqual(reopened.read().apps.fourthWall, fourthWall);
+    fail = true;
+    await assert.rejects(() => repository.setMessagesCapabilities({ imagePrompt: false, voicePrompt: false }), /offline/);
+    assert.deepEqual(saved.xiaobaiOs.apps.messages, { imagePrompt: true, voicePrompt: true });
+    assert.deepEqual(repository.read().apps.messages, { imagePrompt: true, voicePrompt: true });
+    assert.deepEqual(events, ['fence', 'publish']);
+    fail = false;
+    await repository.setMessagesCapabilities({ imagePrompt: false, voicePrompt: false });
+    assert.deepEqual(saved.xiaobaiOs.apps.messages, { imagePrompt: false, voicePrompt: false });
+    assert.deepEqual(saved.xiaobaiOs.apps.fourthWall, fourthWall);
 });

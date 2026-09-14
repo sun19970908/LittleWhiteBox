@@ -35,3 +35,11 @@ export function logScenePlannerValidationFailure(failure, context = {}, logger =
         llmResultTruncated: failure.modelOutputTruncated === true,
     }, logger);
 }
+
+export function logScenePlannerArgumentsRepair(repair, context = {}, logger = console) {
+    return logScenePlannerDiagnostic('已修复 Tool 参数末尾括号', {
+        event: 'scene_planner_tool_arguments_repaired',
+        ...context,
+        ...repair,
+    }, logger);
+}

@@ -1,7 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 import { normalizeAgentSettings } from '../../../agent-core/config.js';
+import { OpenAICompatibleAdapter } from '../../../agent-core/adapters/openai-compatible.js';
 import {
     getProviderLabel,
     getToolModeLabel,
@@ -16,6 +18,7 @@ import {
 } from '../draw-agent.js';
 import { generateAndParseScenePlan } from '../scene-planner.js';
 import { createSubmitScenePlanTool } from '../scene-plan-tool.js';
+import { getScenePlannerErrorCategory, ScenePlannerErrorCategory } from '../scene-plan-contract.js';
 
 function buildSettings(model, apiKey = 'main-key') {
     return {
@@ -97,10 +100,6 @@ function buildValidScenePlanResult() {
             id: 'valid-call',
             name: 'submit_scene_plan',
             arguments: JSON.stringify({
-                mindful_prelude: {
-                    user_insight: '开门动作。',
-                    visual_plan: '画剧情中的这一瞬间，放在插图点 1 后，画面无人物，已录入和未录入角色均不出现，采用室内中景。',
-                },
                 images: [{
                     index: 1,
                     insert_after: 1,
@@ -166,6 +165,46 @@ test('draw agent reads the latest main preset every request and never selects de
     // Diagnostics are redacted at the Draw boundary and never persisted.
     assert.equal(diagnostic.request.request.headers.Authorization, '[redacted]');
     assert.equal(diagnostic.request.request.body.api_key, '[redacted]');
+});
+
+test('DeepSeek text-only planning replies keep their reasoning in the existing correction request', async (t) => {
+    t.mock.method(console, 'log', () => {});
+    resetDrawAgentRuntimeForTests();
+    const requests = [];
+    const firstReply = { role: 'assistant', content: 'Preparing the plan.', reasoning_content: 'Choose the doorway moment.' };
+    const result = await generateAndParseScenePlan({
+        messageText: '阿璃推开门。', maxImages: 1,
+        expansionOptions: { runtime: { substituteParams: text => text } },
+        agentOptions: {
+            dependencies: { getAgentSettings: async () => buildSettings('deepseek-chat') },
+            loadAgentCore: async () => ({ createAgentAdapter: providerConfig => {
+                const adapter = new OpenAICompatibleAdapter(providerConfig);
+                adapter.client.chat.completions.create = async body => {
+                    requests.push(structuredClone(body));
+                    assert.ok(requests.length <= 2, 'the existing correction is sufficient');
+                    if (requests.length === 2) {
+                        const replay = body.messages.find(message => message.role === 'assistant');
+                        assert.equal(replay.reasoning_content, firstReply.reasoning_content);
+                        assert.equal(replay.content, firstReply.content);
+                    }
+                    return { choices: [{ message: requests.length === 1 ? firstReply : {
+                        role: 'assistant', content: '', reasoning_content: 'Submit the plan.',
+                        tool_calls: [{ id: 'plan-call', type: 'function', function: {
+                            name: 'submit_scene_plan', arguments: buildValidScenePlanResult().toolCalls[0].arguments,
+                        } }],
+                    }, finish_reason: requests.length === 1 ? 'stop' : 'tool_calls' }] };
+                };
+                return adapter;
+            } }),
+        },
+    });
+    assert.equal(requests.length, 2);
+    assert.ok(requests.every(body => body.tool_choice === 'auto' && body.thinking.type === 'enabled'));
+    assert.equal(result[0].scene, 'opening door, indoor');
+    const diagnostic = getLastDrawAgentDiagnostic();
+    assert.equal(diagnostic.status, 'success');
+    assert.equal(diagnostic.correctionCount, 1);
+    assert.equal(diagnostic.validationFailures[0].errorCode, 'TOOL_CALL_MISSING');
 });
 
 test('draw agent forwards the per-run Host Client to an injected Node Agent Core', async () => {
@@ -264,6 +303,203 @@ test('scene planner corrects schema failures with canonical provider history in 
     assert.equal(diagnostic.validationFailures[0].modelOutputTruncated, false);
     assert.ok(progress.some(item => item.phase === 'analysis' && item.current === 1 && item.total === 3));
     assert.ok(progress.some(item => item.phase === 'correction' && item.current === 2 && item.total === 3));
+});
+
+test('scene planner receives and replays a malformed argument string before model correction', async () => {
+    resetDrawAgentRuntimeForTests();
+    const settings = buildSettings('correction-model');
+    settings.presets.主预设.modelConfigs['openai-compatible'].toolMode = 'tagged-json';
+    // Redacted reported arguments, transported as a string with unambiguous boundaries.
+    const rawArguments = '{"mindful_prelude":{"user_insight":"A door opens.","visual_plan":"title: SUMMER"}},"images":[{"index":1,"insert_after":1,"scene":"opening door, indoor","characters":[]}]}';
+    const responses = [rawArguments, buildValidScenePlanResult().toolCalls[0].arguments];
+    const requests = [];
+    const result = await generateAndParseScenePlan({
+        messageText: '阿璃推开门。',
+        maxImages: 1,
+        expansionOptions: { runtime: { substituteParams: text => text } },
+        agentOptions: {
+            dependencies: { getAgentSettings: async () => settings },
+            loadAgentCore: async () => ({
+                createAgentAdapter: providerConfig => {
+                    const adapter = new OpenAICompatibleAdapter(providerConfig);
+                    adapter.client.chat.completions.create = async body => {
+                        requests.push(body);
+                        assert.ok(requests.length <= responses.length);
+                        return {
+                            choices: [{
+                                message: {
+                                    role: 'assistant',
+                                    content: `<tool_call>${JSON.stringify({ name: 'submit_scene_plan', arguments: responses[requests.length - 1] })}</tool_call>`,
+                                },
+                                finish_reason: 'stop',
+                            }],
+                        };
+                    };
+                    return adapter;
+                },
+            }),
+        },
+    });
+
+    assert.equal(requests.length, 2);
+    const replayedAssistant = requests[1].messages.find(message => message.role === 'assistant');
+    const replayedPayload = JSON.parse(replayedAssistant.content.match(/<tool_call>([\s\S]*?)<\/tool_call>/)[1]);
+    assert.equal(replayedPayload.arguments, rawArguments);
+    assert.equal(result[0].scene, 'opening door, indoor');
+    const diagnostic = getLastDrawAgentDiagnostic();
+    assert.equal(diagnostic.status, 'success');
+    assert.equal(diagnostic.correctionCount, 1);
+    assert.equal(diagnostic.validationFailures[0].errorCode, 'TOOL_ARGUMENTS_INVALID_JSON');
+    assert.equal(JSON.parse(diagnostic.validationFailures[0].modelOutput).toolCalls[0].arguments, rawArguments);
+});
+
+test('scene planner repairs native and tagged argument shells once, retaining originals in diagnostics', async (t) => {
+    const logs = [];
+    t.mock.method(console, 'log', (_label, details) => logs.push(details));
+    const scene = 'book cover, title: SUMMER, content: OPEN, mode: cinematic';
+    const valid = buildValidScenePlanResult().toolCalls[0].arguments.replace('opening door, indoor', scene);
+    for (const toolMode of ['native', 'tagged-json']) {
+        for (const rawArguments of [valid, valid.slice(0, -1), valid + '}]']) {
+            resetDrawAgentRuntimeForTests();
+            const settings = buildSettings('shell-repair-model');
+            settings.presets.主预设.modelConfigs['openai-compatible'].toolMode = toolMode;
+            const message = toolMode === 'native' ? {
+                role: 'assistant', content: '',
+                tool_calls: [{ id: 'call-1', type: 'function', function: { name: 'submit_scene_plan', arguments: rawArguments } }],
+            } : {
+                role: 'assistant',
+                content: `<tool_call>{"name":"submit_scene_plan","arguments":${rawArguments}}</tool_call>`,
+            };
+            const originalMessage = structuredClone(message);
+            let calls = 0;
+            const result = await generateAndParseScenePlan({
+                messageText: '阿璃推开门。', maxImages: 1,
+                expansionOptions: { runtime: { substituteParams: text => text } },
+                agentOptions: {
+                    dependencies: { getAgentSettings: async () => settings },
+                    loadAgentCore: async () => ({
+                        createAgentAdapter: providerConfig => {
+                            const adapter = new OpenAICompatibleAdapter(providerConfig);
+                            adapter.client.chat.completions.create = async () => {
+                                calls += 1;
+                                assert.equal(calls, 1, 'local shell repair must not make another model request');
+                                return { choices: [{ message, finish_reason: toolMode === 'native' ? 'tool_calls' : 'stop' }] };
+                            };
+                            return adapter;
+                        },
+                    }),
+                },
+            });
+            assert.equal(result.length, 1);
+            assert.equal(result[0].scene, scene);
+            assert.deepEqual(message, originalMessage);
+            const diagnostic = getLastDrawAgentDiagnostic();
+            assert.equal(diagnostic.status, 'success');
+            assert.equal(diagnostic.correctionCount, 0);
+            assert.equal(diagnostic.attemptCount, 1);
+            assert.deepEqual(diagnostic.validationFailures, []);
+            // Tagged outer closers are stripped before argument validation; native extras and
+            // missing argument closers still use the domain repair and retain its diagnostics.
+            if (rawArguments === valid || (toolMode === 'tagged-json' && rawArguments === valid + '}]')) {
+                assert.equal(Object.hasOwn(diagnostic, 'argumentRepair'), false);
+            }
+            else {
+                assert.equal(diagnostic.argumentRepair.originalArguments, rawArguments);
+                assert.equal(diagnostic.argumentRepair.attempt, 1);
+            }
+        }
+    }
+    const repairs = logs.filter(log => log.event === 'scene_planner_tool_arguments_repaired');
+    assert.equal(repairs.length, 3);
+    assert.ok(repairs.every(log => log.originalArguments !== valid));
+});
+
+test('scene planner accepts the reported decorated two-image plan in one request', async (t) => {
+    resetDrawAgentRuntimeForTests();
+    t.mock.method(console, 'log', () => {});
+    const raw = readFileSync(new URL('../../../assistant/tests/fixtures/tagged-scene-plan-dsml-suffix.txt', import.meta.url), 'utf8');
+    const expected = JSON.parse(raw.slice(raw.indexOf('{'), raw.indexOf('</｜｜DSML｜｜ parameter>'))).arguments.images;
+    const settings = buildSettings('decorated-plan-model');
+    settings.presets.主预设.modelConfigs['openai-compatible'].toolMode = 'tagged-json';
+    let calls = 0;
+    const tasks = await generateAndParseScenePlan({
+        messageText: '方灵抬头。\n'.repeat(73), maxImages: 2,
+        presentCharacters: [{ name: '方灵' }],
+        expansionOptions: { runtime: { substituteParams: text => text } },
+        agentOptions: {
+            dependencies: { getAgentSettings: async () => settings },
+            loadAgentCore: async () => ({
+                createAgentAdapter: config => {
+                    const adapter = new OpenAICompatibleAdapter(config);
+                    adapter.client.chat.completions.create = async () => {
+                        calls += 1;
+                        assert.equal(calls, 1);
+                        return { choices: [{ message: { role: 'assistant', content: raw }, finish_reason: 'stop' }] };
+                    };
+                    return adapter;
+                },
+            }),
+        },
+    });
+    assert.equal(calls, 1);
+    assert.deepEqual(tasks.map(task => task.placement.insertAfter), [52, 73]);
+    assert.deepEqual(tasks.map(task => task.scene), expected.map(image => image.scene));
+    assert.deepEqual(tasks.map(task => task.chars[0].action), expected.map(image => image.characters[0].action));
+    assert.equal(getLastDrawAgentDiagnostic().correctionCount, 0);
+    assert.deepEqual(getLastDrawAgentDiagnostic().validationFailures, []);
+});
+
+test('scene planner reports DSML protocol failures with the full redacted response without retrying', async (t) => {
+    resetDrawAgentRuntimeForTests();
+    const logs = [];
+    t.mock.method(console, 'log', (_label, details) => logs.push(details));
+    const settings = buildSettings('dsml-diagnostic-model');
+    settings.presets.主预设.modelConfigs['openai-compatible'].toolMode = 'tagged-json';
+    const message = {
+        role: 'assistant',
+        content: 'Planning. <｜DSML｜function_calls><｜DSML｜invoke name="submit_scene_plan">'
+            + '<｜DSML｜parameter name="images" string="false">[]',
+        api_key: 'response-secret',
+    };
+    const original = structuredClone(message);
+    let calls = 0;
+    await assert.rejects(() => generateAndParseScenePlan({
+        messageText: 'A book rests on a table.', maxImages: 1,
+        expansionOptions: { runtime: { substituteParams: text => text } },
+        agentOptions: {
+            dependencies: { getAgentSettings: async () => settings },
+            loadAgentCore: async () => ({
+                createAgentAdapter: providerConfig => {
+                    const adapter = new OpenAICompatibleAdapter(providerConfig);
+                    adapter.client.chat.completions.create = async () => {
+                        calls += 1;
+                        return { choices: [{ message, finish_reason: 'stop' }] };
+                    };
+                    return adapter;
+                },
+            }),
+        },
+    }), error => {
+        assert.equal(error.code, 'DSML_TOOL_CALL_INVALID');
+        assert.equal(getScenePlannerErrorCategory(error), ScenePlannerErrorCategory.TOOL_PROTOCOL);
+        assert.deepEqual(error.cause.rawAssistantMessage, original);
+        return true;
+    });
+    assert.equal(calls, 1);
+    assert.deepEqual(message, original);
+    const diagnostic = getLastDrawAgentDiagnostic();
+    assert.equal(diagnostic.stage, 'parse');
+    assert.equal(diagnostic.terminationReason, 'tool_protocol_error');
+    assert.equal(diagnostic.errorCode, 'DSML_TOOL_CALL_INVALID');
+    assert.equal(diagnostic.correctionCount, 0);
+    assert.deepEqual(diagnostic.validationFailures, []);
+    const [attempt] = diagnostic.attempts;
+    assert.equal(attempt.errorCode, diagnostic.errorCode);
+    assert.ok(Number.isInteger(attempt.errorOffset));
+    assert.deepEqual(attempt.rawAssistantMessage, { ...original, api_key: '[redacted]' });
+    assert.equal(logs.filter(log => log.rawAssistantMessage).length, 1);
+    assert.deepEqual(logs.find(log => log.rawAssistantMessage).rawAssistantMessage, attempt.rawAssistantMessage);
+    assert.doesNotMatch(JSON.stringify({ diagnostic, logs }), /response-secret/);
 });
 
 test('scene planner corrects a missing Tool call without inventing Tool history', async () => {

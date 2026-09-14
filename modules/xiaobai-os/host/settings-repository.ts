@@ -1,6 +1,7 @@
 import type { FourthWallGlobalSettings } from '../apps/fourth-wall/types.js';
 import type { MapSettings } from '../apps/map/types.js';
 import type { TasksSettings } from '../apps/tasks/types.js';
+import type { MessagesSettings } from '../apps/messages/types.js';
 import type { XiaobaiOsSettings as XiaobaiOsSettingsRoot } from '../types.js';
 import { jsonValuesEqual } from './json-values-equal.js';
 import { normalizeAppOrder } from '../shell/app-order.js';
@@ -16,6 +17,7 @@ type XiaobaiOsSettings = XiaobaiOsSettingsRoot<{
     fourthWall: FourthWallGlobalSettings;
     map: MapSettings;
     tasks: TasksSettings;
+    messages: MessagesSettings;
 }>;
 
 type UnknownRecord = Record<string, unknown>;
@@ -36,7 +38,7 @@ function cloneSettings<T>(value: T): T {
 
 export interface XiaobaiOsSettingsAdapter {
     getExtensionSettings: () => UnknownRecord;
-    saveSettings: () => Promise<void> | void;
+    saveSettings: () => Promise<void | boolean> | void;
 }
 
 export interface XiaobaiOsSettingsRepository {
@@ -46,6 +48,7 @@ export interface XiaobaiOsSettingsRepository {
     setAppOrder: (order: readonly string[]) => Promise<XiaobaiOsSettings>;
     setMapAutoMaintenance: (enabled: boolean) => Promise<XiaobaiOsSettings>;
     setTasksAutoMaintenance: (enabled: boolean) => Promise<XiaobaiOsSettings>;
+    setMessagesCapabilities: (settings: MessagesSettings) => Promise<XiaobaiOsSettings>;
     mutateFourthWall: (
         action: (current: FourthWallGlobalSettings) => FourthWallGlobalSettings,
     ) => Promise<XiaobaiOsSettings>;
@@ -83,8 +86,9 @@ function createWriteQueue() {
 
 /**
  * Creates the sole repository for persistent Xiaobai OS extension settings.
- * Settings are ordinary SillyTavern preferences: mutations install in memory
- * immediately and ask the host to persist them through its normal save path.
+ * Settings are ordinary SillyTavern preferences. A mutation is installed
+ * temporarily while the host persists it; subscribers are notified only after
+ * persistence succeeds, and a reported save failure restores the old value.
  */
 export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): XiaobaiOsSettingsRepository {
     if (typeof adapter?.getExtensionSettings !== 'function' || typeof adapter?.saveSettings !== 'function') {
@@ -93,6 +97,7 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
     const enqueueWrite = createWriteQueue();
     const listeners = new Set<(settings: XiaobaiOsSettings) => void>();
     const mutationInstalledListeners = new Set<(settings: XiaobaiOsSettings) => void>();
+    let committed: XiaobaiOsSettings | null = null;
 
     function publish(settings: XiaobaiOsSettings): void {
         for (const listener of listeners) {
@@ -114,10 +119,23 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         }
     }
 
-    async function saveInstalled(installed: XiaobaiOsSettings): Promise<XiaobaiOsSettings> {
+    async function saveInstalled(
+        previous: XiaobaiOsSettings,
+        installed: XiaobaiOsSettings,
+    ): Promise<XiaobaiOsSettings> {
+        try {
+            const saved = await adapter.saveSettings();
+            if (saved === false) {
+                throw new Error('Xiaobai OS settings could not be saved');
+            }
+        } catch (error) {
+            const root = requireSettingsRoot(adapter);
+            root.xiaobaiOs = cloneSettings(previous);
+            throw error;
+        }
+        committed = cloneSettings(installed);
         publishMutationInstalled(installed);
         publish(installed);
-        await adapter.saveSettings();
         return cloneSettings(installed);
     }
 
@@ -126,8 +144,12 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         if (!Object.hasOwn(root, 'xiaobaiOs')) {
             return null;
         }
+        if (committed !== null) {
+            return cloneSettings(committed);
+        }
         assertValidSettings(root.xiaobaiOs);
-        return cloneSettings(root.xiaobaiOs);
+        committed = cloneSettings(root.xiaobaiOs);
+        return cloneSettings(committed);
     }
 
     async function prepare(): Promise<XiaobaiOsSettings> {
@@ -142,14 +164,37 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
                 }
                 : migrateUpstreamFourthWallSettings(root);
             const installed = cloneSettings(migration.value);
+            const previousLegacyValues = new Map(
+                migration.legacyKeys.map((key) => [key, root[key]]),
+            );
             const changed = !hadSettings
                 || !jsonValuesEqual(previous, installed)
                 || migration.legacyKeys.length > 0;
             root.xiaobaiOs = installed;
             migration.legacyKeys.forEach((key) => delete root[key]);
             if (changed) {
-                await adapter.saveSettings();
+                try {
+                    const saved = await adapter.saveSettings();
+                    if (saved === false) {
+                        throw new Error('Xiaobai OS settings could not be saved');
+                    }
+                } catch (error) {
+                    if (hadSettings) {
+                        root.xiaobaiOs = cloneSettings(previous);
+                    } else {
+                        delete root.xiaobaiOs;
+                    }
+                    for (const key of migration.legacyKeys) {
+                        if (previousLegacyValues.has(key)) {
+                            root[key] = previousLegacyValues.get(key);
+                        } else {
+                            delete root[key];
+                        }
+                    }
+                    throw error;
+                }
             }
+            committed = cloneSettings(installed);
             return cloneSettings(installed);
         });
     }
@@ -164,7 +209,7 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
                 throw new XiaobaiOsSettingsError('SETTINGS_NOT_PREPARED', 'Xiaobai OS settings have not been prepared');
             }
             assertValidSettings(root.xiaobaiOs);
-            const previous = cloneSettings(root.xiaobaiOs);
+            const previous = committed ? cloneSettings(committed) : cloneSettings(root.xiaobaiOs);
             const next = action(cloneSettings(previous));
             if (!isRecord(next)) {
                 throw new TypeError('settings mutation action must return the complete next state');
@@ -172,7 +217,7 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
             assertValidSettings(next);
             const installed = cloneSettings(next);
             root.xiaobaiOs = installed;
-            return saveInstalled(installed);
+            return saveInstalled(previous, installed);
         });
     }
 
@@ -214,6 +259,14 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         });
     }
 
+    function setMessagesCapabilities(settings: MessagesSettings): Promise<XiaobaiOsSettings> {
+        if (typeof settings?.imagePrompt !== 'boolean' || typeof settings?.voicePrompt !== 'boolean') {
+            throw new TypeError('messages capabilities must be boolean');
+        }
+        const nextSettings = { imagePrompt: settings.imagePrompt, voicePrompt: settings.voicePrompt };
+        return mutate(next => ({ ...next, apps: { ...next.apps, messages: nextSettings } }));
+    }
+
     function mutateFourthWall(
         action: (current: FourthWallGlobalSettings) => FourthWallGlobalSettings,
     ): Promise<XiaobaiOsSettings> {
@@ -253,6 +306,7 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         setAppOrder,
         setMapAutoMaintenance,
         setTasksAutoMaintenance,
+        setMessagesCapabilities,
         mutateFourthWall,
         subscribe,
         subscribeMutationInstalled,

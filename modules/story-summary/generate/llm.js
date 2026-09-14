@@ -334,7 +334,8 @@ export function parseSummaryJson(raw) {
         .trim();
 
     try {
-        return JSON.parse(cleaned);
+        const parsed = JSON.parse(cleaned);
+        return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
     } catch { }
 
     const start = cleaned.indexOf('{');
@@ -343,7 +344,8 @@ export function parseSummaryJson(raw) {
         let jsonStr = cleaned.slice(start, end + 1)
             .replace(/,(\s*[}\]])/g, '$1');
         try {
-            return JSON.parse(jsonStr);
+            const parsed = JSON.parse(jsonStr);
+            return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
         } catch { }
     }
 

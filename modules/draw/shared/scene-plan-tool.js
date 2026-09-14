@@ -130,27 +130,8 @@ export function createSubmitScenePlanTool(options = {}) {
             parameters: {
                 type: 'object',
                 additionalProperties: false,
-                required: ['mindful_prelude', 'images'],
+                required: ['images'],
                 properties: {
-                    mindful_prelude: {
-                        type: 'object',
-                        additionalProperties: false,
-                        required: ['user_insight', 'visual_plan'],
-                        properties: {
-                            user_insight: {
-                                ...stringSchema(
-                                    'In one prose paragraph, describe the narrative setting, writing style and emotional expression in the user\'s text. Offer cautious advice only when the text genuinely indicates serious psychological issues.',
-                                    { minLength: 1 },
-                                ),
-                            },
-                            visual_plan: {
-                                ...stringSchema(
-                                    'In one prose paragraph, describe each planned narrative moment, the numbered illustration point it follows, the number and types of characters, which characters are registered or unregistered, and the visual composition.',
-                                    { minLength: 1 },
-                                ),
-                            },
-                        },
-                    },
                     images: imagesSchema,
                 },
             },

@@ -1,5 +1,5 @@
 import { extension_settings, getContext } from '../../../../../../extensions.js';
-import { default_user_avatar, saveSettingsDebounced } from '../../../../../../../script.js';
+import { saveSettings as saveSettingsNow } from '../../../../../../../script.js';
 import { EXT_ID } from '../../../core/constants.js';
 import type { XiaobaiOsChatIdentity } from '../types.js';
 import { countAssistantTurns } from './assistant-turn-count.js';
@@ -22,8 +22,6 @@ interface SillyTavernContext {
     groupId?: unknown;
     characterId?: unknown;
     characters?: Record<string, { avatar?: unknown; name?: unknown }>;
-    user_avatar?: unknown;
-    persona?: { avatar?: unknown };
     name1?: unknown;
     name2?: unknown;
     chat?: SillyTavernMessage[];
@@ -35,7 +33,6 @@ export interface XiaobaiOsShellSnapshot {
         identity: string;
         characterName: string;
         characterAvatar: string;
-        userAvatar: string;
     };
 }
 
@@ -83,26 +80,6 @@ function resolveCharacterAvatar(context: SillyTavernContext): string {
         .split('/')
         .map((segment) => encodeURIComponent(segment))
         .join('/')}`;
-}
-
-function resolveAssetUrl(path: unknown, prefix = ''): string {
-    const value = String(path || '');
-    if (!value) {
-        return '';
-    }
-    if (/^(?:data:|blob:|https?:|\/)/i.test(value)) {
-        return value;
-    }
-    const normalized = value.includes('/') || !prefix ? value : `${prefix}/${value}`;
-    return `/${normalized
-        .split('/')
-        .map((segment) => encodeURIComponent(segment))
-        .join('/')}`;
-}
-
-function resolveUserAvatar(context: SillyTavernContext): string {
-    const avatar = context?.user_avatar || context?.persona?.avatar || default_user_avatar || '';
-    return resolveAssetUrl(avatar, 'User Avatars');
 }
 
 function explicitDocumentTheme(): XiaobaiOsShellSnapshot['theme'] | null {
@@ -184,7 +161,7 @@ export function createSillyTavernSettingsAdapter(): XiaobaiOsSettingsAdapter {
             return settingsRoot[EXT_ID];
         },
         saveSettings() {
-            saveSettingsDebounced();
+            return saveSettingsNow();
         },
     };
 }
@@ -224,7 +201,6 @@ export function getSillyTavernShellSnapshot(): XiaobaiOsShellSnapshot {
                   identity: identity.key,
                   characterName: String(context.name2 || ''),
                   characterAvatar: resolveCharacterAvatar(context),
-                  userAvatar: resolveUserAvatar(context),
               }
             : null,
     };

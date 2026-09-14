@@ -220,9 +220,8 @@ test('one backend runtime forwards changing browser planning schemas and execute
         characters: [{ name: '旅人', type: '女孩', appear: 'black hair', uc: null, nickname: 'ignored' }],
     }];
     const variants = [
-        { mindful_prelude: { user_insight: '雨夜', visual_plan: '画旅人。' } },
-        { planning_notes: ['another planning format'], review: { done: true } },
         {},
+        { planning_notes: ['another planning format'], review: { done: true } },
     ];
     const seenTools = [];
     const { manager, imageJobService } = createManager({
@@ -247,14 +246,11 @@ test('one backend runtime forwards changing browser planning schemas and execute
     for (const [index, notes] of variants.entries()) {
         const envelope = createEnvelope(`run-notes-${index}`);
         const tool = createSubmitScenePlanTool({ maxImages: 1, insertPointCount: 1, centerMode: 'normalized' });
-        if (index > 0) {
-            delete tool.function.parameters.properties.mindful_prelude;
-            tool.function.parameters.required = ['images', ...Object.keys(notes)];
-            for (const [name, value] of Object.entries(notes)) {
-                tool.function.parameters.properties[name] = Array.isArray(value)
-                    ? { type: 'array', items: { type: 'string' } }
-                    : { type: 'object', properties: { done: { type: 'boolean' } } };
-            }
+        tool.function.parameters.required = ['images', ...Object.keys(notes)];
+        for (const [name, value] of Object.entries(notes)) {
+            tool.function.parameters.properties[name] = Array.isArray(value)
+                ? { type: 'array', items: { type: 'string' } }
+                : { type: 'object', properties: { done: { type: 'boolean' } } };
         }
         envelope.planner.tool = tool;
         manager.create('alice', envelope, {});
@@ -271,6 +267,166 @@ test('one backend runtime forwards changing browser planning schemas and execute
         assert.equal(terminal.handoffManifest.items[0].insertOffset, 6);
     }
     assert.equal(seenTools.length, variants.length);
+});
+
+test('backend dispatches repaired complete plans and keeps incomplete or invalid plans out of image jobs', async (t) => {
+    const valid = JSON.stringify({ images: [{ insert_after: 1, scene: 'rain', characters: [] }] });
+    const cases = [
+        [valid.slice(0, -1), 'missing_root_closer'],
+        [valid + '}]', 'trailing_closers'],
+        [valid.slice(0, -2), null, 'TOOL_ARGUMENTS_INVALID_JSON'],
+        [valid.replace('"insert_after":1', '"insert_after":99') + '}', null, 'INSERT_POINT_INVALID'],
+    ];
+    for (const [index, [rawArguments, kind, errorCode]] of cases.entries()) {
+        let calls = 0;
+        const { manager, imageJobService } = createManager({
+            runtime: drawRuntime,
+            managerOptions: {
+                agentCore: {
+                    createAgentAdapter: () => ({
+                        async chat() {
+                            calls += 1;
+                            return { toolCalls: [{ name: 'submit_scene_plan', arguments: rawArguments }] };
+                        },
+                    }),
+                },
+            },
+        });
+        t.after(() => manager.close());
+        const envelope = createEnvelope(`run-shell-repair-${index}`);
+        manager.create('alice', envelope, {});
+        const terminal = await waitFor(() => {
+            const run = manager.get('alice', envelope.runId);
+            return ['dispatched', 'failed'].includes(run?.state) ? run : null;
+        });
+        if (kind) {
+            assert.equal(terminal.state, 'dispatched', JSON.stringify(terminal.error));
+            assert.equal(calls, 1);
+            assert.equal(terminal.progress.argumentRepair.kind, kind);
+            assert.equal(terminal.progress.argumentRepair.originalArguments, rawArguments);
+            assert.deepEqual(terminal.progress.validationFailures, []);
+            const job = imageJobService.get('alice', terminal.childJobId);
+            assert.equal(job.body.items.length, 1);
+            assert.equal(job.body.items[0].request.payload.prompt, 'rain');
+        } else {
+            assert.equal(terminal.state, 'failed');
+            assert.equal(terminal.error.code, errorCode);
+            assert.equal(calls, 2);
+            assert.equal(imageJobService.jobs.size, 0);
+            assert.equal(Object.hasOwn(terminal.progress, 'argumentRepair'), false);
+            assert.equal(JSON.parse(terminal.progress.validationFailures[0].modelOutput).toolCalls[0].arguments, rawArguments);
+        }
+    }
+});
+
+test('backend dispatches a decorated tagged plan once and retains ambiguous-call diagnostics without dispatch', async (t) => {
+    const agentCore = require('../draw-runs/vendor/agent-core-node.cjs');
+    t.mock.method(console, 'log', () => {});
+    const payload = JSON.stringify({ name: 'submit_scene_plan', arguments: {
+        images: [{ insert_after: 1, scene: 'book cover, title: SUMMER', characters: [] }],
+    } });
+    const cases = [
+        { body: `\`\`\`json\n${payload}\n\`\`\`\n</unexpected>[完成]<status value="[done]"/> "完成"` },
+        { body: `${payload}}\n</｜｜DSML｜｜ parameter> ]\n[2 张已完成]` },
+        { body: `${payload},\n${payload}`, ambiguous: true },
+        { body: `${payload} "完成`, ambiguous: true },
+        { body: `${payload.slice(0, -1)},"images":[]}}`, ambiguous: true },
+    ];
+    for (const [index, { body, ambiguous }] of cases.entries()) {
+        const content = `<tool_call>${body}</tool_call>`;
+        let calls = 0;
+        const { manager, imageJobService } = createManager({
+            runtime: drawRuntime,
+            managerOptions: {
+                agentCore: {
+                    createAgentAdapter(config) {
+                        const adapter = agentCore.createAgentAdapter(config);
+                        adapter.client.chat.completions.create = async () => {
+                            calls += 1;
+                            return { choices: [{ message: { role: 'assistant', content }, finish_reason: 'stop' }] };
+                        };
+                        return adapter;
+                    },
+                },
+            },
+        });
+        t.after(() => manager.close());
+        const envelope = createEnvelope(`run-tagged-decoration-${index}`);
+        envelope.agent.providerConfig.toolMode = 'tagged-json';
+        manager.create('alice', envelope, {});
+        const terminal = await waitFor(() => {
+            const run = manager.get('alice', envelope.runId);
+            return ['dispatched', 'failed'].includes(run?.state) ? run : null;
+        });
+        assert.equal(calls, 1);
+        assert.deepEqual(terminal.progress.validationFailures, []);
+        if (ambiguous) {
+            assert.equal(terminal.state, 'failed');
+            assert.equal(terminal.error.code, 'TAGGED_TOOL_CALL_INVALID');
+            assert.equal(terminal.progress.attempts[0].rawAssistantMessage.content, content);
+            assert.equal(imageJobService.jobs.size, 0);
+        } else {
+            assert.equal(terminal.state, 'dispatched');
+            const job = imageJobService.get('alice', terminal.childJobId);
+            assert.equal(job.body.items.length, 1);
+            assert.equal(job.body.items[0].request.payload.prompt, 'book cover, title: SUMMER');
+        }
+    }
+});
+
+test('backend DSML failures retain protocol classification and deliver redacted originals to F12 once', async (t) => {
+    const agentCore = require('../draw-runs/vendor/agent-core-node.cjs');
+    const { logDrawRunPlannerDiagnostics } = await import('../../../modules/draw/shared/draw-run-debug.js');
+    const logs = [];
+    t.mock.method(console, 'log', (_label, details) => logs.push(details));
+    const message = {
+        role: 'assistant',
+        content: 'Planning. <｜DSML｜function_calls><｜DSML｜invoke name="submit_scene_plan">'
+            + '<｜DSML｜parameter name="images" string="false">[]',
+        api_key: 'response-secret',
+    };
+    let calls = 0;
+    const { manager, imageJobService } = createManager({
+        runtime: drawRuntime,
+        managerOptions: {
+            agentCore: {
+                createAgentAdapter(config) {
+                    const adapter = agentCore.createAgentAdapter(config);
+                    adapter.client.chat.completions.create = async () => {
+                        calls += 1;
+                        return { choices: [{ message, finish_reason: 'stop' }] };
+                    };
+                    return adapter;
+                },
+            },
+        },
+    });
+    t.after(() => manager.close());
+    const envelope = createEnvelope('run-dsml-diagnostic');
+    envelope.agent.providerConfig.toolMode = 'tagged-json';
+    manager.create('alice', envelope, {});
+    const terminal = await waitFor(() => {
+        const run = manager.get('alice', envelope.runId);
+        return ['dispatched', 'failed'].includes(run?.state) ? run : null;
+    });
+    assert.equal(terminal.state, 'failed');
+    assert.equal(terminal.error.code, 'DSML_TOOL_CALL_INVALID');
+    assert.equal(calls, 1);
+    assert.equal(imageJobService.jobs.size, 0);
+    assert.deepEqual(terminal.progress.validationFailures, []);
+    const [attempt] = terminal.progress.attempts;
+    assert.equal(attempt.errorCode, terminal.error.code);
+    assert.deepEqual(attempt.rawAssistantMessage, { ...message, api_key: '[redacted]' });
+    const entries = [];
+    const logger = { log: (_label, details) => entries.push(details) };
+    logDrawRunPlannerDiagnostics(terminal, logger);
+    logDrawRunPlannerDiagnostics(terminal, logger);
+    assert.equal(entries.length, 1);
+    assert.equal(entries[0].errorCode, 'DSML_TOOL_CALL_INVALID');
+    assert.ok(Number.isInteger(entries[0].errorOffset));
+    assert.deepEqual(entries[0].rawAssistantMessage, attempt.rawAssistantMessage);
+    assert.deepEqual(logs.find(log => log.rawAssistantMessage).rawAssistantMessage, attempt.rawAssistantMessage);
+    assert.doesNotMatch(JSON.stringify({ terminal, entries, logs }), /response-secret|agent-secret|image-secret/);
 });
 
 test('a permissive supplied schema cannot bypass image placement validation or its diagnostic', async (t) => {

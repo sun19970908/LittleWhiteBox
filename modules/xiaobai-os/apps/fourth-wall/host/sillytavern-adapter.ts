@@ -1,8 +1,6 @@
 import { getContext } from '../../../../../../../../extensions.js';
-import {
-    default_avatar,
-    default_user_avatar,
-} from '../../../../../../../../../script.js';
+import { user_avatar } from '../../../../../../../../personas.js';
+import { default_avatar, default_user_avatar, getThumbnailUrl } from '../../../../../../../../../script.js';
 import { getSillyTavernChatIdentity } from '../../../host/sillytavern-context.js';
 import type {
     FourthWallCapturedCommentary,
@@ -21,8 +19,6 @@ interface SillyTavernMessage {
 interface SillyTavernContext {
     characterId?: unknown;
     characters?: Record<string, { avatar?: unknown }>;
-    user_avatar?: unknown;
-    persona?: { avatar?: unknown };
     name1?: unknown;
     name2?: unknown;
     chat?: SillyTavernMessage[];
@@ -68,10 +64,6 @@ function resolveCharacterAvatar(context: SillyTavernContext): string {
         .join('/')}`;
 }
 
-function resolveUserAvatar(context: SillyTavernContext): string {
-    return resolveAssetUrl(context.user_avatar || context.persona?.avatar || default_user_avatar || '', 'User Avatars');
-}
-
 function normalizeMessageIndex(event: unknown, context: SillyTavernContext): number {
     const direct = isRecord(event) ? (event.messageId ?? event.id ?? event.index) : event;
     const parsed = Number(direct);
@@ -87,7 +79,7 @@ export function getSillyTavernChatSnapshot(maxLayers = 20): FourthWallChatSnapsh
         chatIdentity: identity.key,
         userName: String(context.name1 || 'User'),
         characterName: String(context.name2 || 'Assistant'),
-        userAvatar: resolveUserAvatar(context),
+        userAvatar: user_avatar ? getThumbnailUrl('persona', user_avatar) : `/${default_user_avatar}`,
         characterAvatar: resolveCharacterAvatar(context) || resolveAssetUrl(default_avatar, 'characters'),
         messages: (context.chat || []).slice(-maxLayers).map((message, index) => ({
             index: Math.max(0, (context.chat?.length || 0) - maxLayers) + index,

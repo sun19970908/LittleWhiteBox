@@ -75,8 +75,8 @@ export async function updateMeta(chatId, updates) {
 // Chunks 表操作
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function saveChunks(chatId, chunks) {
-    const records = chunks.map(chunk => ({
+function makeChunkRecords(chatId, chunks) {
+    return chunks.map(chunk => ({
         chatId,
         chunkId: chunk.chunkId,
         floor: chunk.floor,
@@ -87,6 +87,10 @@ export async function saveChunks(chatId, chunks) {
         textHash: chunk.textHash,
         createdAt: Date.now(),
     }));
+}
+
+export async function saveChunks(chatId, chunks) {
+    const records = makeChunkRecords(chatId, chunks);
     await chunksTable.bulkPut(records);
     applyRecallRuntimeMutationBestEffort(chatId, {
         type: 'upsertChunks',
@@ -165,9 +169,9 @@ export async function clearAllChunks(chatId) {
 // ChunkVectors 表操作
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function saveChunkVectors(chatId, items, fingerprint) {
+function makeChunkVectorRecords(chatId, items, fingerprint) {
     let expectedDimensions = null;
-    const records = items.map((item, index) => {
+    return items.map((item, index) => {
         const dims = assertFiniteVector(item.vector, `chunk vector ${index}`, expectedDimensions);
         expectedDimensions ??= dims;
         return {
@@ -178,10 +182,38 @@ export async function saveChunkVectors(chatId, items, fingerprint) {
             fingerprint,
         };
     });
+}
+
+export async function saveChunkVectors(chatId, items, fingerprint) {
+    const records = makeChunkVectorRecords(chatId, items, fingerprint);
     await chunkVectorsTable.bulkPut(records);
     applyRecallRuntimeMutationBestEffort(chatId, {
         type: 'upsertChunkVectors',
         items: records,
+    });
+}
+
+/** 修补正文片段时原文与向量一起提交，失败不覆盖已有的有效记录。 */
+export async function saveChunkRepairs(chatId, chunks, items, fingerprint) {
+    const chunkRecords = makeChunkRecords(chatId, chunks);
+    const vectorRecords = makeChunkVectorRecords(chatId, items, fingerprint);
+    await db.transaction('rw', chunksTable, chunkVectorsTable, async () => {
+        await chunksTable.bulkPut(chunkRecords);
+        await chunkVectorsTable.bulkPut(vectorRecords);
+    });
+    applyRecallRuntimeMutationBestEffort(chatId, { type: 'upsertChunks', chunks: chunkRecords });
+    applyRecallRuntimeMutationBestEffort(chatId, { type: 'upsertChunkVectors', items: vectorRecords });
+}
+
+export async function getChunkVectorDescriptors(chatId) {
+    const records = await chunkVectorsTable.where('chatId').equals(chatId).toArray();
+    return records.map(record => {
+        let valid = false;
+        try {
+            assertFiniteVector(bufferToFloat32(record.vector), 'stored chunk vector', record.dims);
+            valid = true;
+        } catch { /* 无效向量与缺失向量一样，需要补齐。 */ }
+        return { chunkId: record.chunkId, fingerprint: record.fingerprint, valid };
     });
 }
 

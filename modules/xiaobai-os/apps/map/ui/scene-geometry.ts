@@ -1,24 +1,33 @@
 import type { MapElement, MapIconToken, RectGeometry, CircleGeometry, PointGeometry, PointsGeometry } from '../../../domains/map/types.js';
+import { MAP_OBJECT_ICONS } from '../../../domains/map/semantics.js';
 
 export interface SceneBounds { x: number; y: number; width: number; height: number }
 const AREA_CATEGORIES = new Set(['water', 'terrain', 'furniture', 'decoration', 'danger', 'magic', 'secret', 'light']);
-const FOOTPRINT_OBJECT_ICONS = new Set<MapIconToken>(['chair', 'table', 'bed', 'counter', 'shelf', 'sofa', 'bridge', 'tree', 'rock']);
+const FOOTPRINT_OBJECT_ICONS = new Set<MapIconToken>(MAP_OBJECT_ICONS);
+const PLAN_OBJECT_DRAWINGS = new Set<MapIconToken>(['chair', 'table', 'bed', 'counter', 'shelf', 'sofa', 'bridge', 'tree', 'rock']);
+export function hasSceneObjectDrawing(element: MapElement): boolean {return !!element.icon && PLAN_OBJECT_DRAWINGS.has(element.icon);}
 const numberText = (value: number): string => Number(value.toFixed(3)).toString();
 const pointsOf = (element: MapElement): Array<[number, number]> => (element.geometry as PointsGeometry).points || [];
+
+/** Identity markers keep their glyph in both renderers, even with a sized footprint. */
+export function isSceneMarker(element: MapElement): boolean {
+    return element.shape === 'icon' || element.shape === 'label' || element.category === 'actor' || element.category === 'door'
+        || element.kind === 'stairs' || element.icon === 'stairs' || element.icon === 'door-open';
+}
 
 function closesPath(element: MapElement): boolean {
     return pointsOf(element).length >= 3 && (element.closed ?? AREA_CATEGORIES.has(element.category));
 }
 
 export function isAreaElement(element: MapElement): boolean {
-    if (element.category === 'wall' || element.category === 'grid') {return false;}
+    if (element.category === 'wall' || element.category === 'grid' || (element.icon === 'fence' && ['path', 'curve'].includes(element.shape))) {return false;}
     if (element.shape === 'rect' || element.shape === 'circle') {return true;}
     return (element.shape === 'path' || element.shape === 'curve') && closesPath(element);
 }
 
 /** A sized known object remains an object regardless of which category authored it. */
 export function isSceneObject(element: MapElement): boolean {
-    return (element.shape === 'rect' || element.shape === 'circle') && (
+    return !['wall', 'grid', 'actor'].includes(element.category) && (element.shape === 'rect' || element.shape === 'circle') && (
         (element.icon !== undefined && FOOTPRINT_OBJECT_ICONS.has(element.icon))
         || ['furniture', 'decoration', 'door'].includes(element.category)
     );
@@ -34,6 +43,35 @@ function curveControls(points: Array<[number, number]>, closed: boolean, index: 
         [clamp(current[0] + (next[0] - previous[0]) / 6, current[0], next[0]), clamp(current[1] + (next[1] - previous[1]) / 6, current[1], next[1])],
         [clamp(next[0] - (following[0] - current[0]) / 6, current[0], next[0]), clamp(next[1] - (following[1] - current[1]) / 6, current[1], next[1])],
     ];
+}
+
+/** Sample the same bounded cubic curves used by SVG, without parsing SVG or changing map facts. */
+export function sceneElementOutline(element: MapElement): { points: Array<[number, number]>; closed: boolean } {
+    if (element.shape === 'rect') {
+        const { x, y, width, height } = element.geometry as RectGeometry;
+        return { points: [[x, y], [x + width, y], [x + width, y + height], [x, y + height]], closed: true };
+    }
+    if (element.shape === 'circle') {
+        const { x, y, radius } = element.geometry as CircleGeometry;
+        return { points: Array.from({ length: 64 }, (_, i) => [x + radius * Math.cos(i * Math.PI / 32), y + radius * Math.sin(i * Math.PI / 32)]), closed: true };
+    }
+    if (element.shape !== 'path' && element.shape !== 'curve') {return { points: [], closed: false };}
+    const points = pointsOf(element);
+    const closed = closesPath(element);
+    const rounded = (point: [number, number]): [number, number] => point.map(value => Number(numberText(value))) as [number, number];
+    if (element.shape === 'path' || points.length < 2) {return { points: points.map(rounded), closed };}
+    const sampled: Array<[number, number]> = [rounded(points[0])];
+    for (let index = 0; index < points.length - (closed ? 0 : 1); index += 1) {
+        const start = rounded(points[index]);
+        const end = rounded(points[(index + 1) % points.length]);
+        const [first, second] = curveControls(points, closed, index).map(rounded);
+        for (let step = 1; step <= 12; step += 1) {
+            const t = step / 12, u = 1 - t;
+            sampled.push([0, 1].map(axis => u ** 3 * start[axis] + 3 * u ** 2 * t * first[axis] + 3 * u * t ** 2 * second[axis] + t ** 3 * end[axis]) as [number, number]);
+        }
+    }
+    if (closed) {sampled.pop();}
+    return { points: sampled, closed };
 }
 
 /** Actual geometry only: no outline expansion, door cutting or inferred connections. */
@@ -89,7 +127,7 @@ export function sceneElementLabelPoint(element: MapElement, unitScale = 1): [num
     const b = sceneElementBounds(element);
     const centre: [number, number] = [b.x + b.width / 2, b.y + b.height / 2];
     if (element.shape === 'label') {return centre;}
-    if (element.shape === 'icon') {return [centre[0], centre[1] + 23 * unitScale];}
+    if (isSceneMarker(element)) {return [centre[0], centre[1] + 23 * unitScale];}
     if ((element.category === 'terrain' || element.category === 'water') && isAreaElement(element)) {return centre;}
     if (element.shape === 'path' || element.shape === 'curve') {
         const points = pointsOf(element);

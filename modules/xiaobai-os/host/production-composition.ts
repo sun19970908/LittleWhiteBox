@@ -115,7 +115,7 @@ export function createProductionBootstrap(
     const modules = [
         createAgentApiModule(),
         createProductionFourthWallModule(settings, upstreamFourthWall),
-        createProductionMessagesModule(mainGeneration),
+        createProductionMessagesModule(mainGeneration, settings),
         createProductionLearningModule(learningRepository, promptContext),
         createWalletModule({ getChatIdentity: getSillyTavernChatIdentity }),
         createProductionShopModule({

@@ -5,7 +5,7 @@ import MessageIcon from './MessageIcon.vue';
 import ContactAvatar from './ContactAvatar.vue';
 import type { MessageDraft } from './draft.js';
 const props = defineProps<{ contacts: ContactView[]; busyContactId: string; drafts: ReadonlyMap<string, MessageDraft> }>();
-defineEmits<{ select: [id: string]; add: [] }>();
+defineEmits<{ select: [id: string]; add: []; settings: [] }>();
 const search = ref('');
 const filtered = computed(() => props.contacts.filter(contact => `${contact.name} ${contact.note}`.toLocaleLowerCase().includes(search.value.toLocaleLowerCase())));
 function time(value: number | null) {
@@ -18,7 +18,7 @@ function time(value: number | null) {
 </script>
 <template>
     <section class="messages-contacts">
-        <header class="messages-home-header"><h1>信息</h1><button class="messages-icon-button" aria-label="添加联系人" @click="$emit('add')"><MessageIcon name="plus" /></button></header>
+        <header class="messages-home-header"><h1>信息</h1><div class="messages-home-actions"><button class="messages-icon-button" title="设置" aria-label="设置" @click="$emit('settings')"><MessageIcon name="settings" /></button><button class="messages-icon-button messages-add-contact" aria-label="添加联系人" @click="$emit('add')"><MessageIcon name="plus" /></button></div></header>
         <label class="messages-search"><MessageIcon name="search" /><input v-model="search" type="search" placeholder="搜索联系人" aria-label="搜索联系人"></label>
         <div v-if="!contacts.length" class="messages-empty">
             <MessageIcon name="message" />

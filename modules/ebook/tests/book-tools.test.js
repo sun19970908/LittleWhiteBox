@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { estimateConversationTokens, resolveConversationTokens } from '../../agent-core/runtime/context-tokens.js';
 
 const dbModule = await import('../shared/ebook-db.js');
 const toolsModule = await import('../shared/book-tools.js');
@@ -71,8 +72,10 @@ const {
     EBOOK_MAX_CONTEXT_TOKENS,
     EBOOK_MIN_PRESERVED_TURNS,
     EBOOK_SUMMARY_TRIGGER_TOKENS,
-    createEbookHistoryCompactionController,
 } = compactionModule;
+// Workflow tests inject a deterministic counter; protocol tests explicitly use the Host counter.
+const fixtureCountTokens = async options => ({ tokens: estimateConversationTokens(options), source: 'tokenizer' });
+const createEbookHistoryCompactionController = options => compactionModule.createEbookHistoryCompactionController({ countTokens: fixtureCountTokens, ...options });
 const {
     EBOOK_DELEGATE_PROMPT,
     EBOOK_SYSTEM_PROMPT,
@@ -81,7 +84,8 @@ const {
     buildBookTurnContextPrompt,
     buildDelegateBookContextPrompt,
 } = promptsModule;
-const { buildEbookProviderMessagesFromHistory, createEbookAgentRunner } = agentRunnerModule;
+const { buildEbookProviderMessagesFromHistory } = agentRunnerModule;
+const createEbookAgentRunner = options => agentRunnerModule.createEbookAgentRunner({ countTokens: fixtureCountTokens, ...options });
 const {
     captureScrollState,
     createEbookApp,
@@ -6334,6 +6338,32 @@ test('Book context meter ignores resolved token stats when conversation state ch
     assert.equal(renderConversationContextMeterTitle(state, providerConfig), '当前估算送模上下文 / 188k');
 });
 
+test('Book meter includes replayed reasoning and invalidates resolved stats when that input changes', () => {
+    const config = { provider: 'openai-compatible', model: 'deepseek-chat', reasoning: { mode: 'on' } };
+    const preserved = { role: 'assistant', content: 'answer', reasoning_content: 'reasoning '.repeat(1000) };
+    const state = { messages: [
+        { role: 'assistant', content: 'answer', providerPayload: { openaiCompatibleMessage: preserved } },
+        { role: 'user', content: 'next' },
+    ] };
+    const estimate = () => rendererModule.estimateConversationContextTokens(state, config);
+    const initial = estimate();
+    const resolve = () => {
+        state.contextStats = { usedTokens: 777000, source: 'resolved', stateKey: buildConversationContextMeterStateKey(state, config) };
+    };
+    resolve();
+    assert.equal(renderConversationContextMeterLabel(state, config), '777k/188k');
+    preserved.reasoning_content += 'additional reasoning '.repeat(1000);
+    assert.ok(estimate() > initial);
+    assert.notEqual(renderConversationContextMeterLabel(state, config), '777k/188k');
+    resolve();
+    config.reasoning.mode = 'off';
+    assert.ok(estimate() < initial);
+    assert.notEqual(renderConversationContextMeterLabel(state, config), '777k/188k');
+    resolve();
+    preserved.reasoning_content += 'not replayed';
+    assert.equal(renderConversationContextMeterLabel(state, config), '777k/188k');
+});
+
 test('Book context meter keeps last resolved request count while agent is busy', async () => {
     await resetDb();
     const book = await createBook('计数运行中稳定测试');
@@ -7525,6 +7555,49 @@ test('Book agent replays repaired tagged-json Write content after executing malf
     assert.notDeepEqual(taggedPayload.arguments, {});
 });
 
+test('Book agent leaves the book unchanged when a DSML Write response is structurally incomplete', async () => {
+    await resetDb();
+    const book = await createBook('DSML 写入安全测试');
+    const originalFiles = await listBookFiles(book.id);
+    const state = {
+        config: {}, book, books: [book], files: originalFiles,
+        selectedPath: 'book/outline.md', readerPath: '', viewMode: 'studio',
+        editorContent: '', savedContent: '', messages: [], toolTrace: [],
+        historySummary: '', archivedTurnCount: 0, isBusy: false, activeController: null,
+        status: '就绪', toast: '',
+    };
+    const config = { provider: 'openai-compatible', model: 'deepseek-v3.2', apiKey: 'test-key', toolMode: 'tagged-json' };
+    const adapter = new openAICompatibleAdapterModule.OpenAICompatibleAdapter(config);
+    let requests = 0;
+    adapter.client.chat.completions.create = async () => {
+        requests += 1;
+        return {
+            async *[Symbol.asyncIterator]() {
+                yield { choices: [{ delta: { role: 'assistant', content:
+                    '<｜DSML｜invoke name="Write">' +
+                    '<｜DSML｜parameter name="filePath" string="true">book/outline.md</｜DSML｜parameter>' +
+                    '<｜DSML｜parameter name="content" string="true">unfinished</｜DSML｜invoke>',
+                } }] };
+            },
+        };
+    };
+    const runner = createEbookAgentRunner({
+        state,
+        async refreshBooksAndFiles() { state.files = await listBookFiles(book.id); },
+        render() {}, showToast() {}, persistConversation() {},
+        isEditorDirty: () => false,
+        getActiveProviderConfig: () => config,
+        createAdapter: () => adapter,
+    });
+    await runner.runAgent('写入大纲。');
+    assert.equal(requests, 1);
+    assert.deepEqual(await listBookFiles(book.id), originalFiles);
+    assert.equal(state.messages.some(message => message.role === 'tool'), false);
+    assert.equal(state.messages.at(-1).error, true);
+    assert.match(state.messages.at(-1).content, /DSML/);
+    assert.equal(state.isBusy, false);
+});
+
 test('Book agent reports invalid tool arguments without executing Edit', async () => {
     await resetDb();
     const book = await createBook('工具参数坏 JSON 测试');
@@ -8289,6 +8362,36 @@ test('Book history compaction releases archived turns without writing creative r
     assert.equal(state.uiMessageWindowLimit, 5);
 });
 
+test('replayed historical reasoning triggers Book compaction through the shared fallback without changing thresholds', async () => {
+    const state = { messages: [
+        { role: 'user', content: 'old' },
+        { role: 'assistant', content: 'answer', providerPayload: { openaiCompatibleMessage: {
+            role: 'assistant', content: 'answer', reasoning_content: 'r'.repeat(600000),
+        } } },
+        { role: 'user', content: 'recent' },
+        { role: 'assistant', content: 'recent answer' },
+        { role: 'user', content: 'next' },
+    ], archivedTurnCount: 0, historySummary: '' };
+    const config = { provider: 'openai-compatible', model: 'deepseek-chat', reasoning: { mode: 'on' } };
+    const tools = getEbookToolDefinitions();
+    let saves = 0;
+    const controller = createEbookHistoryCompactionController({ state,
+        persistConversation: () => { saves++; },
+        getActiveProviderConfig: () => config, getToolDefinitions: () => tools,
+        buildProviderMessages: () => agentRunnerModule.buildEbookProviderMessagesFromHistory(state.messages),
+        countTokens: input => resolveConversationTokens({ ...input, requestHeaders: () => { throw new Error('unavailable'); } }),
+    });
+    assert.ok(estimateConversationTokens({ messages: state.messages, tools }) < EBOOK_SUMMARY_TRIGGER_TOKENS);
+    assert.ok((await controller.countContext()).tokens > EBOOK_SUMMARY_TRIGGER_TOKENS);
+    const result = await controller.ensureContextBudget({});
+    assert.equal(saves, 1);
+    assert.equal(state.messages.length, 3);
+    assert.equal(state.messages[0].content, 'recent');
+    assert.ok(result.tokens < EBOOK_SUMMARY_TRIGGER_TOKENS);
+    assert.equal(result.source, 'estimated');
+    assert.ok(result.messages.every(m => !m.providerPayload));
+});
+
 test('Book history compaction stops before pruning when aborted', async () => {
     const state = {
         messages: [
@@ -8523,13 +8626,14 @@ test('Book history compaction counts real tool schemas through the shared tokeni
         return {
             ok: true,
             async json() {
-                return { count: 4321 };
+                return { count: 4321, ids: Array(4321).fill(1) };
             },
         };
     };
 
     try {
         const controller = createEbookHistoryCompactionController({
+            countTokens: options => resolveConversationTokens({ ...options, requestHeaders: () => ({ 'X-CSRF-Token': 'test-csrf' }) }),
             state,
             render() {},
             persistConversation() {},
@@ -8562,7 +8666,7 @@ test('Book history compaction counts real tool schemas through the shared tokeni
             },
         });
 
-        const tokenCount = await controller.estimateCurrentTokens();
+        const { tokens: tokenCount } = await controller.countContext();
 
         assert.equal(tokenCount, 4321);
         assert.equal(tokenizerRequests.length, 1);
@@ -8574,6 +8678,44 @@ test('Book history compaction counts real tool schemas through the shared tokeni
     } finally {
         globalThis.fetch = originalFetch;
     }
+});
+
+test('Book replies continue with unavailable counting or uncompressible input, with estimates marked as estimates', async t => {
+    for (const mode of ['403', 'oversize-tool', 'session', 'compact-session']) {await t.test(mode, async t => {
+        await resetDb();
+        const book = await createBook('预算测试');
+        const state = { config: {}, book, files: await listBookFiles(book.id), messages: [], toolTrace: [],
+            historySummary: '', archivedTurnCount: 0, isBusy: false, status: '就绪' };
+        if (mode === 'compact-session') state.messages.push(
+            { role: 'user', content: '最早任务' }, { role: 'assistant', content: '旧答复' },
+            { role: 'user', content: '中间任务' }, { role: 'assistant', content: '中间答复' });
+        const calls = []; let counts = 0;
+        t.mock.method(globalThis, 'fetch', async () => new Response('', { status: 403 }));
+        const runner = createEbookAgentRunner({ state, async refreshBooksAndFiles() {}, render() {}, showToast() {},
+            persistConversation() {}, isEditorDirty: () => false, getActiveProviderConfig: () => ({ provider: 'google', model: 'gemini-test' }),
+            countTokens: async options => {
+                counts++;
+                if (mode === '403') return resolveConversationTokens({ ...options, requestHeaders: () => ({}) });
+                if (mode === 'oversize-tool' && options.messages.some(m => m.role === 'tool')) return { tokens: 194088, source: 'tokenizer' };
+                if (mode === 'compact-session' && counts === 2) return { tokens: 194088, source: 'tokenizer' };
+                return { tokens: 100, source: 'tokenizer' };
+            },
+            createAdapter: () => ({ supportsSessionToolLoop: true, async chat(request) {
+                calls.push(request);
+                return calls.length === 1 ? { text: '', toolCalls: [{ id: 'read', name: EBOOK_TOOL_NAMES.READ,
+                    arguments: JSON.stringify({ filePath: 'book/chapters/001.md' }) }] } : { text: '完成' };
+            } }),
+        });
+        await runner.runAgent('继续写作');
+        assert.equal(calls.length, 2); assert.ok(counts >= 2);
+        assert.equal(state.messages.at(-1).content, '完成');
+        if (mode === '403') assert.equal(state.contextStats.source, 'estimated');
+        if (mode !== 'compact-session') assert.equal(calls[1].toolResponses.length, 1);
+        else {
+            assert.equal(calls[1].toolResponses, undefined);
+            assert.ok(!JSON.stringify(calls[1].messages).includes('最早任务'));
+        }
+    });}
 });
 
 test('Book prompt keeps assistant-style tool layers and recovery rules', () => {

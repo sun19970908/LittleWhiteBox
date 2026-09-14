@@ -18,10 +18,6 @@ import { assembleCharacterPrompts } from '../character-prompts.js';
 
 function buildParameters(overrides = {}) {
     return {
-        mindful_prelude: {
-            user_insight: '用户在描写雨夜重逢。',
-            visual_plan: '画雨夜重逢，放在插图点 1 后；两名女性，已录入阿璃，未录入旅人，分别位于 C3/E5，使用雨夜逆光。',
-        },
         images: [{
             index: 1,
             insert_after: 1,
@@ -77,7 +73,6 @@ test('scene plan contract normalizes aliases, known character fields, placement,
         scene: 'sfw, scenery, rain',
         characters: [],
     });
-    parameters.mindful_prelude.visual_plan += '随后画雨景，放在插图点 2 后，无人物，已录入和未录入角色均不出现。';
     const parsed = parseSubmittedScenePlan(buildResult(parameters), {
         ...parseOptions,
         maxImages: 2,
@@ -129,7 +124,9 @@ test('unordered and shared illustration points preserve each image and its inten
 test('scene plan tool schema applies exact image count and character cap', () => {
     const tool = createSubmitScenePlanTool({ maxImages: 3, maxCharactersPerImage: 2 });
     const schema = tool.function.parameters.properties.images;
-    assert.deepEqual(tool.function.parameters.required, ['mindful_prelude', 'images']);
+    assert.deepEqual(tool.function.parameters.required, ['images']);
+    assert.deepEqual(Object.keys(tool.function.parameters.properties), ['images']);
+    assert.equal(tool.function.parameters.additionalProperties, false);
     assert.equal(schema.minItems, 3);
     assert.equal(schema.maxItems, 3);
     assert.deepEqual(schema.items.required, ['index', 'insert_after', 'scene', 'characters']);
@@ -140,14 +137,6 @@ test('scene plan tool schema applies exact image count and character cap', () =>
     assert.equal(schema.items.properties.characters.items.additionalProperties, false);
     assert.equal(schema.items.properties.characters.items.properties.type.type, 'string');
     assert.equal(schema.items.properties.characters.items.properties.type.enum, undefined);
-    const preludeSchema = tool.function.parameters.properties.mindful_prelude;
-    assert.deepEqual(preludeSchema.required, ['user_insight', 'visual_plan']);
-    assert.equal(preludeSchema.additionalProperties, false);
-    assert.deepEqual(Object.keys(preludeSchema.properties), ['user_insight', 'visual_plan']);
-    for (const field of Object.values(preludeSchema.properties)) {
-        assert.equal(field.type, 'string');
-        assert.equal(field.minLength, 1);
-    }
 
     const boundedTool = createSubmitScenePlanTool({ insertPointCount: 2 });
     const boundedImages = boundedTool.function.parameters.properties.images;
@@ -288,39 +277,16 @@ test('extra image and character fields are discarded rather than forwarded to co
     );
 });
 
-test('scene plan execution accepts absent or invalid planning notes and trusts images placement', () => {
-    const withoutPrelude = buildParameters();
-    delete withoutPrelude.mindful_prelude;
-    assert.equal(
-        parseSubmittedScenePlan(buildResult(withoutPrelude), parseOptions).tasks[0].placement.insertAfter,
-        1,
-    );
-
-    for (const field of ['user_insight', 'visual_plan']) {
-        for (const value of [null, {}, [], '', '   ']) {
-            const invalidPrelude = buildParameters();
-            invalidPrelude.mindful_prelude[field] = value;
-            const parsed = parseSubmittedScenePlan(buildResult(invalidPrelude), parseOptions);
-            assert.deepEqual(Object.keys(parsed), ['tasks']);
-            assert.equal(parsed.tasks[0].placement.insertAfter, 1);
-        }
-    }
-
-    const conflictingPrelude = buildParameters();
-    conflictingPrelude.mindful_prelude.visual_plan = '计划把画面放在插图点 2 后。';
-    assert.equal(
-        parseSubmittedScenePlan(buildResult(conflictingPrelude), parseOptions).tasks[0].placement.insertAfter,
-        1,
-    );
-
+test('scene plan execution ignores extra root fields and trusts images placement', () => {
+    const parameters = buildParameters();
     const differentNotes = {
         analysis: { shots: [2, 3], characters: 'not executable' },
         negative: 'not a drawing parameter at the root',
-        images: withoutPrelude.images,
+        images: parameters.images,
     };
     assert.deepEqual(
         parseSubmittedScenePlan(buildResult(differentNotes), parseOptions),
-        parseSubmittedScenePlan(buildResult(withoutPrelude), parseOptions),
+        parseSubmittedScenePlan(buildResult(parameters), parseOptions),
     );
 });
 
@@ -399,6 +365,7 @@ test('scene planner errors expose stable failure categories', () => {
         ['MODEL_MISSING', ScenePlannerErrorCategory.AGENT_CONFIG],
         ['HOST_REQUEST_HEADERS_LOAD_FAILED', ScenePlannerErrorCategory.AGENT_CONFIG],
         ['TOOL_CALL_MISSING', ScenePlannerErrorCategory.TOOL_PROTOCOL],
+        ['TAGGED_TOOL_CALL_INVALID', ScenePlannerErrorCategory.TOOL_PROTOCOL],
         ['TOOL_ARGUMENTS_SCHEMA_INVALID', ScenePlannerErrorCategory.SCHEMA],
         ['REQUEST_TIMEOUT', ScenePlannerErrorCategory.TIMEOUT],
         ['REQUEST_ABORTED', ScenePlannerErrorCategory.ABORTED],

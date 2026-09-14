@@ -106,8 +106,8 @@ export function injectAssistantStyles(rootId) {
         }
         .xb-assistant-sidebar-content {
             display: grid;
-            gap: 16px;
-            margin-top: 16px;
+            align-content: start;
+            margin-top: 12px;
             min-width: 0;
             min-height: 0;
             overflow: auto;
@@ -121,7 +121,6 @@ export function injectAssistantStyles(rootId) {
             opacity: 0;
             pointer-events: none;
         }
-        .xb-assistant-sidebar.is-collapsed .xb-assistant-brand,
         .xb-assistant-sidebar.is-collapsed .xb-assistant-config {
             display: none;
         }
@@ -137,8 +136,6 @@ export function injectAssistantStyles(rootId) {
             height: 36px;
             padding: 0;
         }
-        .xb-assistant-brand h1 { margin: 12px 0 8px; font-size: 30px; }
-        .xb-assistant-brand p { margin: 0 0 18px; color: #766d62; line-height: 1.55; }
         .xb-assistant-badge {
             display: inline-flex;
             align-items: center;
@@ -316,7 +313,40 @@ export function injectAssistantStyles(rootId) {
             align-items: center;
         }
         .xb-assistant-grow { min-width: 0; }
-        .xb-assistant-model-row { align-items: end; }
+        .xb-assistant-inline-input.xb-assistant-model-row {
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: end;
+        }
+        .xb-assistant-model-row select,
+        .xb-assistant-model-row > button {
+            box-sizing: border-box;
+            min-width: 0;
+            height: 40px;
+            min-height: 40px;
+            padding: 0 12px;
+            border-radius: 12px;
+        }
+        .xb-assistant-model-row > button {
+            border: 1px solid var(--xb-assistant-border);
+            background: var(--xb-assistant-surface);
+            color: var(--xb-assistant-accent-strong);
+            font: inherit;
+            font-size: 13px;
+            line-height: 1;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .xb-assistant-model-row > button:hover:not(:disabled) {
+            background: var(--xb-assistant-accent-soft);
+        }
+        .xb-assistant-model-row > button:focus-visible {
+            outline: 2px solid var(--xb-assistant-accent);
+            outline-offset: 2px;
+        }
+        .xb-assistant-model-row > button:disabled {
+            opacity: 0.52;
+            cursor: not-allowed;
+        }
         .xb-assistant-temperature-row {
             display: grid;
             grid-template-columns: 96px auto;
@@ -933,6 +963,7 @@ export function injectAssistantStyles(rootId) {
         .xb-assistant-chat {
             flex: 1 1 auto;
             height: 100%;
+            box-sizing: border-box;
             min-height: 0;
             overflow: auto;
             overflow-x: hidden;
@@ -1678,10 +1709,11 @@ export function injectAssistantStyles(rootId) {
         }
         .xb-assistant-compose-actions {
             display: flex;
-            align-items: flex-end;
+            flex-direction: column;
+            align-items: center;
             justify-content: flex-end;
             gap: 6px;
-            width: auto;
+            width: 36px;
             overflow: visible;
         }
         .xb-assistant-compose-more {
@@ -1690,21 +1722,21 @@ export function injectAssistantStyles(rootId) {
         }
         .xb-assistant-compose-actions > button,
         .xb-assistant-compose .xb-assistant-compose-menu-toggle {
-            width: 34px;
-            min-width: 34px;
-            height: 34px;
-            min-height: 34px;
+            width: 36px;
+            min-width: 36px;
+            height: 30px;
+            min-height: 30px;
             padding: 0;
-            border-radius: 999px;
+            border-radius: 10px;
             display: inline-flex;
             align-items: center;
             justify-content: center;
-            font-size: 17px;
+            font-size: 18px;
             line-height: 1;
             font-weight: 600;
         }
         #xb-assistant-send {
-            font-size: 15px;
+            font-size: 16px;
         }
         .xb-assistant-compose-menu {
             position: absolute;
@@ -1895,7 +1927,6 @@ export function injectAssistantStyles(rootId) {
                 opacity: 0;
                 pointer-events: none;
             }
-            .xb-assistant-sidebar.is-collapsed .xb-assistant-brand,
             .xb-assistant-sidebar.is-collapsed .xb-assistant-config {
                 display: none;
             }
@@ -1995,9 +2026,6 @@ export function injectAssistantStyles(rootId) {
             .xb-assistant-compose-row {
                 grid-template-columns: minmax(0, 1fr) auto;
                 align-items: stretch;
-            }
-            .xb-assistant-compose-actions {
-                justify-content: center;
             }
             .xb-assistant-compose-menu {
                 right: 0;

@@ -3,7 +3,8 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { useAppBack } from '../../../shell/app-src/navigation/app-navigation.js';
 import type { XiaobaiOsAppProps } from '../../../shell/app-contract.js';
 import MapAtlas from './MapAtlas.vue';
-import MapScene from './MapScene.vue';
+import MapSceneView from './MapSceneView.vue';
+import { resolveInitialMapView } from './map-view.js';
 import MapSettings from './MapSettings.vue';
 import MapSearch from './MapSearch.vue';
 import MapPlaceDetail from './MapPlaceDetail.vue';
@@ -17,7 +18,11 @@ const { state, activeRequest, busy, disabledReason, requiresConfirmation, status
 const region = ref(state.value.map ? initialWorldRegion(state.value.map.atlas) : '');
 const selectedKey = ref('');
 // null: world, empty string: follow the current place, otherwise: browse a recorded place.
-const sceneKey = ref<string | null>(null);
+const sceneKey = ref<string | null>(resolveInitialMapView(state.value.map) === 'scene' ? '' : null);
+const renderMode = ref<'2d' | '3d'>('3d');
+const threeUnavailable = ref(false);
+const threeNotice = ref('');
+let viewChosen = false;
 const showingScene = computed(() => sceneKey.value !== null);
 const focusKey = ref('');
 const focusSequence = ref(0);
@@ -41,10 +46,14 @@ watch(() => state.value, (next, previous) => {
         region.value = next.map ? initialWorldRegion(next.map.atlas) : '';
     }
     if (changedChat || !next.map?.atlas.locations.some(place => place.key === selectedKey.value)) {selectedKey.value = '';}
-    if (changedChat || (sceneKey.value && !next.map?.atlas.locations.some(place => place.key === sceneKey.value))) {sceneKey.value = null;}
+    if (changedChat) {viewChosen = false;}
+    if (changedChat || (!previous.map?.atlas.locations.length && next.map?.atlas.locations.length && !viewChosen) || (sceneKey.value && !next.map?.atlas.locations.some(place => place.key === sceneKey.value))) {
+        sceneKey.value = resolveInitialMapView(next.map) === 'scene' ? '' : null;
+    }
     if (changedChat) {settingsOpen.value = false; searchOpen.value = false;}
 });
 function enterRegion(key: string): void {
+    viewChosen = true;
     region.value = key;
     selectedKey.value = '';
     sceneKey.value = null;
@@ -53,6 +62,7 @@ function enterRegion(key: string): void {
 async function selectPlace(key: string, locate = false): Promise<void> {
     const place = atlas.value?.locations.find(item => item.key === key);
     if (!place) {return;}
+    viewChosen = true;
     sceneKey.value = null;
     selectedKey.value = key;
     searchOpen.value = false;
@@ -66,13 +76,21 @@ async function locatePlayer(): Promise<void> {
     if (player.value) {await selectPlace(player.value.key, true);}
 }
 function showScene(key = ''): void {
+    viewChosen = true;
     sceneKey.value = key === playerKey.value ? '' : key;
     helpOpen.value = false;
     searchOpen.value = false;
 }
 function showWorld(): void {
+    viewChosen = true;
     sceneKey.value = null;
     helpOpen.value = false;
+}
+function fallbackThree(reason: string): void {
+    if (threeUnavailable.value) {return;}
+    threeUnavailable.value = true;
+    renderMode.value = '2d';
+    threeNotice.value = reason;
 }
 useAppBack(() => {
     if (helpOpen.value) { helpOpen.value = false; return true; }
@@ -86,12 +104,19 @@ useAppBack(() => {
     <main class="map-app" :class="{ 'has-view-switch': atlas?.locations.length, 'is-scene-view': showingScene }">
         <div class="map-top">
             <header class="map-search-bar"><MapIcon :name="showingScene ? 'layers' : 'search'" /><button v-if="!showingScene" type="button" class="map-search-entry" :disabled="!atlas?.locations.length" @click="searchOpen = true">想去哪里？<small>搜索世界中的地点</small></button><div v-else class="map-search-entry">{{ sceneLocation?.name || '当前场景' }}<small>{{ sceneKey ? '正在查看已记录的场景' : '看看你身边的布局' }}</small></div><button type="button" class="map-round-button" aria-label="地图设置" @click="settingsOpen = true"><MapIcon name="more" /></button></header>
-            <nav v-if="atlas?.locations.length" class="map-view-switch" aria-label="地图视图">
-                <button type="button" :aria-pressed="!showingScene" @click="showWorld"><MapIcon name="globe" />世界地图</button>
-                <button type="button" :aria-pressed="showingScene" @click="showScene()"><MapIcon name="layers" />{{ sceneKey ? '场景地图' : '当前场景' }}</button>
-            </nav>
+            <div v-if="atlas?.locations.length" class="map-view-row">
+                <nav class="map-view-switch" aria-label="地图视图">
+                    <button type="button" :aria-pressed="!showingScene" @click="showWorld"><MapIcon name="globe" />世界地图</button>
+                    <button type="button" :aria-pressed="showingScene" @click="showScene()"><MapIcon name="layers" />{{ sceneKey ? '场景地图' : '当前场景' }}</button>
+                </nav>
+                <div v-if="showingScene" class="map-scene-tools">
+                    <button v-if="sceneKey" type="button" class="map-round-button" aria-label="回到当前场景" @click="showScene()"><MapIcon name="locate" /></button>
+                    <button type="button" class="map-round-button" :aria-expanded="helpOpen" aria-label="地图图例" @click="helpOpen = !helpOpen"><MapIcon name="layers" /></button>
+                </div>
+            </div>
             <nav v-if="atlas?.locations.length && !showingScene" class="map-region-trail" aria-label="当前查看区域"><button type="button" @click="enterRegion('')"><MapIcon name="globe" />世界</button><template v-for="place in trail" :key="place.key"><MapIcon name="next" /><button type="button" @click="enterRegion(place.key)">{{ place.name }}</button></template></nav>
             <div v-if="status" class="map-progress" role="status"><span />{{ status }}</div>
+            <aside v-if="threeNotice" class="map-notice" role="status"><p>{{ threeNotice }}</p><button type="button" class="map-notice-close" aria-label="关闭三维提示" @click="threeNotice = ''"><MapIcon name="close" /></button></aside>
             <aside v-if="notice || requiresConfirmation || state.status === 'conflict'" class="map-notice" :class="{ 'is-error': isError }" role="status">
                 <p>{{ notice || (requiresConfirmation ? '保存结果尚未确认。' : '保存的版本不一致。') }}</p>
                 <button v-if="requiresConfirmation" type="button" :disabled="busy" @click="confirmSave">核实保存结果</button>
@@ -104,14 +129,14 @@ useAppBack(() => {
             <template v-if="state.map && atlas?.locations.length">
                 <MapAtlas v-show="!showingScene" :atlas="state.map.atlas" :region="region" :current-location-key="playerKey" :selected-location-key="selectedKey" :focus-key="focusKey" :focus-sequence="focusSequence" @select="key => selectPlace(key)" />
                 <template v-if="showingScene">
-                    <MapScene v-if="scene?.status === 'active'" :scene="scene" />
+                    <MapSceneView v-if="scene?.status === 'active'" v-model:mode="renderMode" :scene="scene" :three-unavailable="threeUnavailable" @fallback="fallbackThree" />
                     <div v-else class="map-empty"><MapIcon name="layers" /><h2>{{ sceneLocation ? '这里的布局还没画出来' : '还不知道你在哪里' }}</h2><p>{{ sceneLocation ? '更新地图后，会结合设定与剧情补齐这里的普通布局。' : '更新地图后，会根据剧情确认你所在的地方。' }}</p><button type="button" class="map-secondary-button" :disabled="Boolean(disabledReason)" @click="update">{{ busy ? '正在更新…' : '更新地图' }}</button><p v-if="disabledReason && !busy" class="map-setting-note">{{ disabledReason }}</p></div>
                 </template>
                 <div v-if="!showingScene && !places.length" class="map-empty"><MapIcon name="pin" /><h2>这里还没有标出更多地点</h2><p>可以先看看其他区域，或更新地图补充。</p><button type="button" class="map-secondary-button" @click="enterRegion(currentRegion?.parent || '')">查看上级区域</button></div>
             </template>
             <div v-else class="map-empty map-first-map"><span class="map-empty-art"><MapIcon name="globe" /></span><small>故事之外，还有一整个世界</small><h1>{{ state.status === 'loading' ? '正在打开地图…' : '下一站，去哪里？' }}</h1><p>把世界设定画成地图，<br>也为留白的地方添上值得探索的去处。</p><button v-if="state.status !== 'loading'" type="button" class="map-primary-button" :disabled="Boolean(disabledReason)" @click="rebuild">{{ busy ? status || '正在准备…' : '绘制世界地图' }}</button><p v-if="disabledReason && !busy" class="map-setting-note">{{ disabledReason }}</p></div>
         </div>
-        <div v-if="atlas?.locations.length" class="map-floating-tools" :class="{ 'has-detail': selected && !showingScene }"><button v-if="showingScene && sceneKey" type="button" class="map-round-button" aria-label="回到当前场景" @click="showScene()"><MapIcon name="locate" /></button><button v-else-if="!showingScene" type="button" class="map-round-button" :disabled="!player" aria-label="回到我的位置" @click="locatePlayer"><MapIcon name="locate" /></button><button type="button" class="map-round-button" :aria-expanded="helpOpen" aria-label="地图图例" @click="helpOpen = !helpOpen"><MapIcon name="layers" /></button></div>
+        <div v-if="atlas?.locations.length && !showingScene" class="map-floating-tools" :class="{ 'has-detail': selected }"><button type="button" class="map-round-button" :disabled="!player" aria-label="回到我的位置" @click="locatePlayer"><MapIcon name="locate" /></button><button type="button" class="map-round-button" :aria-expanded="helpOpen" aria-label="地图图例" @click="helpOpen = !helpOpen"><MapIcon name="layers" /></button></div>
         <aside v-if="helpOpen" class="map-key"><strong>读懂这张地图</strong><p><i class="map-key-current" />你在这里 <i class="map-key-place" />可探索地点</p><p>路线连接已记录的地点；箭头表示单向通行。</p><small>世界图展示区域与地点，不按实际比例。场景图展示一个地点的内部布局。</small></aside>
         <MapPlaceDetail v-if="selected && state.map && !showingScene" :key="selected.key" :location="selected" :map="state.map" :current-key="playerKey" @close="selectedKey = ''" @scene="showScene(selected.key)" @explore="enterRegion(selected.key)" @select="key => selectPlace(key, true)" />
         <footer v-else-if="atlas?.locations.length && !showingScene" class="map-region-card"><span class="map-region-icon"><MapIcon name="compass" /></span><div><h1>{{ currentRegion?.name || '世界地图' }}</h1><p>{{ places.length }} 个地点 · {{ unvisited ? unvisited + ' 处还没去过' : '看看熟悉的地方有什么变化' }}</p></div><button type="button" class="map-round-button" aria-label="浏览全部地点" @click="searchOpen = true"><MapIcon name="next" /></button></footer>

@@ -57,10 +57,11 @@ test('real JSON-compatible responses remain distinguishable in F12 after argumen
     t.after(() => setHostChatCompletionsRequestHeadersProvider(null));
 
     for (const provider of ['openai-compatible', 'sillytavern-openai-compatible']) {
-        for (const [label, fields] of [
+        for (const [label, fields, expectedArguments = '{}', errorCode = 'TOOL_ARGUMENTS_SCHEMA_INVALID'] of [
             ['missing', {}],
             ['null', { arguments: null }],
-            ['malformed', { arguments: 'not JSON, but contains actual image tags' }],
+            ['malformed', { arguments: 'not JSON, but contains actual image tags' },
+                'not JSON, but contains actual image tags', 'TOOL_ARGUMENTS_INVALID_JSON'],
             ['empty object', { arguments: {} }],
         ]) {
             await t.test(`${provider}: ${label}`, async () => {
@@ -84,7 +85,7 @@ test('real JSON-compatible responses remain distinguishable in F12 after argumen
                     agentOptions: { providerConfig: config },
                     agentCore: { createAgentAdapter },
                     logger: { error() {} },
-                }), { code: 'TOOL_ARGUMENTS_SCHEMA_INVALID' });
+                }), { code: errorCode });
 
                 const failures = entries.map(([, details]) => details)
                     .filter(details => details.event === 'scene_planner_tool_validation_failed');
@@ -92,7 +93,8 @@ test('real JSON-compatible responses remain distinguishable in F12 after argumen
                 assert.equal(requests.length, 2);
                 for (const failure of failures) {
                     assert.equal(failure.toolMode, 'tagged-json');
-                    assert.equal(failure.llmResult.toolCalls[0].arguments, '{}');
+                    assert.equal(failure.errorCode, errorCode);
+                    assert.equal(failure.llmResult.toolCalls[0].arguments, expectedArguments);
                     assert.equal(failure.llmResult.text, 'Planning.');
                     assert.equal(failure.llmResult.providerPayload.openaiCompatibleMessage.content, 'Planning.');
                     assert.deepEqual(failure.llmResult.rawAssistantMessage, {

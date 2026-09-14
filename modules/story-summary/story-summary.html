@@ -695,14 +695,13 @@
                                 <div class="settings-hint">默认 4000。与 L2 事件摘要的 5000-token 池相互独立；这是上限，不会用低相关证据强行填满。</div>
                             </div>
 
-                            <!-- Step 1: Memory Anchors -->
+                            <!-- Memory Anchors -->
                             <div class="neo-card">
                                 <div class="neo-card-title">
-                                    <span class="neo-badge">Step.1</span>
-                                    <span>锚点与基础向量</span>
+                                    <span>记忆锚点</span>
                                 </div>
                                 <div class="settings-hint" style="margin-bottom: 12px; margin-top: -8px;">
-                                    从对话中提取叙事锚点，并补齐可用锚点的 L0/L1 向量。部分楼层失败时，成功成果仍会保存。首次提取较慢（约每百楼 3 分钟）。
+                                    从对话中提取锚点文本。首次提取较慢，成功楼层不会重复生成。
                                 </div>
 
                                 <!-- Stats -->
@@ -726,7 +725,7 @@
                                             </div>
                                             <span class="vector-stat-sep">·</span>
                                             <div class="vector-stat-col">
-                                                <span class="vector-stat-label">L0 Atoms:</span>
+                                                <span class="vector-stat-label">锚点数:</span>
                                                 <span class="vector-stat-value"><strong
                                                         id="anchor-atoms-count">0</strong></span>
                                             </div>
@@ -756,30 +755,29 @@
                                 </div>
                             </div>
 
-                            <!-- Step 2: Generate Vectors -->
+                            <!-- Vector Data -->
                             <div class="neo-card">
                                 <div class="neo-card-title">
-                                    <span class="neo-badge">Step.2</span>
-                                    <span>完整重建向量</span>
+                                    <span>向量数据</span>
                                 </div>
 
                                 <div class="settings-row">
                                     <div class="settings-field full">
                                         <div class="vector-stats" id="vector-stats">
                                             <div class="vector-stat-col">
-                                                <span class="vector-stat-label">L0 Vectors:</span>
+                                                <span class="vector-stat-label">锚点向量:</span>
                                                 <span class="vector-stat-value"><strong
                                                         id="vector-atom-count">0</strong></span>
                                             </div>
                                             <span class="vector-stat-sep">·</span>
                                             <div class="vector-stat-col">
-                                                <span class="vector-stat-label">L1 Chunks:</span>
+                                                <span class="vector-stat-label">正文片段向量:</span>
                                                 <span class="vector-stat-value"><strong
                                                         id="vector-chunk-count">0</strong></span>
                                             </div>
                                             <span class="vector-stat-sep">·</span>
                                             <div class="vector-stat-col">
-                                                <span class="vector-stat-label">L2 Events:</span>
+                                                <span class="vector-stat-label">事件向量:</span>
                                                 <span class="vector-stat-value"><strong
                                                         id="vector-event-count">0</strong></span>
                                             </div>
@@ -789,7 +787,7 @@
                                         </div>
                                         <div class="vector-empty-warning hidden" id="vector-empty-l0-warning"
                                             style="font-size: 0.75rem; color: #f59e0b; margin-top: 6px;">
-                                            ⚠ 记忆锚点为空，建议先生成
+                                            还没有锚点文本，请先在上方生成。
                                         </div>
                                     </div>
                                 </div>
@@ -804,8 +802,9 @@
 
                                 <!-- Buttons -->
                                 <div class="settings-btn-row" id="vector-action-row">
-                                    <button class="btn btn-sm btn-p" id="btn-gen-vectors" style="flex:1">完整重建</button>
-                                    <button class="btn btn-sm btn-del" id="btn-clear-vectors" style="flex:1">清除</button>
+                                    <button class="btn btn-sm btn-p" id="btn-repair-vectors" style="flex:1">补齐缺漏</button>
+                                    <button class="btn btn-sm" id="btn-gen-vectors" style="flex:1">完整重建</button>
+                                    <button class="btn btn-sm btn-del" id="btn-clear-vectors" style="flex:1">清空</button>
                                     <button class="btn btn-sm hidden" id="btn-cancel-vectors" style="flex:1">取消</button>
                                 </div>
                             </div>
@@ -972,7 +971,7 @@
                                         <div class="guide-step-desc">
                                             在「向量设置」Tab 中勾选启用，填入
                                             <a href="https://siliconflow.cn" target="_blank">硅基流动</a>
-                                            的 API Key，然后依次点击「生成/补齐」→「完整重建」。前者提取锚点并补齐 L0/L1，后者生成完整的 L0/L1/L2 向量。之后每条新消息都会自动处理。
+                                            的 API Key，然后在「记忆锚点」中生成锚点文本，在「向量数据」中点击「补齐缺漏」。完整重建仅在需要全量重算时使用。之后每条新消息都会自动处理。
                                         </div>
                                     </div>
                                 </div>
@@ -1049,7 +1048,7 @@
                                     建议完成实名认证以获得更高并发，记忆锚点提取速度会更快。
                                 </li>
                                 <li>
-                                    首次使用：点「生成/补齐」→「完整重建」。锚点提取需要一些时间（约每百楼 3 分钟），向量生成很快。
+                                    首次使用：生成锚点文本，再补齐向量。缺少向量时点「补齐缺漏」，无需重算已有向量；更换向量模型后使用「完整重建」。
                                 </li>
                                 <li>之后全自动，每条新消息都会自动处理。</li>
                             </ul>

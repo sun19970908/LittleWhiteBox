@@ -32,6 +32,18 @@ function createEslintDisableBannerPlugin() {
     };
 }
 
+function createMapAssetCreditsPlugin() {
+    return {
+        name: 'xiaobai-os-map-asset-credits',
+        generateBundle() {
+            for (const file of ['SOURCES.md', 'LICENSE-furniture.txt', 'LICENSE-nature.txt', 'LICENSE-car.txt', 'LICENSE-survival.txt']) {
+                this.emitFile({ type: 'asset', fileName: `map-assets/${file}`,
+                    source: fs.readFileSync(path.join(xiaobaiOsRoot, 'apps/map/ui/three/assets/kenney', file)) });
+            }
+        },
+    };
+}
+
 function createAgentCompatibilityPlugin() {
     return {
         name: 'xiaobai-os-agent-compatibility',
@@ -83,12 +95,20 @@ export default defineConfig(({ mode }) => {
         plugins: [
             ...(buildAgent ? [createAgentCompatibilityPlugin()] : []),
             ...(buildHost ? [createHostExternalPlugin()] : []),
-            ...(buildShell ? [vue()] : []),
+            ...(buildShell ? [vue(), createMapAssetCreditsPlugin()] : []),
             createEslintDisableBannerPlugin(),
         ],
         define: {
             'process.env.NODE_ENV': JSON.stringify('production'),
             global: 'globalThis',
+        },
+        experimental: {
+            renderBuiltUrl(filename, { hostType }) {
+                // Map models live beside the lazy UI chunk, not at SillyTavern's web root.
+                if (hostType === 'js' && filename.startsWith('map-assets/')) {
+                    return { runtime: `new URL(${JSON.stringify(filename)}, import.meta.url).href` };
+                }
+            },
         },
         build: {
             emptyOutDir: buildShell,
@@ -113,6 +133,8 @@ export default defineConfig(({ mode }) => {
                 output: {
                     manualChunks: undefined,
                     chunkFileNames: 'xiaobai-os-[name]-[hash].js',
+                    assetFileNames: asset => asset.names.some(name => name.endsWith('.glb'))
+                        ? 'map-assets/[name]-[hash][extname]' : '[name][extname]',
                     paths: buildHost
                         ? (id) => {
                             if (!path.isAbsolute(id)) return id;

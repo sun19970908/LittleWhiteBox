@@ -50,7 +50,7 @@ test('invalid writes leave preferences alone; failed host saves remain retryable
     assert.equal(saves, 0);
     assert.deepEqual(repository.read().appOrder, []);
     await assert.rejects(repository.setAppOrder(['map', 'world']), /offline/);
-    assert.deepEqual(repository.read().appOrder, ['map', 'world']);
+    assert.deepEqual(repository.read().appOrder, []);
     failed = false;
     await repository.setAppOrder(['map', 'world']);
     assert.equal(saves, 2);

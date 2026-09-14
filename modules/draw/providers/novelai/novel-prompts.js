@@ -15,9 +15,9 @@ const GUIDE_PATHS = Object.freeze({
 });
 
 /**
- * 升级时提供独立的新版预设，版本标记与预设一起保存；不覆盖旧正文。
+ * 首次升级安装新版预设；后续内容升级只替换未编辑的默认首段。
  */
-const PROMPT_TEMPLATE_VERSION = 13;
+const PROMPT_TEMPLATE_VERSION = 14;
 
 /** 用户可编辑的默认值；内置骨架由 scene-planner-frame.js 生成，不在此列。 */
 let LLM_PROMPT_CONFIG = {

@@ -1,7 +1,9 @@
 <script setup lang="ts">
-import { nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import type { XiaobaiOsFrameBridge } from '../../../shell/app-src/frame-bridge.js';
 import FourthWallMessage from './FourthWallMessage.vue';
+import FourthWallContent from './FourthWallContent.js';
+import { parseFourthWallContent } from './message-content.js';
 import type { FourthWallGenerationState, FourthWallHistoryPage, FourthWallTaskPhase } from '../types.js';
 import { HISTORY_WINDOW_LIMIT } from '../domain/context-policy.js';
 
@@ -24,6 +26,7 @@ const emit = defineEmits<{
 }>();
 const viewport = ref<HTMLElement | null>(null);
 const page = ref(props.page);
+const streamingContent = computed(() => parseFourthWallContent(props.generation.text || ''));
 const loading = ref(false);
 const followLatest = ref(true);
 const editing = ref<{ index: number; content: string; original: string; ts: number; revision: number } | null>(null);
@@ -142,7 +145,8 @@ watch(() => props.generation.text, async () => {
                     <summary>思考中</summary><div>{{ generation.thinking }}</div>
                 </details>
                 <div class="fourth-wall-bubble">
-                    {{ generation.text || (generation.status === 'error' ? generation.message : phaseLabels[generation.phase || 'replying']) }}
+                    <FourthWallContent v-if="generation.text" :content="streamingContent" />
+                    <template v-else>{{ generation.status === 'error' ? generation.message : phaseLabels[generation.phase || 'replying'] }}</template>
                     <small v-if="generation.unsaved" class="fourth-wall-unsaved">未保存</small>
                 </div>
             </div>

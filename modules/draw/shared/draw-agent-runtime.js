@@ -1,12 +1,14 @@
 import {
     SUBMIT_SCENE_PLAN_TOOL_NAME,
     ScenePlannerError,
+    ScenePlannerErrorCategory,
     createScenePlannerCorrectionResult,
     getScenePlannerCorrectionSignature,
+    getScenePlannerErrorCategory,
     isScenePlannerCorrectionError,
 } from './scene-plan-contract.js';
 import { redactRequestSecrets } from '../../agent-core/adapters/request-inspection.js';
-import { logScenePlannerDiagnostic, logScenePlannerValidationFailure } from './scene-planner-debug.js';
+import { logScenePlannerArgumentsRepair, logScenePlannerDiagnostic, logScenePlannerValidationFailure } from './scene-planner-debug.js';
 import {
     buildProviderAssistantToolCallMessage,
     buildProviderToolResultMessage,
@@ -318,7 +320,7 @@ export function assertDrawScenePlannerTask(task, diagnostic) {
 
 /**
  * Classification order is fixed: a typed domain error wins, then user cancellation, the Draw
- * timeout flag, an explicit provider timeout, and finally a generic provider error.
+ * timeout flag, then protocol parsing, an explicit provider timeout, and a generic provider error.
  */
 function mapProviderError(error, abortScope, upstreamSignal) {
     if (error instanceof ScenePlannerError) return error;
@@ -330,6 +332,9 @@ function mapProviderError(error, abortScope, upstreamSignal) {
     }
     if (error?.name === 'AbortError' || error?.code === 'ABORT_ERR') {
         return new ScenePlannerError('场景规划已取消。', 'REQUEST_ABORTED', null, { cause: error });
+    }
+    if (error?.code === 'DSML_TOOL_CALL_INVALID' || error?.code === 'TAGGED_TOOL_CALL_INVALID') {
+        return new ScenePlannerError(error.message, error.code, { offset: error.offset }, { cause: error });
     }
     const timeoutText = `${error?.name || ''} ${error?.code || ''} ${error?.message || ''}`;
     if (/(?:time[ -]?out|timedout|etimedout)/i.test(timeoutText)) {
@@ -447,23 +452,31 @@ export async function callDrawScenePlannerAgentRuntime(options = {}) {
                 result = await adapter.chat(agentTask);
             } catch (rawError) {
                 const error = mapProviderError(rawError, abortScope, options.signal);
+                const protocolFailure = getScenePlannerErrorCategory(error) === ScenePlannerErrorCategory.TOOL_PROTOCOL;
                 const inspection = cloneJson(rawError?.requestInspection);
+                const rawAssistantMessage = redactRequestSecrets(cloneJson(rawError?.rawAssistantMessage));
                 const failedAttempt = {
                     attempt,
                     startedAt,
                     durationMs: Math.max(0, Date.now() - startedAt),
                     errorCode: error.code,
+                    // Transport error text may echo credentials; its retained copy is owned by the backend redactor.
+                    ...(protocolFailure ? { errorMessage: error.message } : {}),
+                    ...(Number.isInteger(error.details?.offset) ? { errorOffset: error.details.offset } : {}),
+                    ...(rawAssistantMessage !== undefined ? { rawAssistantMessage } : {}),
                 };
                 attempts.push(failedAttempt);
                 logScenePlannerDiagnostic('请求失败', { ...logContext, ...failedAttempt, errorMessage: error.message });
                 diagnostic.fail(error, {
-                    stage: 'request',
+                    stage: protocolFailure ? 'parse' : 'request',
                     attempts,
-                    terminationReason: error.code === 'REQUEST_TIMEOUT'
-                        ? 'timeout'
-                        : error.code === 'REQUEST_ABORTED'
-                            ? 'abort'
-                            : 'provider_error',
+                    terminationReason: protocolFailure
+                        ? 'tool_protocol_error'
+                        : error.code === 'REQUEST_TIMEOUT'
+                            ? 'timeout'
+                            : error.code === 'REQUEST_ABORTED'
+                                ? 'abort'
+                                : 'provider_error',
                     ...buildInspectionDiagnosticPatch(inspection),
                 });
                 throw error;
@@ -502,12 +515,21 @@ export async function callDrawScenePlannerAgentRuntime(options = {}) {
 
             try {
                 const parsed = await options.validateResult(validationResult, { providerConfig, attempt });
+                const argumentRepair = parsed?.argumentRepair ? {
+                    ...parsed.argumentRepair,
+                    attempt,
+                    originalArguments: validationToolCalls[0]?.arguments,
+                } : null;
+                if (argumentRepair) {
+                    logScenePlannerArgumentsRepair(argumentRepair, logContext);
+                }
                 diagnostic.update({
                     stage: 'parse',
                     correctionCount: corrections.length,
                     corrections,
                     validationFailures,
                     terminationReason: 'success',
+                    ...(argumentRepair ? { argumentRepair } : {}),
                 });
                 return { result: validationResult, providerConfig, diagnostic, parsed };
             } catch (error) {

@@ -3759,6 +3759,7 @@ export async function initAssistant() {
     }
     document.addEventListener('xb-assistant:editor-context', handleAssistantEditorContextEvent);
     window.xiaobaixAssistant = {
+        open: openAssistant,
         openSettings: openAssistantSettings,
         closeSettings: closeAssistant,
         getSettings: () => ({ ...getAssistantSettings() }),

@@ -863,11 +863,11 @@ async function setupSettings() {
 
         $("#xiaobaix_assistant_open_settings").on("click", async function () {
             if (!isXiaobaixEnabled) return;
-            if (!window.xiaobaixAssistant?.openSettings) {
+            if (!window.xiaobaixAssistant?.open) {
                 await initAssistant();
             }
-            if (window.xiaobaixAssistant?.openSettings) {
-                window.xiaobaixAssistant.openSettings();
+            if (window.xiaobaixAssistant?.open) {
+                window.xiaobaixAssistant.open();
             } else {
                 toastr.warning('小白助手初始化失败');
             }

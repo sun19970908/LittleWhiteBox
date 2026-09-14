@@ -29,7 +29,10 @@
 .map-search-bar small { display: block; font-size: 10px; font-weight: 400; color: var(--map-muted); margin-top: 2px; }
 .map-search-bar .map-round-button { background: var(--map-tint); width: 36px; height: 36px; }
 .map-search-bar .map-round-button .map-icon { stroke-width: 3; }
-.map-view-switch { display: flex; width: fit-content; gap: 3px; padding: 3px; margin-top: 10px; border: 1px solid var(--map-line); border-radius: 13px; background: var(--map-surface); }
+.map-view-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.map-view-switch { display: flex; width: fit-content; gap: 3px; padding: 3px; border: 1px solid var(--map-line); border-radius: 13px; background: var(--map-surface); }
+.map-scene-tools { display: flex; gap: 5px; margin-left: auto; }
+.map-scene-tools .map-round-button { width: 39px; height: 39px; border: 1px solid var(--map-line); }
 .map-view-switch button { display: flex; align-items: center; justify-content: center; gap: 7px; min-height: 36px; padding: 7px 13px; border: 0; border-radius: 9px; background: transparent; color: var(--map-muted); font-size: 12px; }
 .map-view-switch button[aria-pressed="true"] { background: var(--map-tint); color: var(--map-accent); font-weight: 650; }
 .map-view-switch .map-icon { width: 16px; height: 16px; }
@@ -49,7 +52,11 @@
 .map-notice-close .map-icon { width: 15px; height: 15px; }
 .map-canvas { position: relative; flex: 1; min-height: 0; margin-top: calc(var(--os-status-height) + 104px); }
 .map-app.has-view-switch .map-canvas { margin-top: calc(var(--os-status-height) + 155px); }
-.map-app.has-view-switch.is-scene-view .map-canvas { margin-top: calc(var(--os-status-height) + 116px); }
+.map-app.is-scene-view .map-canvas, .map-app.has-view-switch.is-scene-view .map-canvas { margin-top: 0; }
+.map-app.is-scene-view .map-top { position: relative; flex: 0 1 auto; min-height: 0; top: auto; inset-inline: auto; margin: var(--os-status-height) 15px 0; overflow-y: auto; scrollbar-width: thin; }
+.map-app.is-scene-view .map-canvas { padding-top: 4px; flex: 1 0 190px; }
+.map-app.is-scene-view .map-key { top: auto; bottom: 94px; }
+@media (max-width: 360px) { .map-app.is-scene-view .map-top { margin-inline: 11px; } }
 .map-viewport { position: relative; width: 100%; height: 100%; min-height: 0; }
 .map-viewport-svg { display: block; width: 100%; height: 100%; touch-action: none; user-select: none; cursor: grab; }
 .map-viewport-svg:active { cursor: grabbing; }

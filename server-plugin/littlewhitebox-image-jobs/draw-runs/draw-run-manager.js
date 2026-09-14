@@ -123,6 +123,7 @@ function createProgressDiagnostic(runId, onUpdate) {
             record.validationFailures = cloneJson(patch.validationFailures) || [];
         }
         if (Array.isArray(patch.attempts)) record.attempts = cloneJson(patch.attempts) || [];
+        if (patch.argumentRepair) record.argumentRepair = cloneJson(patch.argumentRepair);
         onUpdate(cloneJson(record));
     };
     return Object.freeze({

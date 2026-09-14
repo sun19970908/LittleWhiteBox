@@ -1,0 +1,15 @@
+.map-scene-three { position: relative; width: 100%; height: 100%; overflow: hidden; background: radial-gradient(ellipse at 40% 30%, var(--scene-glow), transparent 70%), var(--map-canvas-bg); }
+.map-scene-three > canvas { display: block; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.map-scene-three > canvas:active { cursor: grabbing; }
+.map-scene-three > canvas:focus-visible { outline: 2px solid var(--map-accent); outline-offset: -3px; }
+.map-3d-labels { position: absolute; inset: 0; pointer-events: none; overflow: hidden; }
+.map-3d-label { position: absolute; top: 0; left: 0; visibility: hidden; user-select: none; color: var(--map-accent); }
+.map-3d-label-text { position: absolute; width: max-content; max-width: 144px; font-size: 11px; line-height: 1.4; padding: 3px 7px; border-radius: 6px; color: var(--map-ink); background: var(--map-surface); overflow-wrap: anywhere; box-shadow: 0 1px 5px #0001; }
+.map-3d-label-text[hidden] { display: none; }
+.map-3d-glyph { position: relative; display: grid; place-items: center; width: 30px; height: 30px; box-sizing: border-box; background: var(--map-surface); border: 1px solid var(--map-line); color: var(--map-accent); border-radius: 50%; font-size: 12px; box-shadow: 0 2px 5px #0002; }
+.map-3d-glyph.has-symbols { font-family: "Xiaobai Map Symbols"; font-size: 21px; font-feature-settings: "liga"; }
+.map-3d-anchor { position: absolute; top: -3px; left: -3px; width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 0 2px var(--map-surface), 0 1px 4px #0003; }
+.map-3d-leader { position: absolute; top: 0; left: 0; height: 1px; background: currentColor; transform-origin: 0 0; opacity: .65; }
+.map-3d-label.is-player { color: var(--map-current); }
+.map-3d-label.is-player .map-3d-glyph { background: var(--map-current); border-color: var(--map-current); color: var(--map-surface); box-shadow: 0 0 0 3px color-mix(in srgb, var(--map-current) 18%, transparent), 0 2px 5px #0002; }
+.map-3d-loading { position: absolute; inset: 0; display: grid; place-items: center; color: var(--map-muted); font-size: 12px; }

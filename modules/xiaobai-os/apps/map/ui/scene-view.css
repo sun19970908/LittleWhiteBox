@@ -1,0 +1,8 @@
+.map-scene-view { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.map-scene-toolbar { display: flex; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 5px; padding: 7px 12px; }
+.map-scene-toolbar button { min-height: 36px; padding: 6px 10px; border: 0; border-radius: 9px; font-size: 12px; background: var(--map-surface); }
+.map-scene-toolbar button[aria-pressed="true"] { background: var(--map-tint); color: var(--map-accent); font-weight: 650; }
+.map-render-switch { display: flex; border: 1px solid var(--map-line); border-radius: 11px; padding: 2px; background: var(--map-surface); margin-right: auto; }
+.map-scene-stage { position: relative; flex: 1; min-height: 0; overflow: hidden; }
+.map-scene-stage > .map-viewport { height: 100%; }
+@media (max-width: 360px) { .map-scene-toolbar { gap: 3px; padding-inline: 8px; }.map-scene-toolbar button { padding-inline: 8px; } }

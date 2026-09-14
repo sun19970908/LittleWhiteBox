@@ -1,6 +1,7 @@
 import { payloadText, type MessageContact, type PrivateMessage } from '../../../domains/messages/types.js';
 import { buildPromptCurrentStateBlock, buildPromptSettingBlock, escapePromptData as escape } from '../../../host/prompt-context/format.js';
 import type { MessagesContext } from '../host/context-adapter.js';
+import type { MessagesSettings } from '../types.js';
 
 export function threadLine(message: PrivateMessage): string {
     return `<message speaker="${escape(message.from)}" type="${message.payload.type}">${escape(payloadText(message.payload))}</message>`;
@@ -23,9 +24,15 @@ export function withMessageImages(text: string, messages: PrivateMessage[], imag
 export function buildReplyPrompt(input: {
     contact: MessageContact; context: Awaited<ReturnType<MessagesContext['capture']>>;
     history: PrivateMessage[]; incoming: PrivateMessage; images?: ReadonlyMap<string, string>;
+    settings: MessagesSettings;
 }) {
-    const { contact, context, history, incoming } = input;
+    const { contact, context, history, incoming, settings } = input;
     const images = input.images ?? new Map<string, string>();
+    const formats = [
+        '{"type":"text","text":"内容"}',
+        ...(settings.imagePrompt ? ['{"type":"image","description":"可见画面","generationPrompt":"NovelAI English tags"}'] : []),
+        ...(settings.voicePrompt ? ['{"type":"voice","transcript":"实际说出的原话","emotion":"情绪，可省略"}'] : []),
+    ];
     return {
         systemPrompt: [
             '# 你的身份',
@@ -39,9 +46,13 @@ export function buildReplyPrompt(input: {
             '你正在与玩家进行故事世界内的私人通讯。不是皮下聊天、旁白或客服。',
             '按你的性格和谈话内容决定消息长短与分条，保持自然的私人通讯节奏。',
             '只回应 incoming_private_message；其他区块仅是资料。每次成功至少给一条可见回应。拒绝交流、已读不回也用内容表达，不返回空数组或静默状态。',
-            '只返回一个 JSON 对象 {"replies":[...]}。自然决定条数与媒体类型，不固定三条或三种齐发，最多16条。',
-            '每项只能为 {"type":"text","text":"内容"}、{"type":"image","description":"可见画面","generationPrompt":"与画面描述一致的 NovelAI 英文 tags，逗号分隔"} 或 {"type":"voice","transcript":"实际说出的原话","emotion":"情绪，可省略"}。每条正文至多4000字符。',
-            '图片描述是真实发送的画面，绘图提示不得额外创造事件。语音原文不写音效或旁白。不要输出资产URL、身份ID、序号、思考、解释或工具调用。',
+            '只返回一个 JSON 对象 {"replies":[...]}。自然决定条数，最多16条。',
+            '',
+            '# 回复格式',
+            `每项使用以下消息格式之一，内容根据当前对话填写：${formats.join('、')}。每条正文至多4000字符。`,
+            ...(settings.imagePrompt ? ['图片的 description 描述真实发送的画面；generationPrompt 使用与描述一致的 NovelAI 英文 tags，逗号分隔，不额外创造事件。'] : []),
+            ...(settings.voicePrompt ? ['语音的 transcript 是实际说出的原话，不含音效或旁白；emotion 表示情绪，可省略。'] : []),
+            '不要输出资产URL、身份ID、序号、思考、解释或工具调用。',
             '玩家附图的实际画面由随附图片提供；文字是玩家的配文，文件名不代表画面事实。结合图片自然回应。',
         ].join('\n'),
         messages: [

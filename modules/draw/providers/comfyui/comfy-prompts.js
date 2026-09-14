@@ -7,8 +7,8 @@ import {
 
 const TAG_GUIDE_PATH = `${extensionFolderPath}/modules/draw/providers/comfyui/COMFY_TAG编写指南.md`;
 
-/** 升级时提供独立的新版预设，版本标记与预设一起保存；不覆盖旧正文。 */
-export const PROMPT_TEMPLATE_VERSION = 10;
+/** 首次升级安装新版预设；后续内容升级只替换未编辑的默认首段。 */
+export const PROMPT_TEMPLATE_VERSION = 11;
 
 /** ComfyUI 的场景规划差异：整图负向、interact 为普通 tag、无坐标字段。 */
 export const COMFY_PLANNER_PROFILE = Object.freeze({

@@ -126,7 +126,7 @@ function decodeBase64Url(input) {
     return Buffer.from(normalized, 'base64').toString('utf8');
 }
 
-function buildChatMessagesFromArgs(args, prefillMode = 'assistant') {
+function buildChatMessagesFromArgs(args) {
     const topMessages = JSON.parse(decodeBase64Url(args.top64 || 'W10='));
     const bottomMessages = JSON.parse(decodeBase64Url(args.bottom64 || 'W10='));
     const messages = [...topMessages, ...bottomMessages]
@@ -135,13 +135,6 @@ function buildChatMessagesFromArgs(args, prefillMode = 'assistant') {
             content: typeof message?.content === 'string' ? message.content : String(message?.content || ''),
         }))
         .filter((message) => message.role && message.content.trim().length > 0);
-
-    if (args.bottomassistant && String(args.bottomassistant).trim()) {
-        messages.push({
-            role: prefillMode === 'user-instruction' ? 'user' : 'assistant',
-            content: String(args.bottomassistant),
-        });
-    }
 
     return messages;
 }
@@ -180,7 +173,7 @@ function createStreamingGenerationShim(summaryApiConfig) {
     const getSession = (sessionId) => sessions.get(sessionId) || { isStreaming: false, text: '', error: null };
 
     const runRequest = async (args) => {
-        const messages = buildChatMessagesFromArgs(args, summaryApiConfig.prefillMode);
+        const messages = buildChatMessagesFromArgs(args);
         let responseMeta = {};
         const text = await callSummaryApi(summaryApiConfig, messages, {
             ...args,
@@ -371,7 +364,6 @@ function buildReplayPanelConfig(config) {
             modelCache: [],
             maxTokens: config?.summaryApi?.maxTokens ?? null,
             reasoningEffort: config?.summaryApi?.reasoningEffort ?? '',
-            prefillMode: config?.summaryApi?.prefillMode ?? 'assistant',
         },
         gen: {
             temperature: config?.summaryApi?.temperature ?? null,
@@ -1221,6 +1213,18 @@ function renderMarkdownReport(report) {
     return lines.join('\n');
 }
 
+export async function runStorySummaryRequestCheck() {
+    ensureNodeReplayGlobals();
+    const { runSummaryRequestCheck } = await import('./summary-request-check.mjs');
+    return runSummaryRequestCheck();
+}
+
+export async function runStorySummaryResponseCheck() {
+    ensureNodeReplayGlobals();
+    const { runSummaryResponseCheck } = await import('./summary-response-check.mjs');
+    return runSummaryResponseCheck();
+}
+
 export async function runStorySummaryCancellationCheck() {
     ensureNodeReplayGlobals();
     const { generateSummary, isSummaryGenerationCancelledError } = await import(
@@ -1481,7 +1485,7 @@ export async function runStorySummaryPostCommitCancellationCheck() {
         const result = await runSummaryGeneration(0, {
             api: { provider: 'st' },
             gen: {},
-            trigger: { useStream: false, maxPerRun: 100 },
+            trigger: { useStream: false, maxPerRun: 100, delayFloors: 0 },
         }, {
             onComplete: async () => {
                 onCompleteCalled = true;
@@ -1535,7 +1539,7 @@ export async function runStorySummaryOwnershipCheck() {
         const result = await runSummaryGeneration(0, {
             api: { provider: 'st' },
             gen: {},
-            trigger: { useStream: false, maxPerRun: 100 },
+            trigger: { useStream: false, maxPerRun: 100, delayFloors: 0 },
         }, {}, { targetChatId: ownerChatId });
         return {
             result,
@@ -1580,7 +1584,7 @@ export async function runStorySummarySourceMutationCheck() {
         const result = await runSummaryGeneration(0, {
             api: { provider: 'st' },
             gen: {},
-            trigger: { useStream: false, maxPerRun: 100 },
+            trigger: { useStream: false, maxPerRun: 100, delayFloors: 0 },
         }, {}, { targetChatId: chatId });
         return {
             result,
@@ -1590,6 +1594,104 @@ export async function runStorySummarySourceMutationCheck() {
     } finally {
         globalThis.window.xiaobaixStreamingGeneration = previousStreamingModule;
     }
+}
+
+export async function runStorySummaryDelayFloorsCheck() {
+    ensureNodeReplayGlobals();
+    const [{ default: assert }, { EXT_ID }, { runSummaryGeneration }, { applySummaryPanelConfigSnapshot }] = await Promise.all([
+        import('node:assert/strict'),
+        import('../../core/constants.js'),
+        import('../../modules/story-summary/generate/generator.js'),
+        import('../../modules/story-summary/data/config.js'),
+    ]);
+    assert.equal(applySummaryPanelConfigSnapshot(null).trigger.delayFloors, 2);
+    assert.equal(applySummaryPanelConfigSnapshot({ trigger: {} }).trigger.delayFloors, 2);
+    // Exercise the generation boundary, including a retry with the original target.
+    // Removing only the deferred tail leaves the source text unchanged, so the
+    // existing source-mutation check alone cannot protect this contract.
+    const cases = [
+        { name: 'deferred-tail-deleted', target: 19, remaining: 20, stale: true, expectedEnd: 17 },
+        { name: 'source-deleted', target: 19, remaining: 18, stale: true, expectedEnd: 15 },
+        { name: 'manual', target: 21, remaining: 22, expectedEnd: 19 },
+        { name: 'automatic', target: 19, remaining: 22, expectedEnd: 19 },
+        { name: 'appended-messages', target: 21, remaining: 24, expectedEnd: 19 },
+        { name: 'all-remaining-floors-deferred', target: 19, remaining: 2, stale: true, expectedEnd: null },
+        { name: 'failed-request-retry', target: 19, remaining: 20, fail: true, expectedEnd: 17 },
+        { name: 'batch-cap-unaffected', target: 19, remaining: 20, maxPerRun: 10, expectedEnd: 9 },
+        { name: 'zero-delay', target: 19, remaining: 20, delayFloors: 0, expectedEnd: 19 },
+        { name: 'default-delay', target: 21, remaining: 22, delayFloors: undefined, expectedEnd: 19 },
+        { name: 'blank-delay', target: 21, remaining: 22, delayFloors: '', expectedEnd: 19 },
+        { name: 'custom-delay', target: 21, remaining: 22, delayFloors: 3, expectedEnd: 18 },
+    ];
+    const previousStreamingModule = globalThis.window.xiaobaixStreamingGeneration;
+    try {
+        for (const scenario of cases) {
+            const chatId = `summary-delay-${scenario.name}`;
+            const chat = Array.from({ length: 22 }, (_, index) => ({
+                is_user: index % 2 === 0,
+                mes: `消息 ${index + 1}`,
+            }));
+            __setExtensionSettings({ [EXT_ID]: { storySummary: { enabled: true } } });
+            __setChatMetadata({});
+            __resetMetadataSaveCount();
+            __setReplayContext({ chatId, chat, name1: '用户', name2: '角色' });
+            let calls = 0;
+            globalThis.window.xiaobaixStreamingGeneration = {
+                async xbgenrawCommand() {
+                    if (++calls === 1) {
+                        chat.splice(scenario.remaining);
+                        while (chat.length < scenario.remaining) chat.push({ is_user: true, mes: '后续消息' });
+                        if (scenario.fail) throw new Error('Simulated summary request failure');
+                    }
+                    return JSON.stringify({
+                        keywords: [], events: [], newCharacters: [], arcUpdates: [], factUpdates: [],
+                    });
+                },
+                cancel() {},
+            };
+            const config = applySummaryPanelConfigSnapshot({
+                api: { provider: 'st' },
+                trigger: {
+                    useStream: false,
+                    maxPerRun: scenario.maxPerRun ?? 100,
+                    delayFloors: Object.hasOwn(scenario, 'delayFloors') ? scenario.delayFloors : 2,
+                },
+            });
+            const generate = () => runSummaryGeneration(scenario.target, config, {}, { targetChatId: chatId });
+            let result = await generate();
+            if (scenario.stale || scenario.fail) {
+                assert.equal(result.success, false, scenario.name);
+                if (scenario.stale) assert.equal(result.stale, true, scenario.name);
+                assert.equal(__saveMetadataCallCount, 0, scenario.name);
+                result = await generate();
+            }
+            assert.equal(result.success, true, scenario.name);
+            const savedEnd = chat_metadata?.extensions?.[EXT_ID]?.storySummary?.lastSummarizedMesId ?? null;
+            assert.equal(savedEnd, scenario.expectedEnd, scenario.name);
+            if (scenario.expectedEnd === null) {
+                assert.equal(result.noContent, true, scenario.name);
+                assert.equal(calls, 1, scenario.name);
+                assert.equal(__saveMetadataCallCount, 0, scenario.name);
+            } else {
+                assert.equal(__immediateMetadataSaveCallCount, 1, scenario.name);
+            }
+        }
+        return { cases: cases.length };
+    } finally {
+        globalThis.window.xiaobaixStreamingGeneration = previousStreamingModule;
+    }
+}
+
+export async function runStorySummaryRollbackStorageCheck() {
+    ensureNodeReplayGlobals();
+    const { runRollbackStorageCheck } = await import('./rollback-storage-check.mjs');
+    return runRollbackStorageCheck();
+}
+
+export async function runStorySummarySwipeRollbackCheck() {
+    ensureNodeReplayGlobals();
+    const { runSwipeRollbackCheck } = await import('./swipe-rollback-check.mjs');
+    return runSwipeRollbackCheck();
 }
 
 export async function runStorySummaryRollbackIntegrityCheck() {

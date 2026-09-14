@@ -132,6 +132,14 @@ test('agent protocol does not treat key-like text inside Write content as argume
     });
 });
 
+test('agent protocol preserves unknown-tool arguments through execution and corrective replay', () => {
+    const rawArguments = '{"frames":[{"caption":"title: SUMMER, content: OPEN, mode: cinematic"}]';
+    const toolCalls = [{ id: 'plan-1', name: 'SubmitPlan', arguments: rawArguments }];
+    assert.deepEqual(resolveResultToolCalls({ toolCalls }), toolCalls);
+    const [replay] = buildProviderMessagesFromHistory([{ role: 'assistant', content: '', toolCalls }]);
+    assert.equal(replay.tool_calls[0].function.arguments, rawArguments);
+});
+
 test('agent protocol normalizes and filters thought blocks per turn', () => {
     const normalized = mergeThoughtBlocks(
         [{ label: '思考块', text: '先读取。' }],

@@ -1,4 +1,4 @@
-import { logScenePlannerDiagnostic, logScenePlannerValidationFailure } from './scene-planner-debug.js';
+import { logScenePlannerArgumentsRepair, logScenePlannerDiagnostic, logScenePlannerValidationFailure } from './scene-planner-debug.js';
 
 const MAX_TRACKED_RUNS = 100;
 const loggedFailureSignatures = new Map();
@@ -45,6 +45,14 @@ export function logDrawRunPlannerDiagnostics(run, logger = console) {
         const signature = failureSignature(failure);
         if (seen.has(signature)) continue;
         if (logScenePlannerValidationFailure(failure, context, logger)) {
+            seen.add(signature);
+            logged += 1;
+        }
+    }
+    const repair = run.progress.argumentRepair;
+    if (repair) {
+        const signature = `repair:${repair.attempt}`;
+        if (!seen.has(signature) && logScenePlannerArgumentsRepair(repair, context, logger)) {
             seen.add(signature);
             logged += 1;
         }

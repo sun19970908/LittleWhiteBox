@@ -534,9 +534,9 @@ export async function loadSettings() {
 
     try {
         const saved = await ComfyDrawStorage.getStrict(SERVER_FILE_KEY, null);
-        const upgrade = installScenePlannerPresets(saved, DEFAULT_PROMPT_CONFIG, PROMPT_TEMPLATE_VERSION);
+        const upgrade = installScenePlannerPresets(saved, DEFAULT_PROMPT_CONFIG, PROMPT_TEMPLATE_VERSION, { installVersion: 10 });
         settingsCache = normalizeSettings(upgrade.settings);
-        if (!saved || upgrade.installed) {
+        if (!saved || upgrade.changed) {
             const savedDefaults = await ComfyDrawStorage.setAndSave(SERVER_FILE_KEY, settingsCache, { silent: true });
             if (!savedDefaults) throw new Error('新版提示词预设保存失败');
         }

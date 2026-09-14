@@ -4,6 +4,8 @@ import { normalizeMapSettings } from '../apps/map/settings.js';
 import type { MapSettings } from '../apps/map/types.js';
 import { normalizeTasksSettings } from '../apps/tasks/settings.js';
 import type { TasksSettings } from '../apps/tasks/types.js';
+import { normalizeMessagesSettings } from '../apps/messages/settings.js';
+import type { MessagesSettings } from '../apps/messages/types.js';
 import type { XiaobaiOsSettings as XiaobaiOsSettingsRoot } from '../types.js';
 import { jsonValuesEqual } from './json-values-equal.js';
 import { normalizeAppOrder } from '../shell/app-order.js';
@@ -15,6 +17,7 @@ export type XiaobaiOsSettings = XiaobaiOsSettingsRoot<{
     fourthWall: FourthWallGlobalSettings;
     map: MapSettings;
     tasks: TasksSettings;
+    messages: MessagesSettings;
 }>;
 
 export const LEGACY_FOURTH_WALL_SETTING_KEYS = Object.freeze([
@@ -48,6 +51,7 @@ export function createDefaultXiaobaiOsSettings(): XiaobaiOsSettings {
             fourthWall: normalizeFourthWallGlobalSettings(undefined),
             map: normalizeMapSettings(undefined),
             tasks: normalizeTasksSettings(undefined),
+            messages: normalizeMessagesSettings(undefined),
         },
     };
 }
@@ -66,6 +70,7 @@ export function normalizeXiaobaiOsSettings(value: unknown): XiaobaiOsSettings {
             fourthWall: normalizeFourthWallGlobalSettings(apps.fourthWall),
             map: normalizeMapSettings(apps.map),
             tasks: normalizeTasksSettings(apps.tasks),
+            messages: normalizeMessagesSettings(apps.messages),
         },
     };
 }
@@ -108,6 +113,7 @@ export function migrateUpstreamFourthWallSettings(extensionSettings: unknown): {
                 }),
                 map: normalizeMapSettings(undefined),
                 tasks: normalizeTasksSettings(undefined),
+                messages: normalizeMessagesSettings(undefined),
             },
         },
         legacyKeys: LEGACY_FOURTH_WALL_SETTING_KEYS.filter((key) => Object.hasOwn(source, key)),

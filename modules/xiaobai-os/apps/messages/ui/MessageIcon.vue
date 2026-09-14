@@ -1,5 +1,5 @@
 <script setup lang="ts">
-defineProps<{ name: 'back' | 'plus' | 'send' | 'image' | 'voice' | 'search' | 'more' | 'close' | 'play' | 'stop' | 'message' }>();
+defineProps<{ name: 'back' | 'plus' | 'send' | 'image' | 'voice' | 'search' | 'more' | 'close' | 'play' | 'stop' | 'message' | 'settings' }>();
 const paths = {
     message: 'M5 4h14a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H9l-6 3V6a2 2 0 0 1 2-2Z',
     back: 'm14 5-7 7 7 7', plus: 'M12 5v14M5 12h14', send: 'm5 12 7-7 7 7M12 5v15',
@@ -8,6 +8,7 @@ const paths = {
     search: 'M17 10a7 7 0 1 1-14 0 7 7 0 0 1 14 0Zm-2 5 6 6',
     more: 'M5 12h.01M12 12h.01M19 12h.01', close: 'm6 6 12 12M6 18 18 6',
     play: 'm8 5 11 7-11 7V5Z', stop: 'M7 7h10v10H7Z',
+    settings: 'm9 3-.5 3-2.5 1-2.5-1-2 3.5L4 11v2l-2.5 1.5 2 3.5L6 17l2.5 1L9 21h6l.5-3 2.5-1 2.5 1 2-3.5L20 13v-2l2.5-1.5-2-3.5L18 7l-2.5-1L15 3H9Zm6 9a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z',
 };
 </script>
 <template><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path :d="paths[name]" /></svg></template>

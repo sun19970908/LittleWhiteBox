@@ -252,9 +252,26 @@
     color: #fff;
 }
 
-.fourth-wall-message-text {
-    white-space: pre-wrap;
-}
+.fourth-wall-markdown { color-scheme: light; overflow-wrap: anywhere; }
+.theme-dark .fourth-wall-markdown { color-scheme: dark; }
+.fourth-wall-markdown > :first-child { margin-top: 0; }
+.fourth-wall-markdown > :last-child { margin-bottom: 0; }
+.fourth-wall-markdown p { margin: 0 0 .65em; }
+.fourth-wall-markdown em, .fourth-wall-markdown i { font-style: italic; font-synthesis: style; }
+.fourth-wall-markdown strong, .fourth-wall-markdown b { font-weight: 700; }
+.fourth-wall-markdown :is(h1, h2, h3, h4, h5, h6) { font-size: 1.05em; margin: .8em 0 .4em; }
+.fourth-wall-markdown :is(ul, ol) { margin: .5em 0; padding-left: 1.5em; }
+.fourth-wall-markdown li > p { margin: .25em 0; }
+.fourth-wall-markdown blockquote { border-left: 3px solid currentColor; margin: .65em 0; padding-left: .75em; }
+.fourth-wall-markdown blockquote > :last-child { margin-bottom: 0; }
+.fourth-wall-markdown a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+.fourth-wall-markdown code { background: color-mix(in srgb, currentColor 9%, transparent); border-radius: 4px; font-size: .92em; padding: .12em .3em; }
+.fourth-wall-markdown pre { background: color-mix(in srgb, currentColor 7%, transparent); border-radius: 8px; margin: .65em 0; max-width: 100%; overflow: auto; padding: 9px; white-space: pre; }
+.fourth-wall-markdown pre code { background: none; padding: 0; }
+.fourth-wall-markdown hr { border: 0; border-top: 1px solid currentColor; margin: .8em 0; opacity: .3; }
+.fourth-wall-table-scroll { max-width: 100%; overflow-x: auto; margin: .65em 0; }
+.fourth-wall-markdown table { border-collapse: collapse; font-size: .95em; }
+.fourth-wall-markdown :is(th, td) { border: 1px solid color-mix(in srgb, currentColor 25%, transparent); min-width: 5em; padding: 4px 7px; text-align: left; vertical-align: top; }
 
 .fourth-wall-message-actions {
     display: flex;
@@ -303,6 +320,7 @@
 }
 
 .fourth-wall-image-card {
+    display: block;
     margin: 7px 0 0;
     max-width: 260px;
     overflow: hidden;
@@ -316,7 +334,7 @@
     width: 100%;
 }
 
-.fourth-wall-image-card div,
+.fourth-wall-image-unavailable,
 .fourth-wall-image-card button {
     background: color-mix(in srgb, var(--xiaobai-os-muted) 8%, transparent);
     border: 1px dashed currentColor;

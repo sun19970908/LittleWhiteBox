@@ -207,7 +207,6 @@ function applyCliOverrides(config, argv) {
     const summaryKeyEnv = readFlag(argv, 'summary-api-key-env');
     const summaryReasoningEffort = readFlag(argv, 'summary-api-reasoning-effort');
     const summaryMaxTokens = readFlag(argv, 'summary-api-max-tokens');
-    const summaryPrefillMode = readFlag(argv, 'summary-api-prefill-mode');
     const eventRerankEnabled = readBooleanFlag(argv, 'event-rerank');
     const summarizedEvidenceBudget = readFlag(argv, 'summarized-evidence-budget');
     const maxFloors = readFlag(argv, 'max-floors');
@@ -235,7 +234,7 @@ function applyCliOverrides(config, argv) {
     if (samplePath) config.samplePath = samplePath;
     if (snapshotPath) config.snapshotPath = snapshotPath;
     if (outputPath) config.outputPath = outputPath;
-    if (summaryProvider || summaryUrl || summaryModel || summaryKeyEnv || summaryReasoningEffort || summaryMaxTokens || summaryPrefillMode) {
+    if (summaryProvider || summaryUrl || summaryModel || summaryKeyEnv || summaryReasoningEffort || summaryMaxTokens) {
         const environmentKey = summaryKeyEnv ? String(process.env[summaryKeyEnv] || '') : '';
         if (summaryKeyEnv && !environmentKey) throw new Error(`环境变量 ${summaryKeyEnv} 不存在或为空`);
         const parsedMaxTokens = summaryMaxTokens == null ? null : Number(summaryMaxTokens);
@@ -250,7 +249,6 @@ function applyCliOverrides(config, argv) {
             ...(summaryKeyEnv ? { key: environmentKey, keyEnv: summaryKeyEnv } : {}),
             ...(summaryReasoningEffort ? { reasoningEffort: summaryReasoningEffort } : {}),
             ...(parsedMaxTokens ? { maxTokens: parsedMaxTokens } : {}),
-            ...(summaryPrefillMode ? { prefillMode: summaryPrefillMode } : {}),
         };
     }
     if (eventRerankEnabled != null) {
@@ -397,6 +395,10 @@ async function main() {
         const bundleUrl = `${pathToFileURL(bundlePath).href}?t=${Date.now()}`;
         // eslint-disable-next-line no-unsanitized/method -- URL points to the bundle path created above.
         const replayModule = await import(bundleUrl);
+        const summaryRequest = await replayModule.runStorySummaryRequestCheck();
+        console.log(`[story-summary-replay] summary request check: ${JSON.stringify(summaryRequest)}`);
+        const summaryResponse = await replayModule.runStorySummaryResponseCheck();
+        console.log(`[story-summary-replay] summary response check: ${JSON.stringify(summaryResponse)}`);
         const result = await replayModule.runStorySummaryCancellationCheck();
         if (!result.cancelled || !result.cancelledSessions.includes('summary-cancel-check')) {
             throw new Error(`总结取消检查失败: ${JSON.stringify(result)}`);
@@ -430,6 +432,8 @@ async function main() {
         ) {
             throw new Error(`总结源内容变更检查失败: ${JSON.stringify(sourceMutation)}`);
         }
+        const delayFloors = await replayModule.runStorySummaryDelayFloorsCheck();
+        console.log(`[story-summary-replay] delay floors check: ${JSON.stringify(delayFloors)}`);
         const rollbackIntegrity = await replayModule.runStorySummaryRollbackIntegrityCheck();
         if (
             rollbackIntegrity.firstResult?.status !== 'rolled_back'
@@ -445,6 +449,10 @@ async function main() {
         ) {
             throw new Error(`总结回滚完整性检查失败: ${JSON.stringify(rollbackIntegrity)}`);
         }
+        const rollbackStorage = await replayModule.runStorySummaryRollbackStorageCheck();
+        console.log(`[story-summary-replay] rollback storage check: ${JSON.stringify(rollbackStorage)}`);
+        const swipeRollback = await replayModule.runStorySummarySwipeRollbackCheck();
+        console.log(`[story-summary-replay] swipe rollback check: ${JSON.stringify(swipeRollback)}`);
         console.log('[story-summary-replay] cancellation check completed');
         return;
     }

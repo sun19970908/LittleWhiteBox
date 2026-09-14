@@ -3,13 +3,8 @@ import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useAppBack } from '../../../shell/app-src/navigation/app-navigation.js';
 import type { XiaobaiOsFrameBridge } from '../../../shell/app-src/frame-bridge.js';
 import type { FourthWallMessageData } from '../types.js';
-
-interface Segment {
-    kind: 'text' | 'image' | 'voice';
-    raw: string;
-    value: string;
-    emotion?: string;
-}
+import FourthWallContent from './FourthWallContent.js';
+import { parseFourthWallContent, type FourthWallMediaSegment } from './message-content.js';
 
 interface MediaState {
     status: 'idle' | 'loading' | 'ready' | 'playing' | 'error' | 'unavailable';
@@ -48,34 +43,7 @@ const media = reactive<Record<number, MediaState>>({});
 const activeMediaIds = new Set<string>();
 let unsubscribe = () => {};
 
-function parseContent(content: string): Segment[] {
-    const expression = /\[(?:img|图片)\s*:\s*([^\]]+)\]|\[(?:voice|语音)\s*:([^:\]]*):([^\]]+)\]|\[(?:voice|语音)\s*:\s*([^\]]+)\]/gi;
-    const result: Segment[] = [];
-    let cursor = 0;
-    let match: RegExpExecArray | null;
-    while ((match = expression.exec(content)) !== null) {
-        if (match.index > cursor) {
-            result.push({ kind: 'text', raw: content.slice(cursor, match.index), value: content.slice(cursor, match.index) });
-        }
-        if (match[1] !== undefined) {
-            result.push({ kind: 'image', raw: match[0], value: match[1].trim() });
-        } else {
-            result.push({
-                kind: 'voice',
-                raw: match[0],
-                value: String(match[3] ?? match[4] ?? '').trim(),
-                emotion: String(match[2] || '').trim().toLowerCase(),
-            });
-        }
-        cursor = expression.lastIndex;
-    }
-    if (cursor < content.length) {
-        result.push({ kind: 'text', raw: content.slice(cursor), value: content.slice(cursor) });
-    }
-    return result.length ? result : [{ kind: 'text', raw: content, value: content }];
-}
-
-const segments = computed(() => parseContent(props.message.content));
+const content = computed(() => parseFourthWallContent(props.message.content));
 const displayTime = computed(() => {
     if (!props.message.ts) {
         return '';
@@ -95,7 +63,7 @@ function isCurrentMedia(index: number, requestId: string): boolean {
     return activeMediaIds.has(requestId) && media[index]?.requestId === requestId;
 }
 
-async function loadImage(segment: Segment, index: number): Promise<void> {
+async function loadImage(segment: FourthWallMediaSegment, index: number): Promise<void> {
     if (media[index]?.status === 'loading' || media[index]?.status === 'ready') {
         return;
     }
@@ -150,7 +118,7 @@ async function loadImage(segment: Segment, index: number): Promise<void> {
     }
 }
 
-async function playVoice(segment: Segment, index: number): Promise<void> {
+async function playVoice(segment: FourthWallMediaSegment, index: number): Promise<void> {
     if (!props.voiceAvailable) {
         media[index] = { status: 'unavailable', message: 'TTS 能力未启用' };
         return;
@@ -250,7 +218,7 @@ onMounted(() => {
             for (const entry of entries) {
                 if (!entry.isIntersecting) { continue; }
                 const index = Number((entry.target as HTMLElement).dataset.imageIndex);
-                const segment = segments.value[index];
+                const segment = content.value.media[index];
                 if (segment?.kind === 'image') { void loadImage(segment, index); }
                 observer?.unobserve(entry.target);
             }
@@ -264,7 +232,7 @@ watch(() => props.message.content, () => {
     Object.keys(media).forEach(key => delete media[Number(key)]);
 });
 
-watch([segments, editing], observeImages, { flush: 'post' });
+watch([content, editing], observeImages, { flush: 'post' });
 
 onBeforeUnmount(() => {
     unsubscribe();
@@ -289,28 +257,27 @@ onBeforeUnmount(() => {
             </details>
             <div class="fourth-wall-bubble">
                 <textarea v-if="editing" v-model="draft" class="fourth-wall-edit" rows="3" />
-                <template v-else>
-                    <template v-for="(segment, index) in segments" :key="`${segment.kind}-${index}`">
-                        <span v-if="segment.kind === 'text'" class="fourth-wall-message-text">{{ segment.value }}</span>
-                        <figure v-else-if="segment.kind === 'image'" class="fourth-wall-image-card" :data-image-index="index">
+                <FourthWallContent v-else :content="content">
+                    <template #media="{ segment, index }">
+                        <span v-if="segment.kind === 'image'" class="fourth-wall-image-card" :data-image-index="index">
                             <img v-if="media[index]?.status === 'ready'" :src="media[index].source" :alt="segment.value">
                             <button v-else-if="media[index]?.status === 'error'" type="button" @click="loadImage(segment, index)">
                                 {{ segment.raw }}<small>{{ media[index].message }}，点此重试</small>
                             </button>
-                            <div v-else-if="media[index]?.status === 'unavailable'">
+                            <span v-else-if="media[index]?.status === 'unavailable'" class="fourth-wall-image-unavailable">
                                 {{ segment.raw }}<small>{{ media[index].message }}</small>
-                            </div>
+                            </span>
                             <button v-else type="button" :disabled="media[index]?.status === 'loading'" @click="loadImage(segment, index)">
                                 {{ segment.raw }}<small>{{ media[index]?.message || '生成图片' }}</small>
                             </button>
-                        </figure>
+                        </span>
                         <button v-else class="fourth-wall-voice" type="button" @click="playVoice(segment, index)">
                             <span aria-hidden="true">{{ media[index]?.status === 'playing' ? '■' : '▶' }}</span>
                             <span>{{ segment.value }}</span>
                             <small v-if="media[index]?.message">{{ media[index].message }}</small>
                         </button>
                     </template>
-                </template>
+                </FourthWallContent>
                 <div class="fourth-wall-message-actions">
                     <template v-if="editing">
                         <button type="button" :disabled="!editable" @click="saveEdit">保存</button>

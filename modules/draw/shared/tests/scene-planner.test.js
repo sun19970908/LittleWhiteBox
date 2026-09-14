@@ -221,10 +221,6 @@ test('scene planner accepts the requested images at one point without another mo
                     toolCalls: [{
                         name: 'submit_scene_plan',
                         arguments: JSON.stringify({
-                            mindful_prelude: {
-                                user_insight: '短句画面。',
-                                visual_plan: '画剧情中的这一瞬间，放在插图点 1 后，画面无人物，已录入和未录入角色均不出现，采用中景。',
-                            },
                             images: [1, 2, 3].map(index => ({ index, insert_after: 1, scene: 'short scene', characters: [] })),
                         }),
                     }],
@@ -380,10 +376,6 @@ test('NovelAI, SD, and Comfy each submit one Tool call and receive the same imag
                         toolCalls: [{
                             name: 'submit_scene_plan',
                             arguments: JSON.stringify({
-                                mindful_prelude: {
-                                    user_insight: '重逢前的动作。',
-                                    visual_plan: '画阿璃开门的瞬间，放在插图点 1 后，画面有一名女性，即已录入角色阿璃，没有未录入角色，采用C3 正面中景。',
-                                },
                                 images: [{
                                     index: 1,
                                     insert_after: 1,
@@ -455,10 +447,6 @@ test('scene placement stays anchored to the unexpanded snapshot while the model 
                     toolCalls: [{
                         name: 'submit_scene_plan',
                         arguments: JSON.stringify({
-                            mindful_prelude: {
-                                user_insight: '开门动作。',
-                                visual_plan: '画剧情中的这一瞬间，放在插图点 1 后，画面无人物，已录入和未录入角色均不出现，采用室内中景。',
-                            },
                             images: [{
                                 index: 1,
                                 insert_after: 1,
@@ -490,10 +478,6 @@ test('scene planner rejects illustration point numbers that do not exist in this
                 toolCalls: [{
                     name: 'submit_scene_plan',
                     arguments: JSON.stringify({
-                        mindful_prelude: {
-                            user_insight: '开门动作。',
-                            visual_plan: '画剧情中的这一瞬间，放在插图点 42 后，画面无人物，已录入和未录入角色均不出现，采用室内中景。',
-                        },
                         images: [{
                             index: 1,
                             insert_after: 42,
@@ -539,6 +523,8 @@ test('prepared scene planner input is serializable and executes without browser 
     assert.equal(Object.hasOwn(transferred, 'task'), false);
     assert.equal(Object.hasOwn(transferred.planner.prompt, 'tools'), false);
     assert.equal(transferred.planner.tool.function.name, 'submit_scene_plan');
+    assert.deepEqual(Object.keys(transferred.planner.tool.function.parameters.properties), ['images']);
+    assert.deepEqual(transferred.planner.tool.function.parameters.required, ['images']);
     assert.deepEqual(transferred.planner.tool, prepared.planner.tool);
     assert.deepEqual(Object.keys(transferred.planner.validationContext).sort(), [
         'centerMode',
@@ -559,10 +545,6 @@ test('prepared scene planner input is serializable and executes without browser 
                     toolCalls: [{
                         name: 'submit_scene_plan',
                         arguments: JSON.stringify({
-                            mindful_prelude: {
-                                user_insight: '推门动作。',
-                                visual_plan: '画剧情中的这一瞬间，放在插图点 1 后，画面无人物，已录入和未录入角色均不出现，采用室内中景。',
-                            },
                             images: [{ index: 1, insert_after: 1, scene: 'opening door, indoor', characters: [] }],
                         }),
                     }],

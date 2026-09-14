@@ -204,13 +204,13 @@ export function migrateLegacyNovelPromptSettings(saved, currentDefaults, targetV
     const installation = installScenePlannerPresets({
         ...source,
         promptPresets: result.presets,
-    }, currentDefaults, targetVersion);
+    }, currentDefaults, targetVersion, { installVersion: 13 });
     return {
         ...result,
         settings: installation.settings,
         presets: installation.settings.promptPresets,
         templateVersion: installation.settings._promptTemplateVersion,
-        migrated: result.migrated || installation.installed,
+        migrated: result.migrated || installation.changed,
         installed: installation.installed,
     };
 }

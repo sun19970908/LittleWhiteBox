@@ -12,8 +12,6 @@ export function buildAppMarkup(state) {
                     </button>
                 </div>
                 <div class="xb-assistant-sidebar-content" ${state.sidebarCollapsed ? 'hidden' : ''}>
-                    <div class="xb-assistant-brand">
-                    </div>
                     ${buildAgentSettingsPanelMarkup({
                         configSave: state.configSave,
                         inlineToastText: state.toast,

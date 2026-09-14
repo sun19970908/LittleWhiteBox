@@ -124,6 +124,8 @@ function parseLoosePrimitive(value = '') {
     return text;
 }
 
+// Compatibility: malformed model arguments for these existing tool contracts only.
+// Remove when transports guarantee valid JSON; unknown tools retain their raw input.
 const LOOSE_ARGUMENT_KEYS_BY_TOOL = {
     Read: ['filePath', 'path', 'scope', 'fromLine', 'toLine', 'tail', 'offset', 'limit', 'outputMode', 'contentFormat'],
     Write: ['filePath', 'path', 'content'],
@@ -149,54 +151,6 @@ const LOOSE_ARGUMENT_KEYS_BY_TOOL = {
     PlanList: ['status'],
     apply_patch: ['patchText'],
 };
-
-const GENERIC_LOOSE_ARGUMENT_KEYS = [
-    'filePath',
-    'path',
-    'fromPath',
-    'toPath',
-    'content',
-    'edits',
-    'patchText',
-    'query',
-    'task',
-    'title',
-    'details',
-    'pattern',
-    'scope',
-    'include',
-    'status',
-    'priority',
-    'owner',
-    'blockedBy',
-    'fromLine',
-    'toLine',
-    'tail',
-    'maxResults',
-    'outputMode',
-    'contentFormat',
-    'limit',
-    'offset',
-    'contextLines',
-    'useRegex',
-    'regex',
-    'mode',
-    'docType',
-    'docId',
-    'expectedRevision',
-    'activate',
-    'dryRun',
-    'ops',
-    'op',
-    'eventId',
-    'fingerprint',
-    'vision',
-    'doneWhen',
-    'hookForModel',
-    'startOrder',
-    'endOrder',
-    'full',
-];
 
 function extractFirstLooseField(source = '', keys = [], nextKeys = []) {
     for (const key of keys) {
@@ -310,9 +264,11 @@ export function parseLooseArgumentsObject(text = '', toolName = '') {
     } catch {
         // Fall through to key-based recovery.
     }
+    // Guessing generic keys can mistake nested text for fields and discard the real payload.
+    if (!Object.hasOwn(LOOSE_ARGUMENT_KEYS_BY_TOOL, toolName)) return null;
     const knownParsed = parseKnownLooseArgumentsObject(source, toolName);
     if (knownParsed) return knownParsed;
-    const keys = LOOSE_ARGUMENT_KEYS_BY_TOOL[toolName] || GENERIC_LOOSE_ARGUMENT_KEYS;
+    const keys = LOOSE_ARGUMENT_KEYS_BY_TOOL[toolName];
     const args = {};
     keys.forEach((key, index) => {
         const value = extractLooseField(source, key, keys.slice(index + 1));

@@ -718,9 +718,13 @@ export function mergeNewData(oldJson, parsed, endMesId, options = {}) {
 // 回滚
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function rollbackSummaryIfNeeded() {
+// 删除时有效原文前缀由聊天长度决定；swipe 则从被替换楼层起失效。
+export async function rollbackSummaryIfNeeded({ changedFromFloor = null } = {}) {
     const { chat, chatId } = getContext();
     const currentLength = Array.isArray(chat) ? chat.length : 0;
+    const validPrefixLength = Number.isInteger(changedFromFloor) && changedFromFloor >= 0
+        ? Math.min(currentLength, changedFromFloor)
+        : currentLength;
     const store = getSummaryStore();
 
     if (!store || store.lastSummarizedMesId == null || store.lastSummarizedMesId < 0) {
@@ -729,16 +733,14 @@ export async function rollbackSummaryIfNeeded() {
 
     const lastSummarized = store.lastSummarizedMesId;
 
-    if (isSummaryRollbackRequired(store, currentLength)) {
-        const deletedCount = lastSummarized + 1 - currentLength;
-
-        xbLog.warn(MODULE_ID, `删除已总结楼层 ${deletedCount} 条，触发回滚`);
+    if (isSummaryRollbackRequired(store, validPrefixLength)) {
+        xbLog.warn(MODULE_ID, `原文变更影响已总结范围 ${validPrefixLength}-${lastSummarized}，触发回滚`);
 
         const history = store.summaryHistory || [];
         let targetEndMesId = -1;
 
         for (let i = history.length - 1; i >= 0; i--) {
-            if (history[i].endMesId < currentLength) {
+            if (history[i].endMesId < validPrefixLength) {
                 targetEndMesId = history[i].endMesId;
                 break;
             }
@@ -791,8 +793,6 @@ function hasSummaryContent(json) {
 export async function executeRollback(chatId, store, targetEndMesId) {
     const previousStore = structuredClone(store);
     const oldEvents = store.json?.events || [];
-    let deletedEventIds = [];
-    let clearAllEventVectors = false;
 
     let json = store.json || {};
     const migrations = Array.isArray(store.aliasMigrations) ? store.aliasMigrations : [];
@@ -831,11 +831,25 @@ export async function executeRollback(chatId, store, targetEndMesId) {
     }
 
     const retainedEventIds = new Set((json.events || []).map(event => event?.id).filter(Boolean));
-    deletedEventIds = oldEvents
+    const deletedEventIds = oldEvents
         .map(event => event?.id)
         .filter(id => id && !retainedEventIds.has(id));
 
-    store.json = hasSummaryContent(json) ? json : null;
+    const nextJson = hasSummaryContent(json) ? json : null;
+    // 先清派生向量，再提交事件撤销。否则清理失败后复用事件 ID，会把旧向量
+    // 当成新事件的向量。反过来即使 metadata 保存失败，也只会留下可补齐的缺向量。
+    try {
+        if (targetEndMesId < 0 && !nextJson) {
+            await clearEventVectors(chatId);
+        } else if (deletedEventIds.length > 0) {
+            await deleteEventVectorsByIds(chatId, deletedEventIds);
+        }
+    } catch (error) {
+        xbLog.error(MODULE_ID, '总结回滚失败: event_vector_cleanup_failed', error);
+        return { status: 'failed', reason: 'event_vector_cleanup_failed', targetEndMesId };
+    }
+
+    store.json = nextJson;
     store.lastSummarizedMesId = targetEndMesId;
     store.summaryHistory = (store.summaryHistory || []).filter(h => h.endMesId <= targetEndMesId);
     store.aliasMigrations = migrations.filter(m => (m._addedAt ?? 0) <= targetEndMesId);
@@ -848,8 +862,6 @@ export async function executeRollback(chatId, store, targetEndMesId) {
     } else {
         delete store.pendingImportBoundary;
     }
-    clearAllEventVectors = targetEndMesId < 0 && !store.json;
-
     store.updatedAt = Date.now();
     try {
         await saveSummaryStoreImmediately(chatId);
@@ -858,17 +870,6 @@ export async function executeRollback(chatId, store, targetEndMesId) {
         Object.assign(store, previousStore);
         xbLog.error(MODULE_ID, '总结回滚失败: metadata_persistence_failed', error);
         return { status: 'failed', reason: 'metadata_persistence_failed', targetEndMesId };
-    }
-
-    try {
-        if (clearAllEventVectors) {
-            await clearEventVectors(chatId);
-        } else if (deletedEventIds.length > 0) {
-            await deleteEventVectorsByIds(chatId, deletedEventIds);
-            xbLog.info(MODULE_ID, `回滚删除 ${deletedEventIds.length} 个事件向量`);
-        }
-    } catch (error) {
-        xbLog.warn(MODULE_ID, '总结已回滚，但事件向量清理失败；后续完整性检查会忽略无主向量', error);
     }
 
     xbLog.info(MODULE_ID, `回滚完成，目标楼层: ${targetEndMesId}`);
@@ -907,6 +908,8 @@ export async function rollbackSummaryOnce(chatId) {
 export async function clearSummaryData(chatId) {
     const store = getSummaryStore();
     const previousStore = store ? structuredClone(store) : null;
+    // 与回滚相同：成功删除派生向量后，才允许释放全部事件 ID。
+    if (chatId) await clearEventVectors(chatId);
     if (store) {
         delete store.json;
         store.lastSummarizedMesId = -1;
@@ -927,15 +930,6 @@ export async function clearSummaryData(chatId) {
         }
         throw error;
     }
-
-    if (chatId) {
-        try {
-            await clearEventVectors(chatId);
-        } catch (error) {
-            xbLog.warn(MODULE_ID, '总结已清空，但事件向量清理失败', error);
-        }
-    }
-
 
     xbLog.info(MODULE_ID, '总结数据已清空');
 }

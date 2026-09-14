@@ -304,7 +304,6 @@ export function sanitizeExecutionProfile(config, reader = null) {
             maxPerRun: Math.max(1, Math.trunc(Number(config?.summaryApi?.maxPerRun) || SUMMARY_DEFAULT_MAX_PER_RUN)),
             maxTokens: config?.summaryApi?.maxTokens ?? null,
             reasoningEffort: String(config?.summaryApi?.reasoningEffort || ''),
-            prefillMode: String(config?.summaryApi?.prefillMode || 'assistant'),
             useStream: config?.summaryApi?.useStream !== false,
             temperature: config?.summaryApi?.temperature ?? null,
         },

@@ -120,7 +120,7 @@ export function buildProviderAssistantToolCallMessage(result = {}, toolCalls = [
                 : {}),
             function: {
                 name: toolCall.name,
-                arguments: toolCall.arguments || '{}',
+                arguments: toolCall.arguments,
             },
         })),
     };

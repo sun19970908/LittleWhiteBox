@@ -1,3 +1,5 @@
+import { updateScenePlannerPresetOpenings } from './scene-planner-opening-migration.js';
+
 export const SCENE_PLANNER_PRESET_NAMES = Object.freeze({
     normal: '新版-完整规则',
     pov: '新版-第一人称完整规则',
@@ -8,7 +10,7 @@ export function isPovPromptPreset(name) {
 }
 
 /**
- * Every upgraded installation lands on a new copy: old rules no longer match the tool
+ * The initial scene-plan preset upgrade lands on a new copy: old rules do not match the tool
  * contract, so leaving any legacy or custom preset active would break drawing silently.
  * A first-person selection keeps its perspective; everything else gets the normal copy.
  */
@@ -34,14 +36,16 @@ export function createScenePlannerDefaultPresets(defaults) {
  * Configuration-load boundary only. Persist the returned settings as one snapshot so
  * the offered presets and the existing template-version marker commit together.
  * The marker, not preset names or presence, prevents deleted/renamed copies returning.
+ * installVersion is the provider's initial scene-plan preset release. Later content
+ * updates only replace untouched openings, without adding copies or changing selection.
  */
-export function installScenePlannerPresets(settings, defaults, targetVersion) {
+export function installScenePlannerPresets(settings, defaults, targetVersion, { installVersion }) {
     if (!Number.isInteger(targetVersion) || targetVersion <= 0) {
         throw new TypeError('targetVersion is required');
     }
     const source = settings && typeof settings === 'object' && !Array.isArray(settings) ? settings : {};
     if (Number(source._promptTemplateVersion) >= targetVersion) {
-        return { settings: source, installed: false };
+        return { settings: source, installed: false, changed: false };
     }
     for (const key of ['topSystem', 'topSystemPov', 'sceneRules']) {
         if (typeof defaults?.[key] !== 'string' || !defaults[key].trim()) {
@@ -52,6 +56,17 @@ export function installScenePlannerPresets(settings, defaults, targetVersion) {
         throw new Error('提示词模板尚未加载：tagGuideContent');
     }
     const existing = Array.isArray(source.promptPresets) ? source.promptPresets : [];
+    if (Number(source._promptTemplateVersion) >= installVersion) {
+        return {
+            settings: {
+                ...source,
+                promptPresets: updateScenePlannerPresetOpenings(existing, defaults),
+                _promptTemplateVersion: targetVersion,
+            },
+            installed: false,
+            changed: true,
+        };
+    }
     const added = createScenePlannerDefaultPresets(defaults);
     return {
         settings: {
@@ -61,6 +76,7 @@ export function installScenePlannerPresets(settings, defaults, targetVersion) {
             _promptTemplateVersion: targetVersion,
         },
         installed: true,
+        changed: true,
     };
 }
 

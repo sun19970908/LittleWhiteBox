@@ -83,3 +83,24 @@ test('backend recovery prints each round once with complete output and durations
     assert.deepEqual(entries.map(entry => entry.durationMs), [25000, 25000, 20000]);
     assert.ok(entries.every(entry => entry.runId === run.id && entry.model === 'model-name'));
 });
+
+test('a backend shell repair reaches F12 once even if the completed attempt was already logged', () => {
+    resetDrawRunPlannerFailureLogsForTests();
+    const entries = [];
+    const logger = { log: (_label, details) => entries.push(details) };
+    const run = {
+        id: 'run-debug-repair',
+        progress: { validationFailures: [], attempts: [{ attempt: 1 }] },
+    };
+    logDrawRunPlannerDiagnostics(run, logger);
+    run.progress.argumentRepair = {
+        attempt: 1, kind: 'missing_root_closer', offset: 12, removed: '', inserted: '}',
+        originalArguments: '{"images":[]',
+    };
+    assert.equal(logDrawRunPlannerDiagnostics(run, logger), 1);
+    assert.equal(logDrawRunPlannerDiagnostics(run, logger), 0);
+    assert.equal(entries.length, 2);
+    assert.equal(entries[1].event, 'scene_planner_tool_arguments_repaired');
+    assert.equal(entries[1].originalArguments, run.progress.argumentRepair.originalArguments);
+    assert.equal(entries[1].inserted, '}');
+});
