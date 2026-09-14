@@ -450,25 +450,6 @@ const LEXICAL_WARMUP_DEBOUNCE_MS = 3000;
 const CHAT_CHANGE_LEXICAL_WARMUP_MS = 3000;
 const AUTO_SUMMARY_DELAY_MS = 3000;
 const AUTO_L0_BACKFILL_DELAY_MS = 5000;
-// 延迟总结配置：保留最近 N 层不纳入总结，手动/自动一致。
-// 通过 循环任务 调 setSummaryDelayFloors 修改，运行时生效。
-const SUMMARY_DELAY_KEY = "summaryDelayFloors";
-const DEFAULT_SUMMARY_DELAY_FLOORS = 0;
-
-export function getSummaryDelayFloors() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[SUMMARY_DELAY_KEY];
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.max(0, Math.min(100, Math.round(n))) : DEFAULT_SUMMARY_DELAY_FLOORS;
-}
-
-export function setSummaryDelayFloors(floors) {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    root.storySummary[SUMMARY_DELAY_KEY] = floors;
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return getSummaryDelayFloors();
-}
-
 const BACKGROUND_VISIBLE_GRACE_MS = 6000;
 const VECTOR_RETRY_MAX_MS = 300000;
 
@@ -3104,13 +3085,11 @@ async function maybeAutoRunSummary(reason) {
 
     const store = getSummaryStore();
     const lastSummarized = store?.lastSummarizedMesId ?? -1;
-    const sourceEnd = getSummarySourceEnd(chat, chat.length - 1);
-    const targetMesId = Math.min(sourceEnd, chat.length - 1 - getSummaryDelayFloors());
-    if (targetMesId <= lastSummarized) return;
-    const pending = targetMesId - lastSummarized;
+    const target = getSummarySourceEnd(chat, chat.length - 1, trig.delayFloors);
+    const pending = target - lastSummarized;
     if (pending < (trig.interval || 1)) return;
 
-    await autoRunSummaryWithRetry(targetMesId, { api: cfgAll.api, gen: cfgAll.gen, trigger: trig });
+    await autoRunSummaryWithRetry(target, { api: cfgAll.api, gen: cfgAll.gen, trigger: trig });
 }
 
 async function autoRunSummaryWithRetry(targetMesId, configForRun) {
@@ -3256,7 +3235,7 @@ async function handleFrameMessage(event) {
                 break;
             }
             const ctx = getContext();
-            currentMesId = (ctx.chat?.length ?? 1) - 1 - getSummaryDelayFloors();
+            currentMesId = (ctx.chat?.length ?? 1) - 1;
             handleManualGenerate(currentMesId, data.config || {});
             break;
         }

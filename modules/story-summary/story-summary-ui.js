@@ -2,6 +2,7 @@
 // iframe 内 UI 逻辑
 
 import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js';
+import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './data/summary-delay.js';
 
 (function () {
     'use strict';
@@ -281,7 +282,7 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
     const config = {
         api: { provider: 'st', url: '', key: '', model: '', modelCache: [] },
         gen: { temperature: null, top_p: null, top_k: null, presence_penalty: null, frequency_penalty: null },
-        trigger: { enabled: false, interval: 20, timing: 'before_user', role: 'system', useStream: true, maxPerRun: 100, wrapperHead: '', wrapperTail: '', forceInsertAtEnd: false },
+        trigger: { enabled: false, interval: 20, delayFloors: DEFAULT_SUMMARY_DELAY_FLOORS, timing: 'before_user', role: 'system', useStream: true, maxPerRun: 100, wrapperHead: '', wrapperTail: '', forceInsertAtEnd: false },
         ui: { hideSummarized: true, keepVisibleCount: 6, useVectorBoundary: true },
         prompts: {
             memoryTemplate: '',
@@ -1165,6 +1166,7 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
         $('gen-frequency').value = config.gen.frequency_penalty ?? '';
         $('trigger-enabled').checked = config.trigger.enabled;
         $('trigger-interval').value = config.trigger.interval;
+        $('trigger-delay-floors').value = normalizeSummaryDelayFloors(config.trigger.delayFloors);
         $('trigger-timing').value = config.trigger.timing;
         $('trigger-role').value = config.trigger.role || 'system';
         $('trigger-stream').checked = config.trigger.useStream !== false;
@@ -1241,6 +1243,7 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
         config.trigger.role = $('trigger-role').value || 'system';
         config.trigger.enabled = $('trigger-enabled').checked;
         config.trigger.interval = Math.max(1, Math.min(30, parseInt($('trigger-interval').value) || 20));
+        config.trigger.delayFloors = normalizeSummaryDelayFloors($('trigger-delay-floors').value);
         config.trigger.useStream = $('trigger-stream').checked;
         config.trigger.maxPerRun = parseInt($('trigger-max-per-run').value) || 100;
         config.trigger.wrapperHead = $('trigger-wrapper-head').value;
@@ -2695,6 +2698,11 @@ import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js
             let val = parseInt(e.target.value) || 20;
             val = Math.max(1, Math.min(30, val));
             e.target.value = val;
+        };
+
+        // 延迟总结楼层范围校验
+        $('trigger-delay-floors').onchange = e => {
+            e.target.value = normalizeSummaryDelayFloors(e.target.value);
         };
 
         // Current chat switch (saved immediately in chat metadata)

@@ -18,6 +18,7 @@ import {
 } from "./llm.js";
 import { filterText } from "../vector/utils/text-filter.js";
 import { getSummarySourceEnd } from './source-boundary.js';
+import { normalizeSummaryDelayFloors } from '../data/summary-delay.js';
 
 const MODULE_ID = 'summaryGenerator';
 const SUMMARY_SESSION_ID = 'xb9';
@@ -194,11 +195,11 @@ export function getNextEventId(store) {
     return maxId + 1;
 }
 
-export function buildIncrementalSlice(targetMesId, lastSummarizedMesId, maxPerRun = 100) {
+export function buildIncrementalSlice(targetMesId, lastSummarizedMesId, maxPerRun = 100, delayFloors = 0) {
     const { chat, name1, name2 } = getContext();
 
     const start = Math.max(0, (lastSummarizedMesId ?? -1) + 1);
-    const rawEnd = getSummarySourceEnd(chat, targetMesId);
+    const rawEnd = getSummarySourceEnd(chat, targetMesId, delayFloors);
     const end = Math.min(rawEnd, start + maxPerRun - 1);
 
     if (start > end) return { text: "", count: 0, range: "", endMesId: -1 };
@@ -251,7 +252,8 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     const storeUpdatedAt = store?.updatedAt;
     const storeJsonAtStart = JSON.stringify(store?.json || {});
     const maxPerRun = config.trigger?.maxPerRun || 100;
-    const slice = buildIncrementalSlice(mesId, lastSummarized, maxPerRun);
+    const delayFloors = normalizeSummaryDelayFloors(config.trigger?.delayFloors);
+    const slice = buildIncrementalSlice(mesId, lastSummarized, maxPerRun, delayFloors);
 
     if (slice.count === 0) {
         const { chat } = getContext();
@@ -301,7 +303,9 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     if (isSummaryRunInactive(signal, targetChatId)) {
         return cancelledResult(onStatus);
     }
-    const currentSlice = buildIncrementalSlice(mesId, lastSummarized, maxPerRun);
+    // Revalidate the captured slice without expanding it when new messages make
+    // more floors eligible. A shortened chat must still respect the delayed tail.
+    const currentSlice = buildIncrementalSlice(slice.endMesId, lastSummarized, maxPerRun, delayFloors);
     if (
         (store?.lastSummarizedMesId ?? -1) !== lastSummarized
         || store?.updatedAt !== storeUpdatedAt

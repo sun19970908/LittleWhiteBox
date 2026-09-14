@@ -3,6 +3,7 @@ import { EXT_ID } from "../../../core/constants.js";
 import { xbLog } from "../../../core/debug-core.js";
 import { CommonSettingStorage } from "../../../core/server-storage.js";
 import { EVENT_MEMORY_ROLES } from "./events.js";
+import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './summary-delay.js';
 
 const MODULE_ID = "summaryConfig";
 const SUMMARY_CONFIG_KEY = "storySummaryPanelConfig";
@@ -430,6 +431,7 @@ function createDefaultSummaryPanelConfig() {
         trigger: {
             enabled: false,
             interval: 20,
+            delayFloors: DEFAULT_SUMMARY_DELAY_FLOORS,
             timing: "before_user",
             role: "system",
             useStream: true,
@@ -520,6 +522,7 @@ function normalizeSummaryPanelConfig(rawConfig = null) {
         result.trigger.timing = defaults.trigger.timing;
     }
     if (result.trigger.useStream === undefined) result.trigger.useStream = true;
+    result.trigger.delayFloors = normalizeSummaryDelayFloors(result.trigger.delayFloors);
     result.ui.hideSummarized = !!result.ui.hideSummarized;
     result.ui.keepVisibleCount = clampKeepVisibleCount(result.ui.keepVisibleCount);
     result.ui.useVectorBoundary = result.ui.useVectorBoundary !== false;
