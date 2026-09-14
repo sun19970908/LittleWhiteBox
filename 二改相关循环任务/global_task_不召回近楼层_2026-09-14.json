@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-14T00:14:17.969Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-14T00:06:04.926Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1789344364926_0240ywl",
+            "interval": 0,
+            "name": "不召回近楼层",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n// ====== 楼层边界 N（持久化到 extension_settings）======\n(async () => {\n    // ====== 修改这里 ======\n    const N = 22;   // 最近 N 楼禁召（含第 N 楼）；0 = 关闭\n    // =====================\n\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/retrieval/floor-boundary.js');\n\n    if (!Number.isInteger(N) || N < 0) throw new Error('N 必须是 >= 0 的整数');\n\n    const applied = mod.setFloorBoundaryLookback(N);\n\n    const chat = SillyTavern?.getContext?.().chat;\n    if (Array.isArray(chat) && chat.length) {\n        const b = mod.resolveFloorBoundary(chat);\n        console.info(b.enabled\n            ? `[Floor Boundary] N=${applied}，禁召 floor >= ${b.blockedFrom}（最新 ${b.latestFloor}）`\n            : `[Floor Boundary] 已关闭（N=${applied}）`);\n    }\n\n    window.toastr?.success(`✅ 楼层边界已保存: N = ${applied}`);\n})();\n<</taskjs>>"
+        }
+    ]
+}

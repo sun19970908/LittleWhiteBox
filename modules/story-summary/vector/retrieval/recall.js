@@ -71,6 +71,12 @@ import {
     eventOwnership,
     classifyEventRecall,
 } from './event-recall-classification.js';
+import {
+    resolveFloorBoundary,
+    isFloorBlocked,
+    isEventRangeBlocked,
+    createBoundaryStats,
+} from './floor-boundary.js';
 
 const MODULE_ID = 'recall';
 
@@ -328,7 +334,7 @@ function mmrSelect(candidates, k, lambda, getVector, getScore) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null, signal = null) {
-    const { chatId } = getContext();
+    const { chatId, chat } = getContext();
     if (!chatId || !queryVector?.length) {
         return { hits: [], floors: new Set() };
     }
@@ -350,7 +356,7 @@ async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null
     if (metrics) {
         metrics.timing.runtimeScoreAnchors = runtimeScores?.stats?.timings?.scoreAnchorsMs ?? null;
     }
-    const scored = (runtimeScores?.scores || [])
+    const scoredAll = (runtimeScores?.scores || [])
         .map(s => {
             const atom = atomMap.get(s.atomId);
             if (!atom) return null;
@@ -360,11 +366,24 @@ async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null
         .filter(s => s.similarity >= CONFIG.ANCHOR_MIN_SIMILARITY)
         .sort((a, b) => b.similarity - a.similarity);
 
+    // 顶端拦截：近处楼层不参与召回，把 fusion/rerank 名额让给远期记忆。
+    const boundary = resolveFloorBoundary(chat);
+    const scored = boundary.enabled
+        ? scoredAll.filter(s => !isFloorBlocked(s.floor, boundary))
+        : scoredAll;
+
     const floors = new Set(scored.map(s => s.floor));
 
     if (metrics) {
         metrics.anchor.matched = scored.length;
         metrics.anchor.floorsHit = floors.size;
+    }
+    if (metrics?.floorBoundary) {
+        metrics.floorBoundary.enabled = boundary.enabled;
+        metrics.floorBoundary.lookback = boundary.lookback;
+        metrics.floorBoundary.latestFloor = boundary.latestFloor;
+        metrics.floorBoundary.blockedFrom = boundary.blockedFrom;
+        metrics.floorBoundary.blockedAnchors += scoredAll.length - scored.length;
     }
 
     return { hits: scored, floors };
@@ -376,7 +395,7 @@ async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacters, metrics, snapshot = null, signal = null) {
-    const { chatId } = getContext();
+    const { chatId, chat } = getContext();
     if (!chatId || !queryVector?.length || !allEvents?.length) {
         return { events: [], scoreMap: new Map(), vectorMap: new Map() };
     }
@@ -420,13 +439,29 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
         metrics.event.inStore = allEvents.length;
     }
 
-    let candidates = scored
-        .filter(s => s.similarity >= CONFIG.EVENT_MIN_SIMILARITY)
+    // 顶端拦截：整体落入禁区的事件直接丢弃（跨边界长事件保留），
+    // 且必须在容量截断前过滤，否则禁区事件会白占 EVENT_CANDIDATE_MAX 名额。
+    const boundary = resolveFloorBoundary(chat);
+    const boundaryKept = [];
+    let eventsBlockedByBoundary = 0;
+    for (const s of scored) {
+        if (s.similarity < CONFIG.EVENT_MIN_SIMILARITY) continue;
+        if (isEventRangeBlocked(parseEventRange(s.event?.summary), boundary)) {
+            eventsBlockedByBoundary++;
+            continue;
+        }
+        boundaryKept.push(s);
+    }
+
+    let candidates = boundaryKept
         .sort((a, b) => b.similarity - a.similarity)
         .slice(0, CONFIG.EVENT_CANDIDATE_MAX);
 
     if (metrics) {
         metrics.event.considered = candidates.length;
+    }
+    if (metrics?.floorBoundary) {
+        metrics.floorBoundary.blockedEventCandidates += eventsBlockedByBoundary;
     }
 
     // 实体过滤（准入规则不变：强语义 bypass 或明确谈焦点人物）
@@ -735,6 +770,10 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
     const atomFloorSet = new Set(getStateAtoms().map(a => a.floor));
 
+    // 顶端拦截：lexical 不经过 recallAnchors，近处楼层需在此单独剔除
+    const boundary = resolveFloorBoundary(chat);
+    let lexFloorBlockedByBoundary = 0;
+
     const lexFloorAgg = new Map();
     // Replay-only observer data: preserves the pre-gate lexical floor set without affecting recall.
     const lexFloorBeforeDense = captureStages ? new Map() : null;
@@ -748,6 +787,12 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
         // 预过滤：必须有 L0 atoms
         if (!atomFloorSet.has(floor)) continue;
+
+        // 顶端拦截：近处楼层不参与融合（必须在映射成 AI 楼层之后判定）
+        if (isFloorBlocked(floor, boundary)) {
+            lexFloorBlockedByBoundary++;
+            continue;
+        }
 
         if (lexFloorBeforeDense) {
             const raw = lexFloorBeforeDense.get(floor);
@@ -800,6 +845,9 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
     if (metrics) {
         metrics.lexical.floorFilteredByDense = lexFloorFilteredByDense;
+    }
+    if (metrics?.floorBoundary) {
+        metrics.floorBoundary.blockedLexFloors += lexFloorBlockedByBoundary;
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -1395,6 +1443,7 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     const events = Array.isArray(allEvents) ? allEvents : [];
 
     const metrics = createMetrics();
+    metrics.floorBoundary = createBoundaryStats();
 
     metrics.anchor.needRecall = true;
 
