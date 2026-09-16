@@ -57,7 +57,7 @@ import { getRerankBatchDiagnostics, rerankChunks } from '../llm/reranker.js';
 import { createMetrics, calcSimilarityStats } from './metrics.js';
 import { tokenizeForIndex } from '../utils/tokenizer.js';
 import { rerankRecalledEvents } from './event-rerank.js';
-import { rankSelectedDirectEvidence } from './direct-evidence-retrieval.js';
+import { selectDirectEvidence } from './direct-evidence-retrieval.js';
 import { buildSemanticRecallInputs } from './semantic-query.js';
 import {
     releaseDirectEvidenceRuntimeLease,
@@ -110,7 +110,6 @@ function recordExternalFailure(metrics, failure) {
 const CONFIG = {
     // 窗口：取 3 条消息（对齐 L0 对结构），pending 存在时取 2 条上下文
     LAST_MESSAGES_K: 3,
-    LAST_MESSAGES_K_WITH_PENDING: 2,
 
     // Anchor (L0 StateAtoms)
     ANCHOR_MIN_SIMILARITY: 0.58,
@@ -1281,7 +1280,7 @@ async function buildL1PairsForSelectedFloors(l0Selected, queryVector, prefetched
 export async function hydrateSelectedDirectEvidence(selectedDirect, context, metrics) {
     const startedAt = performance.now();
     try {
-        const result = await rankSelectedDirectEvidence(selectedDirect, context);
+        const result = await selectDirectEvidence(selectedDirect, context);
         const elapsedMs = Math.round(performance.now() - startedAt);
         const stats = result.stats || {};
         const diagnostics = result.diagnostics || getRerankBatchDiagnostics([]);
@@ -1397,7 +1396,6 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     const T0 = performance.now();
     const { chat, chatId, name1 } = getContext();
     const {
-        pendingUserMessage = null,
         excludeLastAi = false,
         stageObserver = null,
         deferRuntimeRelease = false,
@@ -1425,10 +1423,7 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
 
     const T_Build_Start = performance.now();
 
-    const lastMessagesCount = pendingUserMessage
-        ? CONFIG.LAST_MESSAGES_K_WITH_PENDING
-        : CONFIG.LAST_MESSAGES_K;
-    const lastMessages = getLastMessages(chat, lastMessagesCount, excludeLastAi);
+    const lastMessages = getLastMessages(chat, CONFIG.LAST_MESSAGES_K, excludeLastAi);
 
     // Non-blocking preload: keep recall latency stable.
     // If not ready yet, query-builder will gracefully fall back to TF terms.
@@ -1436,7 +1431,7 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
         xbLog.warn(MODULE_ID, 'Preload lexical index failed; continue with TF fallback', e);
     });
 
-    const bundle = buildQueryBundle(lastMessages, pendingUserMessage);
+    const bundle = buildQueryBundle(lastMessages);
     if (captureStages) {
         observeRecallStage(stageObserver, 'queryFocusOwnership', [], describeQueryFocusOwnership(bundle));
     }

@@ -11,9 +11,7 @@
 // - 短消息通过 lengthFactor 自动降权（下限 35%）
 // - recall.js 负责 embed + 归一化 + 加权平均
 //
-// 焦点确定：
-// - pendingUserMessage 存在 → 它是焦点
-// - 否则 → lastMessages 最后一条是焦点
+// 焦点确定：lastMessages 最后一条是真实入列的当前 USER 消息
 //
 // 不负责：向量化、检索、rerank
 // ═══════════════════════════════════════════════════════════════════════════
@@ -21,13 +19,12 @@
 import { getContext } from '../../../../../../../extensions.js';
 import {
     getEntityVocabulary,
-    extractEntitiesFromText,
     normalizeEntityTerm,
 } from './entity-lexicon.js';
 import { getLexicalIdfAccessor } from './lexical-index.js';
 import { getSummaryStore } from '../../data/store.js';
 import { filterText } from '../utils/text-filter.js';
-import { tokenizeForIndex as tokenizerTokenizeForIndex } from '../utils/tokenizer.js';
+import { getTokenizerSnapshot, injectEntities, tokenizeForIndex as tokenizerTokenizeForIndex } from '../utils/tokenizer.js';
 import { buildBoundedRerankQuery } from './rerank-query.js';
 import { boundRecallEmbeddingSegment } from './recall-query-bounds.js';
 import { resolveFocusCharacters } from './event-recall-classification.js';
@@ -141,7 +138,7 @@ function extractKeyTerms(text, maxTerms = LEXICAL_TERMS_MAX) {
  */
 export function describeQueryFocusOwnership(bundle) {
     const focusText = String(bundle?.focusQuery || '');
-    const focusTerms = extractEntitiesFromText(focusText, bundle?._lexicon, bundle?._displayMap);
+    const focusTerms = bundle?._extractEntities?.(focusText) || [];
     const focusCharacters = resolveFocusCharacters(
         focusTerms,
         bundle?.trustedCharacters,
@@ -191,8 +188,7 @@ export function describeQueryFocusOwnership(bundle) {
  * @property {Set<string>} allCharacters       - Union of trusted and candidate character pools
  * @property {Set<string>} trustedCharacters   - Clean character pool (main/arcs/name2/L2 participants)
  * @property {Set<string>} candidateCharacters - Extended character pool from L0 edges.s/t after cleanup
- * @property {Set<string>}       _lexicon     - 实体词典（内部使用）
- * @property {Map<string, string>} _displayMap - 标准化→原词形映射（内部使用）
+ * @property {function(string): string[]} _extractEntities - 本查询词典快照的实体提取
  */
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -239,17 +235,12 @@ function buildMessageEntry(message, context) {
  *   msg[1] = AI(#N-1)    上下文    baseWeight = 0.30
  *   msg[2] = USER(#N)    焦点      baseWeight = 0.55
  *
- * 焦点确定：
- *   pendingUserMessage 存在 → 焦点，所有 lastMessages 为上下文
- *   pendingUserMessage 不存在 → lastMessages[-1] 为焦点，其余为上下文
- *
  * @param {object[]} lastMessages - 最近 K 条消息（由 recall.js 传入）
- * @param {string|null} pendingUserMessage - 用户刚输入但未进 chat 的消息
  * @param {object|null} store
  * @param {object|null} context - { name1, name2 }
  * @returns {QueryBundle}
  */
-export function buildQueryBundle(lastMessages, pendingUserMessage, store = null, context = null) {
+export function buildQueryBundle(lastMessages, store = null, context = null) {
     if (!store) store = getSummaryStore();
     if (!context) {
         const ctx = getContext();
@@ -257,7 +248,7 @@ export function buildQueryBundle(lastMessages, pendingUserMessage, store = null,
     }
 
     // 1. 实体/人物词典
-    const { lexicon, displayMap, trustedCharacters, candidateCharacters, allCharacters } = getEntityVocabulary(store, context);
+    const { lexicon, displayMap, blockedTerms, trustedCharacters, candidateCharacters, allCharacters } = getEntityVocabulary(store, context);
 
     // 2. 分离焦点与上下文
     const contextEntries = [];
@@ -265,46 +256,23 @@ export function buildQueryBundle(lastMessages, pendingUserMessage, store = null,
     let focusQuery = '';
     const allCleanTexts = [];
 
-    if (pendingUserMessage) {
-        // pending 是焦点，所有 lastMessages 是上下文
-        const pendingClean = cleanMessageText(pendingUserMessage);
-        if (pendingClean) {
-            const speaker = context.name1 || '用户';
-            focusQuery = pendingClean;
-            focusEntry = {
-                text: `${speaker}：${pendingClean}`,
-                charCount: pendingClean.length,
-            };
-            allCleanTexts.push(pendingClean);
-        }
+    const msgs = lastMessages || [];
 
-        for (const m of (lastMessages || [])) {
-            const entry = buildMessageEntry(m, context);
-            if (entry) {
-                contextEntries.push(entry);
-                allCleanTexts.push(cleanMessageText(m.mes));
-            }
+    if (msgs.length > 0) {
+        const lastMsg = msgs[msgs.length - 1];
+        const entry = buildMessageEntry(lastMsg, context);
+        if (entry) {
+            focusQuery = cleanMessageText(lastMsg.mes);
+            focusEntry = entry;
+            allCleanTexts.push(cleanMessageText(lastMsg.mes));
         }
-    } else {
-        // 无 pending → lastMessages[-1] 是焦点
-        const msgs = lastMessages || [];
+    }
 
-        if (msgs.length > 0) {
-            const lastMsg = msgs[msgs.length - 1];
-            const entry = buildMessageEntry(lastMsg, context);
-            if (entry) {
-                focusQuery = cleanMessageText(lastMsg.mes);
-                focusEntry = entry;
-                allCleanTexts.push(cleanMessageText(lastMsg.mes));
-            }
-        }
-
-        for (let i = 0; i < msgs.length - 1; i++) {
-            const entry = buildMessageEntry(msgs[i], context);
-            if (entry) {
-                contextEntries.push(entry);
-                allCleanTexts.push(cleanMessageText(msgs[i].mes));
-            }
+    for (let i = 0; i < msgs.length - 1; i++) {
+        const entry = buildMessageEntry(msgs[i], context);
+        if (entry) {
+            contextEntries.push(entry);
+            allCleanTexts.push(cleanMessageText(msgs[i].mes));
         }
     }
 
@@ -312,10 +280,9 @@ export function buildQueryBundle(lastMessages, pendingUserMessage, store = null,
     // focusCharacters 在这里表示“查询窗口人物”，并非只来自 focusEntry；
     // name1 在匹配阶段与人物筛选阶段均被硬排除。
     const combinedText = allCleanTexts.join(' ');
-    const blockedUserTerms = context?.name1
-        ? [context.name1, String(context.name1).replace(/\s+/gu, '')]
-        : [];
-    const focusTerms = extractEntitiesFromText(combinedText, lexicon, displayMap, blockedUserTerms);
+    injectEntities(lexicon, displayMap, blockedTerms);
+    const { extractEntities } = getTokenizerSnapshot();
+    const focusTerms = extractEntities(combinedText);
     const focusCharacters = resolveFocusCharacters(
         focusTerms,
         trustedCharacters,
@@ -370,8 +337,7 @@ export function buildQueryBundle(lastMessages, pendingUserMessage, store = null,
         allCharacters,
         trustedCharacters,
         candidateCharacters,
-        _lexicon: lexicon,
-        _displayMap: displayMap,
+        _extractEntities: extractEntities,
         _context: { name1: context?.name1 || '', name2: context?.name2 || '' },
     };
 }
