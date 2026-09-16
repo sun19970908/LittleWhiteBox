@@ -104,7 +104,7 @@ import { buildVectorIntegrityIssues } from "./vector/integrity-policy.js";
 import { preload as preloadTokenizer, injectEntities, isReady as isTokenizerReady } from "./vector/utils/tokenizer.js";
 
 // entity lexicon
-import { buildEntityLexicon, buildDisplayNameMap } from "./vector/retrieval/entity-lexicon.js";
+import { getEntityVocabulary } from "./vector/retrieval/entity-lexicon.js";
 
 import {
     getMeta,
@@ -1248,14 +1248,8 @@ function refreshEntityLexiconAndWarmup() {
     if (!vectorCfg?.enabled) return;
 
     const store = getSummaryStore();
-    const { name1, name2 } = getContext();
-
-    const lexicon = buildEntityLexicon(store, { name1, name2 });
-    const displayMap = buildDisplayNameMap(store, { name1, name2 });
-
-    injectEntities(lexicon, displayMap);
-
-    // 异步预建词法索引（不阻塞）
+    const { lexicon, displayMap, blockedTerms } = getEntityVocabulary(store, getContext());
+    if (injectEntities(lexicon, displayMap, blockedTerms)) scheduleLexicalWarmup();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

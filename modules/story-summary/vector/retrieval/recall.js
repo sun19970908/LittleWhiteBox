@@ -71,6 +71,7 @@ import {
     eventOwnership,
     classifyEventRecall,
 } from './event-recall-classification.js';
+import { selectBoundedEventCandidates } from './event-candidate-selection.js';
 import {
     resolveFloorBoundary,
     isFloorBlocked,
@@ -1767,6 +1768,12 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     let lexicalEventFilteredByDense = 0;
     let l0LinkedCount = 0;
     const focusSetForLexical = new Set((focusCharacters || []).map(normalize));
+    const lexicalCandidates = [];
+    const temporalCarrier = buildTemporalTurnCarrier({
+        chat,
+        query: bundle.focusQuery,
+        userName: name1,
+    });
 
     for (const eid of lexicalResult.eventIds) {
         if (existingEventIds.has(eid)) continue;
@@ -1795,21 +1802,24 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
             { evidenceMinSimilarity: CONFIG.EVENT_EVIDENCE_MIN_SIMILARITY },
         );
 
-        // Cap lexical event merge to match the dense path (EVENT_CANDIDATE_MAX).
-        // lexicalResult.eventIds 已按词法加权分降序，此处只对通过 dense gate 的候选计数；
-        // 达到上限即停止，避免事件候选爆量（event rerank 只精排前 60、预算也只放得下 ~50 条）。
-        if (lexicalEventCount >= CONFIG.EVENT_CANDIDATE_MAX) break;
-
-        eventHits.push({
+        lexicalCandidates.push({
             event: ev,
             similarity: sim,
             _recallType: recallType,
             _ownership: ownership,
             _evidenceEligible: evidenceEligible,
         });
-        existingEventIds.add(eid);
-        lexicalEventCount++;
     }
+    // Keep the 100-additional-event cap, but reserve eligible temporal winners
+    // before cutting the lexical tail. No new scoring/API calls are needed.
+    const lexicalSelected = selectBoundedEventCandidates(
+        lexicalCandidates, CONFIG.EVENT_CANDIDATE_MAX, temporalCarrier.exactFloors,
+    ).candidates;
+    for (const candidate of lexicalSelected) {
+        eventHits.push(candidate);
+        existingEventIds.add(candidate.event.id);
+    }
+    lexicalEventCount = lexicalSelected.length;
 
     if (metrics) {
         metrics.lexical.eventFilteredByDense = lexicalEventFilteredByDense;
@@ -2008,11 +2018,6 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     }
 
     let directEvidenceContext = null;
-    const temporalCarrier = buildTemporalTurnCarrier({
-        chat,
-        query: bundle.focusQuery,
-        userName: name1,
-    });
     if (!eventHits.some(item => item?._evidenceEligible === true)) {
         metrics.evidence.directEvidenceStatus = 'skipped-no-direct-events';
     } else {

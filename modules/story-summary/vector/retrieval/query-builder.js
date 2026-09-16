@@ -20,9 +20,7 @@
 
 import { getContext } from '../../../../../../../extensions.js';
 import {
-    buildCharacterPools,
-    buildDisplayNameMap,
-    buildEntityLexicon,
+    getEntityVocabulary,
     extractEntitiesFromText,
     normalizeEntityTerm,
 } from './entity-lexicon.js';
@@ -259,9 +257,7 @@ export function buildQueryBundle(lastMessages, pendingUserMessage, store = null,
     }
 
     // 1. 实体/人物词典
-    const lexicon = buildEntityLexicon(store, context);
-    const displayMap = buildDisplayNameMap(store, context);
-    const { trustedCharacters, candidateCharacters, allCharacters } = buildCharacterPools(store, context);
+    const { lexicon, displayMap, trustedCharacters, candidateCharacters, allCharacters } = getEntityVocabulary(store, context);
 
     // 2. 分离焦点与上下文
     const contextEntries = [];
