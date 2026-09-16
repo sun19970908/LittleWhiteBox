@@ -463,10 +463,14 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
     }
     // MMR 选择（容量可由预算任务 eventSelectMax 覆盖）
     const capacityOverrides = await getCapacityOverrides();
-    const selected = selectDiverseEvents(
+    const eventSelectMax = capacityOverrides?.EVENT_SELECT_MAX ?? CONFIG.EVENT_SELECT_MAX;
+    const diversified = selectDiverseEvents(
         candidates,
-        capacityOverrides?.EVENT_SELECT_MAX ?? CONFIG.EVENT_SELECT_MAX,
+        eventSelectMax,
         CONFIG.EVENT_MMR_LAMBDA,
+    );
+    const { candidates: selected } = selectBoundedEventCandidates(
+        candidates, eventSelectMax, snapshot?.temporalCarrier?.exactFloors, diversified,
     );
 
     let directCount = 0;
