@@ -72,6 +72,7 @@ import {
     classifyEventRecall,
 } from './event-recall-classification.js';
 import { selectBoundedEventCandidates } from './event-candidate-selection.js';
+import { selectDiverseEvents } from './event-diversity-selection.js';
 import {
     resolveFloorBoundary,
     isFloorBlocked,
@@ -288,49 +289,6 @@ function computeR2Weights(segments, hintsSegment) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// MMR 选择算法
-// ═══════════════════════════════════════════════════════════════════════════
-
-function mmrSelect(candidates, k, lambda, getVector, getScore) {
-    const selected = [];
-    const ids = new Set();
-
-    while (selected.length < k && candidates.length) {
-        let best = null;
-        let bestScore = -Infinity;
-
-        for (const c of candidates) {
-            if (ids.has(c._id)) continue;
-
-            const rel = getScore(c);
-            let div = 0;
-
-            if (selected.length) {
-                const vC = getVector(c);
-                if (vC?.length) {
-                    for (const s of selected) {
-                        const sim = cosineSimilarity(vC, getVector(s));
-                        if (sim > div) div = sim;
-                    }
-                }
-            }
-
-            const score = lambda * rel - (1 - lambda) * div;
-            if (score > bestScore) {
-                bestScore = score;
-                best = c;
-            }
-        }
-
-        if (!best) break;
-        selected.push(best);
-        ids.add(best._id);
-    }
-
-    return selected;
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
 // [Anchors] L0 StateAtoms 检索
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -440,26 +398,24 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
         metrics.event.inStore = allEvents.length;
     }
 
-    // 顶端拦截：整体落入禁区的事件直接丢弃（跨边界长事件保留），
+    let candidates = scored
+        .filter(s => s.similarity >= CONFIG.EVENT_MIN_SIMILARITY)
+        .sort((a, b) => b.similarity - a.similarity);
+
+    // 近处楼层禁召（本地扩展）：整体落入禁区的事件直接丢弃（跨边界长事件保留），
     // 且必须在容量截断前过滤，否则禁区事件会白占 EVENT_CANDIDATE_MAX 名额。
     const boundary = resolveFloorBoundary(chat);
-    const boundaryKept = [];
     let eventsBlockedByBoundary = 0;
-    for (const s of scored) {
-        if (s.similarity < CONFIG.EVENT_MIN_SIMILARITY) continue;
-        if (isEventRangeBlocked(parseEventRange(s.event?.summary), boundary)) {
-            eventsBlockedByBoundary++;
-            continue;
+    if (boundary.enabled) {
+        const kept = [];
+        for (const s of candidates) {
+            if (isEventRangeBlocked(parseEventRange(s.event?.summary), boundary)) {
+                eventsBlockedByBoundary++;
+                continue;
+            }
+            kept.push(s);
         }
-        boundaryKept.push(s);
-    }
-
-    let candidates = boundaryKept
-        .sort((a, b) => b.similarity - a.similarity)
-        .slice(0, CONFIG.EVENT_CANDIDATE_MAX);
-
-    if (metrics) {
-        metrics.event.considered = candidates.length;
+        candidates = kept;
     }
     if (metrics?.floorBoundary) {
         metrics.floorBoundary.blockedEventCandidates += eventsBlockedByBoundary;
@@ -484,6 +440,11 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
         }
     }
 
+    candidates = selectBoundedEventCandidates(
+        candidates, CONFIG.EVENT_CANDIDATE_MAX, snapshot?.temporalCarrier?.exactFloors,
+    ).candidates;
+    if (metrics) metrics.event.considered = candidates.length;
+
     const candidateEventIds = candidates.map(c => c._id).filter(Boolean);
     const candidateVectors = await getRecallRuntimeEventVectorsByIds(chatId, candidateEventIds, { signal });
     if (metrics) {
@@ -502,12 +463,10 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
     }
     // MMR 选择（容量可由预算任务 eventSelectMax 覆盖）
     const capacityOverrides = await getCapacityOverrides();
-    const selected = mmrSelect(
+    const selected = selectDiverseEvents(
         candidates,
         capacityOverrides?.EVENT_SELECT_MAX ?? CONFIG.EVENT_SELECT_MAX,
         CONFIG.EVENT_MMR_LAMBDA,
-        c => c.vector,
-        c => c.similarity
     );
 
     let directCount = 0;
@@ -1439,11 +1398,17 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
         stageObserver = null,
         deferRuntimeRelease = false,
         signal = null,
+        diagnostics = null,
     } = options;
     const captureStages = typeof stageObserver === 'function';
     const events = Array.isArray(allEvents) ? allEvents : [];
 
     const metrics = createMetrics();
+    if (diagnostics) {
+        diagnostics.metrics = metrics;
+        diagnostics.stage = 'query-build';
+    }
+    metrics.lexical.denseGateThresholds = { event: CONFIG.LEXICAL_EVENT_DENSE_MIN, floor: CONFIG.LEXICAL_FLOOR_DENSE_MIN };
     metrics.floorBoundary = createBoundaryStats();
 
     metrics.anchor.needRecall = true;
