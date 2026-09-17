@@ -147,6 +147,42 @@ const CONFIG = {
     CAUSAL_INJECT_MAX: 30,
 };
 
+/**
+ * 容量运行时调参（向量七）：把循环任务配置的三项容量就地覆盖到 CONFIG。
+ *
+ * 由 setPromptBudgets({ rerankTopN, fusionCap, eventSelectMax }) 写入
+ * extension_settings，此处读取后覆盖 CONFIG —— CONFIG 是可写对象，覆盖一次
+ * 即可被下方所有 `CONFIG.X` 读取点看到，读取点无需改动。
+ *
+ * 动态 import（而非静态）：generate/prompt.js 静态依赖本模块，静态引入会形成循环依赖。
+ *
+ * @returns {Promise<void>}
+ */
+async function applyCapacityOverrides() {
+    let mod = null;
+    try {
+        mod = await import('../../generate/prompt.js');
+    } catch (error) {
+        xbLog.warn(MODULE_ID, '容量调参：加载 generate/prompt.js 失败，沿用 CONFIG 默认值', error);
+        return;
+    }
+    const budgets = mod?.getPromptBudgets?.();
+    if (!budgets) return;
+
+    const changed = CONFIG.EVENT_SELECT_MAX !== budgets.EVENT_SELECT_MAX
+        || CONFIG.FUSION_CAP !== budgets.FUSION_CAP
+        || CONFIG.RERANK_TOP_N !== budgets.RERANK_TOP_N;
+
+    CONFIG.EVENT_SELECT_MAX = budgets.EVENT_SELECT_MAX;
+    CONFIG.FUSION_CAP = budgets.FUSION_CAP;
+    CONFIG.RERANK_TOP_N = budgets.RERANK_TOP_N;
+
+    // 只在值发生变化时输出一次，避免每次 recall 重复刷日志
+    if (changed) {
+        xbLog.info(MODULE_ID, `容量调参生效：EVENT_SELECT_MAX=${CONFIG.EVENT_SELECT_MAX} FUSION_CAP=${CONFIG.FUSION_CAP} RERANK_TOP_N=${CONFIG.RERANK_TOP_N}`);
+    }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 工具函数
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1233,6 +1269,9 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     } = options;
     const captureStages = typeof stageObserver === 'function';
     const events = Array.isArray(allEvents) ? allEvents : [];
+
+    // 容量运行时调参（向量七）：settings → CONFIG（未配置时保持 CONFIG 默认值）
+    await applyCapacityOverrides();
 
     const metrics = createMetrics();
     if (diagnostics) {

@@ -12,7 +12,8 @@
 // - 注入发生在 story-summary.js：generate_interceptor 时写入 extension_prompts
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { getContext } from "../../../../../../extensions.js";
+import { getContext, extension_settings } from "../../../../../../extensions.js";
+import { saveSettingsDebounced } from "../../../../../../../script.js";
 import { xbLog } from "../../../core/debug-core.js";
 import { getSummaryStore, getFacts } from "../data/store.js";
 import { isRelationFact } from "../data/fact-predicates.js";
@@ -41,21 +42,104 @@ import { detectIssues, finalizeMetricsTiming } from "../vector/retrieval/metrics
 import { createRecallDiagnostics } from '../recall-diagnostics.js';
 
 const MODULE_ID = "summaryPrompt";
+const EXT_ID = "LittleWhiteBox";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 预算常量
 // ─────────────────────────────────────────────────────────────────────────────
 
-const CONSTRAINT_MAX = 2000;
-const ARCS_MAX = 1500;
-const EVENT_BUDGET_MAX = 5000;
-const RELATED_EVENT_MAX = 500;
-const EVENT_EVIDENCE_MAX = 4000;
-const DISTANT_EVIDENCE_MAX = 1000;
-const UNSUMMARIZED_EVIDENCE_MAX = 2000;
-const TOTAL_BUDGET_MAX = CONSTRAINT_MAX + ARCS_MAX + EVENT_BUDGET_MAX
+// 本地扩展：数值与上游逐字一致，声明为 let 以支持运行时调参
+// （循环任务把预算写进 extension_settings，总结时再写回这些变量）。
+// 上游若改动数值或新增常量，跟随上游即可。
+let CONSTRAINT_MAX = 2000;
+let ARCS_MAX = 1500;
+let EVENT_BUDGET_MAX = 5000;
+let RELATED_EVENT_MAX = 500;
+let EVENT_EVIDENCE_MAX = 4000;
+let DISTANT_EVIDENCE_MAX = 1000;
+let UNSUMMARIZED_EVIDENCE_MAX = 2000;
+let TOTAL_BUDGET_MAX = CONSTRAINT_MAX + ARCS_MAX + EVENT_BUDGET_MAX
     + EVENT_EVIDENCE_MAX + DISTANT_EVIDENCE_MAX + UNSUMMARIZED_EVIDENCE_MAX;
-const TOP_N_STAR = 5;
+let TOP_N_STAR = 5;
+
+// ── 本地扩展：预算运行时调整（循环任务调 setPromptBudgets）──
+// 默认值即上面的上游常量；不配置时行为与上游一致。
+const PROMPT_BUDGETS_KEY = "promptBudgets";
+
+// 上游没有的常量：recall.js 的三个容量闸门（其 CONFIG 未导出，故在此保留默认值）
+const CAPACITY_DEFAULTS = Object.freeze({
+    rerankTopN: 20,                 // RERANK_TOP_N       楼层精排幸存数
+    fusionCap: 60,                  // FUSION_CAP         融合候选楼层数
+    eventSelectMax: 50,             // EVENT_SELECT_MAX   事件 MMR 选择上限
+});
+
+/**
+ * 读取当前预算配置。
+ *
+ * settings 里有值就用值（按上下限钳位），没有则沿用在用的模块变量。
+ *
+ * @returns {object} 各段预算上限（含 recall.js 的三个容量闸门）
+ */
+export function getPromptBudgets() {
+    const raw = extension_settings?.[EXT_ID]?.storySummary?.[PROMPT_BUDGETS_KEY] || {};
+    const clamp = (value, fallback, min, max) => {
+        const n = Number(value);
+        return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
+    };
+    return {
+        CONSTRAINT_MAX: clamp(raw.constraintMax, CONSTRAINT_MAX, 100, 100000),
+        ARCS_MAX: clamp(raw.arcsMax, ARCS_MAX, 100, 100000),
+        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, EVENT_BUDGET_MAX, 100, 100000),
+        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, RELATED_EVENT_MAX, 10, 10000),
+        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, UNSUMMARIZED_EVIDENCE_MAX, 100, 50000),
+        TOP_N_STAR: clamp(raw.topNStar, TOP_N_STAR, 1, 20),
+        EVENT_EVIDENCE_MAX: clamp(raw.eventEvidenceMax, EVENT_EVIDENCE_MAX, 100, 100000),
+        DISTANT_EVIDENCE_MAX: clamp(raw.distantEvidenceMax, DISTANT_EVIDENCE_MAX, 0, 100000),
+        RERANK_TOP_N: clamp(raw.rerankTopN, CAPACITY_DEFAULTS.rerankTopN, 1, 200),
+        FUSION_CAP: clamp(raw.fusionCap, CAPACITY_DEFAULTS.fusionCap, 10, 500),
+        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, CAPACITY_DEFAULTS.eventSelectMax, 1, 500),
+    };
+}
+
+/**
+ * 把 settings 里的预算写回模块变量，并重算派生值（TOTAL_BUDGET_MAX）。
+ *
+ * 模块变量只作缓存，真相始终在 settings —— 刷新页面后这里会重新读回来，
+ * 因此不需要额外持久化。每次组装 prompt 前调用一次即可。
+ *
+ * @returns {object} 本次生效的预算（与 getPromptBudgets() 同构）
+ */
+export function applyPromptBudgets() {
+    const b = getPromptBudgets();
+    CONSTRAINT_MAX = b.CONSTRAINT_MAX;
+    ARCS_MAX = b.ARCS_MAX;
+    EVENT_BUDGET_MAX = b.EVENT_BUDGET_MAX;
+    RELATED_EVENT_MAX = b.RELATED_EVENT_MAX;
+    UNSUMMARIZED_EVIDENCE_MAX = b.UNSUMMARIZED_EVIDENCE_MAX;
+    TOP_N_STAR = b.TOP_N_STAR;
+    EVENT_EVIDENCE_MAX = b.EVENT_EVIDENCE_MAX;
+    DISTANT_EVIDENCE_MAX = b.DISTANT_EVIDENCE_MAX;
+    TOTAL_BUDGET_MAX = CONSTRAINT_MAX + ARCS_MAX + EVENT_BUDGET_MAX
+        + EVENT_EVIDENCE_MAX + DISTANT_EVIDENCE_MAX + UNSUMMARIZED_EVIDENCE_MAX;
+    return b;
+}
+
+/**
+ * 写入预算并落盘（供循环任务调用）。
+ *
+ * @param {object} patch - 要修改的预算项（camelCase 键，如 constraintMax）
+ * @returns {object} 写入后实际生效的完整预算
+ */
+export function setPromptBudgets(patch) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[PROMPT_BUDGETS_KEY] = {
+        ...(root.storySummary[PROMPT_BUDGETS_KEY] || {}),
+        ...(patch || {}),
+    };
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return applyPromptBudgets();
+}
 
 // L0 显示文本：分号拼接 vs 多行模式的阈值
 const L0_JOINED_MAX_LENGTH = 120;
@@ -958,6 +1042,8 @@ function factsInBudgetOrder(grouped) {
  */
 async function buildVectorPrompt(store, recallResult, causalById, focusCharacters, meta, metrics, options = {}) {
     const T_Start = performance.now();
+    // 预算运行时生效：settings → 模块变量（未配置时即上游默认值）
+    applyPromptBudgets();
     const recallElapsed = metrics?.timing.total || 0;
     const releaseElapsedBefore = metrics?.timing.runtimeEndSession || 0;
     let deferredDirectEvidenceContext = recallResult?.directEvidenceContext || null;
