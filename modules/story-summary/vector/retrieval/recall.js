@@ -59,11 +59,6 @@ import { recordRecallFallback } from '../../recall-diagnostics.js';
 import { formatErrorDetails } from '../../../../core/error-details.js';
 import { tokenizeForIndex } from '../utils/tokenizer.js';
 import { rerankRecalledEvents } from './event-rerank.js';
-<<<<<<< main
-=======
-import { selectBoundedEventCandidates } from './event-candidate-selection.js';
-import { selectDiverseEvents } from './event-diversity-selection.js';
->>>>>>> upstream/main
 import { selectDirectEvidence } from './direct-evidence-retrieval.js';
 import { buildSemanticRecallInputs } from './semantic-query.js';
 import {
@@ -398,7 +393,6 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
     let candidates = scored
         .filter(s => s.similarity >= CONFIG.EVENT_MIN_SIMILARITY)
         .sort((a, b) => b.similarity - a.similarity);
-<<<<<<< main
 
     // 近处楼层禁召（本地扩展）：整体落入禁区的事件直接丢弃（跨边界长事件保留），
     // 且必须在容量截断前过滤，否则禁区事件会白占 EVENT_CANDIDATE_MAX 名额。
@@ -418,8 +412,6 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
     if (metrics?.floorBoundary) {
         metrics.floorBoundary.blockedEventCandidates += eventsBlockedByBoundary;
     }
-=======
->>>>>>> upstream/main
 
     // 实体过滤（准入规则不变：强语义 bypass 或明确谈焦点人物）
     if (focusSet.size > 0) {
@@ -444,10 +436,6 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
         candidates, CONFIG.EVENT_CANDIDATE_MAX, snapshot?.temporalCarrier?.exactFloors,
     ).candidates;
     if (metrics) metrics.event.considered = candidates.length;
-<<<<<<< main
-
-=======
->>>>>>> upstream/main
     const candidateEventIds = candidates.map(c => c._id).filter(Boolean);
     const candidateVectors = await getRecallRuntimeEventVectorsByIds(chatId, candidateEventIds, { signal });
     if (metrics) {
@@ -464,24 +452,16 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
     if (missingCandidateVectors > 0) {
         xbLog.warn(MODULE_ID, `L2候选向量缺失 ${missingCandidateVectors}/${candidateEventIds.length}，MMR diversity 可能退化`);
     }
-<<<<<<< main
     // MMR 选择（容量可由预算任务 eventSelectMax 覆盖）
     const capacityOverrides = await getCapacityOverrides();
     const eventSelectMax = capacityOverrides?.EVENT_SELECT_MAX ?? CONFIG.EVENT_SELECT_MAX;
-=======
-    // MMR 选择
->>>>>>> upstream/main
     const diversified = selectDiverseEvents(
         candidates,
         eventSelectMax,
         CONFIG.EVENT_MMR_LAMBDA,
     );
     const { candidates: selected } = selectBoundedEventCandidates(
-<<<<<<< main
         candidates, eventSelectMax, snapshot?.temporalCarrier?.exactFloors, diversified,
-=======
-        candidates, CONFIG.EVENT_SELECT_MAX, snapshot?.temporalCarrier?.exactFloors, diversified,
->>>>>>> upstream/main
     );
 
     let directCount = 0;
@@ -1294,10 +1274,6 @@ export async function hydrateSelectedDirectEvidence(selectedDirect, context, met
     if (context?.diagnostics) context.diagnostics.stage = 'direct-evidence';
     try {
         const result = await selectDirectEvidence(selectedDirect, context);
-<<<<<<< main
-        const elapsedMs = Math.round(performance.now() - startedAt);
-=======
->>>>>>> upstream/main
         const stats = result.stats || {};
         if (metrics?.evidence) {
             metrics.evidence.directEvidenceStatus = result.status || 'failed';
@@ -1376,10 +1352,7 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
         diagnostics.stage = 'query-build';
     }
     metrics.lexical.denseGateThresholds = { event: CONFIG.LEXICAL_EVENT_DENSE_MIN, floor: CONFIG.LEXICAL_FLOOR_DENSE_MIN };
-<<<<<<< main
     metrics.floorBoundary = createBoundaryStats();
-=======
->>>>>>> upstream/main
 
     metrics.anchor.needRecall = true;
 
@@ -1742,14 +1715,6 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     let l0LinkedCount = 0;
     const focusSetForLexical = new Set((focusCharacters || []).map(normalize));
     const lexicalCandidates = [];
-<<<<<<< main
-    const temporalCarrier = buildTemporalTurnCarrier({
-        chat,
-        query: bundle.focusQuery,
-        userName: name1,
-    });
-=======
->>>>>>> upstream/main
 
     for (const eid of lexicalResult.eventIds) {
         if (existingEventIds.has(eid)) continue;
