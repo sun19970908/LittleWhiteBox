@@ -215,17 +215,16 @@ Before generating, observe the USER and analyze carefully:
   "mindful_prelude": {
     "user_insight": "本轮主要新增了哪些情节、关系或事实，哪些细节值得进入可召回摘要",
     "dedup_analysis": "已有X个事件，本次识别Y个新事件",
-    "fact_changes": "识别到的事实变化概述",
-    "coverage_check": "本批楼层覆盖自检：写出所有事件 marker 的并集 S（区间列表），逐区间确认 S 是否完全覆盖 [#N, #M]，任一缺失楼必须补事件或拓 marker"
-  },
-  "keywords": [
+    "fact_changes": "识别到的事实变化概述"
+    },
+    "keywords": [
     {"text": "综合历史+新内容的全剧情关键词(5-10个)", "weight": "核心|重要|一般"}
-  ],
-  "events": [
+    ],
+    "events": [
     {
       "id": "evt-{$nextEventId}起始，依次递增",
       "title": "地点·事件标题",
-      "timeLabel": "事件发生时间，必须使用原文中的绝对时间（如果有年份必须包括年份）；无绝对时间时用相对时间（如：6月12日、搬入新家的第二晚）",
+      "timeLabel": "事件发生时间（如：6月12日、搬入新家的第二晚）",
       "summary": "回忆卡片。优先写成1句；信息确实过多时可写2句。必须保留正式人名、原文称呼/昵称、地点、物件、具体动作和可召回钩子，末尾标注楼层(#X-Y)",
       "participants": ["参与角色名，不要使用人称代词或别名，只用正式人名"],
       "memoryRole": "${EVENT_MEMORY_ROLES.join('|')}",
