@@ -2,6 +2,7 @@ import { extension_settings } from "../../../../../../extensions.js";
 import { EXT_ID } from "../../../core/constants.js";
 import { xbLog } from "../../../core/debug-core.js";
 import { CommonSettingStorage } from "../../../core/server-storage.js";
+import { CHARACTER_ALIAS_OUTPUT_TEMPLATE } from './character-aliases.js';
 import { EVENT_MEMORY_ROLES } from "./events.js";
 import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './summary-delay.js';
 
@@ -27,7 +28,7 @@ Incremental_Summary_Requirements:
   - Memory_Album_Style: 形成有细节、有温度、有记忆点的回忆册
   - Retrieval_Readiness: event.summary 必须面向未来召回，不得写成泛化剧情概括
   - Event_Memory_Role: Identify what each event leaves for later context, using the Memory Role definitions below.
-  - Causal_Chain: 为每个新事件标注直接前因事件ID（causedBy）。仅在因果关系明确（直接导致/明确动机/承接后果）时填写；不明确时填[]完全正常。0-2个，只填 evt-数字，指向已存在或本次新输出事件。
+  - Causal_Chain: causedBy links an event to its direct causes or explicit motives. Reference syntax is defined in Event References below.
   - Character_Dynamics: 识别新角色，追踪关系趋势（破裂/厌恶/反感/陌生/投缘/亲密/交融）
   - Arc_Tracking: 更新角色弧光轨迹与成长进度(0.0-1.0)
   - Fact_Tracking: 维护 SPO 三元组知识图谱。追踪生死、物品归属、位置、关系、稳定辨识性身体特征等硬性事实。采用 KV 覆盖模型（s+p 为键）。
@@ -124,6 +125,7 @@ These roles are different uses of memory, not importance levels. Choose the main
 ├─ trajectory: 当前阶段描述(15字内)
 ├─ progress: 0.0 to 1.0
 └─ newMoment: 仅记录本次新增的关键时刻
+Each arc update contains name, trajectory and numeric progress. newMoment is optional. Omit arcUpdates when no arc changes.
 
 [Fact Tracking - SPO / World Facts]
 We maintain a small "world state" as SPO triples.
@@ -177,6 +179,15 @@ ACKNOWLEDGED. Beginning structured JSON generation:
 export const DEFAULT_SUMMARY_USER_JSON_FORMAT_PROMPT = `
 ## Output Rule
 Generate a single valid JSON object with INCREMENTAL updates only.
+events is an array, including [] when this batch has no new events. Other update arrays may be omitted when unchanged.
+
+## Event References
+The application assigns permanent event IDs in events array order when saving.
+causedBy contains up to two direct causes, or [] when none is clear.
+Existing events use the exact evt-N IDs shown in the existing summary.
+Within this response, new-N refers to the Nth item in events, counted from 1. For example, new-1 refers to the first item.
+Each reference points to a different event, never the event containing it.
+Each summary ends with one source marker (#X-Y), or (#X) for one floor. X and Y are floor numbers from the supplied new dialogue, with X <= Y.
 
 ## Mindful Approach
 Before generating, observe the USER and analyze carefully:
@@ -203,10 +214,11 @@ Before generating, observe the USER and analyze carefully:
 - 只输出有变化的条目，确保少、硬、稳定
 
 ## characterAliasUpdates 规则（可选）
-- 目的: 处理同一角色先用称号/外号/代号，后续揭示真名或统一主名的情况
-- 只有当前新内容出现明确身份桥时才输出；没有证据就省略整个 characterAliasUpdates 字段，不要猜
-- to: 统一主名；from: 旧称呼数组；evidence: 当前批次里的短证据，必须能说明“from 其实是 to”
-- 例: {"to":"李玄清","from":["道长"],"evidence":"#37 道长报出本名李玄清"}
+- 目的: 维护同一角色的不同写法，让称号、昵称、缩写、不同语言或译名都能指向同一人
+- 当前对话与既有总结能确认两种名称是同一角色时输出。明确揭示身份、稳定称号或昵称、唯一缩写、不同语言/译名/书写形式都可以作为依据
+- 称号、昵称、缩写必须在当前剧情和既有资料中只指向这一位角色。亲昵称呼、亲属称呼、泛称、普通职位、代词、仅因读音/字形相近的名称不构成同一人依据
+- to: 已有总结中稳定使用的主名；from: 其他写法数组；evidence: 简短说明确认依据
+- 例: {"to":"五条悟","from":["悟","Gojo Satoru"],"evidence":"当前中文称呼“悟”与既有日文名五条悟均指同一角色"}
 - 不要列出要修改哪些事件/事实/弧光，系统会自动合并
 
 ## Output Format
@@ -222,13 +234,12 @@ Before generating, observe the USER and analyze carefully:
   ],
   "events": [
     {
-      "id": "evt-{$nextEventId}起始，依次递增",
       "title": "地点·事件标题",
       "timeLabel": "事件发生时间（如：6月12日、搬入新家的第二晚）",
       "summary": "回忆卡片。优先写成1句；信息确实过多时可写2句。必须保留正式人名、原文称呼/昵称、地点、物件、具体动作和可召回钩子，末尾标注楼层(#X-Y)",
       "participants": ["参与角色名，不要使用人称代词或别名，只用正式人名"],
       "memoryRole": "${EVENT_MEMORY_ROLES.join('|')}",
-      "causedBy": ["evt-12", "evt-14"]
+      "causedBy": []
     }
   ],
   "newCharacters": ["仅本次首次出现的角色名"],
@@ -236,31 +247,25 @@ Before generating, observe the USER and analyze carefully:
     {"name": "角色名，不要使用人称代词或别名，只用正式人名", "trajectory": "当前阶段描述(15字内)", "progress": 0.0-1.0, "newMoment": "本次新增的关键时刻"}
   ],
   "factUpdates": [
-    {"s": "主体", "p": "谓词", "o": "当前值", "isState": true, "trend": "仅关系类填"},
+    {"s": "主体", "p": "谓词", "o": "当前值", "isState": true},
     {"s": "要删除的主体", "p": "要删除的谓词", "retracted": true}
   ],
   "characterAliasUpdates": [
-    {"to": "统一主名，仅明确揭示身份时输出", "from": ["旧称呼/外号/代号/职称"], "evidence": "当前批次里的短证据"}
+    {"to": "${CHARACTER_ALIAS_OUTPUT_TEMPLATE.to}", "from": ["${CHARACTER_ALIAS_OUTPUT_TEMPLATE.from}"], "evidence": "${CHARACTER_ALIAS_OUTPUT_TEMPLATE.evidence}"}
   ]
 }
 \`\`\`
 
 ## CRITICAL NOTES
-- events.id 从 evt-{$nextEventId} 开始编号
 - 仅输出【增量】内容，已有事件绝不重复
 - summary 按 doc 中的“Event Summary Style”执行，不要写成泛化概括
 - keywords 是全局关键词，综合已有+新增
-- causedBy 仅在因果明确时填写，允许为[]，0-2个
 - factUpdates 可为空数组
-- characterAliasUpdates 是可选字段；没有明确身份揭示时不要输出这个 key
+- characterAliasUpdates 是可选字段；没有可靠的同一人依据时不要输出这个 key
 - 合法JSON，字符串值内部避免英文双引号
 - 用朴实、白描、有烟火气的笔触记录事实，避免比喻和意象
 - 严谨、注重细节，避免使用模糊的概括性语言，应用具体的动词描述动作，例:谁,在什么时间/地点,通过什么方式,对谁,做了什么事,出现了什么道具,结果如何。
-</meta_protocol>
-
-## Placeholder Notes
-- {$nextEventId} 会在运行时替换成实际起始事件编号，不要删除
-- {$existingEventCount}、{$historyRange} 这类占位符如果出现在你的自定义版本里，通常也不应该删除`;
+</meta_protocol>`;
 
 export const DEFAULT_SUMMARY_ASSISTANT_CHECK_PROMPT = `Content review initiated...
 [Compliance Check Results]
@@ -375,13 +380,11 @@ function normalizeVectorConfig(rawVector = null) {
     const sharedProvider = String(legacyOnline.provider || DEFAULT_VECTOR_PROVIDER).toLowerCase();
     const sharedUrl = String(legacyOnline.url || (sharedProvider === "openrouter" ? DEFAULT_OPENROUTER_URL : DEFAULT_L0_URL)).trim();
     const sharedKey = String(legacyOnline.key || "").trim();
-    const eventRerankEnabled = rawVector?.eventRerankEnabled !== false;
 
     return {
         enabled: !!rawVector?.enabled,
         engine: "online",
         l0Concurrency: Math.max(1, Math.min(50, Number(rawVector?.l0Concurrency) || 10)),
-        eventRerankEnabled,
         l0Api: normalizeOpenAiCompatApiConfig(rawVector?.l0Api, {
             provider: sharedProvider,
             url: sharedUrl,
