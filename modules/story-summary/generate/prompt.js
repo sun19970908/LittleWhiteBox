@@ -14,6 +14,12 @@
 
 import { getContext, extension_settings } from "../../../../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../../../../script.js";
+import {
+    resolveFloorBoundary,
+    isFloorBlocked,
+    isEventRangeBlocked,
+    formatBoundaryLog,
+} from "../vector/retrieval/floor-boundary.js";
 import { xbLog } from "../../../core/debug-core.js";
 import { getSummaryStore, getFacts } from "../data/store.js";
 import { isRelationFact } from "../data/fact-predicates.js";
@@ -27,7 +33,7 @@ import { getMeta } from "../vector/storage/chunk-store.js";
 import { getStateAtoms } from "../vector/storage/state-store.js";
 import { getEngineFingerprint } from "../vector/utils/embedder.js";
 import { buildTrustedCharacters } from "../vector/retrieval/entity-lexicon.js";
-import { filterConstraintsByRelevance } from "./constraint-filter.js";
+import { filterConstraintsByRelevance, isBlockWorldEnabled, isBlockPeopleEnabled } from "./constraint-filter.js";
 import {
     getTemporalProtectionLimit,
     parseEventRange,
@@ -139,6 +145,46 @@ export function setPromptBudgets(patch) {
     };
     if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
     return applyPromptBudgets();
+}
+
+// ── L1 行 speaker 置空 开关 ─────────────────────────────
+// 默认关闭：保持显示说话者（与上游一致）；打开后 L1 行 USER 侧说话者置空。
+// 由循环任务 toggleBlankL1Speaker() 切换。
+const BLANK_L1_SPEAKER_KEY = "blankL1Speaker";
+
+export function isBlankL1SpeakerEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[BLANK_L1_SPEAKER_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function toggleBlankL1Speaker() {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    const next = !isBlankL1SpeakerEnabled();
+    root.storySummary[BLANK_L1_SPEAKER_KEY] = next;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return next;
+}
+
+// ── L2 下方 L0 渲染 开关 ───────────────────────────────
+// 默认关闭：事件下方照常渲染 L0 行（与上游一致）。
+// 打开后：事件下方不渲染 L0 行（L0 与事件摘要同源派生，是其子集，属冗余呈现）。
+// 仅影响事件挂靠路径；零散/新鲜记忆路径的 L0 不受此开关控制。
+// 由循环任务 toggleHideL0UnderEvents() 切换。
+const HIDE_L0_UNDER_EVENTS_KEY = "hideL0UnderEvents";
+
+export function isHideL0UnderEventsEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[HIDE_L0_UNDER_EVENTS_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function toggleHideL0UnderEvents() {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    const next = !isHideL0UnderEventsEnabled();
+    root.storySummary[HIDE_L0_UNDER_EVENTS_KEY] = next;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return next;
 }
 
 // L0 显示文本：分号拼接 vs 多行模式的阈值
@@ -341,14 +387,19 @@ function buildConstraintPeopleDict(recallResult, focusCharacters = []) {
 function groupConstraintsForDisplay(facts, peopleDict) {
     const people = new Map();
     const world = [];
+    // 约束过滤开关（与 constraint-filter.js 的 BLOCK_WORLD / BLOCK_PEOPLE 同源）
+    const dropWorld = isBlockWorldEnabled();
+    const dropPeople = isBlockPeopleEnabled();
 
     for (const f of (facts || [])) {
         const subjectNorm = normalize(f?.s);
         const displayName = peopleDict.get(subjectNorm);
         if (displayName) {
-            if (!people.has(displayName)) people.set(displayName, []);
-            people.get(displayName).push(f);
-        } else {
+            if (!dropPeople) {
+                if (!people.has(displayName)) people.set(displayName, []);
+                people.get(displayName).push(f);
+            }
+        } else if (!dropWorld) {
             world.push(f);
         }
     }
@@ -486,7 +537,11 @@ function buildL0DisplayText(l0) {
  */
 function formatL1Line(chunk, isUser) {
     const { name1, name2 } = getContext();
-    const speaker = chunk.isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色");
+    // L1 行 speaker 置空开关（默认关闭 = 显示说话者，与上游一致）
+    const blankSpeaker = isUser && isBlankL1SpeakerEnabled();
+    const speaker = blankSpeaker
+        ? ""
+        : (isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色"));
     const text = String(chunk.text || "").trim();
     const symbol = isUser ? "┌" : "›";
     return `    ${symbol} #${chunk.floor + 1} [${speaker}] ${text}`;
@@ -621,10 +676,17 @@ function buildRecentEvidenceGroup(floor, l0AtomsForFloor) {
  *     › #500 [角色] ...
  *
  * @param {EvidenceGroup} group - 证据组
+ * @param {object} [options]
+ * @param {boolean} [options.includeL0=true] - 事件挂靠路径传 false：L0 与事件摘要
+ *   同源派生（同一批楼层文本），语义上是其子集，L2 下方不渲染 📌 行；
+ *   零散/新鲜记忆路径保持 true（那里没有事件头，L0 是唯一呈现）。
  * @returns {string[]} 文本行数组
  */
-function formatEvidenceGroup(group) {
-    const displayTexts = group.l0Atoms.map(l0 => buildL0DisplayText(l0));
+function formatEvidenceGroup(group, options = {}) {
+    const includeL0 = options.includeL0 !== false;
+    const displayTexts = includeL0
+        ? group.l0Atoms.map(l0 => buildL0DisplayText(l0))
+        : [];
 
     const lines = [];
 
@@ -836,9 +898,10 @@ function formatEventWithEvidence(eventItem, idx, evidenceGroups, causalLines = [
 
     lines.push(...causalLines);
 
-    // EvidenceGroup 证据
+    // EvidenceGroup 证据（事件下方是否渲染 L0 由开关 hideL0UnderEvents 控制，默认不渲染）
+    const includeL0UnderEvents = !isHideL0UnderEventsEnabled();
     for (const group of evidenceGroups) {
-        lines.push(...formatEvidenceGroup(group));
+        lines.push(...formatEvidenceGroup(group, { includeL0: includeL0UnderEvents }));
     }
 
     return lines.join("\n");
@@ -1066,8 +1129,23 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     };
 
     // 从 recallResult 解构
-    const l0Selected = recallResult?.l0Selected || [];
-    const l1ByFloor = recallResult?.l1ByFloor || new Map();
+    //
+    // 末端屏蔽：无论走哪条召回路径（dense / lexical / PPR 扩散 / direct 展开 /
+    // must-keep 保底 / L0→L2 反向查找），近处楼层都在此统一剔除。
+    // recent 通道是区间直给而非召回，不经过这里，不受影响。
+    const boundary = resolveFloorBoundary(getContext().chat);
+    const l0SelectedAll = recallResult?.l0Selected || [];
+    const l1ByFloorAll = recallResult?.l1ByFloor || new Map();
+    const l0Selected = boundary.enabled
+        ? l0SelectedAll.filter(l0 => !isFloorBlocked(l0?.floor, boundary))
+        : l0SelectedAll;
+    const l1ByFloor = boundary.enabled
+        ? new Map([...l1ByFloorAll].filter(([floor]) => !isFloorBlocked(floor, boundary)))
+        : l1ByFloorAll;
+    if (metrics?.floorBoundary) {
+        metrics.floorBoundary.blockedL0 += l0SelectedAll.length - l0Selected.length;
+        metrics.floorBoundary.blockedL1Floors += l1ByFloorAll.size - l1ByFloor.size;
+    }
     const evidenceTrace = options.captureEvidenceTrace ? createEvidenceTraceRecorder(causalById) : null;
 
     // 装配结果
@@ -1200,7 +1278,13 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     // ═══════════════════════════════════════════════════════════════════════
     // [Events] L2 Events → 直接命中 + 相似命中 + 因果链 + EvidenceGroup
     // ═══════════════════════════════════════════════════════════════════════
-    const candidates = (recallResult?.events || []).filter(e => e?.event?.summary);
+    const eventsAll = (recallResult?.events || []).filter(e => e?.event?.summary);
+    const candidates = boundary.enabled
+        ? eventsAll.filter(e => !isEventRangeBlocked(parseEventRange(e?.event?.summary), boundary))
+        : eventsAll;
+    if (metrics?.floorBoundary) {
+        metrics.floorBoundary.blockedEvents += eventsAll.length - candidates.length;
+    }
     const eventRankingScore = item => Number.isFinite(item?._eventRerankScore)
         ? item._eventRerankScore
         : Number(item?.similarity || 0);
@@ -1324,9 +1408,22 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         deferredDirectEvidenceContext = null;
     }
     const hasSelectedL1 = ['applied', 'partial-vectors'].includes(directEvidenceStatus);
-    const directL1Candidates = hasSelectedL1
+    const directL1Source = hasSelectedL1
         ? (directEvidenceL1 || [])
         : l1FallbackFromPairs(l1ByFloor);
+    // 末端屏蔽：跨边界事件展开出的近处原文在此剔除
+    const directL1Candidates = boundary.enabled
+        ? directL1Source.filter(chunk => !isFloorBlocked(chunk?.floor, boundary))
+        : directL1Source;
+    if (metrics?.floorBoundary) {
+        metrics.floorBoundary.blockedDirectItems += directL1Source.length - directL1Candidates.length;
+        // 末端补齐窗口信息后一次性输出（top 数据已在 recall 阶段累加）
+        metrics.floorBoundary.enabled = boundary.enabled;
+        metrics.floorBoundary.lookback = boundary.lookback;
+        metrics.floorBoundary.latestFloor = boundary.latestFloor;
+        metrics.floorBoundary.blockedFrom = boundary.enabled ? boundary.blockedFrom : null;
+        console.info(formatBoundaryLog(metrics.floorBoundary));
+    }
     const directEvidenceRelevance = {
         l0ByFloor: buildRankRelevance(l0Selected, l0 => l0.floor),
         l1ByChunkId: hasSelectedL1
