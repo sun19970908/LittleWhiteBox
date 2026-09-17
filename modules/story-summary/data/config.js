@@ -100,11 +100,11 @@ These roles are different uses of memory, not importance levels. Choose the main
 
 [Event Summary Style]
 - summary 不是剧情概括，而是高召回的回忆卡片
-- timeLabel 和 summary 的时间优先用原文日期或明确事件定位，沿用已有时间基准；不单独写"今天、昨天、明晚"等相对时间，不编造日期或间隔。
+- timeLabel 和 summary 的时间优先用原文日期或明确事件定位，沿用已有时间基准；不单独写“今天、昨天、明晚”等相对时间，不编造日期或间隔。
 - 必须优先保留原词：正式人名、原文称呼/昵称/别称、地点、关键物件、动作、情绪态度、关系变化、约定/承诺/交换条件、秘密或羞辱/暧昧/冲突钩子
 - 信息无法全部容纳时，严格按此顺序压缩或删除：气氛描写 → 次要反应 → 心理描写 → 动作过程；必须先删完前一类，才可压缩后一类
 - 与本事件直接相关的具名实体（人名、地点、具名物件）、辨识性特征和15字以内的关键原话属于最后保留层；仅在上述四类都已不足以继续压缩时才考虑舍弃；无关名词不要强行塞入
-- 不要写"两人发生冲突""关系恶化""有暧昧互动""揭示了一个秘密"这种空话，必须写清是谁在什么地方拿着什么、对谁做了什么、结果怎样
+- 不要写“两人发生冲突”“关系恶化”“有暧昧互动”“揭示了一个秘密”这种空话，必须写清是谁在什么地方拿着什么、对谁做了什么、结果怎样
 - 优先写成 1 句；信息确实过多且确有必要时可写 2 句，但不要拆成空泛铺垫 + 具体补充
 - 允许 summary 略密实，但必须让未来一句口语提法也能认出这段
 - 示例只展示具体度，不要求模仿题材、语气或句式
@@ -114,7 +114,7 @@ These roles are different uses of memory, not importance levels. Choose the main
   3. 她揭示了一个秘密，对方受到打击。
 - 合格：
   1. 苏晚在黑鹭酒馆当众把欠条拍到顾衡胸口，骂他拿她母亲的旧宅做赌注，顾衡想抓她手腕被她甩开，周围赌客起哄，两人彻底撕破脸。 (#120-123)
-  2. 原文明确当前为6月12日，追问"昨晚"的去向并约定"明晚"见面：
+  2. 原文明确当前为6月12日，追问“昨晚”的去向并约定“明晚”见面：
      6月12日，周柠在旅馆浴室门口盯着林雨锁骨上的咬痕，追问6月11日晚和谁在一起，林雨一边整理湿透的白衬衫一边嘴硬否认，最后答应6月13日晚还去旧码头见她。 (#88-91)
 
 [Relationship Trend Scale]
@@ -205,7 +205,7 @@ Before generating, observe the USER and analyze carefully:
 ## characterAliasUpdates 规则（可选）
 - 目的: 处理同一角色先用称号/外号/代号，后续揭示真名或统一主名的情况
 - 只有当前新内容出现明确身份桥时才输出；没有证据就省略整个 characterAliasUpdates 字段，不要猜
-- to: 统一主名；from: 旧称呼数组；evidence: 当前批次里的短证据，必须能说明"from 其实是 to"
+- to: 统一主名；from: 旧称呼数组；evidence: 当前批次里的短证据，必须能说明“from 其实是 to”
 - 例: {"to":"李玄清","from":["道长"],"evidence":"#37 道长报出本名李玄清"}
 - 不要列出要修改哪些事件/事实/弧光，系统会自动合并
 
@@ -216,11 +216,11 @@ Before generating, observe the USER and analyze carefully:
     "user_insight": "本轮主要新增了哪些情节、关系或事实，哪些细节值得进入可召回摘要",
     "dedup_analysis": "已有X个事件，本次识别Y个新事件",
     "fact_changes": "识别到的事实变化概述"
-    },
-    "keywords": [
+  },
+  "keywords": [
     {"text": "综合历史+新内容的全剧情关键词(5-10个)", "weight": "核心|重要|一般"}
-    ],
-    "events": [
+  ],
+  "events": [
     {
       "id": "evt-{$nextEventId}起始，依次递增",
       "title": "地点·事件标题",
@@ -248,7 +248,7 @@ Before generating, observe the USER and analyze carefully:
 ## CRITICAL NOTES
 - events.id 从 evt-{$nextEventId} 开始编号
 - 仅输出【增量】内容，已有事件绝不重复
-- summary 按 doc 中的"Event Summary Style"执行，不要写成泛化概括
+- summary 按 doc 中的“Event Summary Style”执行，不要写成泛化概括
 - keywords 是全局关键词，综合已有+新增
 - causedBy 仅在因果明确时填写，允许为[]，0-2个
 - factUpdates 可为空数组
