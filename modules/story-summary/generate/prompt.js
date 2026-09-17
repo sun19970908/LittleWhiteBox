@@ -13,12 +13,6 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { getContext } from "../../../../../../extensions.js";
-import {
-    resolveFloorBoundary,
-    isFloorBlocked,
-    isEventRangeBlocked,
-    formatBoundaryLog,
-} from "../vector/retrieval/floor-boundary.js";
 import { xbLog } from "../../../core/debug-core.js";
 import { getSummaryStore, getFacts } from "../data/store.js";
 import { isRelationFact } from "../data/fact-predicates.js";
@@ -32,20 +26,19 @@ import { getMeta } from "../vector/storage/chunk-store.js";
 import { getStateAtoms } from "../vector/storage/state-store.js";
 import { getEngineFingerprint } from "../vector/utils/embedder.js";
 import { buildTrustedCharacters } from "../vector/retrieval/entity-lexicon.js";
-import { filterConstraintsByRelevance, isBlockWorldEnabled, isBlockPeopleEnabled } from "./constraint-filter.js";
+import { filterConstraintsByRelevance } from "./constraint-filter.js";
 import {
     getTemporalProtectionLimit,
     parseEventRange,
     TEMPORAL_PROTECTION_POLICY,
 } from "../vector/retrieval/temporal-turn-carrier.js";
-import {
-    admitDirectEvidenceItems,
-    buildRankRelevance,
-} from "./direct-evidence-packing.js";
+import { buildRankRelevance } from "./direct-evidence-packing.js";
 import { buildTemporalEventPackingOrder } from "./temporal-event-packing.js";
+import { packEventEvidence } from "./event-evidence-packing.js";
 
 // Metrics
-import { formatMetricsLog, detectIssues } from "../vector/retrieval/metrics.js";
+import { detectIssues, finalizeMetricsTiming } from "../vector/retrieval/metrics.js";
+import { createRecallDiagnostics } from '../recall-diagnostics.js';
 
 const MODULE_ID = "summaryPrompt";
 
@@ -53,7 +46,6 @@ const MODULE_ID = "summaryPrompt";
 // 预算常量
 // ─────────────────────────────────────────────────────────────────────────────
 
-// ── 预算常量（与上游一致，勿改数值/勿搬移：上游的增删改靠这些行自动合入）──
 const CONSTRAINT_MAX = 2000;
 const ARCS_MAX = 1500;
 const EVENT_BUDGET_MAX = 5000;
@@ -61,55 +53,9 @@ const RELATED_EVENT_MAX = 500;
 const EVENT_EVIDENCE_MAX = 4000;
 const DISTANT_EVIDENCE_MAX = 1000;
 const UNSUMMARIZED_EVIDENCE_MAX = 2000;
-// 总预算口径（与上游一致，仅作统计，不参与准入判断）。
-// buildVectorPrompt 内会按运行时配置重新求和，此处保留上游原值作默认口径。
 const TOTAL_BUDGET_MAX = CONSTRAINT_MAX + ARCS_MAX + EVENT_BUDGET_MAX
     + EVENT_EVIDENCE_MAX + DISTANT_EVIDENCE_MAX + UNSUMMARIZED_EVIDENCE_MAX;
 const TOP_N_STAR = 5;
-
-// ── 本地扩展：预算运行时调整（循环任务调 setPromptBudgets）──
-// 默认值即上面的上游常量，不配置时行为与上游逐字节一致。
-// （extension_settings / saveSettingsDebounced / EXT_ID 在文件下方已 import/声明）
-const PROMPT_BUDGETS_KEY = "promptBudgets";
-
-// 上游没有的常量：recall.js 的三个容量闸门（其 CONFIG 未导出，故在此保留默认值）
-const CAPACITY_DEFAULTS = Object.freeze({
-    rerankTopN: 20,                 // RERANK_TOP_N       楼层精排幸存数
-    fusionCap: 60,                  // FUSION_CAP         融合候选楼层数
-    eventSelectMax: 50,             // EVENT_SELECT_MAX   事件 MMR 选择上限
-});
-
-export function getPromptBudgets() {
-    const raw = extension_settings?.[EXT_ID]?.storySummary?.[PROMPT_BUDGETS_KEY] || {};
-    const clamp = (value, fallback, min, max) => {
-        const n = Number(value);
-        return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
-    };
-    return {
-        CONSTRAINT_MAX: clamp(raw.constraintMax, CONSTRAINT_MAX, 100, 100000),
-        ARCS_MAX: clamp(raw.arcsMax, ARCS_MAX, 100, 100000),
-        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, EVENT_BUDGET_MAX, 100, 100000),
-        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, RELATED_EVENT_MAX, 10, 10000),
-        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, UNSUMMARIZED_EVIDENCE_MAX, 100, 50000),
-        TOP_N_STAR: clamp(raw.topNStar, TOP_N_STAR, 1, 20),
-        EVENT_EVIDENCE_MAX: clamp(raw.eventEvidenceMax, EVENT_EVIDENCE_MAX, 100, 100000),
-        DISTANT_EVIDENCE_MAX: clamp(raw.distantEvidenceMax, DISTANT_EVIDENCE_MAX, 0, 100000),
-        RERANK_TOP_N: clamp(raw.rerankTopN, CAPACITY_DEFAULTS.rerankTopN, 1, 200),
-        FUSION_CAP: clamp(raw.fusionCap, CAPACITY_DEFAULTS.fusionCap, 10, 500),
-        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, CAPACITY_DEFAULTS.eventSelectMax, 1, 500),
-    };
-}
-
-export function setPromptBudgets(patch) {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    root.storySummary[PROMPT_BUDGETS_KEY] = {
-        ...(root.storySummary[PROMPT_BUDGETS_KEY] || {}),
-        ...(patch || {}),
-    };
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return getPromptBudgets();
-}
 
 // L0 显示文本：分号拼接 vs 多行模式的阈值
 const L0_JOINED_MAX_LENGTH = 120;
@@ -230,17 +176,6 @@ function getEventSortKey(event) {
     return m ? parseInt(m[1], 10) : Number.MAX_SAFE_INTEGER;
 }
 
-/**
- * 重新编号事件文本
- * @param {string} text - 原始文本
- * @param {number} newIndex - 新编号
- * @returns {string} 重新编号后的文本
- */
-function renumberEventText(text, newIndex) {
-    const s = String(text || "");
-    return s.replace(/^(\s*)\d+(\.\s*(?:【)?)/, `$1${newIndex}$2`);
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // 系统前导与后缀
 // ─────────────────────────────────────────────────────────────────────────────
@@ -322,18 +257,14 @@ function buildConstraintPeopleDict(recallResult, focusCharacters = []) {
 function groupConstraintsForDisplay(facts, peopleDict) {
     const people = new Map();
     const world = [];
-    const dropWorld = isBlockWorldEnabled();
-    const dropPeople = isBlockPeopleEnabled();
 
     for (const f of (facts || [])) {
         const subjectNorm = normalize(f?.s);
         const displayName = peopleDict.get(subjectNorm);
         if (displayName) {
-            if (!dropPeople) {
-                if (!people.has(displayName)) people.set(displayName, []);
-                people.get(displayName).push(f);
-            }
-        } else if (!dropWorld) {
+            if (!people.has(displayName)) people.set(displayName, []);
+            people.get(displayName).push(f);
+        } else {
             world.push(f);
         }
     }
@@ -403,40 +334,28 @@ function selectConstraintsByBudgetDesc(grouped, budgetState) {
     const people = grouped?.people || new Map();
     const world = grouped?.world || [];
 
-    if (people.size > 0) {
-        if (!tryConsumeConstraintLineBudget('people:', budgetState)) {
-            return { people: selectedPeople, world: selectedWorld };
-        }
-        for (const [name, facts] of people.entries()) {
-            const header = `  ${name}:`;
-            if (!tryConsumeConstraintLineBudget(header, budgetState)) {
-                return { people: selectedPeople, world: selectedWorld };
-            }
-            const picked = [];
-            const sorted = [...facts].sort((a, b) => (b.since || 0) - (a.since || 0));
-            for (const f of sorted) {
-                const line = `    ${formatConstraintLine(f, false)}`;
-                if (!tryConsumeConstraintLineBudget(line, budgetState)) {
-                    return { people: selectedPeople, world: selectedWorld };
-                }
-                picked.push(f);
-            }
+    for (const [name, facts] of people.entries()) {
+        const picked = [];
+        const sorted = [...facts].sort((a, b) => (b.since || 0) - (a.since || 0));
+        for (const f of sorted) {
+            // Commit the fact and its still-unpaid headers together. A later
+            // oversized fact cannot roll back earlier accepted facts.
+            const lines = [];
+            if (!selectedPeople.size) lines.push('people:');
+            if (!picked.length) lines.push(`  ${name}:`);
+            lines.push(`    ${formatConstraintLine(f, false)}`);
+            if (!tryConsumeConstraintLineBudget(lines.join('\n'), budgetState)) continue;
+            picked.push(f);
             selectedPeople.set(name, picked);
         }
     }
 
-    if (world.length > 0) {
-        if (!tryConsumeConstraintLineBudget('world:', budgetState)) {
-            return { people: selectedPeople, world: selectedWorld };
-        }
-        const sortedWorld = [...world].sort((a, b) => (b.since || 0) - (a.since || 0));
-        for (const f of sortedWorld) {
-            const line = `  ${formatConstraintLine(f, true)}`;
-            if (!tryConsumeConstraintLineBudget(line, budgetState)) {
-                return { people: selectedPeople, world: selectedWorld };
-            }
-            selectedWorld.push(f);
-        }
+    const sortedWorld = [...world].sort((a, b) => (b.since || 0) - (a.since || 0));
+    for (const f of sortedWorld) {
+        const line = `  ${formatConstraintLine(f, true)}`;
+        const text = selectedWorld.length ? line : `world:\n${line}`;
+        if (!tryConsumeConstraintLineBudget(text, budgetState)) continue;
+        selectedWorld.push(f);
     }
 
     return { people: selectedPeople, world: selectedWorld };
@@ -481,89 +400,12 @@ function buildL0DisplayText(l0) {
  * @param {boolean} isUser - 是否为 USER 侧
  * @returns {string} 格式化后的行
  */
-
-import { extension_settings } from "../../../../../../extensions.js";
-import { saveSettingsDebounced } from "../../../../../../../script.js";
-
-const EXT_ID = "LittleWhiteBox";
-const BLANK_L1_SPEAKER_KEY = "blankL1Speaker";
-
-// ── L1 行 speaker 置空 开关 ─────────────────────────────
-// 默认打开：L1 行说话者置空（保持 4.3 现状）；
-// 关闭后：恢复显示说话者。
-export function isBlankL1SpeakerEnabled() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[BLANK_L1_SPEAKER_KEY];
-    return v === undefined ? false : v === true;
-}
-
-export function toggleBlankL1Speaker() {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    const next = !isBlankL1SpeakerEnabled();
-    root.storySummary[BLANK_L1_SPEAKER_KEY] = next;
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return next;
-}
-
-const HIDE_L0_UNDER_EVENTS_KEY = "hideL0UnderEvents";
-
-// ── L2 下方 L0 渲染 开关 ─────────────────────────────
-// 默认打开：事件挂靠的证据组不渲染 L0（📌）行——L0 与事件摘要同源派生
-// （都从同批楼层文本提取），语义上多为摘要的子集；
-// 关闭后：恢复在事件下方渲染 L0 行。
-// 仅影响事件挂靠路径；零散/新鲜记忆路径的 L0 不受此开关控制。
-export function isHideL0UnderEventsEnabled() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[HIDE_L0_UNDER_EVENTS_KEY];
-    return v === undefined ? true : v === true;
-}
-
-export function toggleHideL0UnderEvents() {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    const next = !isHideL0UnderEventsEnabled();
-    root.storySummary[HIDE_L0_UNDER_EVENTS_KEY] = next;
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return next;
-}
-
 function formatL1Line(chunk, isUser) {
     const { name1, name2 } = getContext();
-    const blankUser = isBlankL1SpeakerEnabled();
-    const speaker = chunk.isUser
-        ? (blankUser ? "" : (name1 || "用户"))
-        : (chunk.speaker || name2 || "角色");
+    const speaker = chunk.isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色");
     const text = String(chunk.text || "").trim();
     const symbol = isUser ? "┌" : "›";
     return `    ${symbol} #${chunk.floor + 1} [${speaker}] ${text}`;
-}
-
-
-
-
-/**
- * 格式化因果事件行
- * @param {object} causalItem - 因果事件项
- * @returns {string} 格式化后的行
- */
-function formatCausalEventLine(causalItem) {
-    const ev = causalItem?.event || {};
-    const depth = Math.max(1, Math.min(9, causalItem?._causalDepth || 1));
-    const indent = "  │" + "  ".repeat(depth - 1);
-    const prefix = `${indent}├─ 前因`;
-
-    const time = ev.timeLabel ? `【${ev.timeLabel}】` : "";
-    const people = (ev.participants || []).join(" / ");
-    const summary = cleanSummary(ev.summary);
-
-    const r = parseEventRange(ev.summary);
-    const floorHint = r ? `(#${r.start + 1}${r.end !== r.start ? `-${r.end + 1}` : ""})` : "";
-
-    const lines = [];
-    lines.push(`${prefix}${time}${people ? ` ${people}` : ""}`);
-    const body = `${summary}${floorHint ? ` ${floorHint}` : ""}`.trim();
-    lines.push(`${indent}  ${body}`);
-
-    return lines.join("\n");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -695,17 +537,10 @@ function buildRecentEvidenceGroup(floor, l0AtomsForFloor) {
  *     › #500 [角色] ...
  *
  * @param {EvidenceGroup} group - 证据组
- * @param {object} [options]
- * @param {boolean} [options.includeL0=true] - 事件挂靠路径传 false：L0 与事件摘要
- *   同源派生（同一批楼层文本），语义上是其子集，L2 下方不渲染 📌 行；
- *   零散/新鲜记忆路径保持 true（那里没有事件头，L0 是唯一呈现）。
- * @returns {string[]} 文本数组
+ * @returns {string[]} 文本行数组
  */
-function formatEvidenceGroup(group, options = {}) {
-    const includeL0 = options.includeL0 !== false;
-    const displayTexts = includeL0
-        ? group.l0Atoms.map(l0 => buildL0DisplayText(l0))
-        : [];
+function formatEvidenceGroup(group) {
+    const displayTexts = group.l0Atoms.map(l0 => buildL0DisplayText(l0));
 
     const lines = [];
 
@@ -751,8 +586,8 @@ function directEvidenceItemTokens(item) {
 }
 
 /**
- * 枚举所有可挂到已入选 DIRECT 事件的证据条目。
- * 归属（owner）= candidateRank 最小且楼层范围包含该条目的事件；
+ * 枚举可挂到已入选、允许携带证据的事件的条目。
+ * L1 保留选择时的归属；L0／回退片段归到候选序最早的范围匹配事件。
  * id 级去重，跨事件不重复枚举。
  */
 function enumerateDirectEvidenceItems(
@@ -806,7 +641,10 @@ function enumerateDirectEvidenceItems(
             : null;
         const itemFloor = fallbackParentFloor ?? Number(chunk.floor);
         if (!Number.isInteger(itemFloor)) continue;
-        const owner = findOwner(itemFloor);
+        const owner = chunk.ownerEventId
+            ? ownedRanges.find(({ selected, range }) => selected.event.id === chunk.ownerEventId
+                && itemFloor >= range.start && itemFloor <= range.end)?.selected
+            : findOwner(itemFloor);
         if (!owner) continue;
         seenL1Ids.add(id);
 
@@ -895,10 +733,10 @@ function unusedL1PairChunks(l1ByFloor, floor, usedEvidenceIds) {
  * @param {object} eventItem - 事件召回项
  * @param {number} idx - 编号
  * @param {EvidenceGroup[]} evidenceGroups - 该事件的证据组
- * @param {Map<string, object>} causalById - 因果事件索引
+ * @param {string[]} causalLines - 已入选且计入证据预算的直接前因
  * @returns {string} 格式化后的文本
  */
-function formatEventWithEvidence(eventItem, idx, evidenceGroups, causalById) {
+function formatEventWithEvidence(eventItem, idx, evidenceGroups, causalLines = []) {
     const ev = eventItem?.event || eventItem || {};
     const time = ev.timeLabel || "";
     const title = String(ev.title || "").trim();
@@ -912,16 +750,11 @@ function formatEventWithEvidence(eventItem, idx, evidenceGroups, causalById) {
     if (people && displayTitle !== people) lines.push(`  ${people}`);
     lines.push(`  ${summary}`);
 
-    // 因果链
-    for (const cid of ev.causedBy || []) {
-        const c = causalById?.get(cid);
-        if (c) lines.push(formatCausalEventLine(c));
-    }
+    lines.push(...causalLines);
 
-    // EvidenceGroup 证据（事件下方是否渲染 L0 由开关 hideL0UnderEvents 控制，默认不渲染）
-    const includeL0UnderEvents = !isHideL0UnderEventsEnabled();
+    // EvidenceGroup 证据
     for (const group of evidenceGroups) {
-        lines.push(...formatEvidenceGroup(group, { includeL0: includeL0UnderEvents }));
+        lines.push(...formatEvidenceGroup(group));
     }
 
     return lines.join("\n");
@@ -1071,9 +904,9 @@ function createEvidenceTraceRecorder(causalById) {
         }
         addFloors(target, unitId, eventFloors, source, score);
     };
-    const causal = (target, item) => {
+    const causal = (target, item, causeIds = item?.causedBy || []) => {
         const unitId = eventUnitId(item);
-        for (const eventId of (item?.causedBy || [])) {
+        for (const eventId of causeIds) {
             const cause = causalById?.get(eventId);
             event(target, cause?.event, 'causal', cause?.similarity ?? null, unitId);
         }
@@ -1125,29 +958,19 @@ function factsInBudgetOrder(grouped) {
  */
 async function buildVectorPrompt(store, recallResult, causalById, focusCharacters, meta, metrics, options = {}) {
     const T_Start = performance.now();
-
-    // 预算运行时读取（生成时生效，无需刷新/重启）
-    const {
-        CONSTRAINT_MAX,
-        ARCS_MAX,
-        EVENT_BUDGET_MAX,
-        RELATED_EVENT_MAX,
-        UNSUMMARIZED_EVIDENCE_MAX,
-        TOP_N_STAR,
-        EVENT_EVIDENCE_MAX,
-        DISTANT_EVIDENCE_MAX,
-    } = getPromptBudgets();
-    // 总预算口径：按运行时配置动态求和（不配置时即上游 TOTAL_BUDGET_MAX）
-    const TOTAL_BUDGET = CONSTRAINT_MAX + ARCS_MAX + EVENT_BUDGET_MAX
-        + EVENT_EVIDENCE_MAX + DISTANT_EVIDENCE_MAX + UNSUMMARIZED_EVIDENCE_MAX;
-
+    const recallElapsed = metrics?.timing.total || 0;
+    const releaseElapsedBefore = metrics?.timing.runtimeEndSession || 0;
     let deferredDirectEvidenceContext = recallResult?.directEvidenceContext || null;
     try {
 
     const data = store.json || {};
-    // 证据预算（上游模型）：事件证据池与远期证据池各自独立记账，互不挤占。
+    // Recalled events may themselves be another selected event's direct cause.
+    // Keep them addressable even when recall excluded them from causalChain.
+    causalById = new Map(causalById);
+    for (const item of recallResult?.events || []) {
+        if (item?.event?.id) causalById.set(item.event.id, item);
+    }
     const eventEvidenceBudget = { used: 0, max: EVENT_EVIDENCE_MAX };
-    const distantEvidenceBudget = { used: 0, max: DISTANT_EVIDENCE_MAX };
     const temporalEvidenceProtectionBudget = {
         used: 0,
         max: getTemporalProtectionLimit(
@@ -1157,23 +980,8 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     };
 
     // 从 recallResult 解构
-    //
-    // 末端屏蔽：无论走哪条召回路径（dense / lexical / PPR 扩散 / direct 展开 /
-    // must-keep 保底 / L0→L2 反向查找），近处楼层都在此统一剔除。
-    // recent 通道是区间直给而非召回，不经过这里，不受影响。
-    const boundary = resolveFloorBoundary(getContext().chat);
-    const l0SelectedAll = recallResult?.l0Selected || [];
-    const l1ByFloorAll = recallResult?.l1ByFloor || new Map();
-    const l0Selected = boundary.enabled
-        ? l0SelectedAll.filter(l0 => !isFloorBlocked(l0?.floor, boundary))
-        : l0SelectedAll;
-    const l1ByFloor = boundary.enabled
-        ? new Map([...l1ByFloorAll].filter(([floor]) => !isFloorBlocked(floor, boundary)))
-        : l1ByFloorAll;
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedL0 += l0SelectedAll.length - l0Selected.length;
-        metrics.floorBoundary.blockedL1Floors += l1ByFloorAll.size - l1ByFloor.size;
-    }
+    const l0Selected = recallResult?.l0Selected || [];
+    const l1ByFloor = recallResult?.l1ByFloor || new Map();
     const evidenceTrace = options.captureEvidenceTrace ? createEvidenceTraceRecorder(causalById) : null;
 
     // 装配结果
@@ -1188,11 +996,12 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
 
     // 注入统计
     const injectionStats = {
-        budget: { max: TOTAL_BUDGET, used: 0 },
+        budget: { max: TOTAL_BUDGET_MAX, used: 0 },
         constraint: { count: 0, tokens: 0, filtered: 0 },
         arc: { count: 0, tokens: 0 },
         event: { selected: 0, tokens: 0 },
         directEvidence: { units: 0, l0: 0, l1: 0, tokens: 0 },
+        causalEvidence: null,
         distantEvidence: { units: 0, tokens: 0 },
         recentEvidence: { units: 0, tokens: 0 },
     };
@@ -1293,7 +1102,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
             const arcBudget = { used: 0, max: ARCS_MAX };
             for (const a of filteredArcs) {
                 const line = formatArcLine(a);
-                if (!pushWithBudget(assembled.arcs.lines, line, arcBudget)) break;
+                if (!pushWithBudget(assembled.arcs.lines, line, arcBudget)) continue;
                 if (evidenceTrace) evidenceTrace.arc('prompt', a);
             }
             assembled.arcs.tokens = arcBudget.used;
@@ -1305,13 +1114,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     // ═══════════════════════════════════════════════════════════════════════
     // [Events] L2 Events → 直接命中 + 相似命中 + 因果链 + EvidenceGroup
     // ═══════════════════════════════════════════════════════════════════════
-    const eventsAll = (recallResult?.events || []).filter(e => e?.event?.summary);
-    const candidates = boundary.enabled
-        ? eventsAll.filter(e => !isEventRangeBlocked(parseEventRange(e?.event?.summary), boundary))
-        : eventsAll;
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedEvents += eventsAll.length - candidates.length;
-    }
+    const candidates = (recallResult?.events || []).filter(e => e?.event?.summary);
     const eventRankingScore = item => Number.isFinite(item?._eventRerankScore)
         ? item._eventRerankScore
         : Number(item?.similarity || 0);
@@ -1362,7 +1165,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
             continue;
         }
 
-        const text = formatEventWithEvidence(e, 0, [], causalById);
+        const text = formatEventWithEvidence(e, 0, []);
         const cost = estimateTokens(text);
         const fitEventBudget = eventBudget.used + cost <= eventBudget.max;
         const fitRelatedBudget = isDirect || (relatedBudget.used + cost <= relatedBudget.max);
@@ -1371,11 +1174,8 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
             if (temporal) temporalDroppedCount++;
             if (!fitEventBudget) {
                 eventBudgetRejected++;
-                // A malformed/oversized protected event must not prevent a
-                // later protected event from using the same protection path.
-                if (temporal) continue;
-                eventBudgetRejected += eventPackingOrder.length - packingIndex - 1;
-                break;
+                // Oversized events do not block later complete events that fit.
+                continue;
             }
             eventRelatedBudgetRejected++;
             continue;
@@ -1384,7 +1184,6 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         if (temporal) temporalProtectedCount++;
         const selected = {
             event: e.event,
-            text,
             evidenceGroups: [],
             candidateRank,
         };
@@ -1430,37 +1229,28 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         );
         directEvidenceL1 = result.items;
         directEvidenceStatus = result.status;
+        if (recallResult.directEvidenceContext.diagnostics) {
+            recallResult.directEvidenceContext.diagnostics.stage = 'prompt-assembly';
+        }
         recallResult.directEvidenceL1 = directEvidenceL1;
         recallResult.directEvidenceStatus = directEvidenceStatus;
         recallResult.directEvidenceContext = null;
         deferredDirectEvidenceContext = null;
     }
-    const directL1Source = directEvidenceStatus === 'applied'
+    const hasSelectedL1 = ['applied', 'partial-vectors'].includes(directEvidenceStatus);
+    const directL1Candidates = hasSelectedL1
         ? (directEvidenceL1 || [])
         : l1FallbackFromPairs(l1ByFloor);
-    // 末端屏蔽：跨边界事件展开出的近处原文在此剔除
-    const directL1Candidates = boundary.enabled
-        ? directL1Source.filter(chunk => !isFloorBlocked(chunk?.floor, boundary))
-        : directL1Source;
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedDirectItems += directL1Source.length - directL1Candidates.length;
-        // 末端补齐窗口信息后一次性输出（top 数据已在 recall 阶段累加）
-        metrics.floorBoundary.enabled = boundary.enabled;
-        metrics.floorBoundary.lookback = boundary.lookback;
-        metrics.floorBoundary.latestFloor = boundary.latestFloor;
-        metrics.floorBoundary.blockedFrom = boundary.enabled ? boundary.blockedFrom : null;
-        console.info(formatBoundaryLog(metrics.floorBoundary));
-    }
     const directEvidenceRelevance = {
         l0ByFloor: buildRankRelevance(l0Selected, l0 => l0.floor),
-        l1ByChunkId: directEvidenceStatus === 'applied'
+        l1ByChunkId: hasSelectedL1
             ? buildRankRelevance(directL1Candidates, chunk => chunk.chunkId)
             : new Map(),
     };
 
     // ── 单条证据入选 ──
-    // 1) 枚举可挂到已入选 DIRECT 事件的 L0/L1 条目（id 级去重，归属第一个
-    //    候选序事件）；2) 时间保护通道每层最多一条，且最多占实际证据池 40%；
+    // 1) 枚举可挂到已入选事件的 L0/L1 条目（id 级去重，保留 L1 归属）；
+    //    2) 时间保护通道每层最多一条，且最多占实际证据池 40%；
     //    超额项撤销特权后回普通相关性队列；3) 入选后才写 usedEvidenceIds；
     //    4) 按事件/楼层分组仅供时间线呈现。
     const enumeration = enumerateDirectEvidenceItems(
@@ -1475,28 +1265,21 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         }
     }
 
-    const admittedEvidenceFloors = new Set();
-    const evidenceAdmissionOptions = {
-        admittedFloors: admittedEvidenceFloors,
-        getTokenCost: directEvidenceItemTokens,
+    selectedDirect.sort((a, b) => getEventSortKey(a.event) - getEventSortKey(b.event));
+    selectedRelated.sort((a, b) => getEventSortKey(a.event) - getEventSortKey(b.event));
+    const causalOwners = [
+        ...selectedDirect.map((item, index) => ({ ...item, label: `[印象深的事]第${index + 1}条` })),
+        ...selectedRelated.map((item, index) => ({ ...item, label: `[其他人的事]第${index + 1}条` })),
+    ].sort((left, right) => left.candidateRank - right.candidateRank);
+    const packed = packEventEvidence({
+        ...enumeration,
+        causalOwners, causesById: causalById, budget: eventEvidenceBudget,
+        estimateTokens, getTokenCost: directEvidenceItemTokens,
         floorOverheadTokens: DIRECT_EVIDENCE_FLOOR_OVERHEAD_TOKENS,
         protectedBudget: temporalEvidenceProtectionBudget,
-    };
-    const admittedItems = admitDirectEvidenceItems(
-        [...enumeration.l0Items, ...enumeration.l1Items],
-        eventEvidenceBudget,
-        evidenceAdmissionOptions,
-    );
-    // fallback L1 与父 L0 捆绑：只有父楼层已入选 L0 才能入选
-    const admittedFallbackItems = admitDirectEvidenceItems(
-        enumeration.fallbackItems.filter(item => (
-            admittedItems.some(admitted => admitted.kind === 'l0' && admitted.floor === item.floor)
-        )),
-        eventEvidenceBudget,
-        evidenceAdmissionOptions,
-    );
-
-    const allAdmittedItems = [...admittedItems, ...admittedFallbackItems];
+    });
+    const allAdmittedItems = packed.items;
+    const causalEvidence = packed.causal;
     for (const item of allAdmittedItems) {
         usedEvidenceIds.add(item.id);
         if (evidenceTrace) evidenceTrace.eventEvidence('prompt', item.owner.event, item.floor);
@@ -1517,21 +1300,15 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         + enumeration.fallbackItems.length;
     const directEvidenceTemporalProtectedItems = allAdmittedItems.filter(item => item.temporalProtected === true);
 
-    for (const selected of [...selectedDirect, ...selectedRelated]) {
-        selected.evidenceGroups = selected.evidenceGroups || [];
-        const eventItem = candidates[selected.candidateRank];
-        selected.text = formatEventWithEvidence(eventItem, 0, selected.evidenceGroups, causalById);
-    }
-    injectionStats.directEvidence.tokens = eventEvidenceBudget.used;
-    const eventBudgetUsedByDirectEvidence = eventEvidenceBudget.used;
+    injectionStats.directEvidence.tokens = eventEvidenceBudget.used - causalEvidence.stats.tokens;
     // 该 ledger 在实际入选时计费，包含首次出现楼层的标题开销。
     const directEvidenceTemporalProtectedTokens = temporalEvidenceProtectionBudget.used;
     if (metrics?.evidence) {
         metrics.evidence.directEvidencePromptGroups = injectionStats.directEvidence.units;
         metrics.evidence.directEvidencePromptItems = injectionStats.directEvidence.l0 + injectionStats.directEvidence.l1;
-        metrics.evidence.directEvidencePromptTokens = eventEvidenceBudget.used;
-        // 单条入选后的枚举/入选/被预算跳过计数；claimed-but-dropped 在该
-        // 结构下不可再现，任何丢弃都来自预算且会计入 skippedByBudget。
+        metrics.evidence.directEvidencePromptTokens = injectionStats.directEvidence.tokens;
+        metrics.evidence.l0ProtectedTokens = packed.l0ProtectedTokens;
+        // 枚举条目均已通过通道准入；此处记录共享预算／时间保护预算的舍弃。
         metrics.evidence.directEvidenceEnumerated = directEvidenceEnumeratedCount;
         metrics.evidence.directEvidenceAdmitted = allAdmittedItems.length;
         metrics.evidence.directEvidenceSkippedByBudget = Math.max(
@@ -1542,39 +1319,10 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         metrics.evidence.directEvidenceTemporalProtectedItems = directEvidenceTemporalProtectedItems.length;
         metrics.evidence.directEvidenceTemporalProtectedTokens = directEvidenceTemporalProtectedTokens;
         metrics.evidence.directEvidenceTemporalProtectionBudgetMax = temporalEvidenceProtectionBudget.max;
-        metrics.evidence.eventEvidenceBudgetUsed = eventBudgetUsedByDirectEvidence;
-        metrics.evidence.eventEvidenceBudgetMax = eventEvidenceBudget.max;
-    }
-
-    // 排序
-    selectedDirect.sort((a, b) => getEventSortKey(a.event) - getEventSortKey(b.event));
-    selectedRelated.sort((a, b) => getEventSortKey(a.event) - getEventSortKey(b.event));
-
-    // 重新编号 + 星标
-    const directEventTexts = selectedDirect.map((it, i) => {
-        const numbered = renumberEventText(it.text, i + 1);
-        return it.candidateRank < TOP_N_STAR ? `⭐${numbered}` : numbered;
-    });
-
-    const relatedEventTexts = selectedRelated.map((it, i) => {
-        const numbered = renumberEventText(it.text, i + 1);
-        return numbered;
-    });
-
-    assembled.directEvents.lines = directEventTexts;
-    assembled.relatedEvents.lines = relatedEventTexts;
-
-    if (evidenceTrace) {
-        const selectedInBudgetOrder = [...selectedDirect, ...selectedRelated]
-            .sort((a, b) => a.candidateRank - b.candidateRank);
-        for (const item of selectedInBudgetOrder) {
-            evidenceTrace.event('prompt', item.event, eventTraceSource(candidates[item.candidateRank]));
-            evidenceTrace.causal('prompt', item.event);
-        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
-    // [Evidence - Distant] 远期证据（已总结范围，未被事件消费的 L0）
+    // [Evidence - Distant] 零散历史（已总结范围，未被事件消费的 L0，独立预算）
     // ═══════════════════════════════════════════════════════════════════════
 
     const lastSummarized = store.lastSummarizedMesId ?? -1;
@@ -1596,8 +1344,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     // 远期：floor <= lastSummarized
     const distantL0 = remainingL0.filter(l0 => l0.floor <= lastSummarized);
 
-    // Build distant groups once; trace, admission and starvation attribution
-    // must observe the exact same token costs.
+    // Build distant groups once so trace and admission observe the same groups.
     const distantRanked = [];
     for (const [floor, l0s] of groupL0ByFloor(distantL0)) {
         const group = buildEvidenceGroup(
@@ -1616,16 +1363,14 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     }
 
     const acceptedDistantGroups = [];
-    if (distantEvidenceBudget.used < distantEvidenceBudget.max) {
-        for (const item of distantRanked) {
-            const group = item.group;
-            if (distantEvidenceBudget.used + group.totalTokens > distantEvidenceBudget.max) continue;
-            distantEvidenceBudget.used += group.totalTokens;
-            acceptedDistantGroups.push(group);
-            if (evidenceTrace) evidenceTrace.floor('prompt', group.floor, 'l0');
-            markEvidenceGroupUsed(group, usedEvidenceIds);
-            injectionStats.distantEvidence.units++;
-        }
+    const distantEvidenceBudget = { used: 0, max: DISTANT_EVIDENCE_MAX };
+    for (const item of distantRanked) {
+        const group = item.group;
+        if (distantEvidenceBudget.used + group.totalTokens > distantEvidenceBudget.max) continue;
+        distantEvidenceBudget.used += group.totalTokens;
+        acceptedDistantGroups.push(group);
+        markEvidenceGroupUsed(group, usedEvidenceIds);
+        injectionStats.distantEvidence.units++;
     }
 
     acceptedDistantGroups.sort((a, b) => a.floor - b.floor);
@@ -1636,18 +1381,42 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         }
     }
 
-    const distantTokens = acceptedDistantGroups.reduce((sum, group) => sum + group.totalTokens, 0);
-    assembled.distantEvidence.tokens = distantTokens;
-    injectionStats.distantEvidence.tokens = distantTokens;
+    assembled.distantEvidence.tokens = distantEvidenceBudget.used;
+    injectionStats.distantEvidence.tokens = distantEvidenceBudget.used;
     if (metrics?.evidence) {
-        // 独立池后 distant 不再与 direct 抢额度，只保留「整体饿死」与丢弃计数。
-        metrics.evidence.distantEvidenceStarved = distantRanked.length > 0 && acceptedDistantGroups.length === 0;
+        metrics.evidence.distantEvidenceBudgetUsed = distantEvidenceBudget.used;
+        metrics.evidence.distantEvidenceBudgetMax = distantEvidenceBudget.max;
         metrics.evidence.distantEvidenceDroppedByBudget = Math.max(
             0,
             distantRanked.length - acceptedDistantGroups.length,
         );
-        metrics.evidence.distantEvidenceBudgetUsed = distantEvidenceBudget.used;
-        metrics.evidence.distantEvidenceBudgetMax = distantEvidenceBudget.max;
+    }
+    injectionStats.causalEvidence = causalEvidence.stats;
+    if (metrics?.evidence) {
+        metrics.evidence.causalEvidence = causalEvidence.stats;
+        metrics.evidence.eventEvidenceBudgetUsed = eventEvidenceBudget.used;
+        metrics.evidence.eventEvidenceBudgetMax = eventEvidenceBudget.max;
+    }
+
+    const renderSelectedEvent = (item, index) => formatEventWithEvidence(
+        item.event,
+        index + 1,
+        item.evidenceGroups,
+        (causalEvidence.byEvent.get(item.event.id) || []).map(cause => cause.text),
+    );
+    assembled.directEvents.lines = selectedDirect.map((item, index) => {
+        const text = renderSelectedEvent(item, index);
+        return item.candidateRank < TOP_N_STAR ? `⭐${text}` : text;
+    });
+    assembled.relatedEvents.lines = selectedRelated.map(renderSelectedEvent);
+
+    if (evidenceTrace) {
+        for (const item of causalOwners) {
+            evidenceTrace.event('prompt', item.event, eventTraceSource(candidates[item.candidateRank]));
+            evidenceTrace.causal('prompt', item.event,
+                (causalEvidence.byEvent.get(item.event.id) || []).map(cause => cause.causeId));
+        }
+        for (const group of acceptedDistantGroups) evidenceTrace.floor('prompt', group.floor, 'l0');
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1710,12 +1479,26 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
 
     const sections = [];
 
-    injectionStats.budget.used = assembled.constraints.tokens
-        + assembled.arcs.tokens
-        + injectionStats.event.tokens
-        + eventEvidenceBudget.used
-        + distantEvidenceBudget.used
-        + (assembled.recentEvidence.tokens || 0);
+    const budgetBreakdown = {
+        constraints: assembled.constraints.tokens,
+        events: injectionStats.event.tokens,
+        directEvidence: injectionStats.directEvidence.tokens,
+        causalEvidence: injectionStats.causalEvidence.tokens,
+        distantEvidence: injectionStats.distantEvidence.tokens,
+        recentEvidence: injectionStats.recentEvidence.tokens,
+        arcs: assembled.arcs.tokens,
+    };
+    injectionStats.budget.used = Object.values(budgetBreakdown).reduce((sum, tokens) => sum + tokens, 0);
+    if (metrics) {
+        metrics.budget.total = injectionStats.budget.used;
+        metrics.budget.limit = TOTAL_BUDGET_MAX;
+        metrics.budget.utilization = Math.round(injectionStats.budget.used / TOTAL_BUDGET_MAX * 100);
+        metrics.budget.breakdown = budgetBreakdown;
+        metrics.evidence.tokens = budgetBreakdown.directEvidence
+            + budgetBreakdown.causalEvidence
+            + budgetBreakdown.distantEvidence
+            + budgetBreakdown.recentEvidence;
+    }
 
     if (assembled.constraints.lines.length) {
         sections.push(`[定了的事] 已确立的事实\n${assembled.constraints.lines.join("\n")}`);
@@ -1737,10 +1520,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     }
 
     if (!sections.length) {
-        if (metrics) {
-            metrics.timing.evidenceAssembly = Math.round(performance.now() - T_Start - (metrics.timing.constraintFilter || 0));
-            metrics.timing.formatting = 0;
-        }
+        if (metrics) metrics.timing.formatting = Math.round(performance.now() - T_Format_Start);
         return {
             promptText: "",
             injectionStats,
@@ -1764,27 +1544,6 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         const formattingTime = Math.round(performance.now() - T_Format_Start);
         metrics.timing.formatting = formattingTime;
 
-        const effectiveTotal = injectionStats.budget.used;
-        const effectiveLimit = TOTAL_BUDGET;
-        metrics.budget.total = effectiveTotal;
-        metrics.budget.limit = effectiveLimit;
-        metrics.budget.utilization = Math.round(effectiveTotal / effectiveLimit * 100);
-        metrics.budget.breakdown = {
-            constraints: assembled.constraints.tokens,
-            events: injectionStats.event.tokens,
-            directEvidence: injectionStats.directEvidence.tokens,
-            distantEvidence: injectionStats.distantEvidence.tokens,
-            recentEvidence: injectionStats.recentEvidence.tokens,
-            arcs: assembled.arcs.tokens,
-        };
-
-        metrics.evidence.tokens = injectionStats.directEvidence.tokens
-            + injectionStats.distantEvidence.tokens
-            + injectionStats.recentEvidence.tokens;
-        metrics.timing.evidenceAssembly = Math.round(
-            performance.now() - T_Start - (metrics.timing.constraintFilter || 0) - formattingTime
-        );
-
         const relevantFacts = Math.max(0, allFacts.length - (metrics.constraint.filtered || 0));
         metrics.quality.constraintCoverage = relevantFacts > 0
             ? Math.round((metrics.constraint.injected || 0) / relevantFacts * 100)
@@ -1803,7 +1562,6 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
             ? Math.round(l0FloorsWithL1.size / l0Floors.size * 100)
             : 0;
 
-        metrics.quality.potentialIssues = detectIssues(metrics);
     }
 
     return {
@@ -1818,6 +1576,15 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         }
         if (recallResult?.directEvidenceContext === deferredDirectEvidenceContext) {
             recallResult.directEvidenceContext = null;
+        }
+        if (metrics) {
+            const elapsed = performance.now() - T_Start;
+            metrics.timing.evidenceAssembly = Math.max(0, Math.round(elapsed
+                - metrics.timing.constraintFilter - metrics.timing.formatting
+                - metrics.timing.directEvidenceRetrieval
+                - (metrics.timing.runtimeEndSession - releaseElapsedBefore)));
+            finalizeMetricsTiming(metrics, recallElapsed + elapsed);
+            metrics.quality.potentialIssues = detectIssues(metrics);
         }
     }
 }
@@ -1843,20 +1610,25 @@ export async function buildVectorPromptForReplay(store, recallResult, causalById
  * 所有可观察副作用都由 generate interceptor 在认领本轮结果后提交。
  * @param {boolean} excludeLastAi - 是否排除最后的 AI 消息
  * @param {object} options - 计算选项
- * @returns {Promise<{text: string, logText: string, notice: object|null}>}
+ * @returns {Promise<{text: string, diagnostics: object, notice: object|null}>}
  */
 export async function buildVectorPromptText(excludeLastAi = false, options = {}) {
-    const { signal = null } = options;
+    const { signal = null, diagnostics = createRecallDiagnostics(getContext()?.chatId) } = options;
+    const finish = (text, reason = '', notice = null) => {
+        diagnostics.reason = reason || diagnostics.reason;
+        diagnostics.finishedAt ??= performance.now();
+        return { text, notice, diagnostics };
+    };
 
     if (!getSettings().storySummary?.enabled) {
-        return { text: "", logText: "", notice: null };
+        return finish('', '剧情总结未启用');
     }
 
     const { chat } = getContext();
     const store = getSummaryStore();
 
     if (!store?.json) {
-        return { text: "", logText: "", notice: null };
+        return finish('', '没有已保存的总结');
     }
 
     const allEvents = store.json.events || [];
@@ -1864,12 +1636,12 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
     const length = chat?.length || 0;
 
     if (lastIdx >= length) {
-        return { text: "", logText: "", notice: null };
+        return finish('', '总结边界超过当前聊天范围');
     }
 
     const vectorCfg = getVectorConfig();
     if (!vectorCfg?.enabled) {
-        return { text: "", logText: "", notice: null };
+        return finish('', '向量召回未启用');
     }
 
     const { chatId } = getContext();
@@ -1883,6 +1655,7 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
             excludeLastAi,
             signal,
             deferRuntimeRelease: true,
+            diagnostics,
         });
 
         recallResult = {
@@ -1909,7 +1682,7 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
         }
         if (recallResult?.directEvidenceContext) recallResult.directEvidenceContext = null;
         if (signal?.aborted) {
-            return { text: "", logText: "", notice: null };
+            return finish('', '召回已取消');
         }
         xbLog.error(MODULE_ID, "向量召回失败", e);
         throw e;
@@ -1920,7 +1693,7 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
             await releaseDirectEvidenceContext(recallResult.directEvidenceContext, recallResult?.metrics);
             recallResult.directEvidenceContext = null;
         }
-        return { text: "", logText: "", notice: null };
+        return finish('', '召回已取消');
     }
 
     const hasRecallEvidence =
@@ -1933,26 +1706,23 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
         const noVectorsGenerated = !meta?.fingerprint || (meta?.lastChunkFloor ?? -1) < 0;
         const fpMismatch = meta?.fingerprint && meta.fingerprint !== getEngineFingerprint(vectorCfg);
 
-        if (fpMismatch) {
+        if (!diagnostics.reason && fpMismatch) {
             notice = {
                 issueCode: 'fingerprint_mismatch',
                 message: '向量引擎已变更，请重新生成向量',
             };
-        } else if (noVectorsGenerated) {
+        } else if (!diagnostics.reason && noVectorsGenerated) {
             notice = {
                 issueCode: 'vectors_not_generated',
                 message: '没有可用向量，请在剧情总结面板中生成向量',
             };
         }
         // 向量存在但本次未命中 → 静默跳过，不打扰用户
-        return {
-            text: "",
-            logText: "\n[Vector Recall Empty]\nNo recall candidates / vectors not ready.\n",
-            notice,
-        };
+        return finish('', diagnostics.reason || notice?.message || '检索完成，没有命中候选', notice);
     }
 
-    const { promptText, metrics: promptMetrics } = await buildVectorPrompt(
+    diagnostics.stage = 'prompt-assembly';
+    const { promptText } = await buildVectorPrompt(
         store,
         recallResult,
         causalById,
@@ -1961,7 +1731,7 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
         recallResult?.metrics || null
     );
     if (signal?.aborted) {
-        return { text: "", logText: "", notice: null };
+        return finish('', '召回已取消');
     }
 
     const cfg = getSummaryPanelConfig();
@@ -1969,11 +1739,6 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
     if (cfg.trigger?.wrapperHead) finalText = cfg.trigger.wrapperHead + "\n" + finalText;
     if (cfg.trigger?.wrapperTail) finalText = finalText + "\n" + cfg.trigger.wrapperTail;
 
-    const metricsLogText = promptMetrics ? formatMetricsLog(promptMetrics) : '';
-
-    return {
-        text: finalText,
-        logText: metricsLogText,
-        notice,
-    };
+    diagnostics.stage = 'prompt-ready';
+    return finish(finalText, finalText.trim() ? '' : '已有候选，但没有内容进入最终装配', notice);
 }
