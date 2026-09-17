@@ -11,6 +11,7 @@
 import { extension_settings } from '../../../../../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../../../../../script.js';
 import { getTextFilterRules } from '../../data/config.js';
+import { stripMarkupTags } from './markup-text.js';
 
 const EXT_ID = "LittleWhiteBox";
 const FILTER_BUILTIN_PLACEHOLDERS_KEY = "filterBuiltinPlaceholders";
@@ -153,4 +154,13 @@ export function setBuiltinTextFilters(rules) {
         : [...DEFAULT_BUILTIN_TEXT_FILTERS];
     if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
     return getBuiltinTextFilters();
+}
+
+// Queries and new L1 chunks share the same prose projection. Remove excluded
+// blocks before stripping their delimiters; otherwise their contents would leak.
+export function cleanRecallMessageText(text) {
+    const filtered = filterText(text)
+        .replace(/\[tts:[^\]]*\]/gi, '')
+        .replace(/<state>[\s\S]*?<\/state>/gi, '');
+    return stripMarkupTags(filtered).trim();
 }
