@@ -45,6 +45,7 @@ import {
 import { withExternalCallTrace } from '../gold-eval/lib/transport-cassette.mjs';
 import { assertBootstrapHealthy } from '../gold-eval/baseline/bootstrap-health.mjs';
 import { withProductRecallTurn } from '../gold-eval/lib/product-recall-turn.mjs';
+import { runPromptPackingChecks } from './prompt-packing-check.mjs';
 
 class MemoryStorage {
     #map = new Map();
@@ -1219,6 +1220,12 @@ export async function runStorySummaryRequestCheck() {
     return runSummaryRequestCheck();
 }
 
+export async function runStorySummaryDiagnosticsCheck() {
+    ensureNodeReplayGlobals();
+    const { runDiagnosticsCheck } = await import('./diagnostics-check.mjs');
+    return runDiagnosticsCheck();
+}
+
 export async function runStorySummaryResponseCheck() {
     ensureNodeReplayGlobals();
     const { runSummaryResponseCheck } = await import('./summary-response-check.mjs');
@@ -1251,7 +1258,6 @@ export async function runStorySummaryCancellationCheck() {
             existingFacts: [],
             newHistoryText: '#1 【用户】\n测试取消',
             historyRange: '1-1楼',
-            nextEventId: 1,
             existingEventCount: 0,
             llmApi: { provider: 'st' },
             useStream: true,
@@ -1278,6 +1284,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
         prompts: { memoryTemplate: '{$剧情记忆}' },
         trigger: { wrapperHead: '', wrapperTail: '' },
         ui: { keepVisibleCount: 0 },
+        // Former user setting: assembly must ignore it and use the plugin budget.
         vector: { enabled: true, summarizedEvidenceBudget: 3000 },
     }));
 
@@ -1350,7 +1357,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
             floor: 109,
             isUser: false,
             speaker: '角色',
-            text: `${evidenceMarkers.protected} ${'P'.repeat(4000)}`,
+            text: `${evidenceMarkers.protected} ${'P'.repeat(5500)}`,
             _directEvidenceTemporalCarrier: true,
             _directEvidencePassedMinScore: true,
         },
@@ -1359,7 +1366,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
             floor: 105,
             isUser: false,
             speaker: '角色',
-            text: `${evidenceMarkers.ordinaryHigh} ${'H'.repeat(3000)}`,
+            text: `${evidenceMarkers.ordinaryHigh} ${'H'.repeat(4000)}`,
             _directEvidencePassedMinScore: true,
         },
         {
@@ -1367,7 +1374,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
             floor: 101,
             isUser: false,
             speaker: '角色',
-            text: `${evidenceMarkers.temporalOverflow} ${'O'.repeat(3000)}`,
+            text: `${evidenceMarkers.temporalOverflow} ${'O'.repeat(4000)}`,
             _directEvidenceTemporalCarrier: true,
             _directEvidencePassedMinScore: true,
         },
@@ -1376,7 +1383,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
             floor: 103,
             isUser: false,
             speaker: '角色',
-            text: `${evidenceMarkers.ordinaryLow} ${'L'.repeat(3000)}`,
+            text: `${evidenceMarkers.ordinaryLow} ${'L'.repeat(4000)}`,
             _directEvidencePassedMinScore: true,
         },
     ];
@@ -1419,6 +1426,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
 
         return {
             externalCalls,
+            packingChecks: await runPromptPackingChecks(buildVectorPromptForReplay, createMetrics, store),
             event: {
                 temporalWinners: metrics.event.temporalWinners,
                 temporalProtectionCap: metrics.event.temporalProtectionCap,
@@ -1427,7 +1435,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
                 overflowRendered: temporalEvents.slice(5).map(item => promptText.includes(item.event.title)),
             },
             evidence: {
-                summarizedBudgetMax: metrics.evidence.summarizedBudgetMax,
+                eventEvidenceBudgetMax: metrics.evidence.eventEvidenceBudgetMax,
                 temporalProtectionBudgetMax: metrics.evidence.directEvidenceTemporalProtectionBudgetMax,
                 temporalProtectedItems: metrics.evidence.directEvidenceTemporalProtectedItems,
                 temporalProtectedTokens: metrics.evidence.directEvidenceTemporalProtectedTokens,
@@ -1931,9 +1939,6 @@ export async function runStorySummaryReplay({ rootDir, config, configPath }) {
     }
     if (naturalResumePlan && !panelConfig.vector?.enabled) {
         throw new Error('natural-resume 需要启用 vectorConfig.enabled');
-    }
-    if (eventRerankGatePlan && panelConfig.vector?.eventRerankEnabled !== true) {
-        throw new Error('event-rerank-gate 需要 --event-rerank=true');
     }
     if (shouldRunPromptOnly && !config?.goldEval?.captureRunDir) {
         throw new Error('prompt-only 需要 goldEval.captureRunDir');

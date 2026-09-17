@@ -187,16 +187,6 @@ function readFlag(argv, name) {
     return value ? value.slice(prefix.length) : null;
 }
 
-function readBooleanFlag(argv, name) {
-    const value = readFlag(argv, name);
-    if (value == null) return null;
-    const normalized = String(value).trim().toLowerCase();
-    if (!['0', '1', 'false', 'true', 'no', 'yes', 'off', 'on'].includes(normalized)) {
-        throw new Error(`--${name} 必须是 true 或 false`);
-    }
-    return ['1', 'true', 'yes', 'on'].includes(normalized);
-}
-
 function applyCliOverrides(config, argv) {
     const samplePath = readFlag(argv, 'sample');
     const snapshotPath = readFlag(argv, 'snapshot');
@@ -207,8 +197,6 @@ function applyCliOverrides(config, argv) {
     const summaryKeyEnv = readFlag(argv, 'summary-api-key-env');
     const summaryReasoningEffort = readFlag(argv, 'summary-api-reasoning-effort');
     const summaryMaxTokens = readFlag(argv, 'summary-api-max-tokens');
-    const eventRerankEnabled = readBooleanFlag(argv, 'event-rerank');
-    const summarizedEvidenceBudget = readFlag(argv, 'summarized-evidence-budget');
     const maxFloors = readFlag(argv, 'max-floors');
     const casesPath = readFlag(argv, 'gold-cases');
     const runsRoot = readFlag(argv, 'gold-runs-root');
@@ -249,22 +237,6 @@ function applyCliOverrides(config, argv) {
             ...(summaryKeyEnv ? { key: environmentKey, keyEnv: summaryKeyEnv } : {}),
             ...(summaryReasoningEffort ? { reasoningEffort: summaryReasoningEffort } : {}),
             ...(parsedMaxTokens ? { maxTokens: parsedMaxTokens } : {}),
-        };
-    }
-    if (eventRerankEnabled != null) {
-        config.vectorConfig = {
-            ...(config.vectorConfig || {}),
-            eventRerankEnabled,
-        };
-    }
-    if (summarizedEvidenceBudget != null) {
-        const parsed = Number(summarizedEvidenceBudget);
-        if (!Number.isInteger(parsed) || parsed < 3000 || parsed > 5000) {
-            throw new Error('--summarized-evidence-budget 必须是 3000-5000 的整数');
-        }
-        config.vectorConfig = {
-            ...(config.vectorConfig || {}),
-            summarizedEvidenceBudget: parsed,
         };
     }
     if (maxFloors != null) {
@@ -380,6 +352,16 @@ function applyCliOverrides(config, argv) {
 }
 
 async function main() {
+    if (process.argv.includes('--check-diagnostics')) {
+        await buildBundle();
+        const bundleUrl = `${pathToFileURL(bundlePath).href}?t=${Date.now()}`;
+        // eslint-disable-next-line no-unsanitized/method -- URL points to the bundle path created above.
+        const replayModule = await import(bundleUrl);
+        const result = await replayModule.runStorySummaryDiagnosticsCheck();
+        console.log(`[story-summary-replay] diagnostics check: ${JSON.stringify(result)}`);
+        return;
+    }
+
     if (process.argv.includes('--check-prompt-assembly')) {
         await buildBundle();
         const bundleUrl = `${pathToFileURL(bundlePath).href}?t=${Date.now()}`;

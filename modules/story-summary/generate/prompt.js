@@ -53,21 +53,31 @@ const MODULE_ID = "summaryPrompt";
 // 预算常量
 // ─────────────────────────────────────────────────────────────────────────────
 
-// 预算配置：通过 循环任务 调 setPromptBudgets 修改，运行时生效
+// ── 预算常量（与上游一致，勿改数值/勿搬移：上游的增删改靠这些行自动合入）──
+const CONSTRAINT_MAX = 2000;
+const ARCS_MAX = 1500;
+const EVENT_BUDGET_MAX = 5000;
+const RELATED_EVENT_MAX = 500;
+const EVENT_EVIDENCE_MAX = 4000;
+const DISTANT_EVIDENCE_MAX = 1000;
+const UNSUMMARIZED_EVIDENCE_MAX = 2000;
+// 总预算口径（与上游一致，仅作统计，不参与准入判断）。
+// buildVectorPrompt 内会按运行时配置重新求和，此处保留上游原值作默认口径。
+const TOTAL_BUDGET_MAX = CONSTRAINT_MAX + ARCS_MAX + EVENT_BUDGET_MAX
+    + EVENT_EVIDENCE_MAX + DISTANT_EVIDENCE_MAX + UNSUMMARIZED_EVIDENCE_MAX;
+const TOP_N_STAR = 5;
+
+// ── 本地扩展：预算运行时调整（循环任务调 setPromptBudgets）──
+// 默认值即上面的上游常量，不配置时行为与上游逐字节一致。
 // （extension_settings / saveSettingsDebounced / EXT_ID 在文件下方已 import/声明）
 const PROMPT_BUDGETS_KEY = "promptBudgets";
-const DEFAULT_PROMPT_BUDGETS = {
-    sharedPoolMax: 10000,           // SHARED_POOL_MAX
-    constraintMax: 2000,            // CONSTRAINT_MAX
-    arcsMax: 1500,                 // ARCS_MAX
-    eventBudgetMax: 5000,          // EVENT_BUDGET_MAX
-    relatedEventMax: 500,           // RELATED_EVENT_MAX
-    unsummarizedEvidenceMax: 2000,  // UNSUMMARIZED_EVIDENCE_MAX
-    topNStar: 5,                    // TOP_N_STAR
+
+// 上游没有的常量：recall.js 的三个容量闸门（其 CONFIG 未导出，故在此保留默认值）
+const CAPACITY_DEFAULTS = Object.freeze({
     rerankTopN: 20,                 // RERANK_TOP_N       楼层精排幸存数
     fusionCap: 60,                  // FUSION_CAP         融合候选楼层数
     eventSelectMax: 50,             // EVENT_SELECT_MAX   事件 MMR 选择上限
-};
+});
 
 export function getPromptBudgets() {
     const raw = extension_settings?.[EXT_ID]?.storySummary?.[PROMPT_BUDGETS_KEY] || {};
@@ -76,16 +86,17 @@ export function getPromptBudgets() {
         return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
     };
     return {
-        SHARED_POOL_MAX: clamp(raw.sharedPoolMax, DEFAULT_PROMPT_BUDGETS.sharedPoolMax, 1000, 1000000),
-        CONSTRAINT_MAX: clamp(raw.constraintMax, DEFAULT_PROMPT_BUDGETS.constraintMax, 100, 100000),
-        ARCS_MAX: clamp(raw.arcsMax, DEFAULT_PROMPT_BUDGETS.arcsMax, 100, 100000),
-        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, DEFAULT_PROMPT_BUDGETS.eventBudgetMax, 100, 100000),
-        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, DEFAULT_PROMPT_BUDGETS.relatedEventMax, 10, 10000),
-        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, DEFAULT_PROMPT_BUDGETS.unsummarizedEvidenceMax, 100, 50000),
-        TOP_N_STAR: clamp(raw.topNStar, DEFAULT_PROMPT_BUDGETS.topNStar, 1, 20),
-        RERANK_TOP_N: clamp(raw.rerankTopN, DEFAULT_PROMPT_BUDGETS.rerankTopN, 1, 200),
-        FUSION_CAP: clamp(raw.fusionCap, DEFAULT_PROMPT_BUDGETS.fusionCap, 10, 500),
-        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, DEFAULT_PROMPT_BUDGETS.eventSelectMax, 1, 500),
+        CONSTRAINT_MAX: clamp(raw.constraintMax, CONSTRAINT_MAX, 100, 100000),
+        ARCS_MAX: clamp(raw.arcsMax, ARCS_MAX, 100, 100000),
+        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, EVENT_BUDGET_MAX, 100, 100000),
+        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, RELATED_EVENT_MAX, 10, 10000),
+        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, UNSUMMARIZED_EVIDENCE_MAX, 100, 50000),
+        TOP_N_STAR: clamp(raw.topNStar, TOP_N_STAR, 1, 20),
+        EVENT_EVIDENCE_MAX: clamp(raw.eventEvidenceMax, EVENT_EVIDENCE_MAX, 100, 100000),
+        DISTANT_EVIDENCE_MAX: clamp(raw.distantEvidenceMax, DISTANT_EVIDENCE_MAX, 0, 100000),
+        RERANK_TOP_N: clamp(raw.rerankTopN, CAPACITY_DEFAULTS.rerankTopN, 1, 200),
+        FUSION_CAP: clamp(raw.fusionCap, CAPACITY_DEFAULTS.fusionCap, 10, 500),
+        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, CAPACITY_DEFAULTS.eventSelectMax, 1, 500),
     };
 }
 
@@ -1117,33 +1128,33 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
 
     // 预算运行时读取（生成时生效，无需刷新/重启）
     const {
-        SHARED_POOL_MAX,
         CONSTRAINT_MAX,
         ARCS_MAX,
         EVENT_BUDGET_MAX,
         RELATED_EVENT_MAX,
         UNSUMMARIZED_EVIDENCE_MAX,
         TOP_N_STAR,
+        EVENT_EVIDENCE_MAX,
+        DISTANT_EVIDENCE_MAX,
     } = getPromptBudgets();
+    // 总预算口径：按运行时配置动态求和（不配置时即上游 TOTAL_BUDGET_MAX）
+    const TOTAL_BUDGET = CONSTRAINT_MAX + ARCS_MAX + EVENT_BUDGET_MAX
+        + EVENT_EVIDENCE_MAX + DISTANT_EVIDENCE_MAX + UNSUMMARIZED_EVIDENCE_MAX;
 
     let deferredDirectEvidenceContext = recallResult?.directEvidenceContext || null;
     try {
 
     const data = store.json || {};
-    const total = { used: 0, max: SHARED_POOL_MAX };
-    const vectorConfig = getVectorConfig() || {};
-    const summarizedEvidenceBudgetMax = vectorConfig.summarizedEvidenceBudget;
-    const summarizedEvidenceBudget = { used: 0, max: summarizedEvidenceBudgetMax };
+    // 证据预算（上游模型）：事件证据池与远期证据池各自独立记账，互不挤占。
+    const eventEvidenceBudget = { used: 0, max: EVENT_EVIDENCE_MAX };
+    const distantEvidenceBudget = { used: 0, max: DISTANT_EVIDENCE_MAX };
     const temporalEvidenceProtectionBudget = {
         used: 0,
         max: getTemporalProtectionLimit(
-            summarizedEvidenceBudgetMax,
+            EVENT_EVIDENCE_MAX,
             TEMPORAL_PROTECTION_POLICY.maxEvidenceBudgetShare,
         ),
     };
-    // 为远期记忆（distant）预留 20% 独立保底：DIRECT 准入时临时把共享池
-    // 压到 max - reserve，distant 准入前恢复，确保远期浓缩 L0 至少拿到 reserve。
-    const distantReserveTokens = Math.floor(summarizedEvidenceBudgetMax * 0.20);
 
     // 从 recallResult 解构
     //
@@ -1177,7 +1188,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
 
     // 注入统计
     const injectionStats = {
-        budget: { max: SHARED_POOL_MAX + summarizedEvidenceBudgetMax + UNSUMMARIZED_EVIDENCE_MAX, used: 0 },
+        budget: { max: TOTAL_BUDGET, used: 0 },
         constraint: { count: 0, tokens: 0, filtered: 0 },
         arc: { count: 0, tokens: 0 },
         event: { selected: 0, tokens: 0 },
@@ -1214,7 +1225,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         metrics.constraint.filtered = allFacts.length - filteredConstraints.length;
     }
 
-    const constraintBudget = { used: 0, max: Math.min(CONSTRAINT_MAX, total.max - total.used) };
+    const constraintBudget = { used: 0, max: CONSTRAINT_MAX };
     const groupedSelectedConstraints = selectConstraintsByBudgetDesc(groupedConstraints, constraintBudget);
     if (evidenceTrace) {
         for (const fact of factsInBudgetOrder(groupedSelectedConstraints)) evidenceTrace.fact('prompt', fact);
@@ -1231,7 +1242,6 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     if (constraintLines.length) {
         assembled.constraints.lines.push(...constraintLines);
         assembled.constraints.tokens = constraintBudget.used;
-        total.used += constraintBudget.used;
         injectionStats.constraint.count = assembled.constraints.lines.length;
         injectionStats.constraint.tokens = constraintBudget.used;
         injectionStats.constraint.filtered = allFacts.length - filteredConstraints.length;
@@ -1265,7 +1275,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         }
     }
 
-    if (data.arcs?.length && total.used < total.max) {
+    if (data.arcs?.length) {
         const { name1 } = getContext();
         const userName = String(name1 || "").trim();
 
@@ -1280,14 +1290,13 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
             return n && relevant.has(n);
         });
         if (filteredArcs.length) {
-            const arcBudget = { used: 0, max: Math.min(ARCS_MAX, total.max - total.used) };
+            const arcBudget = { used: 0, max: ARCS_MAX };
             for (const a of filteredArcs) {
                 const line = formatArcLine(a);
                 if (!pushWithBudget(assembled.arcs.lines, line, arcBudget)) break;
                 if (evidenceTrace) evidenceTrace.arc('prompt', a);
             }
             assembled.arcs.tokens = arcBudget.used;
-            total.used += arcBudget.used;
             injectionStats.arc.count = assembled.arcs.lines.length;
             injectionStats.arc.tokens = arcBudget.used;
         }
@@ -1317,7 +1326,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
             evidenceTrace.causal('final', item.event);
         }
     }
-    const eventBudget = { used: 0, max: Math.min(EVENT_BUDGET_MAX, total.max - total.used) };
+    const eventBudget = { used: 0, max: EVENT_BUDGET_MAX };
     const relatedBudget = { used: 0, max: RELATED_EVENT_MAX };
     const selectedDirect = [];
     const selectedRelated = [];
@@ -1336,7 +1345,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         const { candidateRank, temporal } = eventPackingOrder[packingIndex];
         const e = candidates[candidateRank];
 
-        if (total.used >= total.max || eventBudget.used >= eventBudget.max) {
+        if (eventBudget.used >= eventBudget.max) {
             if (temporal) {
                 temporalDroppedCount++;
                 eventBudgetRejected++;
@@ -1358,9 +1367,9 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         const fitEventBudget = eventBudget.used + cost <= eventBudget.max;
         const fitRelatedBudget = isDirect || (relatedBudget.used + cost <= relatedBudget.max);
 
-        if (total.used + cost > total.max || !fitEventBudget || !fitRelatedBudget) {
+        if (!fitEventBudget || !fitRelatedBudget) {
             if (temporal) temporalDroppedCount++;
-            if (total.used + cost > total.max || !fitEventBudget) {
+            if (!fitEventBudget) {
                 eventBudgetRejected++;
                 // A malformed/oversized protected event must not prevent a
                 // later protected event from using the same protection path.
@@ -1383,7 +1392,6 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
 
         injectionStats.event.selected++;
         injectionStats.event.tokens += cost;
-        total.used += cost;
         eventBudget.used += cost;
         if (!isDirect) relatedBudget.used += cost;
     }
@@ -1474,10 +1482,9 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         floorOverheadTokens: DIRECT_EVIDENCE_FLOOR_OVERHEAD_TOKENS,
         protectedBudget: temporalEvidenceProtectionBudget,
     };
-    summarizedEvidenceBudget.max = Math.max(0, summarizedEvidenceBudgetMax - distantReserveTokens);
     const admittedItems = admitDirectEvidenceItems(
         [...enumeration.l0Items, ...enumeration.l1Items],
-        summarizedEvidenceBudget,
+        eventEvidenceBudget,
         evidenceAdmissionOptions,
     );
     // fallback L1 与父 L0 捆绑：只有父楼层已入选 L0 才能入选
@@ -1485,10 +1492,9 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         enumeration.fallbackItems.filter(item => (
             admittedItems.some(admitted => admitted.kind === 'l0' && admitted.floor === item.floor)
         )),
-        summarizedEvidenceBudget,
+        eventEvidenceBudget,
         evidenceAdmissionOptions,
     );
-    summarizedEvidenceBudget.max = summarizedEvidenceBudgetMax;
 
     const allAdmittedItems = [...admittedItems, ...admittedFallbackItems];
     for (const item of allAdmittedItems) {
@@ -1516,14 +1522,14 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         const eventItem = candidates[selected.candidateRank];
         selected.text = formatEventWithEvidence(eventItem, 0, selected.evidenceGroups, causalById);
     }
-    injectionStats.directEvidence.tokens = summarizedEvidenceBudget.used;
-    const summarizedBudgetUsedByDirectEvidence = summarizedEvidenceBudget.used;
+    injectionStats.directEvidence.tokens = eventEvidenceBudget.used;
+    const eventBudgetUsedByDirectEvidence = eventEvidenceBudget.used;
     // 该 ledger 在实际入选时计费，包含首次出现楼层的标题开销。
     const directEvidenceTemporalProtectedTokens = temporalEvidenceProtectionBudget.used;
     if (metrics?.evidence) {
         metrics.evidence.directEvidencePromptGroups = injectionStats.directEvidence.units;
         metrics.evidence.directEvidencePromptItems = injectionStats.directEvidence.l0 + injectionStats.directEvidence.l1;
-        metrics.evidence.directEvidencePromptTokens = summarizedEvidenceBudget.used;
+        metrics.evidence.directEvidencePromptTokens = eventEvidenceBudget.used;
         // 单条入选后的枚举/入选/被预算跳过计数；claimed-but-dropped 在该
         // 结构下不可再现，任何丢弃都来自预算且会计入 skippedByBudget。
         metrics.evidence.directEvidenceEnumerated = directEvidenceEnumeratedCount;
@@ -1536,8 +1542,8 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         metrics.evidence.directEvidenceTemporalProtectedItems = directEvidenceTemporalProtectedItems.length;
         metrics.evidence.directEvidenceTemporalProtectedTokens = directEvidenceTemporalProtectedTokens;
         metrics.evidence.directEvidenceTemporalProtectionBudgetMax = temporalEvidenceProtectionBudget.max;
-        metrics.evidence.summarizedBudgetUsedByDirectEvidence = summarizedBudgetUsedByDirectEvidence;
-        metrics.evidence.summarizedBudgetMax = summarizedEvidenceBudget.max;
+        metrics.evidence.eventEvidenceBudgetUsed = eventBudgetUsedByDirectEvidence;
+        metrics.evidence.eventEvidenceBudgetMax = eventEvidenceBudget.max;
     }
 
     // 排序
@@ -1610,11 +1616,11 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     }
 
     const acceptedDistantGroups = [];
-    if (summarizedEvidenceBudget.used < summarizedEvidenceBudget.max) {
+    if (distantEvidenceBudget.used < distantEvidenceBudget.max) {
         for (const item of distantRanked) {
             const group = item.group;
-            if (summarizedEvidenceBudget.used + group.totalTokens > summarizedEvidenceBudget.max) continue;
-            summarizedEvidenceBudget.used += group.totalTokens;
+            if (distantEvidenceBudget.used + group.totalTokens > distantEvidenceBudget.max) continue;
+            distantEvidenceBudget.used += group.totalTokens;
             acceptedDistantGroups.push(group);
             if (evidenceTrace) evidenceTrace.floor('prompt', group.floor, 'l0');
             markEvidenceGroupUsed(group, usedEvidenceIds);
@@ -1634,23 +1640,14 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     assembled.distantEvidence.tokens = distantTokens;
     injectionStats.distantEvidence.tokens = distantTokens;
     if (metrics?.evidence) {
-        const distantEvidenceStarved = distantRanked.length > 0 && acceptedDistantGroups.length === 0;
-        const smallestDistantGroup = distantRanked.length
-            ? Math.min(...distantRanked.map(item => item.group.totalTokens))
-            : Number.POSITIVE_INFINITY;
-        const capacityWithoutTemporalProtection = summarizedEvidenceBudget.max
-            - Math.max(0, summarizedBudgetUsedByDirectEvidence - directEvidenceTemporalProtectedTokens);
-        metrics.evidence.distantEvidenceStarved = distantEvidenceStarved;
-        metrics.evidence.distantEvidenceStarvedByTemporalProtection = distantEvidenceStarved
-            && directEvidenceTemporalProtectedTokens > 0
-            && smallestDistantGroup <= capacityWithoutTemporalProtection;
+        // 独立池后 distant 不再与 direct 抢额度，只保留「整体饿死」与丢弃计数。
+        metrics.evidence.distantEvidenceStarved = distantRanked.length > 0 && acceptedDistantGroups.length === 0;
         metrics.evidence.distantEvidenceDroppedByBudget = Math.max(
             0,
             distantRanked.length - acceptedDistantGroups.length,
         );
-    }
-    if (metrics?.evidence) {
-        metrics.evidence.summarizedBudgetUsedFinal = summarizedEvidenceBudget.used;
+        metrics.evidence.distantEvidenceBudgetUsed = distantEvidenceBudget.used;
+        metrics.evidence.distantEvidenceBudgetMax = distantEvidenceBudget.max;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
@@ -1713,8 +1710,11 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
 
     const sections = [];
 
-    injectionStats.budget.used = total.used
-        + summarizedEvidenceBudget.used
+    injectionStats.budget.used = assembled.constraints.tokens
+        + assembled.arcs.tokens
+        + injectionStats.event.tokens
+        + eventEvidenceBudget.used
+        + distantEvidenceBudget.used
         + (assembled.recentEvidence.tokens || 0);
 
     if (assembled.constraints.lines.length) {
@@ -1764,12 +1764,8 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         const formattingTime = Math.round(performance.now() - T_Format_Start);
         metrics.timing.formatting = formattingTime;
 
-        const effectiveTotal = total.used
-            + summarizedEvidenceBudget.used
-            + (assembled.recentEvidence.tokens || 0);
-        const effectiveLimit = SHARED_POOL_MAX
-            + summarizedEvidenceBudget.max
-            + UNSUMMARIZED_EVIDENCE_MAX;
+        const effectiveTotal = injectionStats.budget.used;
+        const effectiveLimit = TOTAL_BUDGET;
         metrics.budget.total = effectiveTotal;
         metrics.budget.limit = effectiveLimit;
         metrics.budget.utilization = Math.round(effectiveTotal / effectiveLimit * 100);
