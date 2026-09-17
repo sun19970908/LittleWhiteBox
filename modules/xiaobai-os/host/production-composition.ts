@@ -2,6 +2,7 @@ import { getRequestHeaders } from '../../../../../../../script.js';
 import { extensionFolderPath } from '../../../core/constants.js';
 import { createAgentApiModule } from '../apps/agent-api/module.js';
 import { createProductionBankModule } from '../apps/bank/production-module.js';
+import { createProductionDiceModule } from '../apps/dice/production-module.js';
 import { createProductionFourthWallModule } from '../apps/fourth-wall/production-module.js';
 import { createProductionGameModule } from '../apps/game/production-module.js';
 import { createProductionLearningModule } from '../apps/learning/production-module.js';
@@ -13,7 +14,7 @@ import {
 import { createProductionMapModule } from '../apps/map/production-module.js';
 import { createProductionMessagesModule } from '../apps/messages/production-module.js';
 import { createMessagesBranchCopy } from '../apps/messages/host/branch-copy.js';
-import type { ChatMessage } from '../apps/messages/application/projection.js';
+import { projectionMarker, type ChatMessage } from '../apps/messages/application/projection.js';
 import { createProductionShopModule } from '../apps/shop/production-module.js';
 import { createProductionTasksModule } from '../apps/tasks/production-module.js';
 import { createWalletModule } from '../apps/wallet/module.js';
@@ -113,6 +114,11 @@ export function createProductionBootstrap(
     ];
 
     const modules = [
+        createProductionDiceModule(async identityKey => {
+            const summary = await import('../../story-summary/story-summary.js') as { isStorySummaryEnabledForCurrentChat(): boolean };
+            return { world: composition.capabilities.require(WORLD_CONTEXT_CAPABILITY).isStoryBackgroundEnabled(identityKey),
+                summary: summary.isStorySummaryEnabledForCurrentChat() };
+        }, message => !!projectionMarker(message)),
         createAgentApiModule(),
         createProductionFourthWallModule(settings, upstreamFourthWall),
         createProductionMessagesModule(mainGeneration, settings),

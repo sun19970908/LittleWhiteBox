@@ -2,9 +2,9 @@
 // Story Summary - 主入口
 //
 // 稳定目标：
-// 1) "聊天时隐藏已总结" 永远只隐藏"已总结"部分，绝不影响未总结部分
-// 2) 关闭隐藏 = 暴力全量 unhide，确保立刻恢复
-// 3) 开启隐藏 / 改Y / 切Chat / 收新消息：先全量 unhide，再按边界重新 hide
+// 1) 自动隐藏由当前聊天长度、有效总结/向量边界和保留楼数共同决定
+// 2) 关闭隐藏 / 功能 / 插件：立即恢复全部楼层，作废尚未完成的显隐任务
+// 3) 加载 / 删除全量核对，日常增长差量校正；一次应用最终状态再保存
 // 4) Prompt 注入：extension_prompts + IN_CHAT + depth（动态计算，最小为2）
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -20,6 +20,7 @@ import {
 } from "../../../../../../script.js";
 import { EXT_ID, extensionFolderPath } from "../../core/constants.js";
 import { xbLog, CacheRegistry } from "../../core/debug-core.js";
+import { formatErrorDetails } from '../../core/error-details.js';
 import { createModuleEvents } from "../../core/event-manager.js";
 import { postToIframe, isTrustedMessage } from "../../core/iframe-messaging.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
@@ -62,7 +63,6 @@ import {
     getSummaryStore,
     saveSummaryStore,
     saveSummaryStoreImmediately,
-    calcHideRange,
     rollbackSummaryIfNeeded,
     rollbackSummaryOnce,
     clearSummaryData,
@@ -70,13 +70,14 @@ import {
     isSummaryConsumable,
     extractRelationshipsFromFacts,
 } from "./data/store.js";
-import { normalizeCharacterAliases } from "./data/character-aliases.js";
+import { normalizeCharacterAliases, replaceCharacterAliases } from "./data/character-aliases.js";
 import { stampEditedCharacters } from "./data/character-edits.js";
 import { normalizeEventMemoryRole, projectEditedSummaryEvents } from "./data/events.js";
 import { isRelationFact, parseRelationTarget } from "./data/fact-predicates.js";
 import { formatStorySummaryL2Events } from "./prompt-events.js";
 import { projectStoryCharacters } from "./prompt-characters.js";
 import { getSummarySourceEnd } from './generate/source-boundary.js';
+import { createHideStateController } from './hide-state.js';
 
 // prompt text builder
 import {
@@ -88,6 +89,8 @@ import {
     getRecallPrefetchStartAction,
 } from "./generate/recall-prefetch.js";
 import { selectBestStoryMemoryResult } from "./generate/story-memory-result.js";
+import { createRecallReuse, recallConfigKey } from './generate/recall-reuse.js';
+import { createRecallDiagnostics, formatRecallDiagnostics, formatRecallReuseDiagnostics, recordRecallFallback } from './recall-diagnostics.js';
 
 // summary generation
 import { runSummaryGeneration } from "./generate/generator.js";
@@ -178,7 +181,7 @@ import {
     waitForVectorWrites,
 } from "./vector/runtime/maintenance-coordinator.js";
 
-import { invalidateLexicalIndex, warmupIndex, removeDocumentsByFloor, addEventDocuments } from "./vector/retrieval/lexical-index.js";
+import { invalidateLexicalIndex, warmupIndex, removeDocumentsByFloor, addEventDocuments, addChunkDocuments, clearChunkDocuments, removeEventDocuments } from "./vector/retrieval/lexical-index.js";
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
@@ -290,6 +293,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
 
     try {
         notifyStorySummaryChatState();
+        if (!nextEnabled) clearHideState({ persist: false });
         await context.saveMetadata();
 
         if (getContext()?.chatId === targetChatId && events) {
@@ -399,6 +403,7 @@ let frameReady = false;
 let currentMesId = null;
 let pendingFrameMessages = [];
 let lastRecallLogText = "";
+let lastSummaryStatus = { type: 'SUMMARY_STATUS', statusText: '' };
 /** @type {ReturnType<typeof createModuleEvents>|null} */
 let events = null;
 let afterAiGateDispose = null;
@@ -439,8 +444,6 @@ class TaskGuard {
 
 const guard = new TaskGuard();
 
-let hideApplyTimer = null;
-const HIDE_APPLY_DEBOUNCE_MS = 250;
 let lexicalWarmupTimer = null;
 let autoL0BackfillTimer = null;
 let vectorIntegrityTimer = null;
@@ -605,10 +608,8 @@ function maybePreloadTokenizer() {
     if (!vectorCfg?.enabled) return;
 
     preloadTokenizer()
-        .then((ok) => {
-            if (ok) {
-                xbLog.info(MODULE_ID, "分词器预热成功");
-            }
+        .then(() => {
+            xbLog.info(MODULE_ID, "分词器预热成功");
         })
         .catch((e) => {
             xbLog.warn(MODULE_ID, "分词器预热失败（将降级运行，可稀后重试）", e);
@@ -643,39 +644,6 @@ async function executeSlashCommand(command) {
     }
 }
 
-function getLastMessageId() {
-    const { chat } = getContext();
-    const len = Array.isArray(chat) ? chat.length : 0;
-    return Math.max(-1, len - 1);
-}
-
-async function unhideAllMessages() {
-    const last = getLastMessageId();
-    if (last < 0) return;
-    await executeSlashCommand(`/unhide 0-${last}`);
-}
-
-function applyHideRangeInMemory(range) {
-    const { chat } = getContext();
-    if (!Array.isArray(chat) || !range) return 0;
-
-    let changed = 0;
-    for (let messageId = range.start; messageId <= range.end; messageId++) {
-        const message = chat[messageId];
-        if (!message || message.is_system === true) continue;
-
-        message.is_system = true;
-        changed++;
-
-        const messageBlock = $(`.mes[mesid="${messageId}"]`);
-        if (messageBlock.length) {
-            messageBlock.attr("is_system", "true");
-        }
-    }
-
-    return changed;
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // 生成状态管理
 // ═══════════════════════════════════════════════════════════════════════════
@@ -692,6 +660,7 @@ function beginSummaryExecution() {
         controller: new AbortController(),
     };
     activeSummaryExecution = execution;
+    postToFrame({ type: 'SUMMARY_STATUS', statusText: '准备总结…' });
     return execution;
 }
 
@@ -699,7 +668,7 @@ function cancelActiveSummaryExecution() {
     const execution = activeSummaryExecution;
     if (!execution || execution.controller.signal.aborted) return false;
     execution.controller.abort();
-    cancelHideApplyTimer();
+    cancelPendingHide();
     return true;
 }
 
@@ -714,6 +683,13 @@ function isSummaryExecutionActive(execution) {
         && !execution.controller.signal.aborted
         && activeSummaryExecution === execution
         && getContext()?.chatId === execution.chatId;
+}
+
+function postSummaryExecution(execution, payload) {
+    // A stopped run may still report its final status, but never into another chat/run.
+    if (activeSummaryExecution === execution && getContext()?.chatId === execution.chatId) {
+        postToFrame(payload);
+    }
 }
 
 function assertSummaryExecutionActive(execution) {
@@ -734,6 +710,7 @@ function postToFrame(payload) {
     if (payload?.type === "RECALL_LOG") {
         lastRecallLogText = String(payload.text || "");
     }
+    if (payload?.type === 'SUMMARY_STATUS' || payload?.type === 'SUMMARY_ERROR') lastSummaryStatus = payload;
 
     const iframe = document.getElementById("xiaobaix-story-summary-iframe");
     if (!iframe?.contentWindow) return;
@@ -882,7 +859,7 @@ async function handleAnchorClear() {
         { chatId: targetChatId, kind: 'clear-anchors', scope: VECTOR_WRITE_SCOPES.IO },
         async () => {
             if (getContext()?.chatId !== targetChatId) return;
-            await clearAllAtomsAndVectors(targetChatId);
+            await changeRecallData(targetChatId, () => clearAllAtomsAndVectors(targetChatId));
         },
     );
     if (getContext()?.chatId !== targetChatId) return;
@@ -947,6 +924,7 @@ async function generateVectorsNow(vectorCfg, targetChatId, writeSession) {
         const batchSize = 20;
 
         await clearAllChunks(chatId);
+        clearChunkDocuments(chatId);
         if (isCancelled()) return;
         await clearEventVectors(chatId);
         if (isCancelled()) return;
@@ -1052,6 +1030,7 @@ async function generateVectorsNow(vectorCfg, targetChatId, writeSession) {
             postToFrame({ type: "VECTOR_GEN_PROGRESS", phase: "L1", current: 0, total: allChunks.length, message: "L1 向量化..." });
             if (isCancelled() || !isTargetActive()) return;
             await saveChunks(chatId, allChunks);
+            addChunkDocuments(allChunks, chatId);
 
             let l1Completed = 0;
             for (let i = 0; i < allChunks.length; i += batchSize) {
@@ -1223,15 +1202,16 @@ async function handleClearVectors() {
 
     await runVectorWriteTask(
         { chatId: targetChatId, kind: 'clear-vectors', scope: VECTOR_WRITE_SCOPES.IO },
-        async () => {
+        () => changeRecallData(targetChatId, async () => {
             if (getContext()?.chatId !== targetChatId) return;
             await clearEventVectors(targetChatId);
             await clearAllChunks(targetChatId);
+            clearChunkDocuments(targetChatId);
             await clearStateVectors(targetChatId);
             // Reset both boundary and fingerprint so next incremental build starts from floor 0
             // without being blocked by stale engine fingerprint mismatch.
             await updateMeta(targetChatId, { lastChunkFloor: -1, fingerprint: null });
-        },
+        }),
     );
     if (getContext()?.chatId !== targetChatId) return;
     await sendVectorStatsToFrame();
@@ -1361,8 +1341,10 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
                         signal: writeSession.signal,
                         shouldCancel: () => !isVectorWriteSessionCurrent(writeSession),
                     });
-                    if (result.built > 0) {
-                        invalidateLexicalIndex();
+                    // These chunks are already committed. A later config
+                    // cancellation must not suppress their lexical update.
+                    if (result.built > 0 && !isChatStale(chatId)) {
+                        addChunkDocuments(result.chunks, chatId);
                         scheduleLexicalWarmup();
                     }
                     return result;
@@ -1418,8 +1400,7 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
         }
 
         if (l0Result?.built > 0) {
-            invalidateLexicalIndex();
-            scheduleLexicalWarmup();
+            refreshEntityLexiconAndWarmup();
         }
 
         await sendAnchorStatsToFrame();
@@ -1524,6 +1505,8 @@ function changeVectorConfig(reason, applyChange) {
         async (writeSession) => {
             const previousVectorConfig = getVectorConfig();
             const result = await applyChange();
+            // This config is global, including if the chat changed while saving.
+            cancelRecallAndClearPrompt('vector-config-changed');
             const nextVectorConfig = getVectorConfig();
             const changed = await finishVectorConfigTransition(
                 previousVectorConfig,
@@ -1547,7 +1530,7 @@ async function rebuildActiveVectorCacheAfterSummary(execution) {
 
     try {
         logRecallRuntimeCheckpoint("afterSummaryRefresh:start", `chat=${chatId}`);
-        postToFrame({ type: "SUMMARY_STATUS", statusText: "记忆数据已更新，下次召回时加载。" });
+        postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: '总结已保存，正在更新检索状态…' });
         let result = await refreshRecallRuntime(chatId, { reason: 'after-summary' });
         assertSummaryExecutionActive(execution);
         if (result?.stale) {
@@ -1569,7 +1552,7 @@ async function rebuildActiveVectorCacheAfterSummary(execution) {
             await clearRecallRuntime(chatId);
             throw createSummaryGenerationCancelledError();
         }
-        xbLog.warn(MODULE_ID, "大总结后刷新向量热缓存失败", error);
+        throw error;
     }
 }
 
@@ -1637,8 +1620,10 @@ async function autoVectorizeMissingEventsNow(store, execution, writeSession) {
         await sendVectorStatsToFrame();
     } catch (e) {
         assertSummaryExecutionActive(execution);
-        if (e?.name === 'AbortError' || !isVectorWriteSessionCurrent(writeSession)) return;
-        xbLog.error(MODULE_ID, "L2 自动向量化失败", e);
+        if (e?.name === 'AbortError' || !isVectorWriteSessionCurrent(writeSession)) {
+            throw createSummaryGenerationCancelledError();
+        }
+        throw new Error('总结后的事件向量化失败', { cause: e });
     }
 }
 
@@ -1745,89 +1730,59 @@ async function repairMissingEventVectorsForCurrentChat() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function syncEventVectorsOnEdit(oldEvents, newEvents) {
-    const syncToken = ++eventEditSyncToken;
     const targetChatId = getContext()?.chatId || '';
-    return syncEventVectorsOnEditNow(oldEvents, newEvents, syncToken, targetChatId);
+    if (!targetChatId) return;
+    const oldById = new Map((oldEvents || []).map(event => [event.id, event]));
+    const newIds = new Set((newEvents || []).map(event => event.id));
+    const deletedIds = [...oldById.keys()].filter(id => !newIds.has(id));
+    // Lexical changes follow each saved edit immediately, independently of the
+    // vector write queue. The index owns batching, tokenization and publication.
+    removeEventDocuments(deletedIds, targetChatId);
+    addEventDocuments((newEvents || []).filter(event => (
+        buildEventLexicalSignature(oldById.get(event.id)) !== buildEventLexicalSignature(event)
+    )), targetChatId);
+    refreshEntityLexiconAndWarmup();
+
+    const vectorChangedIds = [...deletedIds, ...(newEvents || [])
+        .filter(event => buildEventVectorText(oldById.get(event.id)) !== buildEventVectorText(event))
+        .map(event => event.id)];
+    // Ordinary edits never cancel earlier deltas. Only an explicit clear or
+    // rollback changes this token. Queue identities, not obsolete event bodies.
+    return syncEventVectorsOnEditNow(vectorChangedIds, eventEditSyncToken, targetChatId);
 }
 
 function cancelPendingEventEditSync() {
     eventEditSyncToken += 1;
 }
 
-async function syncEventVectorsOnEditWrite(oldEvents, newEvents, syncToken, targetChatId, writeSession) {
+async function syncEventVectorsOnEditWrite(changedIds, syncToken, targetChatId, writeSession) {
     try {
         const vectorCfg = getVectorConfig();
         const { chatId } = getContext();
-        if (!chatId || chatId !== targetChatId) return;
+        if (!chatId || chatId !== targetChatId || !vectorCfg?.enabled) return;
         if (
             syncToken !== eventEditSyncToken
             || isChatStale(chatId)
             || !isVectorWriteSessionCurrent(writeSession)
         ) return;
 
-        const oldList = Array.isArray(oldEvents) ? oldEvents : [];
-        const newList = Array.isArray(newEvents) ? newEvents : [];
-        const sourceSignature = events => JSON.stringify((events || [])
-            .filter(event => event?.id)
-            .map(event => [event.id, buildEventLexicalSignature(event)])
-            .sort(([a], [b]) => String(a).localeCompare(String(b))));
-        if (sourceSignature(getSummaryStore()?.json?.events) !== sourceSignature(newList)) {
-            invalidateLexicalIndex();
-            scheduleLexicalWarmup();
-            scheduleVectorIntegrityCheck(0);
-            return;
-        }
-        const oldById = new Map(oldList.map((e) => [e?.id, e]).filter(([id]) => id));
-        const newById = new Map(newList.map((e) => [e?.id, e]).filter(([id]) => id));
-        const oldIds = new Set(oldById.keys());
-        const newIds = new Set(newById.keys());
-
-        const deletedIds = [...oldIds].filter((id) => !newIds.has(id));
-        const lexicalChangedEvents = newList.filter((event) => {
-            const oldEvent = oldById.get(event?.id);
-            if (!oldEvent) return true;
-            return buildEventLexicalSignature(oldEvent) !== buildEventLexicalSignature(event);
-        });
-        const vectorChangedEvents = newList.filter((event) => {
-            const oldEvent = oldById.get(event?.id);
-            if (!oldEvent) return true;
-            return buildEventVectorText(oldEvent) !== buildEventVectorText(event);
-        });
+        // Resolve only this edit's affected IDs against the current source.
+        // Later edits of other events retain their own place in the write queue.
+        const currentById = new Map((getSummaryStore()?.json?.events || []).map(event => [event.id, event]));
+        const changes = changedIds.map(id => ({ id, text: buildEventVectorText(currentById.get(id)) }));
+        const deletedIds = changes.filter(item => !item.text).map(item => item.id);
+        const pairs = changes.filter(item => item.text);
         if (syncToken !== eventEditSyncToken || isChatStale(chatId)) return;
 
         if (deletedIds.length > 0) {
-            invalidateLexicalIndex();
-            if (vectorCfg?.enabled) {
-                if (!isVectorWriteSessionCurrent(writeSession)) return;
-                await deleteEventVectorsByIds(chatId, deletedIds);
-            }
+            if (!isVectorWriteSessionCurrent(writeSession)) return;
+            await deleteEventVectorsByIds(chatId, deletedIds);
             xbLog.info(MODULE_ID, `L2 同步删除: ${deletedIds.length} 个事件向量`);
         }
 
-        if (lexicalChangedEvents.some((event) => !buildEventLexicalSignature(event))) {
-            invalidateLexicalIndex();
-        } else if (lexicalChangedEvents.length > 0) {
-            addEventDocuments(lexicalChangedEvents);
-        }
-
-        if (vectorCfg?.enabled && vectorChangedEvents.length > 0) {
+        if (pairs.length > 0) {
             const fingerprint = getEngineFingerprint(vectorCfg);
-            const emptyVectorIds = vectorChangedEvents
-                .filter((e) => e?.id && oldById.has(e.id) && !buildEventVectorText(e))
-                .map((e) => e.id);
-            const pairs = vectorChangedEvents
-                .map((e) => ({ id: e.id, text: buildEventVectorText(e) }))
-                .filter((e) => e.id && e.text);
             const batchSize = 20;
-
-            if (emptyVectorIds.length > 0) {
-                if (
-                    syncToken !== eventEditSyncToken
-                    || isChatStale(chatId)
-                    || !isVectorWriteSessionCurrent(writeSession)
-                ) return;
-                await deleteEventVectorsByIds(chatId, emptyVectorIds);
-            }
 
             for (let i = 0; i < pairs.length; i += batchSize) {
                 if (
@@ -1865,9 +1820,7 @@ async function syncEventVectorsOnEditWrite(oldEvents, newEvents, syncToken, targ
                 } catch (error) {
                     if (error?.name === 'AbortError' || !isVectorWriteSessionCurrent(writeSession)) return;
                     if (syncToken === eventEditSyncToken && !isChatStale(chatId)) {
-                        const failedExistingIds = batch
-                            .filter(pair => oldById.has(pair.id))
-                            .map(pair => pair.id);
+                        const failedExistingIds = batch.map(pair => pair.id);
                         if (failedExistingIds.length > 0) {
                             try {
                                 await deleteEventVectorsByIds(chatId, failedExistingIds);
@@ -1882,11 +1835,11 @@ async function syncEventVectorsOnEditWrite(oldEvents, newEvents, syncToken, targ
             }
         }
 
-        if (lexicalChangedEvents.length > 0 || vectorChangedEvents.length > 0) {
-            xbLog.info(MODULE_ID, `L2 同步刷新: ${lexicalChangedEvents.length} 个事件`);
+        if (pairs.length > 0) {
+            xbLog.info(MODULE_ID, `L2 向量同步刷新: ${pairs.length} 个事件`);
         }
 
-        if (deletedIds.length > 0 || lexicalChangedEvents.length > 0 || vectorChangedEvents.length > 0) {
+        if (deletedIds.length > 0 || pairs.length > 0) {
             await sendVectorStatsToFrame();
         }
     } catch (e) {
@@ -1896,8 +1849,8 @@ async function syncEventVectorsOnEditWrite(oldEvents, newEvents, syncToken, targ
     }
 }
 
-async function syncEventVectorsOnEditNow(oldEvents, newEvents, syncToken, targetChatId) {
-    if (!targetChatId) return;
+async function syncEventVectorsOnEditNow(changedIds, syncToken, targetChatId) {
+    if (!targetChatId || !changedIds.length) return;
     return runVectorWriteTask(
         {
             chatId: targetChatId,
@@ -1905,8 +1858,7 @@ async function syncEventVectorsOnEditNow(oldEvents, newEvents, syncToken, target
             scope: VECTOR_WRITE_SCOPES.CONSISTENCY,
         },
         (writeSession) => syncEventVectorsOnEditWrite(
-            oldEvents,
-            newEvents,
+            changedIds,
             syncToken,
             targetChatId,
             writeSession,
@@ -2144,6 +2096,9 @@ function initButtonForLatestMessage() {
 async function sendSavedConfigToFrame() {
     try {
         const loadedConfig = await readSummaryPanelConfigFromServer();
+        if (recallConfigKey(getSummaryPanelConfig()) !== recallConfigKey(loadedConfig)) {
+            cancelRecallAndClearPrompt('recall-config-reloaded');
+        }
         const previousVectorConfig = getVectorConfig();
         const vectorChanged = JSON.stringify(previousVectorConfig || {})
             !== JSON.stringify(loadedConfig?.vector || {});
@@ -2196,15 +2151,14 @@ function setHideUiSettings(patch = {}) {
                 : current.useVectorBoundary,
         },
     };
+    if (recallConfigKey(cfg) !== recallConfigKey(next)) cancelRecallAndClearPrompt('evidence-visibility-changed');
     saveSummaryPanelConfig(next);
     return next.ui;
 }
 
 async function sendFrameBaseData(store, totalFloors) {
     const ui = getHideUiSettings();
-    const boundary = await getHideBoundaryFloor(store);
-    const range = calcHideRange(boundary, ui.keepVisibleCount);
-    const hiddenCount = (ui.hideSummarized && range) ? (range.end + 1) : 0;
+    const hiddenCount = (getContext().chat || []).reduce((count, message) => count + Number(!!message?.is_system), 0);
 
     const lastSummarized = store?.lastSummarizedMesId ?? -1;
     const rollbackTargetEndMesId = getRollbackOnceTargetEndMesId(store);
@@ -2251,6 +2205,8 @@ function buildFramePayload(store) {
         },
         arcs: json.arcs || [],
         facts,
+        characterAliases: normalizeCharacterAliases(json.characterAliases)
+            .map(({ from, to, evidence }) => ({ from, to, evidence })),
         lastSummarizedMesId: store?.lastSummarizedMesId ?? -1,
     };
 }
@@ -2644,7 +2600,6 @@ async function importSummaryMemoryPackage(rawText, targetChatId = '') {
     invalidateLexicalIndex();
 
     store.json = importedJson;
-    delete store.aliasMigrations;
     delete store.summaryInvalid;
     const importBoundary = (Array.isArray(chat) ? chat.length : 0) - 1;
     if (importBoundary >= 0) {
@@ -2860,63 +2815,48 @@ export function openPanel() {
 // - 向量：boundary = meta.lastChunkFloor（若为 -1 或关闭向量边界隐藏，则回退到 lastSummarizedMesId）
 // ═══════════════════════════════════════════════════════════════════════════
 
-async function getHideBoundaryFloor(store) {
-    // 没有总结时，不隐藏
-    if (store?.lastSummarizedMesId == null || store.lastSummarizedMesId < 0) {
-        return -1;
-    }
+const hideState = createHideStateController({
+    getState: () => {
+        const context = getContext();
+        const ui = getHideUiSettings();
+        const store = getSummaryStore();
+        return {
+            chatId: context.chatId,
+            chat: context.chat,
+            saveChat: context.saveChat,
+            enabled: !!events && window.isXiaobaixEnabled !== false
+                && isStorySummaryConsumableForCurrentChat() && ui.hideSummarized,
+            summaryBoundary: store?.lastSummarizedMesId ?? -1,
+            useVectorBoundary: !!getVectorConfig()?.enabled && ui.useVectorBoundary,
+            keepVisibleCount: ui.keepVisibleCount,
+        };
+    },
+    readVectorBoundary: async chatId => (await getMeta(chatId)).lastChunkFloor,
+    renderMessage: (id, hidden) => {
+        const element = document.querySelector(`#chat .mes[mesid="${id}"]`);
+        if (element) element.setAttribute('is_system', String(hidden));
+    },
+    refresh: () => getContext().swipe?.refresh(),
+    save: state => state.saveChat(),
+    onError: (error, stage) => {
+        const message = stage === 'boundary'
+            ? '读取向量隐藏边界失败，已按有效总结边界恢复原文'
+            : stage === 'save' ? '楼层显隐已更新，但保存聊天失败' : '更新楼层显隐失败';
+        xbLog.error(MODULE_ID, message, error);
+        window.toastr?.warning(message, '剧情总结');
+    },
+});
 
-    const vectorCfg = getVectorConfig();
-    if (!vectorCfg?.enabled || getHideUiSettings().useVectorBoundary === false) {
-        return store?.lastSummarizedMesId ?? -1;
-    }
-
-    const { chatId } = getContext();
-    if (!chatId) return store?.lastSummarizedMesId ?? -1;
-
-    const meta = await getMeta(chatId);
-    const v = meta?.lastChunkFloor ?? -1;
-    if (v >= 0) return v;
-    return store?.lastSummarizedMesId ?? -1;
+function applyHideState() {
+    return hideState.reconcile();
 }
 
-async function applyHideState({ reset = true } = {}) {
-    if (reset) cancelHideApplyTimer();
-    if (!isStorySummaryConsumableForCurrentChat()) return;
-    const store = getSummaryStore();
-    const ui = getHideUiSettings();
-    if (!ui.hideSummarized) return;
-
-    const boundary = await getHideBoundaryFloor(store);
-    const range = calcHideRange(boundary, ui.keepVisibleCount);
-
-    if (reset) {
-        // 仅在隐藏范围可能缩小时清理历史残留；普通后台维护只补 hide，避免短暂全展开。
-        await unhideAllMessages();
-        if (range) await executeSlashCommand(`/hide ${range.start}-${range.end}`);
-        return;
-    }
-
-    if (!range) return;
-    const changed = applyHideRangeInMemory(range);
-    if (changed > 0) {
-        xbLog.info(MODULE_ID, `后台隐藏已同步到当前聊天状态：${range.start}-${range.end} changed=${changed}`);
-    }
-}
-
-function cancelHideApplyTimer() {
-    clearTimeout(hideApplyTimer);
-    hideApplyTimer = null;
+function cancelPendingHide() {
+    hideState.cancel();
 }
 
 function applyHideStateDebounced() {
-    cancelHideApplyTimer();
-    hideApplyTimer = setTimeout(() => {
-        hideApplyTimer = null;
-        if (!isStorySummaryConsumableForCurrentChat()) return;
-        if (!getHideUiSettings().hideSummarized) return;
-        applyHideState({ reset: false }).catch((e) => xbLog.warn(MODULE_ID, "applyHideState failed", e));
-    }, HIDE_APPLY_DEBOUNCE_MS);
+    hideState.schedule();
 }
 
 function scheduleLexicalWarmup(delayMs = LEXICAL_WARMUP_DEBOUNCE_MS) {
@@ -3008,10 +2948,8 @@ function clearDeferredBackgroundTasks() {
     autoSummaryTimers.clear();
 }
 
-async function clearHideState() {
-    cancelHideApplyTimer();
-    // 暴力全量 unhide，确保立刻恢复
-    await unhideAllMessages();
+function clearHideState(options) {
+    return hideState.clear(options);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -3055,22 +2993,24 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
     try {
         let lastResult = null;
         for (let attempt = 1; attempt <= 3; attempt++) {
+            if (!isSummaryExecutionActive(execution)) {
+                postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: '已停止' });
+                return;
+            }
             const result = await runSummaryGeneration(targetMesId, configForRun, {
-                onStatus: (text) => postToFrame({ type: "SUMMARY_STATUS", statusText: text }),
-                onError: (msg) => postToFrame({ type: "SUMMARY_ERROR", message: msg }),
+                onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: `自动总结 ${attempt}/3：${text}` }),
+                onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: `自动总结 ${attempt}/3：${msg}` }),
                 onComplete: async ({ newEventIds, aliasChanged, store }) => {
                     assertSummaryExecutionActive(execution);
                     postToFrame({ type: "SUMMARY_FULL_DATA", payload: buildFramePayload(store) });
 
-                    // Incrementally add new events to the lexical index
-                    if (aliasChanged) {
-                        invalidateLexicalIndex();
-                        refreshEntityLexiconAndWarmup();
-                        scheduleLexicalWarmup();
-                    } else if (newEventIds?.length) {
+                    // Alias migration can also change existing participants.
+                    // The corpus skips unchanged documents; no full rebuild.
+                    refreshEntityLexiconAndWarmup();
+                    if (aliasChanged || newEventIds?.length) {
                         const allEvents = store?.json?.events || [];
-                        const idSet = new Set(newEventIds);
-                        addEventDocuments(allEvents.filter(e => idSet.has(e.id)));
+                        const idSet = new Set(newEventIds || []);
+                        addEventDocuments(aliasChanged ? allEvents : allEvents.filter(e => idSet.has(e.id)));
                     }
 
                     if (isStorySummaryEnabledForCurrentChat() && getHideUiSettings().hideSummarized) {
@@ -3102,11 +3042,15 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
             if (attempt < 3) await sleep(1000);
         }
 
+        if (!isSummaryExecutionActive(execution)) return;
         if (lastResult?.stale) {
             await executeSlashCommand("/echo severity=warning 对话在总结期间持续变化，本次结果未保存；下次触发时会重新总结。");
         } else {
-            await executeSlashCommand("/echo severity=error 剧情总结失败（已自动重试 3 次）。请稍后再试。");
+            await executeSlashCommand("/echo severity=error 剧情总结失败（已尝试 3 次）。请稍后再试。");
         }
+    } catch (error) {
+        xbLog.error(MODULE_ID, '自动总结执行失败', error);
+        postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: `自动总结执行失败：${formatErrorDetails(error, { includeStack: false })}` });
     } finally {
         finishSummaryExecution(execution);
         release();
@@ -3137,6 +3081,7 @@ async function handleFrameMessage(event) {
             frameReady = true;
             flushPendingFrameMessages();
             notifySummaryState();
+            postToFrame(lastSummaryStatus);
             sendSavedConfigToFrame();
             sendVectorConfigToFrame();
             sendVectorStatsToFrame();
@@ -3319,7 +3264,7 @@ async function handleFrameMessage(event) {
                             if (getContext()?.chatId !== targetChatId) {
                                 throw new Error('聊天已切换，已取消导入');
                             }
-                            return importSummaryMemoryPackage(data.text || "", targetChatId);
+                            return changeRecallData(targetChatId, () => importSummaryMemoryPackage(data.text || "", targetChatId));
                         },
                     );
                     if (!result) {
@@ -3364,13 +3309,13 @@ async function handleFrameMessage(event) {
                                 if (getContext()?.chatId !== targetChatId) {
                                     throw new Error('聊天已切换，已取消导入');
                                 }
-                                return importVectors(file, (status) => {
+                                return changeRecallData(targetChatId, () => importVectors(file, (status) => {
                                     postToFrame({ type: "VECTOR_IO_STATUS", status });
                                 }, {
                                     targetChatId,
                                     signal: writeSession.signal,
                                     isCurrent: () => isVectorWriteSessionCurrent(writeSession),
-                                });
+                                }));
                             },
                         );
                         if (!result) {
@@ -3427,13 +3372,13 @@ async function handleFrameMessage(event) {
                             if (getContext()?.chatId !== targetChatId) {
                                 throw new Error('聊天已切换，已取消恢复');
                             }
-                            return restoreFromServer((status) => {
+                            return changeRecallData(targetChatId, () => restoreFromServer((status) => {
                                 postToFrame({ type: "VECTOR_IO_STATUS", status });
                             }, {
                                 targetChatId,
                                 signal: writeSession.signal,
                                 isCurrent: () => isVectorWriteSessionCurrent(writeSession),
-                            });
+                            }));
                         },
                     );
                     if (!result) {
@@ -3483,11 +3428,11 @@ async function handleFrameMessage(event) {
             try {
                 cleared = await runVectorWriteTask(
                     { chatId, kind: 'summary-clear', scope: VECTOR_WRITE_SCOPES.IO },
-                    async () => {
+                    () => changeRecallData(chatId, async () => {
                         if (getContext()?.chatId !== chatId) return false;
                         await clearSummaryData(chatId);
                         return true;
-                    },
+                    }),
                 );
             } catch (error) {
                 xbLog.error(MODULE_ID, '清空总结失败', error);
@@ -3495,7 +3440,9 @@ async function handleFrameMessage(event) {
                 break;
             }
             if (!cleared) break;
-            lastRecallLogText = "";
+            if (getContext()?.chatId !== chatId) break;
+            postToFrame({ type: 'RECALL_LOG', text: '' });
+            postToFrame({ type: 'SUMMARY_STATUS', statusText: '总结数据已清空' });
             invalidateLexicalIndex();
             await clearHideState();
             const totalFloors = Array.isArray(chat) ? chat.length : 0;
@@ -3523,13 +3470,14 @@ async function handleFrameMessage(event) {
                 break;
             }
 
+            cancelRecallAndClearPrompt('summary-rollback');
             cancelPendingEventEditSync();
             const result = await runVectorWriteTask(
                 { chatId, kind: 'summary-rollback', scope: VECTOR_WRITE_SCOPES.CONSISTENCY },
-                async () => {
+                () => changeRecallData(chatId, async () => {
                     if (getContext()?.chatId !== chatId) return null;
                     return rollbackSummaryOnce(chatId);
-                },
+                }),
             );
             if (!result) break;
             if (result.success) {
@@ -3538,7 +3486,7 @@ async function handleFrameMessage(event) {
                     if (result.clearedBoundary) {
                         await clearHideState();
                     } else {
-                        await applyHideState({ reset: true });
+                        await applyHideState();
                     }
                 }
             }
@@ -3570,18 +3518,17 @@ async function handleFrameMessage(event) {
 
         case "UPDATE_SECTION": {
             const store = getSummaryStore();
-            if (!store) break;
+            if (!store || !VALID_SECTIONS.includes(data.section)) break;
+            cancelRecallAndClearPrompt('summary-edited');
             store.json ||= {};
 
             // 如果是 events，先记录旧数据用于同步向量
             const oldEvents = data.section === "events" ? [...(store.json.events || [])] : null;
             const oldFacts = data.section === "facts" ? [...(store.json.facts || [])] : null;
 
-            if (VALID_SECTIONS.includes(data.section)) {
-                store.json[data.section] = data.section === "characters"
-                    ? stampEditedCharacters(store.json.characters, data.data, getCurrentFloorHint())
-                    : data.section === "events" ? projectEditedSummaryEvents(data.data) : data.data;
-            }
+            store.json[data.section] = data.section === "characters"
+                ? stampEditedCharacters(store.json.characters, data.data, getCurrentFloorHint())
+                : data.section === "events" ? projectEditedSummaryEvents(data.data) : data.data;
             if (data.section === "facts") {
                 store.json.facts = mergeEditedFactsWithTimestamps(oldFacts, data.data, getCurrentFloorHint());
             }
@@ -3600,16 +3547,39 @@ async function handleFrameMessage(event) {
             break;
         }
 
+        case "UPDATE_CHARACTER_ALIASES": {
+            const store = getSummaryStore();
+            if (!store || !Array.isArray(data.aliases)) break;
+            cancelRecallAndClearPrompt('character-aliases-edited');
+            store.json ||= {};
+
+            let result;
+            try {
+                result = replaceCharacterAliases(store.json, data.aliases, getCurrentFloorHint());
+            } catch (error) {
+                postToFrame({
+                    type: 'SUMMARY_ERROR',
+                    message: `别名映射未保存：${formatErrorDetails(error, { includeStack: false })}`,
+                });
+                break;
+            }
+
+            if (!result.aliasChanged) break;
+            store.updatedAt = Date.now();
+            saveSummaryStore();
+
+            // Alias mappings affect terminology and event ownership through
+            // the shared vocabulary. Existing event bodies stay untouched.
+            refreshEntityLexiconAndWarmup();
+            postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(store) });
+            break;
+        }
+
         case "TOGGLE_HIDE_SUMMARIZED": {
             setHideUiSettings({ hideSummarized: !!data.enabled });
 
-            (async () => {
-                if (data.enabled) {
-                    await applyHideState();
-                } else {
-                    await clearHideState();
-                }
-            })();
+            if (data.enabled) await applyHideState();
+            else await clearHideState();
             break;
         }
 
@@ -3621,34 +3591,25 @@ async function handleFrameMessage(event) {
 
             setHideUiSettings({ keepVisibleCount: newCount });
 
-            (async () => {
-                if (getHideUiSettings().hideSummarized) {
-                    await applyHideState();
-                }
-                const { chat } = getContext();
-                const store = getSummaryStore();
-                await sendFrameBaseData(store, Array.isArray(chat) ? chat.length : 0);
-            })();
+            await applyHideState();
+            const { chat } = getContext();
+            await sendFrameBaseData(getSummaryStore(), Array.isArray(chat) ? chat.length : 0);
             break;
         }
 
         case "TOGGLE_USE_VECTOR_BOUNDARY": {
             setHideUiSettings({ useVectorBoundary: data.enabled !== false });
 
-            (async () => {
-                if (getHideUiSettings().hideSummarized) {
-                    await applyHideState({ reset: true });
-                }
-                const { chat } = getContext();
-                const store = getSummaryStore();
-                await sendFrameBaseData(store, Array.isArray(chat) ? chat.length : 0);
-            })();
+            await applyHideState();
+            const { chat } = getContext();
+            await sendFrameBaseData(getSummaryStore(), Array.isArray(chat) ? chat.length : 0);
             break;
         }
 
         case "SAVE_PANEL_CONFIG":
             if (data.config) {
                 try {
+                    const previousRecallConfig = recallConfigKey(getSummaryPanelConfig());
                     const vectorChanged = Boolean(
                         data.config.vector
                         && JSON.stringify(getVectorConfig() || {}) !== JSON.stringify(data.config.vector || {})
@@ -3664,6 +3625,9 @@ async function handleFrameMessage(event) {
                         savedConfig = transition?.result || getSummaryPanelConfig();
                     } else {
                         savedConfig = await saveSummaryPanelConfigVerified(data.config);
+                    }
+                    if (previousRecallConfig !== recallConfigKey(savedConfig)) {
+                        cancelRecallAndClearPrompt('recall-config-changed');
                     }
                     const nextVectorConfig = savedConfig?.vector || {};
                     const vectorEnabledChanged = !!previousVectorConfig?.enabled !== !!nextVectorConfig?.enabled;
@@ -3681,10 +3645,7 @@ async function handleFrameMessage(event) {
                         config: savedConfig,
                     });
                     sendVectorConfigToFrame();
-                    const hideUi = getHideUiSettings();
-                    if (hideUi.hideSummarized && hideUi.useVectorBoundary && vectorEnabledChanged) {
-                        await applyHideState({ reset: !!previousVectorConfig?.enabled });
-                    }
+                    await applyHideState();
                     {
                         const { chat } = getContext();
                         const store = getSummaryStore();
@@ -3729,21 +3690,24 @@ async function handleManualGenerate(mesId, config) {
 
     try {
         const result = await runSummaryGeneration(mesId, config, {
-            onStatus: (text) => postToFrame({ type: "SUMMARY_STATUS", statusText: text }),
-            onError: (msg) => postToFrame({ type: "SUMMARY_ERROR", message: msg }),
+            onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: text }),
+            onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: msg }),
             onComplete: async ({ newEventIds, aliasChanged, store }) => {
+                // The summary is already saved, even if cancellation arrived
+                // during that save. Only follow-up work is cancellable now.
+                if (activeSummaryExecution === execution && getContext()?.chatId === execution.chatId) {
+                    cancelRecallAndClearPrompt('manual-summary-completed');
+                }
                 assertSummaryExecutionActive(execution);
                 postToFrame({ type: "SUMMARY_FULL_DATA", payload: buildFramePayload(store) });
 
-                // Incrementally add new events to the lexical index
-                if (aliasChanged) {
-                    invalidateLexicalIndex();
-                    refreshEntityLexiconAndWarmup();
-                    scheduleLexicalWarmup();
-                } else if (newEventIds?.length) {
+                // Alias migration can also change existing participants.
+                // The corpus skips unchanged documents; no full rebuild.
+                refreshEntityLexiconAndWarmup();
+                if (aliasChanged || newEventIds?.length) {
                     const allEvents = store?.json?.events || [];
-                    const idSet = new Set(newEventIds);
-                    addEventDocuments(allEvents.filter(e => idSet.has(e.id)));
+                    const idSet = new Set(newEventIds || []);
+                    addEventDocuments(aliasChanged ? allEvents : allEvents.filter(e => idSet.has(e.id)));
                 }
 
                 applyHideStateDebounced();
@@ -3759,6 +3723,9 @@ async function handleManualGenerate(mesId, config) {
         if (result.committed && isStorySummaryConsumableForCurrentChat()) {
             scheduleVectorIntegrityCheck();
         }
+    } catch (error) {
+        xbLog.error(MODULE_ID, '手动总结执行失败', error);
+        postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: `总结执行失败：${formatErrorDetails(error, { includeStack: false })}` });
     } finally {
         finishSummaryExecution(execution);
         release();
@@ -3775,6 +3742,8 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
     if (isChatStale(scheduledChatId)) return;
     clearDeferredBackgroundTasks();
     lastRecallLogText = "";
+    postToFrame({ type: 'RECALL_LOG', text: '' });
+    postToFrame({ type: 'SUMMARY_STATUS', statusText: '' });
     await waitForVectorWrites();
     if (isChatStale(scheduledChatId)) return;
     const { chat } = getContext();
@@ -3793,7 +3762,6 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
     if (isChatStale(scheduledChatId)) return;
     const newLength = Array.isArray(chat) ? chat.length : 0;
 
-    let vectorFloorsTruncated = false;
     const rollback = await runVectorWriteTask(
         {
             chatId: scheduledChatId,
@@ -3805,7 +3773,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
             const result = await rollbackSummaryIfNeeded();
             if (result.status !== 'failed' && !isChatStale(scheduledChatId)) {
                 try {
-                    vectorFloorsTruncated = await reconcileVectorFloorsOnLoad(scheduledChatId, newLength);
+                    await reconcileVectorFloorsOnLoad(scheduledChatId, newLength);
                 } catch (error) {
                     await clearHideState();
                     throw error;
@@ -3871,9 +3839,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
 
     const store = getSummaryStore();
 
-    if (getHideUiSettings().hideSummarized) {
-        await applyHideState({ reset: rollback.status === 'rolled_back' || vectorFloorsTruncated });
-    }
+    await applyHideState();
 
     if (frameReady) {
         await sendFrameBaseData(store, newLength);
@@ -3947,13 +3913,7 @@ async function handleMessageDeletedNow(scheduledChatId) {
     const rollback = await rollbackSummaryIfNeeded();
     invalidateLexicalIndex();
     // 回滚失败也要裁掉越界派生数据，否则 L0/L1 会一直指向已删楼层。
-    try {
-        await truncateVectorDataFromFloor(chatId, newLength);
-    } catch (error) {
-        // 派生数据同步失败时边界不可信，至少恢复原文，不能继续沿用旧隐藏。
-        await clearHideState();
-        throw error;
-    }
+    await truncateVectorDataFromFloor(chatId, newLength);
 
     scheduleLexicalWarmup();
     return rollback;
@@ -3971,7 +3931,7 @@ async function handleMessageDeleted(scheduledChatId) {
     await finishSummaryContentChange(rollback);
 }
 
-async function finishSummaryContentChange(rollback, { resetHide = true } = {}) {
+async function finishSummaryContentChange(rollback) {
     if (!rollback) return;
     // deactivate 内部会 waitForVectorWrites，必须留在写任务之外，否则自等死锁。
     if (rollback.status === 'failed') {
@@ -3982,7 +3942,7 @@ async function finishSummaryContentChange(rollback, { resetHide = true } = {}) {
     }
     // 删除或 swipe 的事件返回后，宿主就可能开始组装请求，必须等待恢复完成。
     // 即使 L2 无需回滚，原文变更也可能缩小 L1 隐藏边界。
-    await applyHideState({ reset: resetHide });
+    await applyHideState();
     notifyStorySummaryChatState();
     await sendAnchorStatsToFrame();
     await sendVectorStatsToFrame();
@@ -3998,16 +3958,11 @@ async function handleMessageSwipedNow(scheduledChatId, messageId) {
     if (rollback.status === 'rolled_back') invalidateLexicalIndex();
     else removeDocumentsByFloor(messageId);
 
-    try {
-        await syncOnMessageSwiped(chatId, messageId);
-        // L0 同步：清理 swipe 前该楼及之后依赖旧正文的派生数据。
-        deleteStateAtomsFromFloor(messageId);
-        deleteL0IndexFromFloor(messageId);
-        await deleteStateVectorsFromFloor(chatId, messageId);
-    } catch (error) {
-        await clearHideState();
-        throw error;
-    }
+    await syncOnMessageSwiped(chatId, messageId);
+    // L0 同步：清理 swipe 前该楼及之后依赖旧正文的派生数据。
+    deleteStateAtomsFromFloor(messageId);
+    deleteL0IndexFromFloor(messageId);
+    await deleteStateVectorsFromFloor(chatId, messageId);
 
     scheduleLexicalWarmup();
     return rollback;
@@ -4023,10 +3978,7 @@ async function handleMessageSwiped(scheduledChatId, messageId) {
         () => handleMessageSwipedNow(scheduledChatId, messageId),
     );
     initButtonsForAll();
-    await finishSummaryContentChange(rollback, {
-        resetHide: rollback?.status === 'rolled_back'
-            || (!!getVectorConfig()?.enabled && getHideUiSettings().useVectorBoundary),
-    });
+    await finishSummaryContentChange(rollback);
 }
 
 async function handleMessageReceived(scheduledChatId, targetMesId = null) {
@@ -4108,7 +4060,7 @@ async function handleMessageUpdated(scheduledChatId, messageId) {
         scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, scheduledChatId);
     }
     initButtonsForAll();
-    applyHideStateDebounced();
+    await applyHideState();
     notifyStorySummaryChatState();
 }
 
@@ -4140,11 +4092,24 @@ const RECALL_REASONS_THAT_ABORT_GENERATION = new Set([
     'unregistered',
 ]);
 
+const recallReuse = createRecallReuse();
+
 const recallPrefetch = createRecallPrefetchCoordinator({
     getContext,
-    prepare: (type, signal) => prepareMemoryPrompt(type, signal),
+    prepare: (type, signal, diagnostics) => prepareMemoryPrompt(type, signal, diagnostics),
     pollMs: 16,
     maxAgeMs: STORY_SUMMARY_RECALL_DEADLINE_MS,
+    onJoinedCancel: (run) => {
+        if (run.cancelReason === 'prefetch-timeout') return; // The interceptor reports a deadline failure.
+        const publish = getContext()?.chatId === run.chatId
+            && ['generation-stopped', 'generation-signal-aborted', 'dispatch-aborted', 'disabled', 'deactivated', 'summary-cleared'].includes(run.cancelReason);
+        if (!publish && !xbLog.isEnabled()) return;
+        const text = formatRecallDiagnostics(run.diagnostics, {
+            status: 'cancelled', reason: run.cancelReason,
+        });
+        xbLog.info(MODULE_ID, text);
+        if (publish) postToFrame({ type: 'RECALL_LOG', text });
+    },
 });
 
 function cancelActiveRecall(reason = 'cancelled', options = {}) {
@@ -4155,8 +4120,22 @@ function cancelActiveRecall(reason = 'cancelled', options = {}) {
 }
 
 function cancelRecallAndClearPrompt(reason) {
+    recallReuse.invalidate();
     cancelActiveRecall(reason);
     clearExtensionPrompt();
+}
+
+// Manual destructive/import operations can yield between writes. Invalidate
+// both before them and after settling, including partial failure; a concurrent
+// recall must not preserve a view from halfway through the operation.
+async function changeRecallData(chatId, change) {
+    if (getContext()?.chatId !== chatId) return;
+    cancelRecallAndClearPrompt('memory-data-changed');
+    try {
+        return await change();
+    } finally {
+        if (getContext()?.chatId === chatId) cancelRecallAndClearPrompt('memory-data-changed');
+    }
 }
 
 /**
@@ -4164,9 +4143,10 @@ function cancelRecallAndClearPrompt(reason) {
  * safe to start immediately after the host pushes the real USER object while
  * save/render continue in parallel.
  */
-async function prepareMemoryPrompt(type, signal) {
+async function prepareMemoryPrompt(type, signal, diagnostics = createRecallDiagnostics(getContext()?.chatId, type)) {
     const T0 = performance.now();
     let preparedChatId = null;
+    let reuseTicket = null;
     const timing = {
         tokenizer: 0,
         boundary: 0,
@@ -4174,6 +4154,8 @@ async function prepareMemoryPrompt(type, signal) {
     };
     const finish = (reason, result = {}) => {
         const total = Math.round(performance.now() - T0);
+        diagnostics.finishedAt ??= performance.now();
+        if (!diagnostics.reason && reason !== 'prepared') diagnostics.reason = reason;
         xbLog.info(
             MODULE_ID,
             `Prompt prepare timing: type=${type || 'unknown'} reason=${reason} total=${total}ms `
@@ -4182,12 +4164,13 @@ async function prepareMemoryPrompt(type, signal) {
         );
         return {
             text: '',
-            logText: '',
+            diagnostics,
             notice: null,
-            publishRecallLog: false,
             chatId: preparedChatId,
             depth: null,
             role: null,
+            boundary: -1,
+            reuseTicket,
             timing: { ...timing, total },
             skipReason: reason,
             ...result,
@@ -4196,28 +4179,41 @@ async function prepareMemoryPrompt(type, signal) {
 
     if (signal?.aborted) return finish('aborted_before_prepare');
 
-    const excludeLastAi = type === "swipe" || type === "regenerate";
+    const context = getContext();
+    const { chat, chatId } = context;
+    preparedChatId = chatId || null;
+    const chatLen = Array.isArray(chat) ? chat.length : 0;
+    const reuse = recallReuse.prepare(context, type);
+    reuseTicket = reuse.ticket;
+    if (reuse.memory) {
+        diagnostics.stage = 'reuse';
+        const { text, boundary, role } = reuse.memory;
+        return finish('reused', {
+            text, boundary, role,
+            depth: Math.max(MIN_INJECTION_DEPTH, chatLen - boundary - 1),
+            reuseMemory: reuse.memory,
+        });
+    }
+    if (chatLen === 0) return finish('empty_chat');
+
+    // Single-chat regenerate has already removed the old answer in the host.
+    const excludeLastAi = type === 'swipe';
     const vectorCfg = getVectorConfig();
 
     // ★ 最后一道关卡：向量启用时，同步等待分词器就绪
     if (vectorCfg?.enabled && !isTokenizerReady()) {
+        diagnostics.stage = 'tokenizer';
         const T_Tokenizer = performance.now();
         try {
             await preloadTokenizer();
         } catch (e) {
             xbLog.warn(MODULE_ID, "生成前分词器预热失败，将使用降级分词", e);
+            recordRecallFallback(diagnostics, 'tokenizer', e);
         } finally {
             timing.tokenizer = Math.round(performance.now() - T_Tokenizer);
         }
     }
     if (signal?.aborted) return finish('aborted_after_tokenizer');
-
-    const { chat, chatId } = getContext();
-    preparedChatId = chatId || null;
-    const chatLen = Array.isArray(chat) ? chat.length : 0;
-    if (chatLen === 0) {
-        return finish('empty_chat');
-    }
 
     const store = getSummaryStore();
 
@@ -4226,6 +4222,7 @@ async function prepareMemoryPrompt(type, signal) {
     // - 向量关：lastSummarizedMesId
     let boundary = -1;
     const T_Boundary = performance.now();
+    diagnostics.stage = 'source-boundary';
     if (vectorCfg?.enabled) {
         const meta = chatId ? await getMeta(chatId) : null;
         if (signal?.aborted) return finish('aborted_after_boundary_read');
@@ -4254,22 +4251,20 @@ async function prepareMemoryPrompt(type, signal) {
 
     // 构建注入文本
     let text = "";
-    let logText = '';
     let notice = null;
-    let publishRecallLog = false;
     const T_BuildPrompt = performance.now();
     if (vectorCfg?.enabled && !usePendingCanonicalSummary) {
         const r = await buildVectorPromptText(excludeLastAi, {
             signal,
+            diagnostics,
         });
         if (signal?.aborted) {
             return finish('aborted_after_build');
         }
         text = r?.text || "";
-        logText = String(r?.logText || "");
         notice = r?.notice || null;
-        publishRecallLog = true;
     } else {
+        diagnostics.stage = 'canonical-summary';
         text = buildNonVectorPromptText() || "";
     }
     timing.buildPrompt = Math.round(performance.now() - T_BuildPrompt);
@@ -4281,11 +4276,10 @@ async function prepareMemoryPrompt(type, signal) {
 
     return finish(text.trim() ? 'prepared' : 'empty_prompt', {
         text,
-        logText,
         notice,
-        publishRecallLog,
         depth,
         role,
+        boundary,
     });
 }
 
@@ -4299,18 +4293,10 @@ async function commitMemoryPrompt(prepared, signal) {
         return !!prepared
             && !signal?.aborted
             && String(prepared.chatId || '') === String(currentChatId || '')
+            && (!prepared.reuseTicket || recallReuse.isCurrent(prepared.reuseTicket, getContext()))
             && isStorySummaryConsumableForCurrentChat();
     };
     if (!isCurrent()) return;
-
-    const committedLog = commitIfSignalActive(signal, () => {
-        if (prepared.publishRecallLog) {
-            postToFrame({ type: 'RECALL_LOG', text: String(prepared.logText || '') });
-        } else {
-            lastRecallLogText = '';
-        }
-    });
-    if (!committedLog) return;
 
     const { chatId } = getContext();
     if (
@@ -4329,16 +4315,30 @@ async function commitMemoryPrompt(prepared, signal) {
         }
     }
 
-    if (!isCurrent() || !String(prepared.text || '').trim()) return;
+    if (!isCurrent()) return;
 
     const T_WritePrompt = performance.now();
     const committedPrompt = commitIfSignalActive(signal, () => {
-        extension_prompts[EXT_PROMPT_KEY] = {
-            value: prepared.text,
-            position: extension_prompt_types.IN_CHAT,
-            depth: prepared.depth,
-            role: prepared.role,
-        };
+        const hasText = !!String(prepared.text || '').trim();
+        if (hasText) {
+            extension_prompts[EXT_PROMPT_KEY] = {
+                value: prepared.text,
+                position: extension_prompt_types.IN_CHAT,
+                depth: prepared.depth,
+                role: prepared.role,
+            };
+        }
+        const report = prepared.reuseMemory
+            ? formatRecallReuseDiagnostics(prepared.diagnostics, prepared.reuseMemory)
+            : formatRecallDiagnostics(prepared.diagnostics, { status: hasText ? 'success' : 'empty' });
+        // Only adopted results may survive generation. Never store diagnostics,
+        // candidates, notices or the prefetch run; reused reports keep one origin.
+        if (!prepared.reuseMemory) {
+            recallReuse.adopt(prepared.reuseTicket, getContext(), {
+                text: prepared.text, boundary: prepared.boundary, role: prepared.role, report,
+            });
+        }
+        postToFrame({ type: 'RECALL_LOG', text: report });
     });
     if (!committedPrompt) return;
 
@@ -4356,7 +4356,7 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
     // 旧 Prompt 只在宿主真正走到 Prompt 组装前清理；提前召回不碰它。
     clearExtensionPrompt();
     if (!isStorySummaryConsumableForCurrentChat()) {
-        cancelActiveRecall('disabled');
+        cancelRecallAndClearPrompt('disabled');
         return;
     }
 
@@ -4396,11 +4396,12 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
         // 不能在这里清掉替代它的新任务结果。后台残余任务也受最终写入闸门保护。
         if (run.cancelReason && run.cancelReason !== 'prefetch-timeout') {
             joinStatus = `cancelled:${run.cancelReason}`;
-            xbLog.info(MODULE_ID, `召回已取消：${run.cancelReason}`);
         } else {
             joinStatus = 'failed';
+            if (recallPrefetch.getCurrent() !== run || getContext()?.chatId !== run.chatId) return;
             clearExtensionPrompt();
-            const failureLog = `\n[Vector Recall Failed]\n${String(error?.stack || error?.message || error)}\n`;
+            run.diagnostics.finishedAt ??= performance.now();
+            const failureLog = formatRecallDiagnostics(run.diagnostics, { status: 'failed', error });
             postToFrame({ type: 'RECALL_LOG', text: failureLog });
             xbLog.warn(MODULE_ID,
                 `召回失败或达到 ${STORY_SUMMARY_RECALL_DEADLINE_MS}ms 硬截止，本轮跳过记忆注入`,
@@ -4487,8 +4488,21 @@ function scheduleWithChatGuard(fn, delay = 0, ...args) {
 function runContentChangeSync(handler, ...args) {
     const chatId = getContext()?.chatId || null;
     if (!chatId || !isStorySummaryEnabledForCurrentChat()) return undefined;
+    if (handler === handleMessageUpdated) {
+        cancelRecallAndClearPrompt('message-edited');
+    } else {
+        recallReuse.historyChanged(getContext(), handler === handleMessageSwiped ? Number(args[0]) : null);
+        if (!recallReuse.getStats().count) {
+            cancelActiveRecall('history-changed');
+            clearExtensionPrompt();
+        }
+    }
+    cancelPendingHide();
     cancelEmbeddingWriteTasks('Chat content changed');
-    return handler(chatId, ...args).catch((error) => {
+    return handler(chatId, ...args).catch(async (error) => {
+        // 派生数据同步失败时边界不可信。所有正文变更统一恢复原文，
+        // 且异步失败绝不能落到已经切换的新聊天上。
+        if (!isChatStale(chatId)) await clearHideState();
         xbLog.error(MODULE_ID, "正文变更同步失败", error);
     });
 }
@@ -4557,7 +4571,7 @@ async function registerEvents() {
                 + Number(item.eventVectors || 0)
                 + Number(item.stateVectors || 0)
             ), 0);
-            return pendingFrameMessages.length + vectorItems;
+            return pendingFrameMessages.length + vectorItems + recallReuse.getStats().count;
         },
         getBytes: () => {
             try {
@@ -4565,7 +4579,7 @@ async function registerEvents() {
                     pendingFrameMessages,
                     lastRecallLogText,
                     recallRuntime: getRecallRuntimeStats(),
-                }).length * 2;
+                }).length * 2 + recallReuse.getStats().bytes;
             } catch {
                 return 0;
             }
@@ -4574,9 +4588,11 @@ async function registerEvents() {
             activeChatId,
             pendingFrameMessages: pendingFrameMessages.length,
             hasRecallLog: Boolean(lastRecallLogText),
+            recallReuse: recallReuse.getStats(),
             recallRuntime: getRecallRuntimeStats(),
         }),
         clear: () => {
+            cancelRecallAndClearPrompt('cache-cleared');
             pendingFrameMessages = [];
             lastRecallLogText = "";
             invalidateLexicalIndex();
@@ -4589,8 +4605,9 @@ async function registerEvents() {
     events.on(event_types.CHAT_CHANGED, () => {
         cancelRecallAndClearPrompt('chat-changed');
         cancelActiveSummaryExecution();
+        activeSummaryExecution = null;
         cancelEmbeddingWriteTasks('Chat changed');
-        cancelHideApplyTimer();
+        cancelPendingHide();
         activeChatId = getContext().chatId || null;
         scheduleWithChatGuard(handleChatChanged, 80);
     });
@@ -4657,8 +4674,14 @@ async function unregisterEvents() {
 }
 
 async function runStorySummaryTeardown() {
+    // The master switch invokes this cleanup directly (without awaiting it).
+    // Restore flags synchronously, before waiting for any background writer.
+    const hideCleanup = clearHideState();
     cancelActiveSummaryExecution();
+    activeSummaryExecution = null;
     cancelRecallAndClearPrompt('unregistered');
+    postToFrame({ type: 'RECALL_LOG', text: '' });
+    postToFrame({ type: 'SUMMARY_STATUS', statusText: '' });
     invalidateLexicalIndex();
     const writerShutdown = shutdownVectorWriteCoordinator('Story Summary unregistered');
     clearWarningCooldowns();
@@ -4669,7 +4692,7 @@ async function runStorySummaryTeardown() {
         afterAiGateDispose?.();
         afterAiGateDispose = null;
         activeChatId = null;
-        cancelHideApplyTimer();
+        cancelPendingHide();
         clearDeferredBackgroundTasks();
 
         messageButtonOwnership.runOwnedCleanup(() => $(".xiaobaix-story-summary-btn").remove());
@@ -4683,7 +4706,7 @@ async function runStorySummaryTeardown() {
         window.visualViewport?.removeEventListener?.("scroll", handleViewportChangeForBackground);
     }
 
-    await writerShutdown;
+    await Promise.all([writerShutdown, hideCleanup]);
     clearDeferredBackgroundTasks();
     logRecallRuntimeCheckpoint("unregisterEvents:shutdown-runtime");
     try {
@@ -4695,23 +4718,18 @@ async function runStorySummaryTeardown() {
 }
 
 async function deactivateCurrentChatStorySummary() {
+    const hideCleanup = clearHideState();
     clearDeferredBackgroundTasks();
-    cancelHideApplyTimer();
+    cancelPendingHide();
     cancelRecallAndClearPrompt('deactivated');
     cancelEmbeddingWriteTasks('Story Summary deactivated for current chat');
     lastRecallLogText = "";
 
     const targetChatId = activeChatId || getContext()?.chatId || '';
     invalidateLexicalIndex();
-    await waitForVectorWrites();
+    await Promise.all([waitForVectorWrites(), hideCleanup]);
     clearDeferredBackgroundTasks();
     if (targetChatId) await clearRecallRuntime(targetChatId);
-
-    try {
-        await clearHideState();
-    } catch (error) {
-        xbLog.warn(MODULE_ID, "Failed to restore hidden messages while disabling this chat", error);
-    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -4936,11 +4954,6 @@ $(document).on("xiaobaix:storySummary:toggle", async (_e, enabled) => {
         cancelActiveSummaryExecution();
         cancelRecallAndClearPrompt('disabled');
         await unregisterEvents();
-        try {
-            await clearHideState();
-        } catch (e) {
-            xbLog.warn(MODULE_ID, "clearHideState failed on toggle off", e);
-        }
     }
     notifyStorySummaryChatState();
 });

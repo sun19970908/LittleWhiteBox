@@ -1,4 +1,4 @@
-import { parseRelationTarget } from './data/fact-predicates.js';
+import { isRelationFact, parseRelationTarget } from './data/fact-predicates.js';
 
 const text = value => typeof value === 'string' ? value.trim() : '';
 const key = value => text(value).normalize('NFKC').toLocaleLowerCase();
@@ -20,7 +20,10 @@ export function projectStoryCharacters(store, { throughMessageIndex, currentMess
     const json = store.json;
     const budget = Math.min(8000, Math.max(0, Number(maxCharacters) || 0));
     const peopleLimit = Math.min(200, Math.max(0, Number(maxPeople) || 0));
-    const aliases = (json.characterAliases || []).filter(item => at(item, throughMessageIndex));
+    // Identity vocabulary is a current, durable lookup table. Unlike story
+    // facts, it is neither a historical assertion nor subject to a content
+    // rollback boundary.
+    const aliases = json.characterAliases || [];
     const selectedName = key(name);
     let remaining = budget;
     const people = [];
@@ -42,7 +45,10 @@ export function projectStoryCharacters(store, { throughMessageIndex, currentMess
         for (const fact of selectedName ? json.facts || [] : []) {
             if (!fact.retracted && at(fact, throughMessageIndex)
                 && (related(fact.s) || related(fact.o) || related(parseRelationTarget(fact.p)))) {
-                lines.push(`${text(fact.s)}｜${text(fact.p)}｜${text(fact.o)}`);
+                const trend = isRelationFact(fact) ? text(fact.trend) : '';
+                const updated = Number.isSafeInteger(fact.since) && fact.since >= 0
+                    ? `｜事实更新：第${fact.since + 1}楼` : '';
+                lines.push(`${text(fact.s)}｜${text(fact.p)}｜${text(fact.o)}${trend ? `｜关系状态：${trend}` : ''}${updated}`);
             }
         }
         const headerCost = personName.length + names.join('、').length;
