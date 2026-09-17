@@ -235,7 +235,8 @@ Before generating, observe the USER and analyze carefully:
   "events": [
     {
       "title": "地点·事件标题",
-      "timeLabel": "事件发生时间（如：6月12日、搬入新家的第二晚）",
+      "timeLabel": "事件发生时间，必须使用原文中的绝对时间（如果有年份必须包括年份）；无绝对时间时用相对时间（如：6月12日、搬入新家的第二晚）
+",
       "summary": "回忆卡片。优先写成1句；信息确实过多时可写2句。必须保留正式人名、原文称呼/昵称、地点、物件、具体动作和可召回钩子，末尾标注楼层(#X-Y)",
       "participants": ["参与角色名，不要使用人称代词或别名，只用正式人名"],
       "memoryRole": "${EVENT_MEMORY_ROLES.join('|')}",
