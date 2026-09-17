@@ -1,4 +1,4 @@
-// ═══════════════════════════════════════════════════════════════════════════
+﻿// ═══════════════════════════════════════════════════════════════════════════
 // Story Summary - Recall Engine (v9 - Dense-Gated Lexical + Entity Bypass Tuning)
 //
 // 命名规范：
@@ -59,6 +59,8 @@ import { recordRecallFallback } from '../../recall-diagnostics.js';
 import { formatErrorDetails } from '../../../../core/error-details.js';
 import { tokenizeForIndex } from '../utils/tokenizer.js';
 import { rerankRecalledEvents } from './event-rerank.js';
+import { selectBoundedEventCandidates } from './event-candidate-selection.js';
+import { selectDiverseEvents } from './event-diversity-selection.js';
 import { selectDirectEvidence } from './direct-evidence-retrieval.js';
 import { buildSemanticRecallInputs } from './semantic-query.js';
 import {
@@ -73,14 +75,6 @@ import {
     eventOwnership,
     classifyEventRecall,
 } from './event-recall-classification.js';
-import { selectBoundedEventCandidates } from './event-candidate-selection.js';
-import { selectDiverseEvents } from './event-diversity-selection.js';
-import {
-    resolveFloorBoundary,
-    isFloorBlocked,
-    isEventRangeBlocked,
-    createBoundaryStats,
-} from './floor-boundary.js';
 
 const MODULE_ID = 'recall';
 
@@ -112,7 +106,7 @@ function recordExternalFailure(metrics, failure) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const CONFIG = {
-    // 窗口：取 3 条消息（对齐 L0 对结构），pending 存在时取 2 条上下文
+    // 固定读取 chat 末尾 3 条；普通发送时末条是真实入列的当前 USER 消息。
     LAST_MESSAGES_K: 3,
 
     // Anchor (L0 StateAtoms)
@@ -152,28 +146,6 @@ const CONFIG = {
     CAUSAL_CHAIN_MAX_DEPTH: 10,
     CAUSAL_INJECT_MAX: 30,
 };
-
-/**
- * 运行时容量覆盖：RERANK_TOP_N / FUSION_CAP / EVENT_SELECT_MAX 可由预算循环任务
- * （setPromptBudgets 的 rerankTopN / fusionCap / eventSelectMax）配置。
- * 动态 import 读取（generate/prompt.js 静态依赖本模块，避免静态循环依赖）；
- * 读取失败或未配置时回退 CONFIG 默认值。
- */
-async function getCapacityOverrides() {
-    try {
-        const mod = await import('../../generate/prompt.js');
-        const b = mod.getPromptBudgets?.();
-        if (!b) return null;
-        const pick = (v, fallback) => (Number.isFinite(v) && v > 0 ? v : fallback);
-        return {
-            RERANK_TOP_N: pick(b.RERANK_TOP_N, CONFIG.RERANK_TOP_N),
-            FUSION_CAP: pick(b.FUSION_CAP, CONFIG.FUSION_CAP),
-            EVENT_SELECT_MAX: pick(b.EVENT_SELECT_MAX, CONFIG.EVENT_SELECT_MAX),
-        };
-    } catch {
-        return null;
-    }
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 工具函数
@@ -285,7 +257,7 @@ function computeR2Weights(segments, hintsSegment) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null, signal = null) {
-    const { chatId, chat } = getContext();
+    const { chatId } = getContext();
     if (!chatId || !queryVector?.length) {
         return { hits: [], floors: new Set() };
     }
@@ -307,7 +279,7 @@ async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null
     if (metrics) {
         metrics.timing.runtimeScoreAnchors = runtimeScores?.stats?.timings?.scoreAnchorsMs ?? null;
     }
-    const scoredAll = (runtimeScores?.scores || [])
+    const scored = (runtimeScores?.scores || [])
         .map(s => {
             const atom = atomMap.get(s.atomId);
             if (!atom) return null;
@@ -317,24 +289,11 @@ async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null
         .filter(s => s.similarity >= CONFIG.ANCHOR_MIN_SIMILARITY)
         .sort((a, b) => b.similarity - a.similarity);
 
-    // 顶端拦截：近处楼层不参与召回，把 fusion/rerank 名额让给远期记忆。
-    const boundary = resolveFloorBoundary(chat);
-    const scored = boundary.enabled
-        ? scoredAll.filter(s => !isFloorBlocked(s.floor, boundary))
-        : scoredAll;
-
     const floors = new Set(scored.map(s => s.floor));
 
     if (metrics) {
         metrics.anchor.matched = scored.length;
         metrics.anchor.floorsHit = floors.size;
-    }
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.enabled = boundary.enabled;
-        metrics.floorBoundary.lookback = boundary.lookback;
-        metrics.floorBoundary.latestFloor = boundary.latestFloor;
-        metrics.floorBoundary.blockedFrom = boundary.blockedFrom;
-        metrics.floorBoundary.blockedAnchors += scoredAll.length - scored.length;
     }
 
     return { hits: scored, floors };
@@ -346,7 +305,7 @@ async function recallAnchors(queryVector, vectorConfig, metrics, snapshot = null
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacters, metrics, snapshot = null, signal = null) {
-    const { chatId, chat } = getContext();
+    const { chatId } = getContext();
     if (!chatId || !queryVector?.length || !allEvents?.length) {
         return { events: [], scoreMap: new Map(), vectorMap: new Map() };
     }
@@ -394,25 +353,6 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
         .filter(s => s.similarity >= CONFIG.EVENT_MIN_SIMILARITY)
         .sort((a, b) => b.similarity - a.similarity);
 
-    // 近处楼层禁召（本地扩展）：整体落入禁区的事件直接丢弃（跨边界长事件保留），
-    // 且必须在容量截断前过滤，否则禁区事件会白占 EVENT_CANDIDATE_MAX 名额。
-    const boundary = resolveFloorBoundary(chat);
-    let eventsBlockedByBoundary = 0;
-    if (boundary.enabled) {
-        const kept = [];
-        for (const s of candidates) {
-            if (isEventRangeBlocked(parseEventRange(s.event?.summary), boundary)) {
-                eventsBlockedByBoundary++;
-                continue;
-            }
-            kept.push(s);
-        }
-        candidates = kept;
-    }
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedEventCandidates += eventsBlockedByBoundary;
-    }
-
     // 实体过滤（准入规则不变：强语义 bypass 或明确谈焦点人物）
     if (focusSet.size > 0) {
         const beforeFilter = candidates.length;
@@ -452,16 +392,14 @@ async function recallEvents(queryVector, allEvents, vectorConfig, focusCharacter
     if (missingCandidateVectors > 0) {
         xbLog.warn(MODULE_ID, `L2候选向量缺失 ${missingCandidateVectors}/${candidateEventIds.length}，MMR diversity 可能退化`);
     }
-    // MMR 选择（容量可由预算任务 eventSelectMax 覆盖）
-    const capacityOverrides = await getCapacityOverrides();
-    const eventSelectMax = capacityOverrides?.EVENT_SELECT_MAX ?? CONFIG.EVENT_SELECT_MAX;
+    // MMR 选择
     const diversified = selectDiverseEvents(
         candidates,
-        eventSelectMax,
+        CONFIG.EVENT_SELECT_MAX,
         CONFIG.EVENT_MMR_LAMBDA,
     );
     const { candidates: selected } = selectBoundedEventCandidates(
-        candidates, eventSelectMax, snapshot?.temporalCarrier?.exactFloors, diversified,
+        candidates, CONFIG.EVENT_SELECT_MAX, snapshot?.temporalCarrier?.exactFloors, diversified,
     );
 
     let directCount = 0;
@@ -697,9 +635,6 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
     const T_Start = performance.now();
 
-    // 融合/精排容量可由预算任务（fusionCap / rerankTopN）覆盖
-    const capacityOverrides = await getCapacityOverrides();
-
     // ─────────────────────────────────────────────────────────────────
     // 6a. Dense floor rank（加权聚合：maxSim×0.6 + meanSim×0.4）
     // ─────────────────────────────────────────────────────────────────
@@ -725,10 +660,6 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
     const atomFloorSet = new Set(getStateAtoms().map(a => a.floor));
 
-    // 顶端拦截：lexical 不经过 recallAnchors，近处楼层需在此单独剔除
-    const boundary = resolveFloorBoundary(chat);
-    let lexFloorBlockedByBoundary = 0;
-
     const lexFloorAgg = new Map();
     // Replay-only observer data: preserves the pre-gate lexical floor set without affecting recall.
     const lexFloorBeforeDense = captureStages ? new Map() : null;
@@ -742,12 +673,6 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
         // 预过滤：必须有 L0 atoms
         if (!atomFloorSet.has(floor)) continue;
-
-        // 顶端拦截：近处楼层不参与融合（必须在映射成 AI 楼层之后判定）
-        if (isFloorBlocked(floor, boundary)) {
-            lexFloorBlockedByBoundary++;
-            continue;
-        }
 
         if (lexFloorBeforeDense) {
             const raw = lexFloorBeforeDense.get(floor);
@@ -801,9 +726,6 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     if (metrics) {
         metrics.lexical.floorFilteredByDense = lexFloorFilteredByDense;
     }
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedLexFloors += lexFloorBlockedByBoundary;
-    }
 
     // ─────────────────────────────────────────────────────────────────
     // 6b.5 Fusion Guard: lexical must-keep floors
@@ -816,7 +738,7 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     // ─────────────────────────────────────────────────────────────────
 
     const T_Fusion_Start = performance.now();
-    const { top: fusedFloors, all: fusedFloorsPreCap, totalUnique } = fuseByFloor(denseFloorRank, lexFloorRank, capacityOverrides?.FUSION_CAP ?? CONFIG.FUSION_CAP);
+    const { top: fusedFloors, all: fusedFloorsPreCap, totalUnique } = fuseByFloor(denseFloorRank, lexFloorRank, CONFIG.FUSION_CAP);
     const fusionTime = Math.round(performance.now() - T_Fusion_Start);
 
     if (captureStages) {
@@ -884,34 +806,6 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     // 6e. 构建 rerank documents（每个 floor: USER chunks + AI chunks）
     // ─────────────────────────────────────────────────────────────────
 
-    // ─── 方案C：floor rerank doc 每侧「首块无条件进 + 第 2 块起按 char 预算」 ───
-    // chunks 已按 _cosineScore 降序（scoring.js:133-136），此处只读不写、保序截取。
-    // 规则：
-    //   - 首块无条件进（不计入预算，保证单 chunk 楼层与首块为最强信号的楼层完整入 doc）
-    //   - 第 2 块起按 400 字符预算累计，累计超预算即停（chunk 内文字永不裁剪）
-    // 目的：把"每侧 1 块（200 字）"放宽到"每侧 2-3 块（400-600 字）"，
-    //       让 rerank 看到楼层里 2 个不同位置的文本片段，覆盖一个楼层有多个主题的情况。
-    // USER/AI 配对结构不变。
-    // 回滚：把函数体恢复为「if (out.length > 0 && used + len > budget) break; push; used += len;」即可。
-    const RERANK_DOC_CHAR_BUDGET_PER_SIDE = 400;
-    function takeTopChunksByCharBudget(chunks, budget) {
-        const out = [];
-        let used = 0;
-        for (const c of chunks) {
-            const len = (c.text || '').length;
-            // 首块无条件进（不计入预算）
-            if (out.length === 0) {
-                out.push(c);
-                continue;
-            }
-            // 第 2 块起：累计字符超过预算即停
-            if (used + len > budget) break;
-            out.push(c);
-            used += len;
-        }
-        return out;
-    }
-
     const normalFloors = fusedFloors.filter(f => !mustKeep.floorSet.has(f.id));
 
     const rerankCandidates = [];
@@ -919,15 +813,9 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
         const aiFloor = f.id;
         const userFloor = aiFloor - 1;
 
-        const aiChunks = takeTopChunksByCharBudget(
-            l1ScoredByFloor.get(aiFloor) || [],
-            RERANK_DOC_CHAR_BUDGET_PER_SIDE,
-        );
+        const aiChunks = l1ScoredByFloor.get(aiFloor) || [];
         const userChunks = (userFloor >= 0 && chat?.[userFloor]?.is_user)
-            ? takeTopChunksByCharBudget(
-                l1ScoredByFloor.get(userFloor) || [],
-                RERANK_DOC_CHAR_BUDGET_PER_SIDE,
-            )
+            ? (l1ScoredByFloor.get(userFloor) || [])
             : [];
 
         const parts = [];
@@ -958,7 +846,7 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
     const T_Rerank_Start = performance.now();
 
     const reranked = await rerankChunks(rerankQuery, rerankCandidates, {
-        topN: capacityOverrides?.RERANK_TOP_N ?? CONFIG.RERANK_TOP_N,
+        topN: CONFIG.RERANK_TOP_N,
         minScore: CONFIG.RERANK_MIN_SCORE,
         signal,
     });
@@ -1352,7 +1240,6 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
         diagnostics.stage = 'query-build';
     }
     metrics.lexical.denseGateThresholds = { event: CONFIG.LEXICAL_EVENT_DENSE_MIN, floor: CONFIG.LEXICAL_FLOOR_DENSE_MIN };
-    metrics.floorBoundary = createBoundaryStats();
 
     metrics.anchor.needRecall = true;
 
