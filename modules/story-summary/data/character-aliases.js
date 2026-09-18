@@ -566,9 +566,21 @@ export function replaceCharacterAliases(json, rawAliases, floor) {
     return { json, aliasChanged: tableChanged };
 }
 
-export function formatCharacterAliasTableForAI(json) {
+/**
+ * Render the alias table as `- 主名：别名1、别名2` lines.
+ *
+ * `names` is an optional context filter: when given, only groups whose canonical
+ * name (or one of its alias spellings) appears in it are emitted. Grouping always
+ * runs over the whole table, so a chain (A→B→C) still resolves to its final owner
+ * even when an intermediate name is absent from `names`; the filter only decides
+ * which groups get printed. Omitting `names` keeps the previous whole-table output.
+ */
+export function formatCharacterAliasTableForAI(json, names = null) {
     const aliases = normalizeCharacterAliases(json?.characterAliases);
     if (!aliases.length) return '';
+
+    const wanted = names ? new Set([...names].map(normalizeAliasNameKey).filter(Boolean)) : null;
+    if (wanted && !wanted.size) return '';
 
     const resolver = buildAliasResolver(aliases);
     const grouped = new Map();
@@ -577,6 +589,7 @@ export function formatCharacterAliasTableForAI(json) {
         const canonicalKey = normalizeAliasNameKey(canonical);
         const fromKey = normalizeAliasNameKey(alias.from);
         if (!canonicalKey || !fromKey || canonicalKey === fromKey) continue;
+        if (wanted && !wanted.has(canonicalKey) && !wanted.has(fromKey)) continue;
         const group = grouped.get(canonicalKey) || { canonical, aliases: [] };
         group.aliases.push(alias.from);
         grouped.set(canonicalKey, group);
@@ -584,8 +597,8 @@ export function formatCharacterAliasTableForAI(json) {
 
     return Array.from(grouped.values())
         .map(group => {
-            const names = dedupeByKey(group.aliases, normalizeAliasNameKey);
-            return names.length ? `- ${group.canonical}：${names.join('、')}` : '';
+            const groupNames = dedupeByKey(group.aliases, normalizeAliasNameKey);
+            return groupNames.length ? `- ${group.canonical}：${groupNames.join('、')}` : '';
         })
         .filter(Boolean)
         .join('\n');

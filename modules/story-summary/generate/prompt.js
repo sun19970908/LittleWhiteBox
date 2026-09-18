@@ -23,6 +23,7 @@ import {
 import { xbLog } from "../../../core/debug-core.js";
 import { getSummaryStore, getFacts } from "../data/store.js";
 import { isRelationFact } from "../data/fact-predicates.js";
+import { formatCharacterAliasTableForAI } from "../data/character-aliases.js";
 import { getVectorConfig, getSummaryPanelConfig, getSettings, DEFAULT_MEMORY_PROMPT_TEMPLATE } from "../data/config.js";
 import {
     hydrateSelectedDirectEvidence,
@@ -1703,6 +1704,8 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     if (assembled.constraints.lines.length) {
         sections.push(`[定了的事] 已确立的事实\n${assembled.constraints.lines.join("\n")}`);
     }
+    const aliasTable = formatCharacterAliasTableForAI(store.json, recallResult?.focusTerms);
+    if (aliasTable) sections.push(`[角色别名]\n${aliasTable}`);
     if (assembled.directEvents.lines.length) {
         sections.push(`[印象深的事] 记得很清楚\n\n${assembled.directEvents.lines.join("\n\n")}`);
     }
