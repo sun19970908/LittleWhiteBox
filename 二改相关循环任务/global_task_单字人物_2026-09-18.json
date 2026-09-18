@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-18T11:47:35.653Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-18T10:32:24.564Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1789727544564_fhl56gj",
+            "interval": 0,
+            "name": "单字人物",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/retrieval/entity-lexicon.js');\n    window.toastr?.success(mod.toggleSingleCharPerson() ? '单字人物：已开启' : '单字人物：已关闭');\n})();\n<</taskjs>>"
+        }
+    ]
+}
