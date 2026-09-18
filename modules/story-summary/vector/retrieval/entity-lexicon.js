@@ -14,6 +14,9 @@ import {
     normalizeUserIdentityKey,
 } from '../../data/character-aliases.js';
 import { normalizeEntityTerm } from './entity-matcher.js';
+import { extension_settings } from '../../../../../../../extensions.js';
+import { saveSettingsDebounced } from '../../../../../../../../script.js';
+import { EXT_ID } from '../../../../core/constants.js';
 
 export { extractEntitiesFromText, normalizeEntityTerm } from './entity-matcher.js';
 
@@ -30,9 +33,35 @@ function isBlacklistedPersonTerm(raw) {
     return PERSON_LEXICON_BLACKLIST.has(normalizeEntityTerm(raw));
 }
 
+// ── 单字人物进焦点人物 开关 ─────────────────────────────────
+// 默认关闭：长度 < 2 的名字不进人物词典（保持原有行为）。
+// 打开后：单字名也能进入 trusted 池，因此可以成为焦点人物。
+// 注意：L0 边的 s/t 与别名两端共用本函数，打开后它们的单字也会进词典；
+// 其中 L0 单字进的是 candidateCharacters，不会通过 trusted 检查。
+const SINGLE_CHAR_PERSON_KEY = 'singleCharPerson';
+
+export function isSingleCharPersonEnabled() {
+    return extension_settings?.[EXT_ID]?.storySummary?.[SINGLE_CHAR_PERSON_KEY] === true;
+}
+
+export function setSingleCharPerson(flag) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[SINGLE_CHAR_PERSON_KEY] = !!flag;
+    // getEntityVocabulary 的缓存只比对数据输入，开关状态不在其中，
+    // 这里显式作废，避免切换后要等到下次数据变化才生效。
+    cachedVocabulary = null;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isSingleCharPersonEnabled();
+}
+
+export function toggleSingleCharPerson() {
+    return setSingleCharPerson(!isSingleCharPersonEnabled());
+}
+
 function addPersonTerm(set, raw) {
     const n = normalizeEntityTerm(raw);
-    if (!n || n.length < 2) return;
+    if (!n || (!isSingleCharPersonEnabled() && n.length < 2)) return;
     if (isBlacklistedPersonTerm(n)) return;
     set.add(n);
 }

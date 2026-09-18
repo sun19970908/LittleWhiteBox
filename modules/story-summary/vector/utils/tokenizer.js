@@ -436,10 +436,16 @@ export function getState() {
 // No add_word mutation: a new name must not silently change unrelated documents
 // (or leak a previous chat's dictionary into the next chat).
 export function injectEntities(lexicon, displayMap, blockedTerms = []) {
+    // 单字人物开关打开后 addPersonTerm 会把单字名放进 lexicon，匹配器这里必须同步放行；
+    // 否则会出现「词典里有单字、匹配器里没有」的哑火状态，focusTerms/focusCharacters 永远为空。
+    // 直接由 lexicon 推断而非读取开关，是为了让本模块保持无宿主依赖（可裸 Node 单测）。
+    const allowSingleChar = [...(lexicon || [])].some(raw => normalizeEntityTerm(raw).length === 1);
+    const acceptsTerm = term => term.length >= 2 || allowSingleChar;
+
     const terms = new Map();
     for (const raw of lexicon || []) {
         const term = normalizeEntityTerm(raw);
-        if (term.length >= 2 && !terms.has(term)) terms.set(term, displayMap?.get(term) || String(raw));
+        if (acceptsTerm(term) && !terms.has(term)) terms.set(term, displayMap?.get(term) || String(raw));
     }
     const blocked = [...new Set(blockedTerms.map(normalizeEntityTerm).filter(Boolean))].sort();
     const sameTerms = terms.size === entityMatcher.terms.size
@@ -448,7 +454,7 @@ export function injectEntities(lexicon, displayMap, blockedTerms = []) {
         && blocked.every((term, i) => term === entityMatcher.blockedTerms[i])) return false;
     // Build/sort matching candidates only when the vocabulary actually changes.
     entityMatcher = createEntityMatcher(
-        new Set([...(lexicon || [])].filter(term => normalizeEntityTerm(term).length >= 2)), displayMap, blocked,
+        new Set([...(lexicon || [])].filter(term => acceptsTerm(normalizeEntityTerm(term)))), displayMap, blocked,
     );
     tokenizerSnapshot = null;
     return true;
