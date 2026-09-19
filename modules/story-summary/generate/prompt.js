@@ -167,6 +167,45 @@ export function toggleBlankL1Speaker() {
     return next;
 }
 
+// ── L1 渲染过滤（并集：关键词或楼层命中即弃）──────────
+// 两个数组直接写进 settings，空数组 = 不过滤，不加布尔开关。
+// 关键词：L1 chunk 文本包含任一关键词（大小写不敏感）即整条丢弃。
+// 楼层：L1 chunk.floor 在列表内即整条丢弃。
+const L1_KEYWORDS_KEY = "l1FilterKeywords";
+const L1_BLOCKED_FLOORS_KEY = "l1BlockedFloors";
+
+export function getL1FilterKeywords() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[L1_KEYWORDS_KEY];
+    if (!Array.isArray(v)) return [];
+    return v.map(s => String(s || '').trim()).filter(Boolean);
+}
+
+export function getL1BlockedFloors() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[L1_BLOCKED_FLOORS_KEY];
+    if (!Array.isArray(v)) return [];
+    return v.map(f => Number(f)).filter(Number.isInteger);
+}
+
+export function setL1FilterKeywords(list) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[L1_KEYWORDS_KEY] = Array.isArray(list)
+        ? list.map(s => String(s || '').trim()).filter(Boolean)
+        : [];
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return getL1FilterKeywords();
+}
+
+export function setL1BlockedFloors(list) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[L1_BLOCKED_FLOORS_KEY] = Array.isArray(list)
+        ? list.map(f => Number(f)).filter(Number.isInteger)
+        : [];
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return getL1BlockedFloors();
+}
+
 // ── L2 下方 L0 渲染 开关 ───────────────────────────────
 // 默认关闭：事件下方照常渲染 L0 行（与上游一致）。
 // 打开后：事件下方不渲染 L0 行（L0 与事件摘要同源派生，是其子集，属冗余呈现）。
@@ -534,16 +573,20 @@ function buildL0DisplayText(l0) {
  * 格式化 L1 chunk 行
  * @param {object} chunk - L1 chunk 对象
  * @param {boolean} isUser - 是否为 USER 侧
- * @returns {string} 格式化后的行
+ * @returns {string} 格式化后的行（命中过滤则返回空串）
  */
 function formatL1Line(chunk, isUser) {
+    // L1 渲染过滤（并集）：关键词命中或楼层命中即整条丢弃
+    const text = String(chunk?.text || "").trim();
+    if (text && getL1FilterKeywords().some(kw => text.toLowerCase().includes(kw.toLowerCase()))) return "";
+    if (Number.isInteger(chunk?.floor) && getL1BlockedFloors().includes(chunk.floor)) return "";
+
     const { name1, name2 } = getContext();
     // L1 行 speaker 置空开关（默认关闭 = 显示说话者，与上游一致）
     const blankSpeaker = isUser && isBlankL1SpeakerEnabled();
     const speaker = blankSpeaker
         ? ""
         : (isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色"));
-    const text = String(chunk.text || "").trim();
     const symbol = isUser ? "┌" : "›";
     return `    ${symbol} #${chunk.floor + 1} [${speaker}] ${text}`;
 }
@@ -705,7 +748,8 @@ function formatEvidenceGroup(group, options = {}) {
     }
 
     for (const chunk of group.l1Chunks || []) {
-        lines.push(formatL1Line(chunk, chunk.isUser === true));
+        const line = formatL1Line(chunk, chunk.isUser === true);
+        if (line) lines.push(line);
     }
 
     return lines;
