@@ -127,6 +127,20 @@ import {
     loadLocalDanbooruDB, unloadLocalDanbooruDB,
     searchLocalDanbooru, isDanbooruDBLoaded,
 } from '../../shared/danbooru-local-db.js';
+// 缝入的工作流 view 复用的 ComfyUI 函数（comfy-draw.js 已加 export + NAI iframe 兜底）
+import {
+    getSettings as comfyGetSettings,
+    updateSettingsPersistent as updateComfySettingsPersistent,
+    buildWorkflowNodeMapFromForm,
+    validateWorkflowPresetDraftOrThrow,
+    getBuiltinWorkflowDefinition,
+    createBuiltinWorkflowPreview,
+    getBuiltinWorkflowPreviewParams,
+    fillWorkflowPresetSelect,
+    populateModelSelect,
+    populateBuiltinWorkflowSelect,
+    refreshBuiltinWorkflowPanel,
+} from '../comfyui/comfy-draw.js';
 import {
     clearDrawSavedEntry,
     syncDrawSavedFromPreview,
@@ -4191,6 +4205,196 @@ function ensureAgentSettingsSurface() {
     return agentSettingsSurface;
 }
 
+// ── 缝入的 ComfyUI 工作流 view：事件绑定 + 表单回填 ──
+// 数据读写走 comfy 的 settings（updateSettingsPersistent），
+// 保证将来 drawProvider 切到 comfyui 时工作流配置仍然共享。
+
+function getNovelComfyWorkflowDoc() {
+    return document.getElementById('xiaobaix-novel-draw-iframe')?.contentDocument || null;
+}
+
+async function setNovelComfyWorkflowMode(mode) {
+    const doc = getNovelComfyWorkflowDoc();
+    if (!doc) return;
+    const isSimple = mode === 'simple';
+    doc.getElementById('comfy-workflow-mode-simple')?.classList.toggle('active', isSimple);
+    doc.getElementById('comfy-workflow-mode-custom')?.classList.toggle('active', !isSimple);
+    doc.getElementById('comfy-simple-mode-section')?.classList.toggle('hidden', !isSimple);
+    doc.getElementById('comfy-custom-mode-section')?.classList.toggle('hidden', isSimple);
+    await updateComfySettingsPersistent((draft) => {
+        draft.workflowMode = isSimple ? 'simple' : 'custom';
+    }, '已切换模式', { silent: true });
+}
+
+function bindNovelComfyWorkflowUI() {
+    const doc = getNovelComfyWorkflowDoc();
+    if (!doc) return;
+    const $el = (id) => doc.getElementById(id);
+
+    $el('comfy-workflow-mode-simple')?.addEventListener('click', () => setNovelComfyWorkflowMode('simple'));
+    $el('comfy-workflow-mode-custom')?.addEventListener('click', () => setNovelComfyWorkflowMode('custom'));
+
+    $el('comfy-toggle-advanced-params')?.addEventListener('click', () => {
+        const section = $el('comfy-advanced-params-section');
+        const btn = $el('comfy-toggle-advanced-params');
+        if (!section || !btn) return;
+        const hidden = section.classList.toggle('hidden');
+        btn.innerHTML = hidden
+            ? '<i class="fa-solid fa-chevron-down"></i> 展开'
+            : '<i class="fa-solid fa-chevron-up"></i> 收起';
+    });
+
+    $el('comfy-workflow-preset-select')?.addEventListener('change', async () => {
+        const selectedId = $el('comfy-workflow-preset-select').value;
+        const current = comfyGetSettings();
+        const preset = current.workflowPresets?.find((item) => item.id === selectedId)
+            || current.workflowPresets?.[0];
+        if (preset) {
+            $el('comfy-workflow-json').value = preset.json || '';
+            $el('comfy-node-positive').value = preset.nodePositive || '';
+            $el('comfy-node-negative').value = preset.nodeNegative || '';
+            $el('comfy-node-width').value = preset.nodeWidth || '';
+            $el('comfy-node-height').value = preset.nodeHeight || '';
+            $el('comfy-node-seed').value = preset.nodeSeed || '';
+            $el('comfy-node-save-image').value = preset.nodeSaveImage || '';
+        }
+        await updateComfySettingsPersistent((draft) => {
+            draft.selectedWorkflowPresetId = selectedId;
+        }, '已切换工作流', { silent: true });
+    });
+
+    $el('comfy-workflow-preset-add')?.addEventListener('click', async () => {
+        const name = window.prompt('新工作流名称', `工作流 ${(comfyGetSettings().workflowPresets?.length || 0) + 1}`);
+        if (!name) return;
+        const newPreset = {
+            id: `workflow-${Date.now()}`,
+            name,
+            json: '',
+            nodePositive: '',
+            nodeNegative: '',
+            nodeWidth: '',
+            nodeHeight: '',
+            nodeSeed: '',
+            nodeSaveImage: '',
+        };
+        await updateComfySettingsPersistent((draft) => {
+            draft.workflowPresets = [...(draft.workflowPresets || []), newPreset];
+            draft.selectedWorkflowPresetId = newPreset.id;
+        }, '已新建工作流');
+        fillWorkflowPresetSelect(comfyGetSettings());
+    });
+
+    $el('comfy-workflow-preset-rename')?.addEventListener('click', async () => {
+        const current = comfyGetSettings();
+        const preset = current.workflowPresets?.find((item) => item.id === current.selectedWorkflowPresetId);
+        if (!preset) return;
+        const name = window.prompt('新名称', preset.name);
+        if (!name) return;
+        await updateComfySettingsPersistent((draft) => {
+            const target = draft.workflowPresets?.find((item) => item.id === current.selectedWorkflowPresetId);
+            if (target) target.name = name;
+        }, '已重命名');
+        fillWorkflowPresetSelect(comfyGetSettings());
+    });
+
+    $el('comfy-workflow-preset-delete')?.addEventListener('click', async () => {
+        const current = comfyGetSettings();
+        const preset = current.workflowPresets?.find((item) => item.id === current.selectedWorkflowPresetId);
+        if (!preset) return;
+        if (!window.confirm(`确定要删除工作流 "${preset.name}" 吗？`)) return;
+        await updateComfySettingsPersistent((draft) => {
+            draft.workflowPresets = (draft.workflowPresets || []).filter(
+                (item) => item.id !== current.selectedWorkflowPresetId
+            );
+            draft.selectedWorkflowPresetId = draft.workflowPresets?.[0]?.id || null;
+        }, '已删除');
+        fillWorkflowPresetSelect(comfyGetSettings());
+    });
+
+    $el('comfy-workflow-preset-save')?.addEventListener('click', async () => {
+        const json = $el('comfy-workflow-json')?.value || '';
+        const nodeMap = buildWorkflowNodeMapFromForm();
+        try {
+            validateWorkflowPresetDraftOrThrow({ json, nodeMap });
+        } catch (error) {
+            toastr.error(error?.message || '校验失败', '工作流');
+            return;
+        }
+        await updateComfySettingsPersistent((draft) => {
+            const list = draft.workflowPresets || [];
+            const idx = list.findIndex((item) => item.id === draft.selectedWorkflowPresetId);
+            const updated = { ...list[idx], ...nodeMap, json };
+            if (idx >= 0) list[idx] = updated;
+            else list.push({ ...updated, id: draft.selectedWorkflowPresetId || `workflow-${Date.now()}` });
+            draft.workflowPresets = list;
+        }, '工作流已保存');
+    });
+
+    $el('comfy-builtin-workflow')?.addEventListener('change', async () => {
+        const builtinWorkflowId = $el('comfy-builtin-workflow').value;
+        await updateComfySettingsPersistent((draft) => {
+            draft.builtinWorkflowId = builtinWorkflowId;
+        }, '已切换内置工作流', { silent: true });
+        refreshBuiltinWorkflowPanel(comfyGetSettings());
+    });
+
+    $el('comfy-builtin-workflow-apply')?.addEventListener('click', async () => {
+        const workflow = getBuiltinWorkflowDefinition(
+            $el('comfy-builtin-workflow')?.value || comfyGetSettings().builtinWorkflowId
+        );
+        const recommended = workflow.recommended || {};
+        if (recommended.sampler) $el('comfy-draw-sampler').value = recommended.sampler;
+        if (recommended.scheduler) $el('comfy-draw-scheduler').value = recommended.scheduler;
+        if (recommended.steps) $el('comfy-draw-steps').value = String(recommended.steps);
+        if (recommended.cfg) $el('comfy-draw-cfg').value = String(recommended.cfg);
+        await updateComfySettingsPersistent((draft) => {
+            if (recommended.sampler) draft.sampler = recommended.sampler;
+            if (recommended.scheduler) draft.scheduler = recommended.scheduler;
+            if (recommended.steps) draft.steps = recommended.steps;
+            if (recommended.cfg) draft.cfg = recommended.cfg;
+        }, '已应用推荐参数', { silent: true });
+    });
+
+    $el('comfy-workflow-import')?.addEventListener('change', async (event) => {
+        const file = event.target.files?.[0];
+        if (!file) return;
+        $el('comfy-workflow-json').value = await file.text();
+        event.target.value = '';
+    });
+
+    $el('comfy-workflow-clear')?.addEventListener('click', () => {
+        $el('comfy-workflow-json').value = '';
+    });
+
+    // 回填表单
+    fillNovelComfyWorkflowForm();
+}
+
+function fillNovelComfyWorkflowForm() {
+    const doc = getNovelComfyWorkflowDoc();
+    if (!doc) return;
+    const $el = (id) => doc.getElementById(id);
+    const settings = comfyGetSettings();
+
+    $el('comfy-draw-model') && ($el('comfy-draw-model').value = settings.selectedModel || '');
+    $el('comfy-draw-sampler') && ($el('comfy-draw-sampler').value = settings.sampler || 'euler');
+    $el('comfy-draw-scheduler') && ($el('comfy-draw-scheduler').value = settings.scheduler || 'normal');
+    $el('comfy-draw-steps') && ($el('comfy-draw-steps').value = String(settings.steps || 20));
+    $el('comfy-draw-cfg') && ($el('comfy-draw-cfg').value = String(settings.cfg || 7));
+    $el('comfy-workflow-json') && ($el('comfy-workflow-json').value = settings.customWorkflow?.json || '');
+    $el('comfy-node-positive') && ($el('comfy-node-positive').value = settings.customWorkflow?.nodePositive || '');
+    $el('comfy-node-negative') && ($el('comfy-node-negative').value = settings.customWorkflow?.nodeNegative || '');
+    $el('comfy-node-width') && ($el('comfy-node-width').value = settings.customWorkflow?.nodeWidth || '');
+    $el('comfy-node-height') && ($el('comfy-node-height').value = settings.customWorkflow?.nodeHeight || '');
+    $el('comfy-node-seed') && ($el('comfy-node-seed').value = settings.customWorkflow?.nodeSeed || '');
+    $el('comfy-node-save-image') && ($el('comfy-node-save-image').value = settings.customWorkflow?.nodeSaveImage || '');
+
+    fillWorkflowPresetSelect(settings);
+    populateModelSelect(settings.modelCache || []);
+    refreshBuiltinWorkflowPanel(settings);
+    setNovelComfyWorkflowMode(settings.workflowMode || 'simple');
+}
+
 async function handleFrameMessage(event) {
     const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
     if (!isTrustedMessage(event, iframe, 'NovelDraw-Frame')) return;
@@ -4202,6 +4406,7 @@ async function handleFrameMessage(event) {
             frameReady = true;
             sendInitData();
             ensureAgentSettingsSurface();
+            bindNovelComfyWorkflowUI();
             // 若本地 Danbooru DB 已启用，预加载（失败只警告，不修改用户设置）
             if (getSharedDrawSettings().danbooruLocalDB) {
                 const datUrl = `${extensionFolderPath}/modules/draw/shared/data/danbooru-chars.dat`;

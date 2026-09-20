@@ -706,7 +706,7 @@ function getActiveWorkflowPreset(settings = getSettings()) {
         || createDefaultWorkflowPreset();
 }
 
-function buildWorkflowNodeMapFromForm() {
+export function buildWorkflowNodeMapFromForm() {
     return {
         positive: getValue('comfy-node-positive').trim(),
         negative: getValue('comfy-node-negative').trim(),
@@ -717,7 +717,7 @@ function buildWorkflowNodeMapFromForm() {
     };
 }
 
-function validateWorkflowPresetDraftOrThrow({ json, nodeMap }) {
+export function validateWorkflowPresetDraftOrThrow({ json, nodeMap }) {
     if (!nodeMap.positive || !nodeMap.saveImage) {
         throw new Error('请至少填写正向提示词节点和 SaveImage 节点。');
     }
@@ -794,11 +794,11 @@ export function createComfyGenerationRecipe({
     };
 }
 
-function getBuiltinWorkflowDefinition(id) {
+export function getBuiltinWorkflowDefinition(id) {
     return BUILTIN_WORKFLOWS.find((item) => item.id === id) || BUILTIN_WORKFLOWS[0];
 }
 
-function createBuiltinWorkflowPreview({ model, width, height, steps, cfg, sampler, scheduler }) {
+export function createBuiltinWorkflowPreview({ model, width, height, steps, cfg, sampler, scheduler }) {
     const workflow = buildSimpleWorkflow({
         model: String(model || '<selected-model>'),
         sampler,
@@ -814,7 +814,7 @@ function createBuiltinWorkflowPreview({ model, width, height, steps, cfg, sample
     return JSON.stringify(workflow, null, 2);
 }
 
-function getBuiltinWorkflowPreviewParams(settings = getSettings()) {
+export function getBuiltinWorkflowPreviewParams(settings = getSettings()) {
     const activePreset = getActivePreset(settings);
     const selectedBuiltinId = getValue('comfy-builtin-workflow') || settings.builtinWorkflowId || DEFAULT_COMFY_DRAW_SETTINGS.builtinWorkflowId;
     const workflow = getBuiltinWorkflowDefinition(selectedBuiltinId);
@@ -1403,7 +1403,10 @@ function syncOverlayHeight() {
 }
 
 function getSettingsDocument() {
-    return overlayFrame?.contentDocument || document.getElementById('xiaobaix-comfy-draw-iframe')?.contentDocument || null;
+    return overlayFrame?.contentDocument
+        || document.getElementById('xiaobaix-comfy-draw-iframe')?.contentDocument
+        || document.getElementById('xiaobaix-novel-draw-iframe')?.contentDocument
+        || null;
 }
 
 function getSettingsElement(id) {
@@ -2290,7 +2293,7 @@ function fillPresetSelect(settings = getSettings()) {
     select.value = settings.selectedPresetId;
 }
 
-function fillWorkflowPresetSelect(settings = getSettings()) {
+export function fillWorkflowPresetSelect(settings = getSettings()) {
     const select = getSettingsElement('comfy-workflow-preset-select');
     if (!select) return;
     select.textContent = '';
@@ -2381,7 +2384,7 @@ function updateConnectionModeUI(
 }
 
 // 填充模型下拉框
-function populateModelSelect(models = []) {
+export function populateModelSelect(models = []) {
     const select = getSettingsElement('comfy-draw-model');
     if (!select) return;
     const currentValue = select.value;
@@ -2405,7 +2408,7 @@ function populateModelSelect(models = []) {
     }
 }
 
-function populateBuiltinWorkflowSelect(selectedId) {
+export function populateBuiltinWorkflowSelect(selectedId) {
     const select = getSettingsElement('comfy-builtin-workflow');
     if (!select) return;
     select.textContent = '';
@@ -2420,7 +2423,7 @@ function populateBuiltinWorkflowSelect(selectedId) {
         : BUILTIN_WORKFLOWS[0].id;
 }
 
-function refreshBuiltinWorkflowPanel(settings = getSettings()) {
+export function refreshBuiltinWorkflowPanel(settings = getSettings()) {
     const workflow = getBuiltinWorkflowDefinition(settings.builtinWorkflowId);
     populateBuiltinWorkflowSelect(workflow.id);
     const summaryEl = getSettingsElement('comfy-builtin-workflow-summary');
