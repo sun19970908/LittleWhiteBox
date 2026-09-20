@@ -136,6 +136,10 @@ const CONFIG = {
     // Rerank（floor-level）
     RERANK_TOP_N: 20,
     RERANK_MIN_SCORE: 0.10,
+    // rerank doc 每侧（USER/AI）在首块之后的字符预算。
+    // 首块（该楼层 cosine 最强 chunk）无条件进且不计预算；第 2 块起累计超过此预算即停。
+    // 400 字 ≈ 2-3 个 200 字 chunk，目标是把长楼层 doc 压进 reranker 的训练分布与上下文窗口。
+    RERANK_DOC_CHAR_BUDGET_PER_SIDE: 400,
 
     // Fusion guard: lexical must-keep floors
     MUST_KEEP_MAX_FLOORS: 3,
@@ -808,14 +812,39 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
 
     const normalFloors = fusedFloors.filter(f => !mustKeep.floorSet.has(f.id));
 
+    // 每侧截断：首块无条件进（保底该楼层最强 cosine 信号），第 2 块起按字符预算累计。
+    // 不截断时长楼层 doc 可达 3000-4000 字，远超 reranker 训练分布与上下文窗口：
+    // 尾部被服务端硬截断 + 相关性被噪声稀释，楼层间分数失去可比性。
+    function takeTopChunksByCharBudget(chunks, budget) {
+        const out = [];
+        let used = 0;
+        for (const c of chunks) {
+            const len = (c.text || '').length;
+            if (out.length === 0) {
+                out.push(c);
+                continue;
+            }
+            if (used + len > budget) break;
+            out.push(c);
+            used += len;
+        }
+        return out;
+    }
+
     const rerankCandidates = [];
     for (const f of normalFloors) {
         const aiFloor = f.id;
         const userFloor = aiFloor - 1;
 
-        const aiChunks = l1ScoredByFloor.get(aiFloor) || [];
+        const aiChunks = takeTopChunksByCharBudget(
+            l1ScoredByFloor.get(aiFloor) || [],
+            CONFIG.RERANK_DOC_CHAR_BUDGET_PER_SIDE,
+        );
         const userChunks = (userFloor >= 0 && chat?.[userFloor]?.is_user)
-            ? (l1ScoredByFloor.get(userFloor) || [])
+            ? takeTopChunksByCharBudget(
+                l1ScoredByFloor.get(userFloor) || [],
+                CONFIG.RERANK_DOC_CHAR_BUDGET_PER_SIDE,
+            )
             : [];
 
         const parts = [];
