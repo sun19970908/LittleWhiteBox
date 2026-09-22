@@ -1446,25 +1446,25 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
     }
 
     function clampTlPage(page) {
-        return Math.min(Math.max(0, page | 0), tlTotalPages() - 1);
+        return Math.min(Math.max(0, Math.trunc(page)), tlTotalPages() - 1);
     }
 
     function tlLoadPage() {
-        try {
-            const v = JSON.parse(localStorage.getItem(TL_PAGE_KEY))?.[currentTimelineChatId];
-            return Number.isFinite(v) ? v : -1;
-        } catch {
-            return -1;
-        }
+        const v = JSON.parse(localStorage.getItem(TL_PAGE_KEY))?.[currentTimelineChatId];
+        return Number.isFinite(v) ? v : -1;
     }
 
     function tlSavePage() {
         if (!currentTimelineChatId) return;
-        try {
-            const m = JSON.parse(localStorage.getItem(TL_PAGE_KEY)) || {};
-            m[currentTimelineChatId] = tlCurrentPage;
-            localStorage.setItem(TL_PAGE_KEY, JSON.stringify(m));
-        } catch { /* ignore */ }
+        const pages = JSON.parse(localStorage.getItem(TL_PAGE_KEY)) || {};
+        if (tlCurrentPage < 0) {
+            if (!Object.hasOwn(pages, currentTimelineChatId)) return;
+            delete pages[currentTimelineChatId];
+        } else {
+            if (pages[currentTimelineChatId] === tlCurrentPage) return;
+            pages[currentTimelineChatId] = tlCurrentPage;
+        }
+        localStorage.setItem(TL_PAGE_KEY, JSON.stringify(pages));
     }
 
     function tlItemHtml(e) {
@@ -1483,38 +1483,65 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
             </div>`;
     }
 
-    function updateTlPager(visible) {
+    function revealTlCurrentPage() {
+        const strip = $('tl-pg-strip');
+        const cur = strip.querySelector('[aria-current="page"]');
+        if (!cur || !strip.clientWidth) return;
+        const left = cur.offsetLeft;
+        if (left < strip.scrollLeft || left + cur.offsetWidth > strip.scrollLeft + strip.clientWidth) {
+            strip.scrollLeft = left - (strip.clientWidth - cur.offsetWidth) / 2;
+        }
+    }
+
+    function updateTlPager(visible, syncPageNumber = false) {
         const pager = $('tl-pager');
         if (!pager) return;
         pager.classList.toggle('hidden', !visible);
         if (!visible) return;
         const total = tlTotalPages();
-        let html = '';
-        for (let i = 0; i < total; i++) {
-            html += `<button class="tl-pg-btn${i === tlCurrentPage ? ' cur' : ''}" data-page="${i}">${i + 1}</button>`;
-        }
         const strip = $('tl-pg-strip');
-        setHtml(strip, html);
-        const cur = strip.querySelector('.tl-pg-btn.cur');
-        if (cur) strip.scrollLeft = cur.offsetLeft - (strip.clientWidth - cur.offsetWidth) / 2;
+        const focused = document.activeElement;
+        const hadPagerFocus = pager.contains(focused);
+        // Keep existing buttons so selecting or refreshing a page retains keyboard focus.
+        while (strip.children.length > total) strip.lastElementChild.remove();
+        for (let i = strip.children.length; i < total; i++) {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'tl-pg-btn';
+            button.dataset.page = i;
+            button.textContent = i + 1;
+            strip.append(button);
+        }
+        Array.from(strip.children).forEach((button, i) => {
+            button.classList.toggle('cur', i === tlCurrentPage);
+            if (i === tlCurrentPage) button.setAttribute('aria-current', 'page');
+            else button.removeAttribute('aria-current');
+        });
         const num = $('tl-pg-num');
         num.max = total;
-        if (document.activeElement !== num) num.value = tlCurrentPage + 1;
+        if (syncPageNumber || document.activeElement !== num) num.value = tlCurrentPage + 1;
         const atStart = tlCurrentPage <= 0;
         const atEnd = tlCurrentPage >= total - 1;
         $('tl-pg-first').disabled = atStart;
         $('tl-pg-prev').disabled = atStart;
         $('tl-pg-next').disabled = atEnd;
         $('tl-pg-last').disabled = atEnd;
+        if (hadPagerFocus && (!focused.isConnected || focused.disabled)) {
+            strip.children[tlCurrentPage].focus({ preventScroll: true });
+        }
+        revealTlCurrentPage();
     }
 
     function renderTimeline(ev, options = {}) {
         const scrollState = getTimelineScrollState();
+        const previousPage = tlCurrentPage;
+        const wasPaging = timelineHasRenderedEvents && !$('tl-pager').classList.contains('hidden');
         summaryData.events = ev || [];
         const c = $('timeline-list');
         if (!ev?.length) {
             setHtml(c, '<div class="empty">暂无事件记录</div>');
             tlCurrentPage = -1;
+            tlSavePage();
             timelineHasRenderedEvents = false;
             updateTlPager(false);
             return;
@@ -1523,16 +1550,17 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
             tlCurrentPage = options.page != null
                 ? clampTlPage(options.page)
                 : (tlCurrentPage < 0 || tlCurrentPage > tlTotalPages() - 1 ? tlTotalPages() - 1 : tlCurrentPage);
-            if (options.page != null) tlSavePage();
+            tlSavePage();
             const start = tlCurrentPage * TL_PAGE_SIZE;
             setHtml(c, summaryData.events.slice(start, start + TL_PAGE_SIZE).map(tlItemHtml).join(''));
-            c.scrollTop = 0;
+            updateTlPager(true, options.page != null || !wasPaging || previousPage !== tlCurrentPage);
+            c.scrollTop = wasPaging && previousPage === tlCurrentPage ? scrollState.scrollTop : 0;
         } else {
             setHtml(c, summaryData.events.map(tlItemHtml).join(''));
+            updateTlPager(false);
             restoreTimelineScroll(scrollState, options.scrollMode || 'auto');
         }
         timelineHasRenderedEvents = true;
-        updateTlPager(tlPagingEnabled);
     }
 
     function getCharName(c) {
@@ -2910,11 +2938,11 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
 
         // Timeline pager
         const tlPagingToggle = $('tl-paging-toggle');
-        tlPagingToggle.classList.toggle('on', tlPagingEnabled);
+        tlPagingToggle.setAttribute('aria-pressed', String(tlPagingEnabled));
         tlPagingToggle.onclick = () => {
+            localStorage.setItem(TL_PAGING_KEY, tlPagingEnabled ? '0' : '1');
             tlPagingEnabled = !tlPagingEnabled;
-            localStorage.setItem(TL_PAGING_KEY, tlPagingEnabled ? '1' : '0');
-            tlPagingToggle.classList.toggle('on', tlPagingEnabled);
+            tlPagingToggle.setAttribute('aria-pressed', String(tlPagingEnabled));
             renderTimeline(summaryData.events);
         };
         $('tl-pg-first').onclick = () => renderTimeline(summaryData.events, { page: 0 });
@@ -2922,6 +2950,7 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
         $('tl-pg-next').onclick = () => renderTimeline(summaryData.events, { page: tlCurrentPage + 1 });
         $('tl-pg-last').onclick = () => renderTimeline(summaryData.events, { page: tlTotalPages() - 1 });
         const tlPgStrip = $('tl-pg-strip');
+        new ResizeObserver(revealTlCurrentPage).observe(tlPgStrip);
         tlPgStrip.addEventListener('click', (e) => {
             const btn = e.target.closest('.tl-pg-btn');
             if (btn) renderTimeline(summaryData.events, { page: parseInt(btn.dataset.page, 10) });
@@ -2945,7 +2974,6 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
         tlPgNum.addEventListener('keydown', (e) => {
             if (e.key === 'Enter') {
                 tlPgJump();
-                tlPgNum.blur();
             }
         });
 

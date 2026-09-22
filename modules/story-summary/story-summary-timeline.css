@@ -1,0 +1,121 @@
+.tl-pager {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-bottom: 8px;
+    padding: 4px 0 8px;
+    border-bottom: 1px solid var(--bdr);
+    color: var(--txt3);
+    font-size: .75rem;
+}
+
+.tl-pg-btn {
+    min-width: 28px;
+    height: 28px;
+    padding: 0 6px;
+    border: 1px solid var(--bdr);
+    border-radius: 4px;
+    background: transparent;
+    color: var(--txt2);
+    font-size: .8125rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.tl-pg-btn:hover:not(:disabled):not(.cur),
+.tl-pg-btn:focus-visible:not(.cur) {
+    border-color: var(--hl);
+    color: var(--hl);
+}
+
+.tl-pg-btn:focus-visible,
+.tl-pg-num:focus-visible,
+#tl-paging-toggle:focus-visible {
+    outline: 2px solid var(--hl);
+    outline-offset: 2px;
+}
+
+.tl-pg-btn:disabled {
+    opacity: .35;
+    cursor: default;
+}
+
+.tl-pg-strip {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    gap: 4px;
+    overflow-x: auto;
+    padding: 1px 2px;
+    scrollbar-width: thin;
+}
+
+.tl-pg-strip .tl-pg-btn {
+    flex: 0 0 auto;
+    font-variant-numeric: tabular-nums;
+}
+
+.tl-pg-btn.cur {
+    border-color: var(--hl);
+    background: var(--hl);
+    color: var(--inv);
+}
+
+.tl-pg-num {
+    flex: 0 0 auto;
+    width: 3.4em;
+    height: 28px;
+    padding: 2px 4px;
+    border: 1px solid var(--bdr);
+    border-radius: 4px;
+    background: var(--bg2);
+    color: var(--txt);
+    font: inherit;
+    text-align: center;
+    appearance: textfield;
+}
+
+.tl-pg-num::-webkit-outer-spin-button,
+.tl-pg-num::-webkit-inner-spin-button {
+    margin: 0;
+    -webkit-appearance: none;
+}
+
+#tl-paging-toggle[aria-pressed="true"] {
+    border-color: var(--hl);
+    color: var(--hl);
+}
+
+@media (max-width: 768px) {
+    .timeline {
+        --tl-touch-size: 44px;
+    }
+
+    .tl-pager {
+        display: grid;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+        gap: 6px;
+    }
+
+    .tl-pg-strip {
+        grid-column: 1 / -1;
+        grid-row: 1;
+    }
+
+    .tl-pg-btn,
+    .tl-pg-num {
+        width: 100%;
+        height: var(--tl-touch-size);
+    }
+
+    .tl-pg-strip .tl-pg-btn {
+        width: auto;
+        min-width: var(--tl-touch-size);
+    }
+
+    .timeline .sec-actions .sec-btn {
+        min-width: var(--tl-touch-size);
+        min-height: var(--tl-touch-size);
+    }
+}
