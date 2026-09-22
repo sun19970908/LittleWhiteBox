@@ -10,25 +10,18 @@ import type { MapService, MapServiceView } from '../application/service.js';
 import { createEmptyMapDomain } from '../../../domains/map/state.js';
 import type { MapDomainEdit } from '../../../domains/map/edit.js';
 import type { MapDomainV1 } from '../../../domains/map/types.js';
-import { compileAtlasIntent } from './atlas-intent-compiler.js';
-import { buildMapAtlasDataMessage } from './atlas-data-message.js';
-import { readAtlas } from './atlas-reader.js';
+import { compileAtlasIntent } from '../tools/atlas-intent-compiler.js';
+import { buildMapAtlasDataMessage } from '../tools/atlas-data-message.js';
+import { readAtlas } from '../tools/atlas-reader.js';
 import { buildMapMaintenancePrompt } from './prompt.js';
-import { mapToolResult, type MapToolItemReport, type MapToolResult } from './result.js';
-import { compileSceneIntent } from './scene-intent-compiler.js';
-import { sceneForTool } from './scene-reader.js';
-import { MAP_MAINTENANCE_TOOLS, MAP_MAINTENANCE_TOOL_NAMES } from './tool-contract.js';
-import { intentId, isRecord } from './intent-common.js';
+import { mapToolResult, type MapToolItemReport, type MapToolResult } from '../tools/result.js';
+import { compileSceneIntent } from '../tools/scene-intent-compiler.js';
+import { resolveSceneKey, sceneForTool } from '../tools/scene-reader.js';
+import { MAP_MAINTENANCE_TOOLS, MAP_MAINTENANCE_TOOL_NAMES } from '../tools/tool-contract.js';
+import { intentId, isRecord } from '../tools/intent-common.js';
 
 function mapContent(domain: MapDomainV1): Pick<MapDomainV1, 'atlas' | 'scenes'> {
     return { atlas: domain.atlas, scenes: domain.scenes };
-}
-
-function sceneKey(domain: MapDomainV1, requested: string): string {
-    const location = domain.atlas.locations.find(candidate => candidate.key === requested)
-        || domain.atlas.locations.find(candidate => candidate.sceneKey === requested)
-        || domain.atlas.locations.find(candidate => candidate.name === requested);
-    return location?.sceneKey || location?.key || requested;
 }
 
 export function createMapMaintenanceSession(
@@ -97,7 +90,7 @@ export function createMapMaintenanceSession(
                 if (unknown.length) { throw new TypeError(`MapSceneRead has unsupported fields: ${unknown.join(', ')}.`); }
                 const key = intentId(args.scene);
                 if (!key) { throw new TypeError('MapSceneRead.scene is required.'); }
-                const keyForScene = sceneKey(staged, key);
+                const keyForScene = resolveSceneKey(staged, key);
                 const scene = staged.scenes[keyForScene];
                 // Domain validation guarantees one owner. Use its key on readback
                 // so a scene key cannot be mistaken for another location's key.
@@ -109,7 +102,7 @@ export function createMapMaintenanceSession(
             }
             if (name === MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT) {
                 const requestedScene = isRecord(args) ? intentId(args.scene, '*') : '*';
-                const scene = sceneKey(staged, requestedScene);
+                const scene = resolveSceneKey(staged, requestedScene);
                 return acceptCompile('scene', scene, compileSceneIntent(staged, args, source.player));
             }
             throw new TypeError(`Unknown map maintenance tool: ${name}`);
@@ -128,7 +121,7 @@ export function createMapMaintenanceSession(
             if (mode === 'rebuild' && unresolvedFailures.size) { throw new Error('map_rebuild_edits_unresolved'); }
             if (!hasChanges()) { return map.readCurrent(); }
             const guard = () => {
-                assertActive();
+                if (invalidated) { throw new Error('map_maintenance_session_invalid'); }
                 if (!beforeCommit()) { throw new Error('map_maintenance_commit_guard_rejected'); }
             };
             guard();

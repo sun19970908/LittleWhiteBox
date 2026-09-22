@@ -1,8 +1,8 @@
-import type { ScopedChatStore, XiaobaiOsFileControls } from '../../../kernel/contracts.js';
+import type { PartitionStore, XiaobaiOsFileControls } from '../../../kernel/contracts.js';
 import { emptyMessages, type MessagesDomainV2 } from '../../../domains/messages/types.js';
 import { validateMessages } from '../../../domains/messages/invariants.js';
 
-export function createMessagesService(store: ScopedChatStore<MessagesDomainV2>, files: XiaobaiOsFileControls) {
+export function createMessagesService(store: PartitionStore<MessagesDomainV2>, files: XiaobaiOsFileControls) {
     function current(): MessagesDomainV2 {return structuredClone(store.peekCurrent()?.value ?? emptyMessages());}
     async function change<T>(command: (state: MessagesDomainV2) => T, guard: () => boolean = () => true): Promise<T> {
         const result = await store.transact(context => {

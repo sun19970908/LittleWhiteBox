@@ -6,11 +6,12 @@ import type {
     CapabilityToken,
     CapabilityTransactionAccess,
     PartitionRegistration,
-    ScopedChatStore,
+    PartitionStore,
     XiaobaiOsFileControls,
     XiaobaiOsFileState,
 } from '../../kernel/contracts.js';
 import { validateLedger } from '../../domains/economy/invariants.js';
+import { economyScope } from './scope.js';
 import {
     ensureEconomy,
     listTransactions,
@@ -18,7 +19,7 @@ import {
     projectBalances,
 } from '../../domains/economy/ledger.js';
 import type {
-    EconomyLedgerV2,
+    EconomyLedger,
     EconomyPostActionResult,
     EconomyTransaction,
     EconomyTransactionPage,
@@ -41,8 +42,9 @@ export interface EconomyReadCapability extends EconomyReadView {
     subscribe(listener: () => void): () => void;
 }
 
-export interface EconomyActionLeg extends Omit<PostTransactionInput, 'sourceDomain'> {
+export interface EconomyActionLeg extends Omit<PostTransactionInput, 'sourceDomain' | 'sourceScope'> {
     sourceDomain?: never;
+    sourceScope?: never;
 }
 
 export interface EconomyActionInput {
@@ -60,10 +62,11 @@ export const ECONOMY_READ_CAPABILITY: CapabilityToken<EconomyReadCapability> =
 export const ECONOMY_TRANSACTION_CAPABILITY: CapabilityToken<EconomyTransactionCapability> =
     createCapabilityToken('economy.transaction');
 
-export const ECONOMY_PARTITION: PartitionRegistration<EconomyLedgerV2> = Object.freeze({
+export const ECONOMY_PARTITION: PartitionRegistration<EconomyLedger> = Object.freeze({
     key: ECONOMY_PARTITION_KEY,
+    storage: 'user',
     ownerId: 'economy',
-    schemaVersion: 2,
+    schemaVersion: 3,
     parse(value: unknown) {
         try {
             validateLedger(value);
@@ -78,7 +81,7 @@ export const ECONOMY_PARTITION: PartitionRegistration<EconomyLedgerV2> = Object.
             };
         }
     },
-    serialize(value: EconomyLedgerV2) {
+    serialize(value: EconomyLedger) {
         validateLedger(value);
         return structuredClone(value);
     },
@@ -87,7 +90,7 @@ export const ECONOMY_PARTITION: PartitionRegistration<EconomyLedgerV2> = Object.
     },
 });
 
-function readLedger(access: CapabilityTransactionAccess): EconomyLedgerV2 | null {
+function readLedger(access: CapabilityTransactionAccess): EconomyLedger | null {
     return access.readPartition(ECONOMY_PARTITION);
 }
 
@@ -114,6 +117,8 @@ function transactionCapability(
     callerDomain: string,
     accountNamespace: string,
 ): EconomyTransactionCapability {
+    const scopeId = access.scopeId ?? 'user';
+    const scope = economyScope(scopeId);
     const assertAccount = (accountId: string, direction: 'from' | 'to'): void => {
         const ownedPrefixes = [`counterparty:${accountNamespace}:`, `escrow:${accountNamespace}:`];
         const allowed = accountId === 'player'
@@ -138,21 +143,21 @@ function transactionCapability(
                 assertAccount(leg.fromAccountId, 'from');
                 assertAccount(leg.toAccountId, 'to');
             }
-            const result = postAction(ledger, input.legs.map(leg => ({
+            const result = postAction(ledger, input.legs.map(leg => scope.qualify({
                 ...leg,
                 sourceDomain: callerDomain,
             })));
             access.replacePartition(ECONOMY_PARTITION, result.ledger);
             return {
-                transactions: structuredClone(result.transactions),
+                transactions: result.transactions.map(scope.local),
                 created: result.created,
             };
         },
         listOwnedTransactions() {
             return Object.freeze(
                 (readLedger(access)?.transactions ?? [])
-                    .filter(transaction => transaction.sourceDomain === callerDomain)
-                    .map(transaction => Object.freeze(structuredClone(transaction))),
+                    .filter(transaction => transaction.sourceDomain === callerDomain && transaction.sourceScope === scopeId)
+                    .map(transaction => Object.freeze(scope.local(transaction))),
             );
         },
         getAccountBalance(accountId: string) {
@@ -163,13 +168,13 @@ function transactionCapability(
                 });
             }
             const ledger = readLedger(access);
-            return ledger ? projectBalances(ledger)[accountId] ?? 0 : 0;
+            return ledger ? projectBalances(ledger)[scope.account(accountId)] ?? 0 : 0;
         },
     });
 }
 
 function installedReadCapability(
-    store: ScopedChatStore<EconomyLedgerV2>,
+    store: PartitionStore<EconomyLedger>,
     files: XiaobaiOsFileControls,
 ): { capability: EconomyReadCapability; dispose: () => void } {
     const listeners = new Set<() => void>();
@@ -182,7 +187,7 @@ function installedReadCapability(
     };
     const unsubscribeStore = store.subscribe(publish);
     const unsubscribeFile = files.subscribeFileState(publish);
-    const currentLedger = (): EconomyLedgerV2 | null => store.peekCurrent()?.value ?? null;
+    const currentLedger = (): EconomyLedger | null => store.peekCurrent()?.value ?? null;
     const capability: EconomyReadCapability = Object.freeze({
         async refresh() {
             await store.read();
@@ -265,7 +270,7 @@ export function createEconomyCapabilityRegistrations({
                     throw new Error('Economy capability requires its partition store and file controls');
                 }
                 const installed = installedReadCapability(
-                    context.partition as ScopedChatStore<EconomyLedgerV2>,
+                    context.partition as PartitionStore<EconomyLedger>,
                     context.files,
                 );
                 disposers.set(installed.capability, installed.dispose);

@@ -5,7 +5,7 @@ import {
     OPENING_GRANT_AMOUNT,
     OPENING_GRANT_IDEMPOTENCY_KEY,
     EconomyError,
-    type EconomyLedgerV2,
+    type EconomyLedger,
     type EconomyPostActionResult,
     type EconomyPostResult,
     type EconomyTransaction,
@@ -27,6 +27,7 @@ function defaultCreateId(): string {
 
 function normalizedInput(input: PostTransactionInput): Omit<EconomyTransaction, 'id' | 'sequence' | 'createdAt'> {
     return {
+        sourceScope: input.sourceScope ?? 'user',
         idempotencyKey: input.idempotencyKey,
         actionId: input.actionId,
         fromAccountId: input.fromAccountId,
@@ -43,6 +44,7 @@ function normalizedInput(input: PostTransactionInput): Omit<EconomyTransaction, 
 
 function sameInput(transaction: EconomyTransaction, input: PostTransactionInput): boolean {
     return transaction.idempotencyKey === input.idempotencyKey
+        && transaction.sourceScope === (input.sourceScope ?? 'user')
         && transaction.actionId === input.actionId
         && transaction.fromAccountId === input.fromAccountId
         && transaction.toAccountId === input.toAccountId
@@ -56,14 +58,14 @@ function sameInput(transaction: EconomyTransaction, input: PostTransactionInput)
 }
 
 export function ensureEconomy(
-    ledger: EconomyLedgerV2 | undefined,
+    ledger: EconomyLedger | undefined,
     { now = Date.now, createId = defaultCreateId }: LedgerDependencies = {},
-): EconomyLedgerV2 {
+): EconomyLedger {
     if (ledger) {
         validateLedger(ledger);
         return structuredClone(ledger);
     }
-    const created: EconomyLedgerV2 = {
+    const created: EconomyLedger = {
         schemaVersion: ECONOMY_SCHEMA_VERSION,
         transactions: [{
             id: createId(),
@@ -77,6 +79,7 @@ export function ensureEconomy(
             title: '开户赠礼',
             note: '欢迎来到小白 OS',
             sourceDomain: 'economy',
+            sourceScope: 'user',
             sourceId: 'opening-grant:v1',
             createdAt: now(),
         }],
@@ -86,7 +89,7 @@ export function ensureEconomy(
 }
 
 export function postTransaction(
-    ledger: EconomyLedgerV2,
+    ledger: EconomyLedger,
     input: PostTransactionInput,
     { now = Date.now, createId = defaultCreateId }: LedgerDependencies = {},
 ): EconomyPostResult {
@@ -111,7 +114,7 @@ export function postTransaction(
 }
 
 export function postAction(
-    ledger: EconomyLedgerV2,
+    ledger: EconomyLedger,
     inputs: readonly PostTransactionInput[],
     dependencies: LedgerDependencies = {},
 ): EconomyPostActionResult {
@@ -128,7 +131,7 @@ export function postAction(
         idempotencyKeys.add(input.idempotencyKey);
         if (
             input.actionId !== first.actionId ||
-            input.sourceDomain !== first.sourceDomain ||
+            input.sourceDomain !== first.sourceDomain || (input.sourceScope ?? 'user') !== (first.sourceScope ?? 'user') ||
             input.sourceId !== first.sourceId
         ) {
             throw new EconomyError(
@@ -173,7 +176,7 @@ export function postAction(
 }
 
 export function reverseTransaction(
-    ledger: EconomyLedgerV2,
+    ledger: EconomyLedger,
     input: ReverseTransactionInput,
     dependencies: LedgerDependencies = {},
 ): EconomyPostResult {
@@ -198,10 +201,11 @@ export function reverseTransaction(
         sourceDomain: input.sourceDomain,
         sourceId: input.sourceId,
         reversalOfTransactionId: original.id,
+        sourceScope: original.sourceScope,
     }, dependencies);
 }
 
-export function projectBalances(ledger: EconomyLedgerV2): Readonly<Record<string, number>> {
+export function projectBalances(ledger: EconomyLedger): Readonly<Record<string, number>> {
     validateLedger(ledger);
     const balances: Record<string, number> = {};
     for (const transaction of ledger.transactions) {
@@ -212,7 +216,7 @@ export function projectBalances(ledger: EconomyLedgerV2): Readonly<Record<string
 }
 
 export function listTransactions(
-    ledger: EconomyLedgerV2,
+    ledger: EconomyLedger,
     { beforeSequence = Number.POSITIVE_INFINITY, limit = 18 }: { beforeSequence?: number; limit?: number } = {},
 ): EconomyTransactionPage {
     validateLedger(ledger);

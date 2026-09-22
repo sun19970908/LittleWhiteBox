@@ -1,8 +1,8 @@
 import { parseTeacherPreference, type LearningTeacherPreference } from '../../../domains/learning/profile.js';
 import { selectKnownPeople, type KnownPerson } from '../../../host/prompt-context/known-people.js';
-import type { ScopedChatStore } from '../../../kernel/contracts.js';
+import type { PartitionStore } from '../../../kernel/contracts.js';
 
-export function createLearningTeacherService(store: ScopedChatStore<LearningTeacherPreference>, sources: {
+export function createLearningTeacherService(store: PartitionStore<LearningTeacherPreference>, sources: {
     knownPeople(): KnownPerson[];
     playerName(): string;
 }) {

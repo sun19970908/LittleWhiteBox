@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { buildRAggregateText } from './state-vector-input.js';
+import { isL0FloorDeferred } from './l0-eligibility.js';
 import { inputDigest } from '../utils/vector-input-digest.js';
 import { getContext } from '../../../../../../../extensions.js';
 import { xbLog } from '../../../../core/debug-core.js';
@@ -177,7 +178,7 @@ async function incrementalExtractAtomsInner(chatId, chat, onProgress, options = 
 
     const tryQueueFloor = (i) => {
         const msg = chat[i];
-        if (!msg || msg.is_user || queuedFloors.has(i)) return;
+        if (!msg || msg.is_user || queuedFloors.has(i) || isL0FloorDeferred(chat, i)) return;
 
         const st = getL0FloorStatus(i);
         // ★ 只跳过 ok 和 empty，fail 的可以重试
@@ -219,7 +220,7 @@ async function incrementalExtractAtomsInner(chatId, chat, onProgress, options = 
     }
 
     if (!pendingPairs.length) {
-        onProgress?.('已全部提取', 0, 0);
+        if (!isL0FloorDeferred(chat)) onProgress?.('已全部提取', 0, 0);
         return { built: 0, failed: 0, llmFailed: 0, vectorFailed: 0, cancelled: false };
     }
 

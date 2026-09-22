@@ -2,8 +2,8 @@ import type { FourthWallGlobalSettings } from '../apps/fourth-wall/types.js';
 import type { MapSettings } from '../apps/map/types.js';
 import type { TasksSettings } from '../apps/tasks/types.js';
 import type { MessagesSettings } from '../apps/messages/types.js';
-import type { ActionCheckFrequency, DiceFeature, DiceSettings } from '../apps/dice/types.js';
-import { isActionCheckFrequency } from '../apps/dice/settings.js';
+import type { ActionCheckFrequency, ActionCheckRule, DiceFeature, DiceSettings } from '../apps/dice/types.js';
+import { isActionCheckFrequency, isActionCheckRule } from '../apps/dice/settings.js';
 import type { WorldSettings } from '../apps/world/types.js';
 import type { XiaobaiOsSettings as XiaobaiOsSettingsRoot } from '../types.js';
 import { jsonValuesEqual } from './json-values-equal.js';
@@ -56,6 +56,9 @@ export interface XiaobaiOsSettingsRepository {
     setMessagesCapabilities: (settings: MessagesSettings) => Promise<XiaobaiOsSettings>;
     setDiceFeature: (feature: DiceFeature, enabled: boolean) => Promise<XiaobaiOsSettings>;
     setDiceActionCheckFrequency: (frequency: ActionCheckFrequency) => Promise<XiaobaiOsSettings>;
+    setDiceActionCheckRule: (rule: ActionCheckRule) => Promise<XiaobaiOsSettings>;
+    readLegacyDiceSheet: () => unknown;
+    finishDiceSheetMigration: () => Promise<XiaobaiOsSettings>;
     setWorldPreference: (key: keyof WorldSettings, enabled: boolean) => Promise<XiaobaiOsSettings>;
     mutateFourthWall: (
         action: (current: FourthWallGlobalSettings) => FourthWallGlobalSettings,
@@ -286,6 +289,27 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         });
     }
 
+    function setDiceActionCheckRule(rule: ActionCheckRule): Promise<XiaobaiOsSettings> {
+        if (!isActionCheckRule(rule)) { throw new TypeError('dice_rule_invalid'); }
+        return mutate(next => {
+            next.apps.dice.actionCheckRule = rule;
+            return next;
+        });
+    }
+
+    function readLegacyDiceSheet(): unknown {
+        return (read()?.apps.dice as unknown as UnknownRecord | undefined)?.coc7Sheet ?? null;
+    }
+
+    function finishDiceSheetMigration(): Promise<XiaobaiOsSettings> {
+        const current = read();
+        if (current && !Object.hasOwn(current.apps.dice, 'coc7Sheet')) { return Promise.resolve(current); }
+        return mutate(next => {
+            delete (next.apps.dice as unknown as UnknownRecord).coc7Sheet;
+            return next;
+        });
+    }
+
     function setDiceActionCheckFrequency(frequency: ActionCheckFrequency): Promise<XiaobaiOsSettings> {
         if (!isActionCheckFrequency(frequency)) { throw new TypeError('invalid Dice action-check frequency'); }
         return mutate(next => {
@@ -345,6 +369,9 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         setMessagesCapabilities,
         setDiceFeature,
         setDiceActionCheckFrequency,
+        setDiceActionCheckRule,
+        readLegacyDiceSheet,
+        finishDiceSheetMigration,
         setWorldPreference,
         mutateFourthWall,
         subscribe,

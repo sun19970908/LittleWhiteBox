@@ -1,6 +1,6 @@
 import { AGENT_CAPABILITY, type AgentCapability } from '../../capabilities/agent/index.js';
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
-import type { ScopedChatStore } from '../../kernel/contracts.js';
+import type { PartitionStore } from '../../kernel/contracts.js';
 import type { XiaobaiOsAppRuntime } from '../../types.js';
 import { FOURTH_WALL_APP_DESCRIPTOR } from './descriptor.js';
 import {
@@ -31,7 +31,7 @@ export function createFourthWallModule(dependencies: FourthWallModuleDependencie
         install(context) {
             if (!context.partition) { throw new Error('Fourth Wall partition store is unavailable'); }
             const repository = createFourthWallRepository(
-                context.partition as ScopedChatStore<FourthWallStoredPartition>,
+                context.partition as PartitionStore<FourthWallStoredPartition>,
                 { upgradeSource: dependencies.upgradeSource },
             );
             return dependencies.install({

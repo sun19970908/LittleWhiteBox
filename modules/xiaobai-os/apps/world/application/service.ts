@@ -1,4 +1,4 @@
-import type { ScopedChatStore, XiaobaiOsFileControls, XiaobaiOsFileState } from '../../../kernel/contracts.js';
+import type { PartitionStore, XiaobaiOsFileControls, XiaobaiOsFileState } from '../../../kernel/contracts.js';
 import { parseWorld, parseWorldContent } from '../../../domains/world/invariants.js';
 import { worldContent } from '../../../domains/world/projection.js';
 import { createEmptyWorld, sameWorldContent, type WorldContent, type WorldDomain } from '../../../domains/world/types.js';
@@ -14,7 +14,7 @@ export interface WorldView {
 }
 
 export function createWorldService(
-    store: ScopedChatStore<WorldDomain>,
+    store: PartitionStore<WorldDomain>,
     files: XiaobaiOsFileControls,
     getChatIdentity: () => string,
 ) {
@@ -61,7 +61,7 @@ export function createWorldService(
                 return { ...current, ...replacement };
             }, guard);
         },
-        confirmPending: files.retryPending,
+        confirmPending: (guard?: () => boolean) => files.retryPending({ beforeRetry: guard }),
         adoptServerState: files.adoptServerState,
         subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
         dispose() { unsubscribeStore(); unsubscribeFile(); listeners.clear(); },

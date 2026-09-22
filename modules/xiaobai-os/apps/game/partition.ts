@@ -6,6 +6,7 @@ import { GAME_APP_DESCRIPTOR } from './descriptor.js';
 
 export const GAME_PARTITION: PartitionRegistration<GameDomainV1> = Object.freeze({
     key: 'game',
+    storage: 'user-story',
     ownerId: GAME_APP_DESCRIPTOR.id,
     schemaVersion: 1,
     parse(value: unknown) {

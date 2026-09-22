@@ -5,7 +5,7 @@ import { learningRecord, learningText, LearningValidationError, parseLearningLan
 import type { LearningAnswer } from '../../../domains/learning/types.js';
 import { learningInteger, requireLearning } from '../../../domains/learning/validation.js';
 import type { KnownPerson } from '../../../host/prompt-context/known-people.js';
-import type { ScopedChatStore, XiaobaiOsFileControls } from '../../../kernel/contracts.js';
+import type { PartitionStore, XiaobaiOsFileControls } from '../../../kernel/contracts.js';
 import type { XiaobaiOsExecutionScope } from '../../../kernel/execution-scope.js';
 import type { XiaobaiOsAppActivationContext, XiaobaiOsAppRuntime } from '../../../types.js';
 import type { LearningTeacherContext } from '../agent/context.js';
@@ -23,9 +23,11 @@ import { LearningStorageError } from '../storage/repository.js';
 import { sameLearningDocument } from '../storage/document.js';
 import type { LearningClientState } from '../types.js';
 import type { LearningTtsFacade } from './media-adapter.js';
+import type { LearningRewardPolicy } from '../reward-partition.js';
 
 export function createLearningRuntime(deps: {
-    repository: LearningRepository; store: ScopedChatStore<LearningTeacherPreference>; files: XiaobaiOsFileControls;
+    repository: LearningRepository; store: PartitionStore<LearningTeacherPreference>; files: XiaobaiOsFileControls;
+    rewardStore: PartitionStore<LearningRewardPolicy>; rewardFiles: XiaobaiOsFileControls;
     agent: AgentCapability; economy: EconomyReadCapability; execution: XiaobaiOsExecutionScope;
     chatIdentity(): string; playerName(): string; people(): KnownPerson[];
     capture(name: string, identity: string): Promise<LearningTeacherContext>;
@@ -47,7 +49,7 @@ export function createLearningRuntime(deps: {
     const repository = deps.repository;
     const service = createLearningService(repository);
     const teacher = createLearningTeacherService(deps.store, { knownPeople: deps.people, playerName: deps.playerName });
-    const rewards = createLearningRewards({ ...deps });
+    const rewards = createLearningRewards({ repository: deps.repository, store: deps.rewardStore, files: deps.rewardFiles, economy: deps.economy });
     const active = () => !!activation?.isCurrent() && chatIdentity === deps.chatIdentity();
     function current(): LearningClassroom | null {
         const saved = deps.store.peekCurrent();
@@ -72,13 +74,13 @@ export function createLearningRuntime(deps: {
     function state(): LearningClientState {
         const snapshot = repository.snapshot();
         const saved = deps.store.peekCurrent();
-        const view = learningClassView(snapshot.document?.data ?? { profiles: [] }, language, saved?.osId ?? null, offset, recordId);
+        const view = learningClassView(snapshot.document?.data ?? { profiles: [] }, language, saved?.osId ?? null, offset, recordId, rewards.status);
         // Keep navigation on the displayed page when deletion or a server read shrinks the list.
         offset = view.records.offset;
         return { ...view,
             chatIdentity, language, teacher: saved?.value?.teacher ?? null,
             candidates: teacher.candidates().map(person => ({ name: person.name, aliases: person.aliases })),
-            storage: loadFailed ? 'unloaded' : snapshot.status, chatStorage: deps.files.getFileState(), busy: !!job,
+            storage: loadFailed ? 'unloaded' : snapshot.status, chatStorage: deps.files.getFileState(), walletStorage: deps.rewardFiles.getFileState(), busy: !!job,
             message: job ? progress : message, reply, conversation: teaching.conversation(),
             walletOpen: deps.economy.isOpen(), media: speech.media.snapshot(), voices: speech.media.capabilities() };
     }
@@ -97,8 +99,8 @@ export function createLearningRuntime(deps: {
         const result = await rewards.settle(language, unitId, open, guard);
         if (!guard()) { return; }
         if (result === 'paid') { message = '学习奖励已到账。'; }
-        else if (result === 'wallet-closed') { message = '学习已完成。开通当前聊天的钱包后即可领取奖励。'; }
-        else if (result === 'other-story') { message = '学习成果已保留；奖励只能在开课的原聊天领取。'; }
+        else if (result === 'wallet-closed') { message = '学习已完成。开通钱包后即可领取奖励。'; }
+        else if (result === 'retired') { message = '学习成果已保留；经济重置前的课程不再补发奖励。'; }
         else if (result !== 'cancelled') { message = '学习已完成，还不确定奖励是否到账。请先检查账本再补领，不需要重新上课。'; }
     }
     async function afterTeaching(result: LearningTeachingResult, guard: () => boolean, action: LearningAction['kind'], exerciseId?: string, selection: LearningSelection | null = null) {
@@ -155,8 +157,8 @@ export function createLearningRuntime(deps: {
             }
             return;
         }
-        if (name === 'verify-wallet') { saved(await deps.files.retryPending()); await deps.economy.refresh(); return; }
-        if (name === 'adopt-wallet') { saved(await deps.files.adoptServerState()); await deps.economy.refresh(); return; }
+        if (name === 'verify-wallet') { saved(await deps.rewardFiles.retryPending()); await deps.economy.refresh(); return; }
+        if (name === 'adopt-wallet') { saved(await deps.rewardFiles.adoptServerState()); await deps.economy.refresh(); return; }
         requireLearning(!loadFailed, 'storage', 'Read the learning file first');
         confirmedLearning(repository);
         if (name === 'teacher') {
@@ -241,7 +243,7 @@ export function createLearningRuntime(deps: {
         if (name === 'reward') { await pay(String(input.unitId), input.openWallet === true, guard); return; }
         if (name === 'delete-item') { saved(await service.deleteItem(language, String(input.id), guard)); recordId = ''; return; }
         if (name === 'delete-attempt') { saved(await service.deleteAttempt(language, String(input.id), guard)); return; }
-        requireLearning(!deps.files.hasPendingCommit(), 'wallet', 'Resolve pending wallet changes before deleting learning data');
+        requireLearning(!deps.rewardFiles.hasPendingCommit(), 'wallet', 'Resolve pending wallet changes before deleting learning data');
         if (name === 'abandon') { saved(await service.abandonUnit(language, guard)); reply = null; return; }
         if (name === 'delete-language') { saved(await service.deleteLanguage(language, guard)); reply = null; return; }
         if (name === 'clear') { saved(await repository.clear(confirmedLearning(repository), guard)); reply = null; return; }

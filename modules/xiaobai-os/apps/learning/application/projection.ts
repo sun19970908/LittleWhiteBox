@@ -1,6 +1,7 @@
 import { learningProgress } from '../../../domains/learning/progress.js';
 import { learningSpeechParts } from '../../../domains/learning/speech.js';
-import { canReadLearningScope, type LearningData, type LearningExercise, type LearningMaterial, type LearningUnit } from '../../../domains/learning/types.js';
+import { canReadLearningScope, type LearningCompletion, type LearningData, type LearningExercise, type LearningMaterial, type LearningUnit } from '../../../domains/learning/types.js';
+import type { LearningRewardStatus } from './rewards.js';
 
 export function learningMaterialView(material: LearningMaterial, hidden: boolean) {
     return { id: material.id, title: material.title, provenance: material.provenance, hidden,
@@ -14,7 +15,8 @@ export function learningExerciseView(exercise: LearningExercise, unit?: Learning
 }
 
 /** The iframe receives a reading surface, never an unfiltered lesson or answer-key cache. */
-export function learningClassView(data: LearningData, language: string, osId: string | null, offset = 0, recordId = '') {
+export function learningClassView(data: LearningData, language: string, osId: string | null, offset = 0, recordId = '',
+    rewardStatus: (completion: LearningCompletion) => LearningRewardStatus | 'available' = completion => completion.receipt ? 'paid' : 'available') {
     const profile = data.profiles.find(entry => entry.language === language);
     const visible = (scope: Parameters<typeof canReadLearningScope>[0]) => canReadLearningScope(scope, osId);
     const unit = profile?.unit && visible(profile.unit.scope) ? profile.unit : null;
@@ -47,7 +49,7 @@ export function learningClassView(data: LearningData, language: string, osId: st
         })) } : null,
         completions: (profile?.completions ?? []).map(completion => ({ unitId: completion.unitId,
             completedAt: completion.completedAt, summary: visible(completion.scope) ? completion.summary : '在其他故事中完成的学习',
-            amount: completion.reward.amount, paid: !!completion.receipt, originHere: completion.reward.originOsId === osId,
+            amount: completion.reward.amount, rewardStatus: rewardStatus(completion),
         })).reverse(),
     };
 }

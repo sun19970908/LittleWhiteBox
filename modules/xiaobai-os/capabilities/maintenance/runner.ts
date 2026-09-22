@@ -158,8 +158,7 @@ export function createMaintenanceRunner({
         run.invalid = true;
         try {run.session.invalidate?.(reason);} catch (error) {report(error);}
     };
-    const onWriteUnconfirmed = (job: MaintenanceQueuedJob, reason: string): void => {
-        cancelJob(job, reason);
+    const onWriteUnconfirmed = (reason: string): void => {
         for (const queued of queue.drain()) {cancelJob(queued, reason);}
     };
     const enabled = (run: MaintenanceSessionRun, mode: MaintenanceMode): boolean => {

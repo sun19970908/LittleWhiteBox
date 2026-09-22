@@ -162,8 +162,8 @@ export function createMetrics() {
             directEvidenceTemporalProtectedCandidates: 0,
             directEvidenceVectorHits: 0,
             directEvidenceMissingVectors: 0,
-            directEvidenceMissingEventVectors: 0,
-            directEvidenceEventItems: 0,
+            directEvidenceQueryItems: 0,
+            directEvidenceFloorItems: 0,
             directEvidenceConversationItems: 0,
             directEvidenceLexicalItems: 0,
             l0ProtectedTokens: 0,
@@ -587,11 +587,11 @@ export function formatMetricsLog(metrics, { complete = true } = {}) {
         if ((m.evidence.directEvidenceTemporalProtectedItems || 0) > 0) {
             lines.push(`│   ├─ temporal_protected_in_prompt: items=${m.evidence.directEvidenceTemporalProtectedItems}, tokens=${m.evidence.directEvidenceTemporalProtectedTokens || 0}`);
         }
-        lines.push(`│   ├─ local_selection: event=${m.evidence.directEvidenceEventItems || 0}, conversation=${m.evidence.directEvidenceConversationItems || 0}, lexical_hits=${m.evidence.directEvidenceLexicalItems || 0}`);
+        lines.push(`│   ├─ local_selection: query=${m.evidence.directEvidenceQueryItems || 0}, floor=${m.evidence.directEvidenceFloorItems || 0}, conversation=${m.evidence.directEvidenceConversationItems || 0}, lexical_hits=${m.evidence.directEvidenceLexicalItems || 0}`);
         lines.push(`│   ├─ vector_coverage: hits=${m.evidence.directEvidenceVectorHits || 0}, missing=${m.evidence.directEvidenceMissingVectors || 0}`);
         lines.push(`│   ├─ temporal_candidate_protection: candidates=${m.evidence.directEvidenceTemporalCandidates || 0}, floor_winners=${m.evidence.directEvidenceTemporalFloorWinners || 0}, protected=${m.evidence.directEvidenceTemporalProtectedCandidates || 0}`);
         lines.push(`│   ├─ selected_L1/prompt_L0_L1: ${m.evidence.directEvidenceItems || 0}/${m.evidence.directEvidencePromptItems || 0} in ${m.evidence.directEvidencePromptGroups || 0} groups`);
-        lines.push(`│   ├─ missing_event_vectors: ${m.evidence.directEvidenceMissingEventVectors || 0}, L0_protected_tokens=${m.evidence.l0ProtectedTokens || 0}`);
+        lines.push(`│   ├─ L0_protected_tokens=${m.evidence.l0ProtectedTokens || 0}`);
         lines.push(`│   └─ prompt_tokens: ${m.evidence.directEvidencePromptTokens || 0}`);
     }
     if (m.evidence.causalEvidence) {
@@ -903,12 +903,8 @@ export function detectIssues(metrics) {
         issues.push(`High budget utilization (${m.budget.utilization}%) - may be truncating content`);
     }
 
-    if (m.evidence.distantEvidenceDroppedByBudget > 0 && m.evidence.distantEvidenceBudgetUsed === 0) {
-        issues.push('No complete distant evidence group fits its independent budget');
-    }
-
     if ((m.event.temporalDropped || 0) > 0) {
-        issues.push(`${m.event.temporalDropped} temporal event(s) still dropped - single event may exceed the event budget`);
+        issues.push(`${m.event.temporalDropped} temporal event(s) dropped after the event or related-event budget was exhausted`);
     }
 
     if ((m.evidence.directEvidenceSkippedByBudget || 0) > 0

@@ -11,6 +11,7 @@ function parseShopPartition(value: unknown): ShopDomainV2 {
 
 export const SHOP_PARTITION: PartitionRegistration<ShopDomainV2> = Object.freeze({
     key: 'shop',
+    storage: 'user-story',
     ownerId: SHOP_APP_DESCRIPTOR.id,
     schemaVersion: 2,
     parse(value: unknown) {

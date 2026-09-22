@@ -6,6 +6,7 @@ import {
     enhanceMessageVoiceHtml,
     enhanceMessageVoiceTextNodes,
     hydrateMessageVoiceBubbles,
+    releaseMessageVoiceBubbles,
     restoreMessageVoiceBubbles,
     stopMessageVoicePlayback,
 } from '../tts-message-voice.js';
@@ -51,6 +52,28 @@ test('hydrated voice bubble sends text and emotion to the TTS playback runtime',
     assert.deepEqual(calls, [{ text: 'hello', emotion: 'happy' }]);
     assert.equal(message.querySelector('.xb-voice-bubble').classList.contains('playing'), true);
     stopMessageVoicePlayback();
+});
+
+test('content disposal releases its bubble without stopping another floor or retaining click handlers', () => {
+    const { document } = parseHTML(`<div id="one">${enhanceMessageVoiceHtml('[voice:one]', true)}</div><div id="two">${enhanceMessageVoiceHtml('[voice:two]', true)}</div>`);
+    const one = document.getElementById('one');
+    const two = document.getElementById('two');
+    const stopped = [];
+    const options = {
+        isEnabled: () => true,
+        play: text => ({ stop: () => stopped.push(text) }),
+    };
+    hydrateMessageVoiceBubbles(one, options);
+    hydrateMessageVoiceBubbles(two, options);
+    const bubble = two.querySelector('[data-xb-tts-message-voice]');
+    bubble.click();
+    releaseMessageVoiceBubbles(one);
+    assert.deepEqual(stopped, []);
+    releaseMessageVoiceBubbles(two);
+    assert.deepEqual(stopped, ['two']);
+    assert.equal(bubble.onclick, null);
+    releaseMessageVoiceBubbles(two);
+    assert.deepEqual(stopped, ['two']);
 });
 
 test('TTS cleanup restores the exact original ordinary chat voice marker', () => {

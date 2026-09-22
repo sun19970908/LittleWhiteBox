@@ -3,6 +3,9 @@
 
 import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js';
 import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './data/summary-delay.js';
+import { RELATION_TRENDS } from './data/fact-predicates.js';
+
+const UNANNOTATED_LABEL = '未标注';
 
 (function () {
     'use strict';
@@ -2183,8 +2186,13 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
     }
 
     function memoryRoleOptions(role = '') {
-        return `<option value=""${role ? '' : ' selected'}>未标注</option>`
+        return `<option value=""${role ? '' : ' selected'}>${UNANNOTATED_LABEL}</option>`
             + EVENT_MEMORY_ROLES.map(value => `<option value="${h(value)}"${role === value ? ' selected' : ''}>${h(value)}</option>`).join('');
+    }
+
+    function relationTrendOptions(trend = '') {
+        return [{ value: '', label: UNANNOTATED_LABEL }, ...RELATION_TRENDS.map(value => ({ value, label: value }))]
+            .map(({ value, label }) => `<option value="${h(value)}"${trend === value ? ' selected' : ''}>${h(label)}</option>`).join('');
     }
 
     function renderEventsEditor(events) {
@@ -2246,7 +2254,6 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
         const d = data || { main: [], relationships: [] };
         const main = (d.main || []).map(getCharName);
         const rels = d.relationships || [];
-        const trendOpts = ['破裂', '厌恶', '反感', '陌生', '投缘', '亲密', '交融'];
 
         const es = $('editor-struct');
         setHtml(es, `
@@ -2260,12 +2267,12 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
             <div class="struct-item">
                 <div class="struct-row"><strong>人物关系</strong></div>
                 <div id="char-rel-list">
-                    ${(rels.length ? rels : [{ from: '', to: '', label: '', trend: '陌生' }]).map(r => `
+                    ${(rels.length ? rels : [{ from: '', to: '', label: '', trend: '' }]).map(r => `
                         <div class="struct-row char-rel-item">
                             <input type="text" class="char-rel-from" placeholder="角色 A" value="${h(r.from || '')}">
                             <input type="text" class="char-rel-to" placeholder="角色 B" value="${h(r.to || '')}">
                             <input type="text" class="char-rel-label" placeholder="关系" value="${h(r.label || '')}">
-                            <select class="char-rel-trend">${trendOpts.map(t => `<option ${r.trend === t ? 'selected' : ''}>${t}</option>`).join('')}</select>
+                            <select class="char-rel-trend">${relationTrendOptions(r.trend)}</select>
                         </div>
                     `).join('')}
                 </div>
@@ -2290,7 +2297,7 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
                 <input type="text" class="char-rel-from" placeholder="角色 A">
                 <input type="text" class="char-rel-to" placeholder="角色 B">
                 <input type="text" class="char-rel-label" placeholder="关系">
-                <select class="char-rel-trend">${trendOpts.map(t => `<option>${t}</option>`).join('')}</select>
+                <select class="char-rel-trend">${relationTrendOptions()}</select>
             `);
             addDeleteHandler(div);
             $('char-rel-list').appendChild(div);

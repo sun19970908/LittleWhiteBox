@@ -1,15 +1,15 @@
 import { ECONOMY_TRANSACTION_CAPABILITY, type EconomyReadCapability } from '../../../capabilities/economy/index.js';
 import { learningRewardInput, matchesLearningReward } from '../../../domains/learning/reward.js';
-import type { LearningTeacherPreference } from '../../../domains/learning/profile.js';
+import type { LearningRewardPolicy } from '../reward-partition.js';
 import type { LearningCompletion } from '../../../domains/learning/types.js';
-import type { ScopedChatStore, XiaobaiOsFileControls } from '../../../kernel/contracts.js';
+import type { PartitionStore, XiaobaiOsFileControls } from '../../../kernel/contracts.js';
 import { confirmedLearning, type LearningRepository } from './service.js';
 
-export type LearningRewardStatus = 'paid' | 'wallet-closed' | 'other-story' | 'unconfirmed' | 'conflict' | 'failed' | 'cancelled';
+export type LearningRewardStatus = 'paid' | 'retired' | 'wallet-closed' | 'unconfirmed' | 'conflict' | 'failed' | 'cancelled';
 
 /** Completion, ledger, receipt: three confirmations; neither store pretends to own both files. */
 export function createLearningRewards(deps: {
-    repository: LearningRepository; store: ScopedChatStore<LearningTeacherPreference>;
+    repository: LearningRepository; store: PartitionStore<LearningRewardPolicy>;
     economy: EconomyReadCapability; files: XiaobaiOsFileControls;
 }) {
     let running = false;
@@ -22,17 +22,16 @@ export function createLearningRewards(deps: {
             if (snapshot.status !== 'ready') { return snapshot.status === 'conflict' ? 'conflict' : 'unconfirmed'; }
             const completion = snapshot.document?.data.profiles.find(profile => profile.language === language)?.completions.find(item => item.unitId === unitId);
             if (!completion || !isCurrent()) { return 'cancelled'; }
-            if (completion.receipt) { return 'paid'; }
             const initial = await deps.store.read();
             if (!isCurrent()) { return 'cancelled'; }
-            if (initial.osId !== completion.reward.originOsId) { return 'other-story'; }
+            if (initial.value?.retiredUnitIds.includes(completion.unitId)) { return 'retired'; }
+            if (completion.receipt) { return 'paid'; }
             const sameCompletion = () => {
                 const current = deps.repository.snapshot();
                 return current.status === 'ready' && JSON.stringify(current.document?.data.profiles.find(profile => profile.language === language)
                     ?.completions.find(item => item.unitId === unitId)) === JSON.stringify(completion);
             };
-            const guard = () => isCurrent() && sameCompletion() && deps.store.peekCurrent()?.osId === initial.osId
-                && deps.store.peekCurrent()?.identityKey === initial.identityKey;
+            const guard = () => isCurrent() && sameCompletion();
             if (deps.files.hasPendingCommit()) { return 'unconfirmed'; }
             await deps.economy.refresh();
             if (!guard()) { return 'cancelled'; }
@@ -52,7 +51,7 @@ export function createLearningRewards(deps: {
                     if (!matchesLearningReward(existing, completion)) { throw new Error('learning_reward_mismatch'); }
                     return existing;
                 }
-                const { sourceDomain: _source, ...leg } = input;
+                const { sourceDomain: _source, sourceScope: _scope, ...leg } = input;
                 return economy.postAction({ legs: [leg] }).transactions[0];
             }, { commitGuard: guard });
             if (!guard()) { return 'cancelled'; }
@@ -70,9 +69,9 @@ export function createLearningRewards(deps: {
     }
     return {
         settle,
-        status(completion: LearningCompletion, osId: string | null): LearningRewardStatus | 'available' {
+        status(completion: LearningCompletion): LearningRewardStatus | 'available' {
+            if (deps.store.peekCurrent()?.value?.retiredUnitIds.includes(completion.unitId)) { return 'retired'; }
             if (completion.receipt) { return 'paid'; }
-            if (completion.reward.originOsId !== osId) { return 'other-story'; }
             if (!deps.economy.isOpen()) { return 'wallet-closed'; }
             return 'available';
         },

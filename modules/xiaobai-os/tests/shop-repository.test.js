@@ -185,7 +185,7 @@ test('Shop partition parser is strict', () => {
     assert.equal(SHOP_PARTITION.parse({ schemaVersion: 1, events: [] }).ok, false);
 });
 
-test('Shop module declares both Economy capabilities and removes only its partition', async () => {
+test('Shop module declares both Economy capabilities without a ledger-breaking partition-only reset', () => {
     const module = createShopModule({
         getChatIdentity: () => null,
         isMainGenerationActive: () => false,
@@ -196,9 +196,7 @@ test('Shop module declares both Economy capabilities and removes only its partit
         'economy.read',
         'economy.transaction',
     ]);
-    const removed = [];
-    await module.clearData({ async removePartition(key) { removed.push(key); } });
-    assert.deepEqual(removed, ['shop']);
+    assert.equal(module.clearData, undefined);
 });
 
 test('a corrupt Shop partition is isolated from Economy reads', async () => {

@@ -4,7 +4,7 @@ import { once } from 'node:events';
 import { createServer } from 'node:http';
 import test from 'node:test';
 import { GoogleAdapter } from '../../agent-core/adapters/google.js';
-import { MAP_MAINTENANCE_TOOLS } from '../apps/map/maintenance/tool-contract.js';
+import { MAP_MAINTENANCE_TOOLS } from '../apps/map/tools/tool-contract.js';
 
 // External protocol contract: Gemini functionDeclaration.parameters uses Schema,
 // not arbitrary JSON Schema. Check the SDK's outgoing body, not source text.

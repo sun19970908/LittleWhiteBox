@@ -6,7 +6,7 @@ import { sameWorldContent, WORLD_LIMITS } from '../../../domains/world/types.js'
 import type { WorldService } from '../application/service.js';
 import { buildWorldDataMessage } from '../prompt-data.js';
 import { buildWorldMaintenancePrompt } from './prompt.js';
-import { WORLD_TOOLS } from './tool-contract.js';
+import { WORLD_TOOLS } from '../tools/tool-contract.js';
 
 // Failed atomic batches must be addressed; a read or unrelated edit cannot clear them.
 function editScopes(args: unknown): string[] {
@@ -58,7 +58,7 @@ export function createWorldMaintenanceSession(world: WorldService, mode: Mainten
                         ? 'An earlier failed edit still needs a valid correction before this publication can be saved.'
                         : scope === 'overview'
                             ? 'An earlier failed batch included overview. Resubmit the desired or unchanged overview in WorldEdit.'
-                            : `An earlier failed batch included article ID ${scope.slice(5)}. Resolve it in WorldEdit with a complete upsert (unchanged values keep the article) or remove (deletes it if present).`,
+                            : `An earlier failed batch included article ID ${scope.slice(5)}. Resolve it in WorldEdit with a complete upsert within the writing limits or remove (deletes it if present).`,
                 }));
             } else { for (const scope of scopes) { failures.add(scope); } }
             return result;
@@ -69,7 +69,7 @@ export function createWorldMaintenanceSession(world: WorldService, mode: Mainten
             active();
             if (failures.size) { throw new Error('world_edits_unresolved'); }
             if (!changed()) { return; }
-            const guard = () => !invalid && !committed && beforeCommit();
+            const guard = () => !invalid && beforeCommit();
             const result = await world.replaceContent(original.identityKey, expected, staged, guard);
             committed = true;
             return result;

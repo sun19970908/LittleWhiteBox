@@ -666,7 +666,7 @@ function buildMustKeepFloors(lexicalResult, lexicalTerms, atomFloorSet, chat) {
 
 async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexicalResult, lexicalTerms, metrics, stageObserver, signal = null) {
     const { chatId, chat, name1, name2 } = getContext();
-    if (!chatId) return { l0Selected: [], l1ScoredByFloor: new Map(), mustKeepFloors: [] };
+    if (!chatId) return { l0Selected: [], l1ScoredByFloor: new Map(), mustKeepFloors: [], sourceTurns: [] };
     const captureStages = typeof stageObserver === 'function';
 
     const T_Start = performance.now();
@@ -814,7 +814,7 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
             metrics.evidence.l1CosineTime = 0;
             metrics.evidence.rerankApplied = false;
         }
-        return { l0Selected: [], l1ScoredByFloor: new Map(), mustKeepFloors: [] };
+        return { l0Selected: [], l1ScoredByFloor: new Map(), mustKeepFloors: [], sourceTurns: [] };
     }
 
     // ─────────────────────────────────────────────────────────────────
@@ -1023,6 +1023,10 @@ async function locateAndPullEvidence(anchorHits, queryVector, rerankQuery, lexic
         l0Selected,
         l1ScoredByFloor,
         mustKeepFloors: mustKeep.floors.map(x => x.floor),
+        sourceTurns: finalFloorItems.map(({ floor }) => ({
+            floor,
+            contextFloor: floor > 0 && chat?.[floor - 1]?.is_user ? floor - 1 : null,
+        })),
     };
 }
 
@@ -1193,11 +1197,11 @@ async function buildL1PairsForSelectedFloors(l0Selected, queryVector, prefetched
     return l1ByFloor;
 }
 
-export async function hydrateSelectedDirectEvidence(selectedDirect, context, metrics) {
+export async function hydrateDirectEvidence(context, metrics, options = {}) {
     const startedAt = performance.now();
     if (context?.diagnostics) context.diagnostics.stage = 'direct-evidence';
     try {
-        const result = await selectDirectEvidence(selectedDirect, context);
+        const result = await selectDirectEvidence(context, options);
         const stats = result.stats || {};
         if (metrics?.evidence) {
             metrics.evidence.directEvidenceStatus = result.status || 'failed';
@@ -1205,8 +1209,9 @@ export async function hydrateSelectedDirectEvidence(selectedDirect, context, met
                 parents: 'directEvidenceParents', floors: 'directEvidenceFloors',
                 sourceCandidates: 'directEvidenceSourceCandidates', candidates: 'directEvidenceCandidates',
                 relevantItems: 'directEvidenceRelevantItems', vectorHits: 'directEvidenceVectorHits',
-                missingVectors: 'directEvidenceMissingVectors', missingEventVectors: 'directEvidenceMissingEventVectors',
-                eventItems: 'directEvidenceEventItems', conversationItems: 'directEvidenceConversationItems',
+                missingVectors: 'directEvidenceMissingVectors',
+                queryItems: 'directEvidenceQueryItems',
+                floorItems: 'directEvidenceFloorItems', conversationItems: 'directEvidenceConversationItems',
                 lexicalItems: 'directEvidenceLexicalItems', temporalCandidates: 'directEvidenceTemporalCandidates',
                 temporalFloorWinners: 'directEvidenceTemporalFloorWinners',
                 temporalProtectedCandidates: 'directEvidenceTemporalProtectedCandidates',
@@ -1215,7 +1220,7 @@ export async function hydrateSelectedDirectEvidence(selectedDirect, context, met
         }
         if (result.status === 'partial-vectors') {
             recordRecallFallback(context?.diagnostics, 'direct-evidence',
-                `部分向量缺失：L1=${stats.missingVectors || 0}, events=${stats.missingEventVectors || 0}，保留可用通道结果`);
+                `部分 L1 向量缺失：${stats.missingVectors || 0}，保留可用通道结果`);
         }
         return result;
     } catch (error) {
@@ -1706,7 +1711,7 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     // ═══════════════════════════════════════════════════════════════════
 
     if (diagnostics) diagnostics.stage = 'floor-evidence';
-    const { l0Selected, l1ScoredByFloor, mustKeepFloors } = await locateAndPullEvidence(
+    const { l0Selected, l1ScoredByFloor, mustKeepFloors, sourceTurns } = await locateAndPullEvidence(
         anchorHits,
         queryVector_v1,
         bundle.rerankQuery,
@@ -1889,13 +1894,15 @@ export async function recallMemory(allEvents, vectorConfig, options = {}) {
     }
 
     let directEvidenceContext = null;
-    if (!eventHits.some(item => item?._evidenceEligible === true)) {
-        metrics.evidence.directEvidenceStatus = 'skipped-no-eligible-events';
+    if (!sourceTurns.length && !eventHits.some(item => item?._evidenceEligible === true)) {
+        metrics.evidence.directEvidenceStatus = 'skipped-no-sources';
     } else {
         directEvidenceContext = {
             diagnostics,
             chatId,
             ...semanticInputs.directEvidence,
+            sourceTurns,
+            sourceEvents: eventHits.filter(item => item?._evidenceEligible === true),
             lexicalScores: lexicalResult.chunkScores,
             temporalCarrier,
             signal,

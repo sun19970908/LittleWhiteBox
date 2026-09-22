@@ -6,7 +6,7 @@ import { createEmptyMapDomain } from '../domains/map/state.js';
 import { createMapKernelHarness } from './map-kernel-harness.js';
 import { sceneMapInputs } from './fixtures/scene-maps.js';
 import { sceneElementPath } from '../apps/map/ui/scene-geometry.js';
-import { SCENE_EXAMPLES } from '../apps/map/maintenance/scene-examples.js';
+import { SCENE_EXAMPLES } from '../apps/map/tools/scene-examples.js';
 
 const source = { chatIdentity: 'scene-map-verification', messages: [{ index: 0, role: 'assistant', text: 'Independent scene verification.', swipeId: 0, speakerName: 'Narrator' }], messageCount: 1, assistantCount: 1, player: { actorKey: 'player', displayName: '小白' } };
 const sessionFor = kernel => createMapMaintenanceParticipant({ map: kernel.map, readSettings: () => ({ autoMaintenance: false }) }).createSession(source, 'manual');

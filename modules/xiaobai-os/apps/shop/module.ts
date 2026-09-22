@@ -4,7 +4,7 @@ import {
     type EconomyReadCapability,
 } from '../../capabilities/economy/index.js';
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
-import type { ScopedChatStore } from '../../kernel/contracts.js';
+import type { PartitionStore } from '../../kernel/contracts.js';
 import type { XiaobaiOsAppRuntime, XiaobaiOsChatIdentity } from '../../types.js';
 import type { ShopDomainV2 } from '../../domains/shop/types.js';
 import {
@@ -46,7 +46,7 @@ export function createShopModule(dependencies: ShopModuleDependencies): XiaobaiO
             if (!context.partition) {throw new Error('Shop partition store is unavailable');}
             const economy = context.useCapability(ECONOMY_READ_CAPABILITY);
             const shop = createShopService(
-                context.partition as ScopedChatStore<ShopDomainV2>,
+                context.partition as PartitionStore<ShopDomainV2>,
                 context.files,
                 economy,
                 {
@@ -71,6 +71,5 @@ export function createShopModule(dependencies: ShopModuleDependencies): XiaobaiO
             });
         },
         async dispose(runtime) { await runtime.stopBackground?.(); },
-        clearData: context => context.removePartition(SHOP_PARTITION.key),
     };
 }

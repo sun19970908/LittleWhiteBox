@@ -1,9 +1,10 @@
-export const ECONOMY_SCHEMA_VERSION = 2 as const;
+export const ECONOMY_SCHEMA_VERSION = 3 as const;
 export const OPENING_GRANT_AMOUNT = 100 as const;
 export const OPENING_GRANT_ACTION_ID = 'economy:opening-grant:v1';
 export const OPENING_GRANT_IDEMPOTENCY_KEY = 'economy:opening-grant:v1';
 
 export interface EconomyTransaction {
+    sourceScope: string;
     id: string;
     sequence: number;
     idempotencyKey: string;
@@ -20,12 +21,13 @@ export interface EconomyTransaction {
     reversalOfTransactionId?: string;
 }
 
-export interface EconomyLedgerV2 {
+export interface EconomyLedger {
     schemaVersion: typeof ECONOMY_SCHEMA_VERSION;
     transactions: EconomyTransaction[];
 }
 
 export interface PostTransactionInput {
+    sourceScope?: string;
     idempotencyKey: string;
     actionId: string;
     fromAccountId: string;
@@ -50,13 +52,13 @@ export interface ReverseTransactionInput {
 }
 
 export interface EconomyPostResult {
-    ledger: EconomyLedgerV2;
+    ledger: EconomyLedger;
     transaction: EconomyTransaction;
     created: boolean;
 }
 
 export interface EconomyPostActionResult {
-    ledger: EconomyLedgerV2;
+    ledger: EconomyLedger;
     transactions: EconomyTransaction[];
     created: boolean;
 }

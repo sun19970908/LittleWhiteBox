@@ -1,0 +1,53 @@
+import { ADMINISTRATOR_APP_DESCRIPTOR } from '../descriptor.js';
+export const ADMINISTRATOR_COPY = Object.freeze({
+    title: ADMINISTRATOR_APP_DESCRIPTOR.name, context: '上下文用量', clear: '清空聊天', clearTitle: '清空管理员聊天？',
+    clearWarning: '聊天和附件会被删除，已完成的管理修改不会撤销。', cancel: '取消', delete: '删除', regenerate: '重新生成',
+    send: '发送', stop: '停止', attach: '选择图片', removeImage: '移除图片', placeholder: '说说需要处理的事…',
+    latest: '回到最新', earlier: '更早记录', later: '后面记录', confirm: '重新提交', check: '检查保存结果', close: '关闭',
+    empty: '有什么需要处理？', details: '查看过程', moreText: '展开更多',
+    evidence: '查看资料', itemReport: (applied: number, skipped: number) => `成功 ${applied} 项，未完成 ${skipped} 项`,
+    messageActions: '消息操作', messagePages: '展开消息', noReply: '尚未回复', longReply: '回复结束后可展开完整内容。',
+    adopt: '放弃未保存内容',
+    budget: '应用输入预算', estimated: '估算用量', budgetNote: '应用工作预算，不代表模型实际窗口。',
+    contextParts: { history: '聊天与摘要', rules: '规则与资料', tools: '工具说明', images: '图片预留', runtime: '本轮工具结果' },
+    phases: { preparing: '准备中', replying: '回复中', summarizing: '整理上下文', saving: '保存中', stopping: '正在停止' },
+    operations: { preparing: '准备参数', reading: '读取中', saving: '保存中', read: '已读取', saved: '已保存', unchanged: '无需修改', partial: '部分完成', failed: '未完成', unconfirmed: '保存待确认' },
+    invalidImage: '请选择不超过 4MB、可打开的 PNG、JPG、WEBP 或 GIF 图片。',
+    imageModel: '图片会发给当前模型，需要模型支持看图。',
+    imageRequest: '请查看这张图片。', stopped: '已停止；已保存的修改仍然生效。',
+    deleteWarning: '只删除这条消息，不撤销已经完成的管理修改。',
+    noEvidence: '这份资料的临时查阅入口已失效。已返回给管理员的内容仍保留在会话历史中，需要更多原文时可以重新查阅。',
+    corrupted: '管理员记录损坏。可以清空管理员聊天；其他 APP 数据不受影响。',
+    unsaved: '保存尚未确认。可检查结果、重新提交，或放弃未保存内容；已保存的修改不会撤销。',
+});
+
+const ERRORS: Readonly<Record<string, string>> = Object.freeze({
+    administrator_stopped: ADMINISTRATOR_COPY.stopped,
+    administrator_busy: '当前操作尚未结束，请先等待或停止。',
+    administrator_context_changed: '聊天已切换，旧操作已停止。',
+    administrator_chat_unavailable: '请先进入一个酒馆聊天。',
+    administrator_message_missing: '这条消息已不存在，请刷新记录。',
+    administrator_history_conflict: '管理员记录已被其他操作更新，请重新打开核对，不会覆盖现有记录。',
+    administrator_input_invalid: '请输入内容或选择图片，文字最多 16000 字符。',
+    administrator_invalid_image: ADMINISTRATOR_COPY.invalidImage,
+    administrator_image_missing: '附件读取失败，原消息与附件引用仍然保留，请重试。',
+    administrator_image_delete_failed: '记录已保存，但附件删除失败，请再次确认清理。',
+    administrator_image_list_failed: '附件目录读取失败，请再次确认清理。',
+    administrator_save_pending: ADMINISTRATOR_COPY.unsaved,
+    administrator_save_failed: '保存失败。可检查结果、重新提交，或放弃未保存内容。',
+    administrator_save_unconfirmed: ADMINISTRATOR_COPY.unsaved,
+    administrator_save_conflict: '服务器记录已更新，未覆盖它。可放弃本地未保存内容，保留服务器记录。',
+    administrator_context_full: '本轮资料已超出应用输入预算，请缩小查阅范围后再继续。',
+    administrator_summary_failed: '上下文整理失败，原记录未删除，可以重试。',
+    administrator_model_refused: '模型没有接受本次请求，原消息和附件仍然保留。',
+    administrator_empty_response: '模型未返回回复，可以重试。',
+    administrator_tool_round_limit: '本轮已达到工具调用上限，请缩小任务范围。',
+    administrator_tool_batch_too_large: '模型一次请求了过多工具，未执行这批操作。',
+    administrator_evidence_expired: ADMINISTRATOR_COPY.noEvidence,
+    management_request_superseded: '记录已被后续修改取代。请说明当前希望怎样处理，不会恢复旧状态。',
+    management_source_changed: '所依据的原文已经改变，需要重新查证。',
+});
+export function administratorError(error: unknown): string {
+    const code = error instanceof Error ? error.message : String(error);
+    return ERRORS[code] ?? code.slice(0, 700);
+}

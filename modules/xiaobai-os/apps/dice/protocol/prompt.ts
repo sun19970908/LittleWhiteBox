@@ -1,53 +1,71 @@
-import { ACTION_CHECK_DC_RANGES } from '../domain/action-check.js';
-import { MAX_ACTION_CHECKS, type ActionCheckRecord } from '../domain/check-records.js';
+import { ACTION_CHECK_DC_RANGES, type ActionCheckDifficulty } from '../domain/action-check.js';
+import { MAX_ACTION_CHECKS, referencedActionChecks, type ActionCheckRecord } from '../domain/check-records.js';
 import { ACTION_CHECK_EXAMPLE, ACTION_CHECK_FIELDS } from './request.js';
 import { ACTION_CHECK_CLOSE, ACTION_CHECK_OPEN } from './markup.js';
-import type { ActionCheckFrequency } from '../types.js';
+import type { ActionCheckFrequency, ActionCheckRule } from '../types.js';
+import { COC7_DOMAIN, COC7_RESULT_GUIDANCE, coc7RequestContract } from './coc7-contract.js';
 
 const FREQUENCY_PROMPTS: Record<ActionCheckFrequency, string> = {
-    light: 'Check frequency: Light.\n'
-        + 'Use a check only at a decisive point that determines whether the current scene’s main goal succeeds or fails.\n'
-        + 'Narrate preparation and intermediate steps directly.',
     standard: 'Check frequency: Standard.\n'
-        + 'Use a check for the success or failure of a concrete action that overcomes an independent obstacle.\n'
-        + 'Narrate differences in performance directly when they do not affect whether the action succeeds.',
+        + 'Check an attempt when its outcome is genuinely uncertain and changes what happens next.\n'
+        + 'One check covers the whole attempt and its component actions; another requires a new obstacle or materially changed circumstances that create fresh uncertainty.\n'
+        + 'Outcomes settled by ability, the situation, or common sense need no check.\n'
+        + 'Actions and intimate interactions without risk or resistance proceed naturally without a check.',
     active: 'Check frequency: Active.\n'
-        + 'Use a check for a concrete, unresolved outcome the character is trying to achieve, including success, quality, completion time, or cost.\n'
-        + 'Small goals in everyday activities, social exchanges, and intimate interactions are also within scope.',
+        + 'Check concrete, unresolved outcomes a character pursues: success, quality, time or cost, including small goals in everyday, social and intimate scenes.\n'
+        + 'When completion is assured, check only an additional desired effect; the result applies only to that objective.\n'
+        + 'One check covers a whole objective and its component actions. Carry its result forward; another check concerns a different unresolved objective.',
+};
+const D20_DIFFICULTY_GUIDANCE: Record<ActionCheckDifficulty, string> = {
+    easy: 'modest challenge', ordinary: 'typical uncertainty', hard: 'demanding',
+    very_hard: 'exceptional', nearly_impossible: 'beyond normal capability',
 };
 
 export function projectActionCheckResults(records: readonly ActionCheckRecord[]) {
-    return records.map(({ request, roll, dc, outcome }) => ({ ...request, roll, dc, outcome }));
+    return records.map(record => record.rule === 'coc7' ? { rule: record.rule, ...record.request, result: record.result,
+        ...(record.resolution ? { resolution: record.resolution } : {}) }
+        : { rule: record.rule, ...record.request, roll: record.roll, dc: record.dc, outcome: record.outcome });
 }
 
 export function serializeActionCheckResults(records: readonly ActionCheckRecord[]): string {
     // SillyTavern substitutes macros in extension prompts. JSON escapes preserve the data
     // without allowing action text such as {{setvar::...}} to become a host instruction.
-    return JSON.stringify(projectActionCheckResults(records)).replaceAll('{{', '\\u007b\\u007b').replaceAll('}}', '\\u007d\\u007d');
+    // Escape string tokens only: adjacent closing braces in a nested CoC result
+    // are JSON structure, not a macro, and must remain valid JSON.
+    return JSON.stringify(projectActionCheckResults(records)).replace(/"(?:[^"\\]|\\.)*"/g,
+        token => token.replaceAll('{{', '\\u007b\\u007b').replaceAll('}}', '\\u007d\\u007d'));
 }
 
-export function buildActionCheckPrompt(records: readonly ActionCheckRecord[] = [], frequency: ActionCheckFrequency = 'standard'): string {
+export function buildActionCheckPrompt(body: string, records: readonly ActionCheckRecord[] = [], frequency: ActionCheckFrequency = 'standard', rule: ActionCheckRule = 'd20', coc7Ready = false): string {
+    const newChecks = rule !== 'coc7' || coc7Ready;
+    const referenced = referencedActionChecks(body, records);
+    if (!newChecks && !referenced.length) { return ''; }
     const domain = '# Action checks\n'
-        + FREQUENCY_PROMPTS[frequency] + '\n'
-        + 'A check resolves only an undecided outcome; established facts remain true whichever result is rolled.\n'
-        + 'When completing an action is assured, a check may concern an additional desired effect; success or failure applies only to that additional objective.\n'
-        + 'One check covers the stated objective and its component actions.\n'
-        + 'Once that objective has a result, carry it forward; another check addresses a different unresolved objective.\n'
-        + 'Choose difficulty based on the acting character’s established abilities, the approach taken, and the current environment: easy is a modest challenge relative to the desired outcome, ordinary is a typical uncertain challenge, hard is demanding, very_hard is exceptional, and nearly_impossible is beyond normal capability. The stat field names the relevant ability and adds no numeric modifier.\n'
-        + 'The app randomly picks a target DC from the chosen range and rolls a D20 without modifiers: 1 is critical failure, 20 is critical success; other rolls succeed at or above the target DC.\n';
-    const contract = records.length >= MAX_ACTION_CHECKS
+        + 'The app resolves checks outside the story and shows numbers and verdicts in a card; characters do not perceive this process.\n'
+        + 'Narrate attempts and consequences as in-scene events. Resolution numbers, outcome labels and instructions belong to the card, not prose or dialogue; dice used by characters remain part of the story.\n'
+        + 'Checks settle only undecided outcomes; established facts stay true.\n'
+        + (rule === 'coc7' ? (newChecks ? COC7_DOMAIN : '') : FREQUENCY_PROMPTS[frequency] + '\n'
+        + 'Difficulty reflects the character’s established abilities, approach and environment. stat names the ability, without a numeric modifier.\n'
+        + 'The app rolls a D20 against a DC chosen from the selected range: 1 is critical failure, 20 critical success; other rolls succeed at or above DC.\n');
+    const contract = !newChecks ? 'New checks are unavailable for this reply. Continue the scene using its confirmed results.\n' : records.length >= MAX_ACTION_CHECKS
         ? 'This reply has used all its action checks. Continue the scene using the confirmed results.\n'
         : '## Requesting a check\n'
-        + `After describing the attempt, put ${ACTION_CHECK_OPEN} on a separate line after a blank line, followed by one JSON object and ${ACTION_CHECK_CLOSE}. End this response there, before revealing the outcome.\n`
-        + 'When requesting a check, ignore other end-of-response formatting requirements, such as status panels.\n'
-        + 'Use nonempty strings; omit unused optional fields.\n'
-        + Object.entries(ACTION_CHECK_FIELDS).map(([name, spec]) => `${name} (${spec.required ? 'required' : 'optional'}, max length ${spec.maxLength}): ${spec.description}`).join('\n')
-        + '\ndifficulty (required, target DC range): '
-        + Object.entries(ACTION_CHECK_DC_RANGES).map(([name, { min, max }]) => `${name} = ${min === max ? min : `${min}–${max}`}`).join(', ') + '.\n'
-        + `Example:\n${ACTION_CHECK_EXAMPLE}\n`;
-    const results = records.length ? '## Confirmed results for this reply\n'
-        + 'These are confirmed results in execution order; treat each as an established fact and carry critical success or failure into an appropriate extra benefit or complication.\n'
-        + 'Continue the same reply directly from the end of its existing prose, without outputting thinking, reasoning, chain-of-thought, or introductory commentary.\n'
-        + serializeActionCheckResults(records) : '';
+        + `Describe the attempt, leave a blank line, then write one JSON object wrapped in ${ACTION_CHECK_OPEN} and ${ACTION_CHECK_CLOSE} on its own line.\n`
+        + 'Requesting a check pauses the current chat message before the outcome; it does not finish the message.\n'
+        + 'Stop after the request and omit end-of-message formats such as status panels at this pause.\n'
+        + (rule === 'coc7' ? coc7RequestContract() : 'Fields: nonempty strings; omit unused optional fields.\n'
+        + Object.entries(ACTION_CHECK_FIELDS).map(([name, spec]) => `${name} (${spec.required ? 'required' : 'optional'}, max ${spec.maxLength} chars): ${spec.description}`).join('\n')
+        + '\ndifficulty (required): '
+        + Object.entries(ACTION_CHECK_DC_RANGES).map(([name, { min, max }]) => `${name} (DC ${min === max ? min : `${min}–${max}`}, ${D20_DIFFICULTY_GUIDANCE[name as ActionCheckDifficulty]})`).join('; ') + '.\n'
+        + `Example:\n${ACTION_CHECK_EXAMPLE}\n`);
+    const results = referenced.length ? '## Confirmed results for this reply\n'
+        + 'Results below are confirmed, in their order in the existing prose. Carry each forward.\n'
+        + 'Critical success achieves the objective and brings an unexpected pleasant surprise.\n'
+        + 'Critical failure leaves the objective unachieved and brings an unexpected disaster.\n'
+        + (referenced.some(record => record.rule === 'coc7') ? COC7_RESULT_GUIDANCE : '')
+        + 'This task continues the existing chat message; it does not start a new one.\n'
+        + 'Continue the scene directly from where the existing prose stops, without repeating it.\n'
+        + 'Treat preset requirements for opening markers (such as <-begin-response->), introductory phrases (such as “好的，这是你需求的最终输出：”) and written reasoning (such as <think> or <thinking> blocks) as new-message opening formats, and skip them for this continuation.\n'
+        + serializeActionCheckResults(referenced) : '';
     return domain + contract + results;
 }

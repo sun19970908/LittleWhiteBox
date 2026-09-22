@@ -1043,6 +1043,18 @@ export function ensureComfyDrawPanel(messageEl, messageId, options = {}) {
     return null;
 }
 
+export function releaseComfyDrawPanel(messageEl, messageId) {
+    floorObserver?.unobserve(messageEl);
+    pendingCallbacks.delete(messageId);
+    const panelData = panelMap.get(messageId);
+    if (!panelData || !messageEl.contains(panelData.root)) return;
+    if (panelData.autoResetTimer) clearTimeout(panelData.autoResetTimer);
+    if (panelData.cooldownRafId) cancelAnimationFrame(panelData.cooldownRafId);
+    panelData._cleanup?.();
+    removeFromToolbar(messageId, panelData.root);
+    panelMap.delete(messageId);
+}
+
 export function setStateForMessage(messageId, state, data = {}) {
     let panelData = panelMap.get(messageId);
     if (!panelData?.root?.isConnected) {

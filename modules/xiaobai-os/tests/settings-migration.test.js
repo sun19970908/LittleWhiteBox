@@ -40,7 +40,7 @@ function createCurrentSettings(enabled = true) {
             map: { autoMaintenance: false },
             tasks: { autoMaintenance: false },
             messages: { imagePrompt: false, voicePrompt: false },
-            dice: { actionChecksEnabled: false, actionCheckFrequency: 'standard', encountersEnabled: false },
+            dice: { actionChecksEnabled: false, actionCheckFrequency: 'standard', actionCheckRule: 'd20', encountersEnabled: false },
             world: { subscribed: false, injectToStory: true },
         },
     };
@@ -58,7 +58,7 @@ test('enables a new OS entry without enabling automatic app features', async () 
         assert.equal(current.apps.fourthWall.image.enablePrompt, false);
         assert.equal(current.apps.fourthWall.voice.enabled, false);
         assert.deepEqual(current.apps.messages, { imagePrompt: false, voicePrompt: false });
-        assert.deepEqual(current.apps.dice, { actionChecksEnabled: false, actionCheckFrequency: 'standard', encountersEnabled: false });
+        assert.deepEqual(current.apps.dice, { actionChecksEnabled: false, actionCheckFrequency: 'standard', actionCheckRule: 'd20', encountersEnabled: false });
         assert.deepEqual(current.apps.world, { subscribed: false, injectToStory: true });
         assert.deepEqual(repository.read(), current);
     }

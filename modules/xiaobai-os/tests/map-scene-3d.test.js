@@ -11,7 +11,7 @@ import { Scene3DResources } from '../apps/map/ui/three/scene3d-resources.js';
 import { createSceneAssetSession } from '../apps/map/ui/three/scene3d-assets.js';
 import { sceneAssetKind } from '../apps/map/ui/three/scene3d-asset-fit.js';
 import { SCENE_MATERIAL_COLORS } from '../apps/map/ui/scene-materials.js';
-import { compileSceneIntent } from '../apps/map/maintenance/scene-intent-compiler.js';
+import { compileSceneIntent } from '../apps/map/tools/scene-intent-compiler.js';
 import { createEmptyMapDomain } from '../domains/map/state.js';
 import { sceneMapInputs } from './fixtures/scene-maps.js';
 

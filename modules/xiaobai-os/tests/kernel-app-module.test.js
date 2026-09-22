@@ -128,7 +128,7 @@ test('APP capability manifest authorizes one cross-partition candidate and one u
 
     await assert.rejects(
         harness.getStore().transact(transaction => transaction.useCapability(harness.hiddenUpdate)),
-        error => error.failure?.code === 'capability_not_authorized',
+        error => error.code === 'capability_not_authorized',
     );
     assert.equal(harness.state.writes, 1);
 });

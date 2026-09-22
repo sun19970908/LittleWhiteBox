@@ -323,6 +323,34 @@ function buildSummaryMessages(existingSummary, existingFacts, newHistoryText, hi
 // JSON 解析
 // ═══════════════════════════════════════════════════════════════════════════
 
+function removeJsonTrailingCommas(value) {
+    let output = '';
+    let inString = false;
+    let escaped = false;
+    for (let i = 0; i < value.length; i++) {
+        const character = value[i];
+        if (inString) {
+            output += character;
+            if (escaped) escaped = false;
+            else if (character === '\\') escaped = true;
+            else if (character === '"') inString = false;
+            continue;
+        }
+        if (character === '"') {
+            inString = true;
+            output += character;
+            continue;
+        }
+        if (character === ',') {
+            let next = i + 1;
+            while (/\s/u.test(value[next] || '')) next++;
+            if (value[next] === '}' || value[next] === ']') continue;
+        }
+        output += character;
+    }
+    return output;
+}
+
 export function parseSummaryJson(raw) {
     if (!raw) return null;
 
@@ -339,8 +367,7 @@ export function parseSummaryJson(raw) {
     const start = cleaned.indexOf('{');
     const end = cleaned.lastIndexOf('}');
     if (start !== -1 && end > start) {
-        let jsonStr = cleaned.slice(start, end + 1)
-            .replace(/,(\s*[}\]])/g, '$1');
+        const jsonStr = removeJsonTrailingCommas(cleaned.slice(start, end + 1));
         try {
             const parsed = JSON.parse(jsonStr);
             return parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;

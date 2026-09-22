@@ -28,6 +28,9 @@ test('assistant manifest excludes developer-local files', () => {
 
     assert.deepEqual(pluginOverlap, []);
     assert.deepEqual(publicOverlap, []);
+    // Check the generated catalogue, not source text: local verification output
+    // must never be advertised as plugin source, even when it is not gitignored.
+    assert.deepEqual(pluginPaths.filter(value => value.startsWith('output/')), []);
 });
 
 test('assistant manifest excludes generated dists and includes draw scene planner sources', () => {

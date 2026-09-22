@@ -2,15 +2,21 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue';
 import type { XiaobaiOsAppProps } from '../../../shell/app-contract.js';
 import { HostRequestError } from '../../../shell/app-src/frame-bridge.js';
-import type { ActionCheckFrequency, DiceClientState } from '../types.js';
+import type { ActionCheckFrequency, ActionCheckRule, DiceClientState } from '../types.js';
+import Coc7Sheet from './Coc7Sheet.vue';
+import { COC7_UI } from './coc7-copy.js';
 const props = defineProps<XiaobaiOsAppProps>();
 const state = ref(props.initialState as DiceClientState);
 const busy = ref(false);
-const error = ref('');
+const error = ref<{ type: string; message: string } | null>(null);
+const continuationNotice = '使用不支持预填充的模型时，请关闭「续写预填充」，并保留预设「实用提示词」里的「继续推进」内容（不能为空）。';
 const frequencyChoices: Record<ActionCheckFrequency, { label: string; description: string }> = {
-    light: { label: '轻量', description: '模型会更克制地使用骰子。' },
-    standard: { label: '标准', description: '模型会在合适的时候使用骰子。' },
-    active: { label: '活跃', description: '模型将更活跃地使用骰子参与剧情。' },
+    standard: { label: '标准', description: '有风险或阻力，且成败会改变后续的行动才检定。' },
+    active: { label: '积极', description: '日常小目标，以及效果、耗时和代价的不确定性也可检定。' },
+};
+const ruleChoices: Record<ActionCheckRule, { label: string; description: string }> = {
+    d20: { label: '通用 D20', description: '不需要人物数值，由情境决定难度。' },
+    coc7: { label: COC7_UI.rule, description: COC7_UI.description },
 };
 let unsubscribe = () => {};
 let mounted = false;
@@ -25,19 +31,24 @@ onMounted(() => {
     });
 });
 onBeforeUnmount(() => { mounted = false; unsubscribe(); });
-async function send(type: string, payload: Record<string, unknown>) {
-    if (busy.value) { return; }
-    busy.value = true; error.value = '';
+async function send(type: string, payload: Record<string, unknown>, reportError = true) {
+    if (busy.value) { return false; }
+    busy.value = true; error.value = null;
     const identity = state.value.chatIdentity;
     const version = pushed;
     try {
         const response = await props.bridge.request(type, { chatIdentity: identity, ...payload }) as { result: DiceClientState };
         if (mounted && version === pushed && response.result.chatIdentity === identity) { state.value = response.result; }
+        return mounted && response.result.chatIdentity === identity;
     } catch (cause) {
-        if (mounted) { error.value = cause instanceof HostRequestError && cause.code === 'app_request_failed'
-            ? cause.message : '操作未完成，请稍后重试。'; }
+        if (mounted && reportError) { error.value = { type, message: cause instanceof HostRequestError && cause.code === 'app_request_failed'
+            ? cause.message : '操作未完成，请稍后重试。' }; }
+        return false;
     }
     finally { if (mounted) { busy.value = false; } }
+}
+function clearSheetFailure() {
+    if (error.value?.type === 'dice/set-coc7-sheet' || error.value?.type === 'dice/confirm-sheet-save') { error.value = null; }
 }
 </script>
 
@@ -54,7 +65,20 @@ async function send(type: string, payload: Record<string, unknown>) {
                 </button>
             </div>
             <p class="dice-intro">当你尝试不确定的事——说服陌生人、翻越高墙、破译符文——由骰子裁决，而非 AI。一次真随机掷骰仲裁结果，故事顺从命运。</p>
-            <fieldset v-if="state.actionChecksEnabled" class="dice-frequency" :disabled="busy" aria-describedby="dice-frequency-description">
+            <fieldset v-if="state.actionChecksEnabled" class="dice-frequency" :disabled="busy" aria-describedby="dice-rule-description">
+                <legend>检定规则</legend>
+                <div class="dice-frequency-options">
+                    <button
+                        v-for="(choice, rule) in ruleChoices" :key="rule" type="button" class="dice-frequency-option"
+                        :aria-pressed="state.actionCheckRule === rule"
+                        @click="state.actionCheckRule !== rule && send('dice/set-rule', { rule })"
+                    >
+                        {{ choice.label }}
+                    </button>
+                </div>
+                <p id="dice-rule-description" aria-live="polite">{{ ruleChoices[state.actionCheckRule].description }}</p>
+            </fieldset>
+            <fieldset v-if="state.actionChecksEnabled && state.actionCheckRule === 'd20'" class="dice-frequency" :disabled="busy" aria-describedby="dice-frequency-description">
                 <legend>检定频率</legend>
                 <div class="dice-frequency-options">
                     <button
@@ -67,8 +91,16 @@ async function send(type: string, payload: Record<string, unknown>) {
                 </div>
                 <p id="dice-frequency-description" aria-live="polite">{{ frequencyChoices[state.actionCheckFrequency].description }}</p>
             </fieldset>
+            <Coc7Sheet
+                v-if="state.coc7Sheet.kind === 'invalid' || state.actionChecksEnabled && state.actionCheckRule === 'coc7'"
+                :sheet="state.coc7Sheet.kind === 'ready' ? state.coc7Sheet.sheet : null" :invalid="state.coc7Sheet.kind === 'invalid'"
+                :busy="busy" :failure="error?.message" :blocked="state.sheetStorage !== 'ready'"
+                :check-save="() => send('dice/confirm-sheet-save', {})" :save="sheet => send('dice/set-coc7-sheet', { sheet })"
+                @confirmed="clearSheetFailure"
+            />
             <aside class="dice-notice">
                 <p>请勿开启酒馆的「自动续写」。</p>
+                <p>{{ continuationNotice }}</p>
                 <p>酒馆 1.14 / 1.15：行动检定的自动续写会发送输入框中尚未发送的文字。</p>
                 <p>功能开启期间，会自动创建「小白 OS · 行动检定显示」全局正则。</p>
             </aside>
@@ -88,7 +120,7 @@ async function send(type: string, payload: Record<string, unknown>) {
             <p class="dice-cooldown">触发后，接下来的两次用户发言不会触发新遭遇。不额外调用模型。</p>
         </section>
         <section v-if="error" class="dice-recovery" aria-live="polite">
-            <p>{{ error }}</p>
+            <p>{{ error.message }}</p>
         </section>
     </main>
 </template>
@@ -105,7 +137,7 @@ p { margin:14px 0; }
 .dice-intro { margin-top:24px; }
 .dice-frequency { min-width:0; margin:20px 0 0; padding:0; border:0; }
 .dice-frequency legend { margin-bottom:8px; padding:0; font-size:13px; }
-.dice-frequency-options { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:4px; padding:4px; border-radius:12px; background:color-mix(in srgb,currentColor 7%,transparent); }
+.dice-frequency-options { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:4px; padding:4px; border-radius:12px; background:color-mix(in srgb,currentColor 7%,transparent); }
 .dice-frequency-option { min-width:0; min-height:44px; padding:8px; border:0; border-radius:8px; background:transparent; color:inherit; font:inherit; line-height:1.4; text-align:center; cursor:pointer; }
 .dice-frequency-option[aria-pressed="true"] { background:#7062d9; color:white; font-weight:600; }
 .dice-frequency-option:focus-visible { outline:2px solid #8577f0; outline-offset:2px; }

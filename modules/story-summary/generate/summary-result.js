@@ -1,15 +1,35 @@
 // Model output boundary. No store mutation; temporary references live only here.
 import { sanitizeCharacterAliasUpdates } from '../data/character-aliases.js';
 import { EVENT_MEMORY_ROLES } from '../data/events.js';
+import { isRelationFact, RELATION_TRENDS } from '../data/fact-predicates.js';
+import { parseModelArcProgress } from './arc-progress.js';
 
 const FACT_PREDICATE_ALIASES = new Map([
     ['当前位置', '位置'], ['当前所在地', '位置'], ['所在位置', '位置'],
     ['所在地', '位置'], ['当前状态', '状态'],
 ]);
-const RELATION_TRENDS = ['破裂', '厌恶', '反感', '陌生', '投缘', '亲密', '交融'];
+// Accept one extra cause beyond the prompt's target; never truncate valid links.
+const MAX_DIRECT_CAUSES = 3;
+const SOURCE_ERRORS = {
+    source_missing: '缺少来源楼层标注',
+    source_ambiguous: '来源楼层标注不唯一',
+    source_format: '来源楼层须为 (#X)、(#X-Y) 或 (#X、#Y)',
+    source_body_empty: '事件须有正文，不能只有楼层标注',
+    source_range: '来源楼层须按顺序落在本批范围内',
+};
+
+function invalidSource(path, code) {
+    const error = new Error(`${path}：${SOURCE_ERRORS[code]}`);
+    error.code = code;
+    error.path = path;
+    throw error;
+}
 
 function invalid(path, reason) {
-    throw new Error(`${path}：${reason}`);
+    const error = new Error(`${path}：${reason}`);
+    error.code = 'invalid_summary_field';
+    error.path = path;
+    throw error;
 }
 
 function object(value, path) {
@@ -35,6 +55,20 @@ function names(value, path) {
     return array(value, path).map((name, i) => text(name, `${path}[${i}]`));
 }
 
+function parseSourceMarkerBody(value) {
+    // Normalize only source notation, never narrative text or other numerals.
+    const body = value
+        .replace(/[＃０-９－，]/gu, character => String.fromCharCode(character.charCodeAt(0) - 0xFEE0))
+        .replace(/[−–—]/gu, '-')
+        .trim();
+    const range = body.match(/^(\d+)(?:\s*-\s*#?\s*(\d+))?$/u);
+    if (range) return { list: false, floors: [Number(range[1]), Number(range[2] ?? range[1])] };
+    if (/^\d+(?:\s*[,、]\s*#?\s*\d+)+$/u.test(body)) {
+        return { list: true, floors: body.split(/\s*[,、]\s*#?\s*/u).map(Number) };
+    }
+    return null;
+}
+
 export function getNextEventId(existingEvents = []) {
     let maxId = 0;
     for (const event of existingEvents) {
@@ -46,27 +80,29 @@ export function getNextEventId(existingEvents = []) {
 
 function eventSummary(value, path, startFloor, endFloor) {
     const summary = text(value, path);
-    const markers = [...summary.matchAll(/\(#([^()]*)\)/g)];
+    // Require the explicit # prefix so ordinary numeric parentheses stay prose.
+    // Count malformed markers too: never silently drop an ambiguous source.
+    const markers = [...summary.matchAll(/[（(]\s*[#＃]([^（）()]*)[）)]/gu)];
+    if (!markers.length) invalidSource(path, 'source_missing');
+    if (markers.length !== 1) invalidSource(path, 'source_ambiguous');
     const marker = markers[0];
-    // Retrieval reads the first marker; generation requires one unambiguous suffix.
-    if (markers.length !== 1 || marker.index + marker[0].length !== summary.length) {
-        invalid(path, '须以唯一的来源楼层标注结尾');
-    }
-    if (!summary.slice(0, marker.index).trim()) invalid(path, '楼层标注前须有正文');
-    const range = marker[1].match(/^(\d+)(?:-(\d+))?$/);
-    const list = !range && /^\d+(?:\s*[,，、]\s*#\d+)+$/.test(marker[1])
-        ? marker[1].split(/\s*[,，、]\s*#/).map(Number) : null;
-    if (!range && !list) invalid(path, '来源楼层须为 (#X)、(#X-Y) 或 (#X、#Y)');
-    const floors = list || [Number(range[1]), Number(range[2] ?? range[1])];
+    const parsed = parseSourceMarkerBody(marker[1]);
+    if (!parsed) invalidSource(path, 'source_format');
+    const { list, floors } = parsed;
     if (floors.some(floor => !Number.isSafeInteger(floor) || floor < startFloor || floor > endFloor)
         || (!list && floors[0] > floors[1])) {
-        invalid(path, `来源楼层须按顺序落在本批 #${startFloor}-#${endFloor} 内`);
+        invalidSource(path, 'source_range');
     }
-    if (!list) return summary;
     // Project explicit sources to the runtime's continuous envelope once, at input.
-    const start = list.reduce((min, floor) => Math.min(min, floor));
-    const end = list.reduce((max, floor) => Math.max(max, floor));
-    return `${summary.slice(0, marker.index)}(#${start}${start === end ? '' : `-${end}`})`;
+    const start = floors.reduce((min, floor) => Math.min(min, floor));
+    const end = floors.reduce((max, floor) => Math.max(max, floor));
+    const canonicalMarker = `(#${start}${start === end ? '' : `-${end}`})`;
+    const prefix = summary.slice(0, marker.index);
+    const suffix = summary.slice(marker.index + marker[0].length);
+    const prose = (prefix + suffix).trim();
+    if (!prose) invalidSource(path, 'source_body_empty');
+    // Retrieval still receives exactly one standard suffix, regardless of layout.
+    return suffix ? `${prose} ${canonicalMarker}` : `${prefix}${canonicalMarker}`;
 }
 
 function resolveCauses(value, path, selfId, eventIds, newIds) {
@@ -80,7 +116,7 @@ function resolveCauses(value, path, selfId, eventIds, newIds) {
         return id;
     });
     const unique = [...new Set(resolved)];
-    if (unique.length > 2) invalid(path, '直接前因最多为 2 个');
+    if (unique.length > MAX_DIRECT_CAUSES) invalid(path, `直接前因最多为 ${MAX_DIRECT_CAUSES} 个`);
     return unique;
 }
 
@@ -88,12 +124,10 @@ function prepareArc(update, path) {
     object(update, path);
     const name = text(update.name, `${path}.name`);
     const trajectory = text(update.trajectory, `${path}.trajectory`);
-    if (typeof update.progress !== 'number' || !Number.isFinite(update.progress)
-        || update.progress < 0 || update.progress > 1) {
-        invalid(`${path}.progress`, '须为 0 到 1 之间的数字');
-    }
+    const progress = parseModelArcProgress(update.progress);
+    if (progress === null) invalid(`${path}.progress`, '须为有效数值或百分数');
     return {
-        name, trajectory, progress: update.progress,
+        name, trajectory, progress,
         ...(update.newMoment === undefined ? {} : { newMoment: text(update.newMoment, `${path}.newMoment`, true) }),
     };
 }
@@ -110,9 +144,12 @@ function prepareFact(update, path) {
     const o = text(update.o, `${path}.o`);
     if (typeof update.isState !== 'boolean') invalid(`${path}.isState`, '须为布尔值');
     const fact = { s, p, o, isState: update.isState };
-    if (/^对.+的看法$/.test(p) || /^与.+的关系$/.test(p)) {
-        if (!RELATION_TRENDS.includes(update.trend)) invalid(`${path}.trend`, '须为规定的关系趋势');
-        fact.trend = update.trend;
+    if (isRelationFact(fact) && update.trend != null) {
+        const trend = text(update.trend, `${path}.trend`, true);
+        if (trend) {
+            if (!RELATION_TRENDS.includes(trend)) invalid(`${path}.trend`, '须为规定的关系趋势');
+            fact.trend = trend;
+        }
     }
     return fact;
 }

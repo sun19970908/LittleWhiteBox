@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createEmptyWorld, WORLD_LIMITS } from '../domains/world/types.js';
+import { createEmptyWorld, WORLD_LIMITS, WORLD_WRITE_LIMITS } from '../domains/world/types.js';
 import { parseWorld } from '../domains/world/invariants.js';
 import { worldContent } from '../domains/world/projection.js';
 import { buildWorldStoryPrompt, MAX_WORLD_STORY_MESSAGE_CHARS } from '../apps/world/host/story-projection.js';
@@ -12,6 +12,11 @@ import { article, worldHarness } from './world-harness.js';
 test('world tools create, continue, retain and retire articles through the real partition store', async t => {
     const h = await worldHarness(); t.after(h.dispose);
     const session = await h.session();
+    const schema = session.tools.find(tool => tool.function.name === 'WorldEdit').function.parameters.properties.upsert.items;
+    assert.deepEqual(Object.keys(schema.properties).sort(), Object.keys(article()).sort());
+    assert.deepEqual([...schema.required].sort(), Object.keys(article()).sort());
+    assert.equal(schema.additionalProperties, false);
+    assert.equal(schema.properties.body.maxLength, WORLD_WRITE_LIMITS.body);
     assert.deepEqual(await session.executeTool('WorldRead', {}), { overview: '', news: [] });
     const first = { overview: '港城在初夏恢复热闹。', upsert: [article(), article('market')] };
     assert.equal((await session.executeTool('WorldEdit', first)).status, 'updated');
@@ -71,6 +76,8 @@ test('world validates code-point limits, duplicate IDs and user-owned preference
         { upsert: [article()], remove: ['canal'] },
         { upsert: Array.from({ length: 9 }, (_, i) => article(String(i))) },
         { upsert: [{ ...article(), title: '😀'.repeat(65) }] },
+        { upsert: [{ ...article(), body: '😀'.repeat(WORLD_WRITE_LIMITS.body + 1) }] },
+        { upsert: [{ ...article(), summary: 'redundant content' }] },
         { upsert: [{ ...article(), arbitrary: 'field' }] },
     ]) {
         const session = await h.session();
@@ -81,7 +88,7 @@ test('world validates code-point limits, duplicate IDs and user-owned preference
     }
     const session = await h.session();
     const result = await session.executeTool('WorldEdit', { upsert: Array.from({ length: 8 }, (_, i) => ({
-        ...article(String(i)), title: '😀'.repeat(64), summary: '闻'.repeat(120), body: '文'.repeat(800),
+        ...article(String(i)), title: '😀'.repeat(64), body: '文'.repeat(WORLD_WRITE_LIMITS.body),
     })), overview: '世'.repeat(320) });
     assert.equal(result.ok, true);
     await session.commit(() => true);
@@ -93,7 +100,7 @@ test('maximally escaped publication survives tool edits, persistence and reopeni
     const content = { overview: '<'.repeat(WORLD_LIMITS.overview),
         news: Array.from({ length: WORLD_LIMITS.news }, (_, i) => ({
             id: '&'.repeat(WORLD_LIMITS.id - 1) + i, title: '{'.repeat(WORLD_LIMITS.title),
-            summary: '>'.repeat(WORLD_LIMITS.summary), body: '<'.repeat(WORLD_LIMITS.body),
+            body: '<'.repeat(WORLD_WRITE_LIMITS.body),
         })),
     };
     const h = await worldHarness(); t.after(h.dispose);
@@ -110,23 +117,56 @@ test('maximally escaped publication survives tool edits, persistence and reopeni
     assert.deepEqual(await reader.executeTool('WorldRead', {}), content);
 });
 
-test('story budget selects complete safely escaped sections without altering the publication', () => {
+test('story context includes every title and complete body at ordinary-text capacity', () => {
+    const world = parseWorld({ ...createEmptyWorld(), overview: '世'.repeat(WORLD_LIMITS.overview),
+        news: Array.from({ length: WORLD_LIMITS.news }, (_, i) => ({ id: String(i),
+            title: `${i}` + '题'.repeat(WORLD_LIMITS.title - 1), body: '🌲'.repeat(WORLD_LIMITS.body),
+        })),
+    });
+    const prompt = buildWorldStoryPrompt(world);
+    assert.ok([...prompt].length <= MAX_WORLD_STORY_MESSAGE_CHARS);
+    assert.ok(prompt.includes(world.overview));
+    for (const item of world.news) { assert.ok(prompt.includes(`• ${item.title}\n${item.body}`)); }
+});
+
+test('body writing limits reject whole batches, count code points and leave stored long articles intact', async t => {
+    const saved = { ...article(), body: '文'.repeat(WORLD_LIMITS.body) };
+    const initial = { ...createEmptyWorld(), news: [saved] };
+    const h = await worldHarness(initial); t.after(h.dispose);
+    const first = await h.session();
+    const brief = { ...article('new'), body: '😀'.repeat(WORLD_WRITE_LIMITS.body - 2) + '。\n' };
+    assert.equal((await first.executeTool('WorldEdit', { overview: '港城的新概况', upsert: [brief] })).ok, true);
+    await first.commit(() => true);
+    const reopened = await worldHarness(h.state.persisted.partitions.world); t.after(reopened.dispose);
+    assert.deepEqual(reopened.world.readCurrent().world.news, [brief, saved]);
+
+    const session = await reopened.session();
+    const rejected = await session.executeTool('WorldEdit', { remove: ['new'], upsert: [{ ...saved, body: brief.body + '文' }] });
+    assert.equal(rejected.ok, false);
+    assert.equal(rejected.errors[0].path, 'WorldEdit.upsert[0].body');
+    assert.deepEqual(rejected.data.news, [brief, saved]);
+    assert.equal(session.canCommit(), false);
+    assert.deepEqual((await session.executeTool('WorldRead', {})).news, [brief, saved]);
+    const replacement = { ...saved, body: brief.body };
+    assert.equal((await session.executeTool('WorldEdit', { remove: ['new'], upsert: [replacement] })).ok, true);
+    await session.commit(() => true);
+    assert.deepEqual(reopened.state.persisted.partitions.world.news, [replacement]);
+});
+
+test('story budget selects complete safely escaped articles without altering the publication', () => {
     const world = { ...createEmptyWorld(), overview: '"'.repeat(WORLD_LIMITS.overview),
         news: Array.from({ length: WORLD_LIMITS.news }, (_, i) => ({ ...article(String(i)),
-            summary: `${i}:` + '&'.repeat(WORLD_LIMITS.summary - 2),
+            title: `${i}:` + '<'.repeat(WORLD_LIMITS.title - 2), body: '&'.repeat(WORLD_LIMITS.body),
         })),
     };
     const original = structuredClone(world);
     const prompt = buildWorldStoryPrompt(world);
     assert.ok([...prompt].length <= MAX_WORLD_STORY_MESSAGE_CHARS);
-    assert.ok(!prompt.includes(escapePromptData(world.overview))); // Too large alone; smaller summaries still fit.
-    const summaries = world.news.map(item => `• ${escapePromptData(item.summary)}`);
+    const articles = world.news.map(item => `• ${escapePromptData(item.title)}\n${escapePromptData(item.body)}`);
     const included = prompt.split('\n').filter(line => line.startsWith('• '));
-    assert.ok(included.length > 0 && included.length < summaries.length);
-    assert.deepEqual(included, summaries.filter(summary => included.includes(summary)));
-    assert.ok(!prompt.includes(article().body));
+    assert.ok(included.length > 0 && included.length < articles.length);
+    assert.deepEqual(included, articles.filter(item => prompt.includes(item)).map(item => item.split('\n')[0]));
     assert.deepEqual(world, original);
-    assert.equal(buildWorldStoryPrompt({ ...world, news: [] }), ''); // No complete section fits.
 });
 
 test('failed batches can abandon new articles or keep existing ones by resubmitting their current values', async t => {
@@ -155,14 +195,19 @@ test('failed batches can abandon new articles or keep existing ones by resubmitt
     }
 });
 
-test('main story projection is safe, summary-only and independent from subscription', () => {
-    const world = { ...createEmptyWorld(), overview: '<setting>{{user}}</setting>', news: [{ ...article(), summary: '<script>{{char}}&' }] };
+test('main story projection escapes titles and bodies and excludes internal IDs', () => {
+    const world = { ...createEmptyWorld(), overview: '<setting>{{user}}</setting>',
+        news: [{ ...article(), title: '</world_background>', body: '<script>{{char}}&\n\n' + article().body }] };
     const prompt = buildWorldStoryPrompt(world);
     assert.ok(prompt.includes('&lt;script&gt;&#123;&#123;char&#125;&#125;&amp;'));
-    assert.ok(!prompt.includes(article().body));
+    assert.ok(prompt.includes('&lt;/world_background&gt;'));
+    assert.ok(prompt.includes(article().body));
     assert.ok(!prompt.includes(article().id));
-    assert.throws(() => parseWorld({ ...world, version: 3 }));
+    assert.throws(() => parseWorld({ ...world, version: 2 }));
+    assert.throws(() => parseWorld({ ...world, news: [{ ...article(), summary: 'obsolete field' }] }));
     assert.throws(() => parseWorld({ ...world, news: null }));
+    assert.equal(buildWorldStoryPrompt(createEmptyWorld()), '');
+    assert.equal(buildWorldStoryPrompt(null), '');
 });
 
 test('content CAS preserves concurrent preference changes but rejects a stale publication', async t => {

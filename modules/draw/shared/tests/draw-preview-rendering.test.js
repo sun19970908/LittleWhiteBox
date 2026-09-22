@@ -24,7 +24,7 @@ const stubs = {
     'utils.js': 'export const saveBase64AsFile = async () => { throw new Error("Unexpected image upload"); };',
     'event-manager.js': `
         export const createModuleEvents = () => ({ on() {}, cleanup() {} });
-        export const event_types = {};
+        export const event_types = { MESSAGE_UPDATED: 'message_updated' };
     `,
     'generate-interceptor.js': `
         export const GENERATE_INTERCEPTOR_ORDER = {};
@@ -185,6 +185,14 @@ test('settlement and reopening retain old images alongside newly completed and f
     }
 });
 
+test('content leases respect host-filtered markers instead of restoring the raw message', async t => {
+    const { root } = mountMessage(t, 'Before[image:filtered]After');
+    root.textContent = 'Filtered by host';
+    await api.renderPreviewsForMessage(0, { content: root, signal: new AbortController().signal });
+    assert.equal(root.textContent, 'Filtered by host');
+    assert.equal(root.querySelector('.xb-nd-img'), null);
+});
+
 test('genuinely missing anchors still rebuild from the current persisted message', async t => {
     const slotId = 'missing-anchor';
     const { message, root } = mountMessage(t, `Before[image : ${slotId}]After`);
@@ -197,4 +205,70 @@ test('genuinely missing anchors still rebuild from the current persisted message
     assert.ok(root.textContent.startsWith('Before'));
     assert.ok(root.textContent.endsWith('After'));
     assert.equal(message.mes, `Before[image : ${slotId}]After`);
+});
+
+const CODE_BLOCK = ['', '', '```html', '<div>frontend</div>', '```', ''].join('\n');
+
+test('a revoked content lease does not paint; remount reads the existing image without generating again', async t => {
+    const slotId = 'leased-image';
+    const { message, root } = mountMessage(t, `Before[image:${slotId}]After`);
+    const imgId = await seedImage(slotId, 'image');
+    const controller = new AbortController();
+    const pending = api.renderPreviewsForMessage(0, { content: root, signal: controller.signal });
+    controller.abort();
+    await pending;
+    assert.equal(root.querySelector('.xb-nd-img'), null);
+
+    const nextContent = root.cloneNode(true);
+    root.replaceWith(nextContent);
+    await api.renderPreviewsForMessage(0, { content: root, signal: new AbortController().signal });
+    assert.equal(nextContent.querySelector('.xb-nd-img'), null, 'stale content cannot write into its replacement');
+    await api.renderPreviewsForMessage(0, { content: nextContent, signal: new AbortController().signal });
+    assert.equal(nextContent.querySelector('.xb-nd-img').dataset.imgId, imgId);
+    assert.equal((await api.getPreviewsBySlot(slotId)).length, 1);
+    assert.equal(message.mes, `Before[image:${slotId}]After`);
+});
+
+test('rebuilding a message with a code block notifies other renderers only after the rewritten DOM is in place', async t => {
+    const slotId = 'rewrite-notify';
+    const { message, root } = mountMessage(t, `Before[image:${slotId}]After${CODE_BLOCK}`);
+    await seedImage(slotId, 'image');
+    root.textContent = 'outdated rendering';
+    const emitted = [];
+    host.ctx.eventSource = {
+        emit: async (event, messageId) => emitted.push({ event, messageId, domRewritten: root.textContent.startsWith('Before') }),
+    };
+
+    const rebuilt = await api.syncRenderedMessageFromState(0, { chatId: 'test-chat', expectedMessage: message });
+
+    assert.equal(rebuilt, true);
+    assert.deepEqual(emitted, [{ event: 'message_updated', messageId: 0, domRewritten: true }]);
+});
+
+test('rebuilding a message without any code block does not emit MESSAGE_UPDATED', async t => {
+    const slotId = 'rewrite-no-pre';
+    const { message, root } = mountMessage(t, `Before[image:${slotId}]After`);
+    await seedImage(slotId, 'image');
+    root.textContent = 'outdated rendering';
+    const emitted = [];
+    host.ctx.eventSource = { emit: async (...args) => emitted.push(args) };
+
+    const rebuilt = await api.syncRenderedMessageFromState(0, { chatId: 'test-chat', expectedMessage: message });
+
+    assert.equal(rebuilt, true);
+    assert.deepEqual(emitted, []);
+});
+
+test('a failing MESSAGE_UPDATED listener does not break rebuilding the message', async t => {
+    const slotId = 'rewrite-notify-error';
+    const { message, root } = mountMessage(t, `Before[image:${slotId}]After${CODE_BLOCK}`);
+    await seedImage(slotId, 'image');
+    root.textContent = 'outdated rendering';
+    host.ctx.eventSource = { emit: async () => { throw new Error('listener failed'); } };
+    t.mock.method(console, 'warn', () => {});
+
+    const rebuilt = await api.syncRenderedMessageFromState(0, { chatId: 'test-chat', expectedMessage: message });
+
+    assert.equal(rebuilt, true);
+    assert.ok(root.querySelector(`[data-slot-id="${slotId}"] img`));
 });

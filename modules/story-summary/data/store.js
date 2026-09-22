@@ -423,7 +423,7 @@ export function extractRelationshipsFromFacts(facts) {
                 from: f.s,
                 to,
                 label: f.o,
-                trend: f.trend || '陌生',
+                trend: f.trend || '',
             };
         })
         .filter(Boolean);

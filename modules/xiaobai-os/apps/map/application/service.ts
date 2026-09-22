@@ -1,6 +1,6 @@
 import type {
     PendingCommitRecoveryResult,
-    ScopedChatStore,
+    PartitionStore,
     XiaobaiOsFileState,
 } from '../../../kernel/contracts.js';
 import type { TransactionCoordinator } from '../../../kernel/transaction-coordinator.js';
@@ -23,7 +23,7 @@ export interface MapService {
     readCurrent(): MapServiceView;
     refreshCurrent(): Promise<MapServiceView>;
     replaceCurrent(candidate: unknown, options: MapMutationOptions): Promise<MapServiceView>;
-    confirmPending(): Promise<PendingCommitRecoveryResult>;
+    confirmPending(guard?: () => boolean): Promise<PendingCommitRecoveryResult>;
     adoptServerState(): Promise<PendingCommitRecoveryResult>;
     getWriteState(): XiaobaiOsFileState;
     subscribe(listener: () => void): () => void;
@@ -55,7 +55,7 @@ function transactionError(result: { status: string; error?: { code: string; mess
 }
 
 export function createMapService(
-    store: ScopedChatStore<MapDomainV1>,
+    store: PartitionStore<MapDomainV1>,
     files: Pick<
         TransactionCoordinator,
         'retryPending' | 'adoptServerState' | 'getFileState' | 'subscribeFileState'
@@ -110,7 +110,7 @@ export function createMapService(
         readCurrent: () => buildView(),
         refreshCurrent,
         replaceCurrent,
-        confirmPending: () => files.retryPending(),
+        confirmPending: (guard?: () => boolean) => files.retryPending({ beforeRetry: guard }),
         adoptServerState: () => files.adoptServerState(),
         getWriteState: () => files.getFileState(),
         subscribe(listener: () => void) {

@@ -2,7 +2,7 @@ import type {
     CapabilityToken,
     CapabilityTransactionAccess,
     PartitionRegistration,
-    ScopedChatStore,
+    PartitionStore,
     XiaobaiOsFileControls,
 } from './contracts.js';
 
@@ -26,7 +26,7 @@ export interface CapabilityRegistration<T> {
 
 export interface CapabilityInstallContext {
     require<C>(token: CapabilityToken<C>): C;
-    partition: ScopedChatStore<unknown> | null;
+    partition: PartitionStore<unknown> | null;
     files: XiaobaiOsFileControls | null;
 }
 
@@ -50,8 +50,9 @@ export interface CapabilityRegistryInstallOptions {
     createStore?(
         registration: PartitionRegistration<unknown>,
         allowedCapabilities: readonly CapabilityToken<unknown>[],
-    ): ScopedChatStore<unknown>;
+    ): PartitionStore<unknown>;
     files?: XiaobaiOsFileControls;
+    filesFor?(registration?: PartitionRegistration<unknown>): XiaobaiOsFileControls;
 }
 
 export function createCapabilityRegistry(
@@ -129,7 +130,7 @@ export function createCapabilityRegistry(
                         partition: registration.partition
                             ? installOptions.createStore?.(registration.partition, registration.dependencies) ?? null
                             : null,
-                        files: installOptions.files ?? null,
+                        files: installOptions.filesFor?.(registration.partition) ?? installOptions.files ?? null,
                         require<C>(token: CapabilityToken<C>): C {
                             if (!allowed.has(token.id)) {
                                 throw new Error(`${registration.token.id} did not declare dependency ${token.id}`);

@@ -4,7 +4,7 @@ import {
     type EconomyReadCapability,
 } from '../../capabilities/economy/index.js';
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
-import type { ScopedChatStore } from '../../kernel/contracts.js';
+import type { PartitionStore } from '../../kernel/contracts.js';
 import type { XiaobaiOsAppRuntime } from '../../types.js';
 import type { BankDomainV1 } from '../../domains/bank/types.js';
 import {
@@ -39,7 +39,7 @@ export function createBankModule(dependencies: BankModuleDependencies): XiaobaiO
             if (!context.partition) { throw new Error('Bank partition store is unavailable'); }
             const economy = context.useCapability(ECONOMY_READ_CAPABILITY);
             const bank = createBankService(
-                context.partition as ScopedChatStore<BankDomainV1>,
+                context.partition as PartitionStore<BankDomainV1>,
                 context.files,
                 economy,
                 dependencies.service,
@@ -53,6 +53,5 @@ export function createBankModule(dependencies: BankModuleDependencies): XiaobaiO
             });
         },
         dispose: dependencies.dispose,
-        clearData: context => context.removePartition(BANK_PARTITION.key),
     };
 }

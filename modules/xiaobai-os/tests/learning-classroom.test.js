@@ -10,6 +10,28 @@ import { createLearningPractice } from '../apps/learning/application/practice.js
 import { independentLearningSuccess } from '../domains/learning/progress.js';
 import { MAX_LEARNING_WRITE_BYTES } from '../apps/learning/storage/document.js';
 
+test('unconfirmed global rewards block learning deletion until the saved wallet is explicitly adopted', async t => {
+    t.mock.method(console, 'error', () => {});
+    const h = await createClassroomFixture(); t.after(h.dispose);
+    await h.openLesson();
+    const unit = h.profile().unit;
+    h.flags.ledgerUnknown = true;
+    await h.command('submit', { unitId: unit.id, exerciseId: unit.exercises[0].id, answer: { kind: 'choice', ids: ['a'] } });
+    assert.equal(h.wallet.getFileState(), 'unconfirmed');
+    assert.equal(h.coordinator.getFileState(), 'ready');
+    const before = structuredClone(h.repository.snapshot().document);
+    for (const action of ['abandon', 'delete-language', 'clear']) {
+        await h.command(action);
+        assert.deepEqual(h.repository.snapshot().document, before);
+    }
+    assert.equal((await h.wallet.adoptServerState()).status, 'adopted');
+    await h.command('clear');
+    h.flags.ledgerUnknown = false;
+    assert.equal((await h.wallet.retryPending()).status, 'none');
+    assert.equal(h.repository.snapshot().document.data.profiles.length, 0);
+    assert.equal(h.economy.getPlayerBalance(), 100);
+});
+
 test('profile clarification returns the teacher reply without inventing a saved goal, and accepts a follow-up', async t => {
     const h = await createClassroomFixture(); t.after(h.dispose);
     await h.command('teacher', { teacher: { name: '林老师', note: '' } });
@@ -281,7 +303,7 @@ test('formal classroom opens without a model, saves a lesson, submits, completes
     assert.equal(initial.unit.exercises[0].solution, null);
     const q = initial.unit.exercises[0];
     const after = await h.command('submit', { unitId: initial.unit.id, exerciseId: q.id, answer: { kind: 'choice', ids: ['a'] } });
-    assert.equal(after.completions[0].paid, true, after.message);
+    assert.equal(after.completions[0].rewardStatus, 'paid');
     assert.equal(h.economy.getPlayerBalance(), 120);
     const calls = h.counts.provider;
     await h.command('reward', { unitId: initial.unit.id });
@@ -302,7 +324,7 @@ test('unconfirmed completion remains unpublished; recovery pays only after confi
     assert.equal(result.storage, 'unconfirmed'); assert.equal(result.completions.length, 0); assert.equal(h.economy.getPlayerBalance(), 100);
     const calls = h.counts.provider; h.confirmUser();
     const verified = await h.command('verify');
-    assert.equal(verified.completions[0].paid, true, verified.message);
+    assert.equal(verified.completions[0].rewardStatus, 'paid');
     assert.equal(h.counts.provider, calls); assert.equal(h.economy.getPlayerBalance(), 120);
 });
 
@@ -310,24 +332,29 @@ test('ledger failure and receipt failure retain the completed lesson and never m
     const h = await createClassroomFixture(); t.after(h.dispose); await h.openLesson(); await h.economy.ensureOpen();
     const unit = h.profile().unit; h.flags.ledgerFailure = true;
     let state = await h.command('submit', { unitId: unit.id, exerciseId: unit.exercises[0].id, answer: { kind: 'choice', ids: ['a'] } });
-    assert.equal(state.completions.length, 1); assert.equal(state.completions[0].paid, false);
+    assert.equal(state.completions.length, 1); assert.notEqual(state.completions[0].rewardStatus, 'paid');
     const calls = h.counts.provider; h.flags.ledgerFailure = false; h.flags.userFailure = true;
     state = await h.command('reward', { unitId: unit.id });
-    assert.equal(h.economy.getPlayerBalance(), 120); assert.equal(state.storage, 'unconfirmed'); assert.equal(state.completions[0].paid, false);
+    assert.equal(h.economy.getPlayerBalance(), 120); assert.equal(state.storage, 'unconfirmed'); assert.notEqual(state.completions[0].rewardStatus, 'paid');
     h.confirmUser(); await h.command('verify'); await h.command('reward', { unitId: unit.id });
     assert.equal(h.economy.getPlayerBalance(), 120); assert.equal(h.counts.provider, calls);
     assert.equal(h.profile().completions[0].receipt.transactionId.length > 0, true);
 });
 
-test('wallet closed is not auto-opened; cross-story copies cannot read the private course or take its reward', async t => {
+test('cross-story learning content stays private while its reward can be claimed globally once', async t => {
     const h = await createClassroomFixture(); t.after(h.dispose); await h.openLesson();
     const unit = h.profile().unit;
-    let state = await h.command('submit', { unitId: unit.id, exerciseId: unit.exercises[0].id, answer: { kind: 'choice', ids: ['a'] } });
-    assert.equal(h.economy.isOpen(), false); assert.equal(state.completions[0].paid, false);
+    h.flags.ledgerFailure = true;
+    await h.command('submit', { unitId: unit.id, exerciseId: unit.exercises[0].id, answer: { kind: 'choice', ids: ['a'] } });
+    assert.equal(h.economy.getPlayerBalance(), 100);
     const view = learningClassView(h.repository.snapshot().document.data, 'en', 'other');
-    assert.equal(view.unit, null); assert.equal(view.blockedUnit, true); assert.equal(view.completions[0].originHere, false);
-    state = await h.command('reward', { unitId: unit.id, openWallet: true });
-    assert.equal(state.completions[0].paid, true); assert.equal(h.economy.getPlayerBalance(), 120);
+    assert.equal(view.unit, null); assert.equal(view.blockedUnit, true);
+    h.flags.ledgerFailure = false;
+    await h.changeChat();
+    const state = await h.command('reward', { unitId: unit.id });
+    assert.equal(state.completions[0].rewardStatus, 'paid'); assert.equal(h.economy.getPlayerBalance(), 120);
+    await h.command('reward', { unitId: unit.id });
+    assert.equal(h.economy.getPlayerBalance(), 120);
 });
 
 test('hidden listening text and keys stay off the reading surface; reveal/notes/selection are real saved facts', async t => {
@@ -445,11 +472,11 @@ test('cancellation after a submitted answer was sent cannot start a new teacher 
     assert.equal(h.profile().unit.attempts.length, 1);
 });
 
-test('opening a wallet honours the queued guard and does not leave an account after cancellation', async t => {
+test('cancelled account operations do not change the existing global wallet', async t => {
     const h = await createClassroomFixture(); t.after(h.dispose);
     const writes = h.counts.ledgerWrites;
     await assert.rejects(h.economy.ensureOpen(() => false));
-    await h.economy.refresh(); assert.equal(h.economy.isOpen(), false); assert.equal(h.counts.ledgerWrites, writes);
+    await h.economy.refresh(); assert.equal(h.economy.getPlayerBalance(), 100); assert.equal(h.counts.ledgerWrites, writes);
 });
 
 test('unknown ledger writes are reconciled before receipt saving, without a second transaction', async t => {

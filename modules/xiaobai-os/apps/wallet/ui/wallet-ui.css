@@ -37,6 +37,12 @@
 .wallet-ui-notice-copy strong { display: block; font-size: 13px; color: var(--wallet-tone); }
 .wallet-ui-notice-copy p { color: var(--wallet-muted); font-size: 12px; line-height: 1.8; margin: 5px 0 0; }
 .wallet-ui-notice-copy button { margin-top: 9px; }
+.wallet-adopt-dialog { width: 360px; padding: 20px; border: 1px solid var(--wallet-line); border-radius: 18px; background: var(--wallet-panel); color: var(--wallet-ink); }
+.wallet-adopt-dialog h2 { margin: 0; font-size: 17px; line-height: 1.5; }
+.wallet-adopt-dialog p { margin: 12px 0 20px; color: var(--wallet-muted); line-height: 1.8; }
+.wallet-adopt-actions { display: flex; gap: 8px; }
+.wallet-adopt-actions button { flex: 1; min-height: 44px; padding: 8px 12px; border: 1px solid var(--wallet-line); border-radius: 10px; background: transparent; }
+.wallet-adopt-actions button:last-child { border-color: transparent; background: var(--wallet-tint); color: var(--wallet-accent); }
 .wallet-ui-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 32px 20px; text-align: center; min-height: 200px; gap: 10px; }
 .wallet-ui-empty-icon { display: grid; place-items: center; width: 58px; height: 62px; background: var(--wallet-panel); border: 1px solid var(--wallet-line); border-radius: 18px; color: var(--wallet-accent); transform: rotate(-6deg); }
 .wallet-ui-empty-icon .wallet-icon { width: 25px; height: 25px; }

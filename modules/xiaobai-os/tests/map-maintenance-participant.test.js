@@ -5,7 +5,7 @@ import {
     createMapMaintenanceParticipant,
     MAP_MAINTENANCE_TOOL_NAMES,
 } from '../apps/map/host/maintenance-participant.js';
-import { MAX_ATLAS_DATA_MESSAGE_CHARS } from '../apps/map/maintenance/atlas-data-message.js';
+import { MAX_ATLAS_DATA_MESSAGE_CHARS } from '../apps/map/tools/atlas-data-message.js';
 import {
     MAX_MAP_LOCATIONS,
     MAX_SCENE_ELEMENTS,

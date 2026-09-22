@@ -585,6 +585,21 @@ function buildFailedPlaceholderHtml({ slotId, messageId, tags, positive, errorTy
 </div>`;
 }
 
+// 整条重写楼层 DOM 会销毁其它扩展（如酒馆助手）挂在 <pre> 上已渲染的 iframe，而它们只在楼层事件时才重新处理。
+// 重写完成后补发 MESSAGE_UPDATED 让它们重新渲染该楼层。楼层里没有 <pre> 时没有可被渲染器挂载的对象，
+// 重写不会破坏什么，就不通知，避免无谓地打扰其它监听方。
+export async function notifyMessageRewritten(messageId) {
+    try {
+        if (!getMesTextElement(messageId)?.querySelector('pre')) return;
+        const eventSource = getContext()?.eventSource;
+        if (eventSource?.emit && event_types?.MESSAGE_UPDATED) {
+            await eventSource.emit(event_types.MESSAGE_UPDATED, messageId);
+        }
+    } catch (error) {
+        console.warn('[DrawCommon] 通知楼层重写失败:', error);
+    }
+}
+
 async function rebuildRenderedMessageFromState(messageId, {
     chatId,
     expectedMessage,
@@ -609,6 +624,7 @@ async function rebuildRenderedMessageFromState(messageId, {
     // Host-generated message markup.
     // eslint-disable-next-line no-unsanitized/property
     mesTextEl.innerHTML = formatted;
+    await notifyMessageRewritten(messageId);
     return true;
 }
 
@@ -616,7 +632,10 @@ async function renderPreviewsForMessageNow(messageId, {
     refreshSlotIds = [],
     expectedChatId,
     expectedMessage,
+    content,
+    signal,
 } = {}) {
+    if (signal?.aborted) return;
     const ctx = getContext();
     const message = ctx.chat?.[messageId];
     if (!message?.mes
@@ -626,11 +645,14 @@ async function renderPreviewsForMessageNow(messageId, {
     const sourceText = message.mes;
     const slotIds = extractSlotIds(sourceText);
     let mesTextEl = getMesTextElement(messageId);
-    if (!mesTextEl) return;
+    if (!mesTextEl || (content && content !== mesTextEl)) return;
     // 锚点探测与实际替换共用 DOM 解析；不能因合法空格或换行误判缺失，
     // 再用尚未提交新槽位的正文重建 DOM，把本批等待卡清掉。
     const renderedSlots = getRenderedSceneSlotIds(mesTextEl);
     if ([...slotIds].some(slotId => !renderedSlots.has(slotId))) {
+        // A content lease projects the host's formatted text, including its regex
+        // filters. Missing markers are not permission to rewrite that content.
+        if (content) return;
         // message.mes 是持久化排版事实。adoption 当下若恰逢聊天切换或宿主 DOM
         // 尚未挂载，一次局部 patch 可能没有锚点；先按前台生成相同的宿主格式
         // 重建楼层，再在下面统一投影 pending 卡或图片。
@@ -723,7 +745,7 @@ async function renderPreviewsForMessageNow(messageId, {
 
     if (replacements.length === 0) return;
     const live = getContext();
-    if (String(live.chatId || '') !== String(ctx.chatId || '')
+    if (signal?.aborted || String(live.chatId || '') !== String(ctx.chatId || '')
         || live.chat?.[messageId] !== message
         || message.mes !== sourceText
         || getMesTextElement(messageId) !== mesTextEl
@@ -734,7 +756,7 @@ async function renderPreviewsForMessageNow(messageId, {
 // 同一楼层只允许一个异步投影在运行。图片落库、恢复状态变化和消息事件可能在同一时刻
 // 发起刷新；串行执行保证较早读取的旧事实一定先完成，最后留在 DOM 的总是较新的投影。
 // 队列只绑定当前 message 对象，聊天切换或宿主替换消息对象后，旧任务会被上面的身份守卫丢弃。
-export function renderPreviewsForMessage(messageId, { refreshSlotIds = [] } = {}) {
+export function renderPreviewsForMessage(messageId, { refreshSlotIds = [], content, signal } = {}) {
     const ctx = getContext();
     const message = ctx.chat?.[messageId];
     if (!message?.mes) return Promise.resolve();
@@ -750,6 +772,8 @@ export function renderPreviewsForMessage(messageId, { refreshSlotIds = [] } = {}
         refreshSlotIds: requestedSlots,
         expectedChatId,
         expectedMessage: message,
+        content,
+        signal,
     }));
     const tail = render.catch(() => {});
     queue.tail = tail;

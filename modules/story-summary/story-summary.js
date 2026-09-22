@@ -24,12 +24,12 @@ import { formatErrorDetails } from '../../core/error-details.js';
 import { createModuleEvents } from "../../core/event-manager.js";
 import { postToIframe, isTrustedMessage } from "../../core/iframe-messaging.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
+import { STORY_SUMMARY_TOGGLE_EVENT } from './runtime-events.js';
 import { initAfterAiGate, notifyAfterAiHint, registerAfterAiHandler } from "../../core/after-ai-gate.js";
 import { getDefaultApiPrefix, resolveApiBaseUrl } from "../../shared/common/openai-url-utils.js";
 import {
     commitIfSignalActive,
     mergeAbortSignals,
-    runWithAbortDeadline,
 } from "../../shared/common/abort-utils.js";
 import {
     GENERATE_INTERCEPTOR_ORDER,
@@ -92,6 +92,7 @@ import {
 import { selectBestStoryMemoryResult } from "./generate/story-memory-result.js";
 import { createRecallReuse, recallConfigKey } from './generate/recall-reuse.js';
 import { createRecallDiagnostics, formatRecallDiagnostics, formatRecallReuseDiagnostics, recordRecallFallback } from './recall-diagnostics.js';
+import { RECALL_TIMEOUT_MS, RECALL_TIMEOUT_REASONS, recallFailureNotice } from './generate/recall-failure.js';
 
 // summary generation
 import { runSummaryGeneration } from "./generate/generator.js";
@@ -132,6 +133,8 @@ import {
 // 本地扩展：加载时 textHash 对账（仅检测不重建；上游无此检测，勿在合并时删掉）
 import { findStaleTextHashFloors } from "./vector/pipeline/text-hash-reconcile.js";
 import { runVectorMaintenance } from "./vector/pipeline/vector-workflow.js";
+import { isL0FloorDeferred } from './vector/pipeline/l0-eligibility.js';
+import { createVectorMaintenanceScheduler } from './vector/pipeline/maintenance-scheduler.js';
 import { repairMissingChunks } from "./vector/pipeline/chunk-repair.js";
 import {
     incrementalExtractAtoms,
@@ -192,6 +195,7 @@ import { invalidateLexicalIndex, warmupIndex, removeDocumentsByFloor, addEventDo
 
 const MODULE_ID = "storySummary";
 const messageButtonOwnership = createMessageButtonOwnership();
+let saveChatSummaryState = context => context.saveMetadata();
 const iframePath = `${extensionFolderPath}/modules/story-summary/story-summary.html`;
 const VALID_SECTIONS = ["keywords", "events", "characters", "arcs", "facts"];
 const MESSAGE_EVENT = "message";
@@ -297,7 +301,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
     try {
         notifyStorySummaryChatState();
         if (!nextEnabled) clearHideState({ persist: false });
-        await context.saveMetadata();
+        await saveChatSummaryState(context);
 
         if (getContext()?.chatId === targetChatId && events) {
             await handleChatChanged();
@@ -448,7 +452,12 @@ class TaskGuard {
 const guard = new TaskGuard();
 
 let lexicalWarmupTimer = null;
-let autoL0BackfillTimer = null;
+const vectorMaintenanceScheduler = createVectorMaintenanceScheduler({
+    getContext,
+    isStale: isChatStale,
+    getQuietWaitMs: getBackgroundQuietWaitMs,
+    run: maybeRunDelayedVectorMaintenance,
+});
 let vectorIntegrityTimer = null;
 // 完整性检查连续失败时的退避间隔（纯内存态，切聊天/停用/卸载即清零）。
 let vectorIntegrityRetryDelayMs = 0;
@@ -1234,6 +1243,7 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
     const { chatId, chat } = getContext();
     const targetChatId = scheduledChatId || chatId;
     if (!targetChatId || !chatId || targetChatId !== chatId || !chat?.length) return;
+    if (isL0FloorDeferred(chat)) return;
 
     if (isHostGenerating() || guard.isAnyRunning('summary', 'anchor', 'vector')) {
         scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, targetChatId);
@@ -1314,7 +1324,7 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
                 return { chunkResult: null, l0Result: null, l0VectorResult: null, deferred: false, stale: false, cancelled: true };
             }
             if (hasL0LlmWork || hasL0VectorWork || hasL1Work) {
-                if (isHostGenerating() || isChatStale(chatId)) {
+                if (isHostGenerating() || isChatStale(chatId) || isL0FloorDeferred(chatSnapshot)) {
                     return {
                         chunkResult: { success: true, status: 'up_to_date', built: 0 },
                         l0Result: null,
@@ -2043,8 +2053,9 @@ function addSummaryBtnToMessage(mesId) {
     msg.querySelector(".flex-container.flex1.alignitemscenter")?.appendChild(btn);
 }
 
-export function configureStorySummaryRuntime({ ownsMessageButtons: nextOwnership = true } = {}) {
+export function configureStorySummaryRuntime({ ownsMessageButtons: nextOwnership = true, saveChatState } = {}) {
     messageButtonOwnership.configure(nextOwnership);
+    if (saveChatState) saveChatSummaryState = saveChatState;
 }
 
 export function mountStorySummaryButton(message, mesId) {
@@ -2704,7 +2715,7 @@ function mergeCharacterRelationshipsIntoFacts(existingFacts, relationships, floo
         const key = `${from}->${to}`;
         const oldFact = oldRelationByKey.get(key);
         const label = String(rel?.label || "").trim() || "未知";
-        const trend = String(rel?.trend || "").trim() || "陌生";
+        const trend = String(rel?.trend || "").trim();
         const id = oldFact?.id || `f-${nextFactId++}`;
 
         newRelationFacts.push({
@@ -2712,7 +2723,7 @@ function mergeCharacterRelationshipsIntoFacts(existingFacts, relationships, floo
             s: from,
             p: oldFact?.p || `对${to}的关系`,
             o: label,
-            trend,
+            ...(trend ? { trend } : {}),
             since: oldFact?.since ?? floorHint,
             _addedAt: oldFact?._addedAt ?? floorHint,
         });
@@ -2877,18 +2888,7 @@ function scheduleAutoSummary(reason, delayMs = AUTO_SUMMARY_DELAY_MS) {
 }
 
 function scheduleAutoL0Backfill(delayMs = AUTO_L0_BACKFILL_DELAY_MS, chatIdOverride = null) {
-    clearTimeout(autoL0BackfillTimer);
-    const scheduledChatId = chatIdOverride || getContext().chatId || null;
-    autoL0BackfillTimer = setTimeout(() => {
-        autoL0BackfillTimer = null;
-        if (isChatStale(scheduledChatId)) return;
-        const quietWait = getBackgroundQuietWaitMs();
-        if (quietWait > 0) {
-            scheduleAutoL0Backfill(quietWait, scheduledChatId);
-            return;
-        }
-        maybeRunDelayedVectorMaintenance(scheduledChatId);
-    }, delayMs);
+    vectorMaintenanceScheduler.schedule(delayMs, chatIdOverride);
 }
 
 /** 完整性读取连续失败时 6s → 12s → 24s … 封顶 5min；成功后由调用方清零。 */
@@ -2922,8 +2922,7 @@ function scheduleVectorIntegrityCheck(delayMs = 2000) {
 function clearDeferredBackgroundTasks() {
     clearTimeout(lexicalWarmupTimer);
     lexicalWarmupTimer = null;
-    clearTimeout(autoL0BackfillTimer);
-    autoL0BackfillTimer = null;
+    vectorMaintenanceScheduler.clear();
     clearTimeout(vectorIntegrityTimer);
     vectorIntegrityTimer = null;
     vectorIntegrityRetryDelayMs = 0;
@@ -3965,14 +3964,12 @@ async function handleMessageSwiped(scheduledChatId, messageId) {
 async function handleMessageReceived(scheduledChatId, targetMesId = null) {
     if (!isStorySummaryConsumableForCurrentChat()) return;
     if (isChatStale(scheduledChatId)) return;
-    const { chat, chatId } = getContext();
+    const { chat } = getContext();
     const lastFloor = (chat?.length || 1) - 1;
     const floor = Number.isFinite(targetMesId) ? Number(targetMesId) : lastFloor;
     if (floor < 0 || floor > lastFloor) return;
     const message = chat?.[floor];
     if (!message || message.is_user) return;
-    const vectorConfig = getVectorConfig();
-
     initButtonsForAll();
 
     applyHideStateDebounced();
@@ -3980,11 +3977,6 @@ async function handleMessageReceived(scheduledChatId, targetMesId = null) {
 
     // Refresh entity lexicon after new message (new roles may appear)
     refreshEntityLexiconAndWarmup();
-
-    if (vectorConfig?.enabled) {
-        rememberVectorMaintenance(chatId, floor, 'after_ai');
-        scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, chatId);
-    }
 }
 
 function handleMessageSent(scheduledChatId) {
@@ -3992,6 +3984,7 @@ function handleMessageSent(scheduledChatId) {
     initButtonForLatestMessage();
     if (!isStorySummaryConsumableForCurrentChat()) return;
     scheduleAutoSummary("before_user");
+    if (getVectorConfig()?.enabled) scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, scheduledChatId);
 }
 
 /**
@@ -4060,10 +4053,8 @@ function clearExtensionPrompt() {
 // Prompt 注入
 // ═══════════════════════════════════════════════════════════════════════════
 
-// 整轮硬截止：召回在宿主 generate_interceptor 的 await 内执行，必须有兜底，
-// 不能把宿主发送流程无限卡住。30s 为初始护栏值，进入浏览器 E2E 后需结合
-// 真实 p50/p95 与首 token 体感校准。
-const STORY_SUMMARY_RECALL_DEADLINE_MS = 30000;
+// The coordinator times actual computation separately from waiting for a USER
+// message. Completed outcomes remain claimable by this generation only.
 const RECALL_WARNING_COOLDOWN_MS = 10000;
 const RECALL_REASONS_THAT_ABORT_GENERATION = new Set([
     'chat-changed',
@@ -4079,9 +4070,9 @@ const recallPrefetch = createRecallPrefetchCoordinator({
     getContext,
     prepare: (type, signal, diagnostics) => prepareMemoryPrompt(type, signal, diagnostics),
     pollMs: 16,
-    maxAgeMs: STORY_SUMMARY_RECALL_DEADLINE_MS,
+    maxAgeMs: RECALL_TIMEOUT_MS,
     onJoinedCancel: (run) => {
-        if (run.cancelReason === 'prefetch-timeout') return; // The interceptor reports a deadline failure.
+        if (Object.values(RECALL_TIMEOUT_REASONS).includes(run.cancelReason)) return; // The interceptor owns failure reporting.
         const publish = getContext()?.chatId === run.chatId
             && ['generation-stopped', 'generation-signal-aborted', 'dispatch-aborted', 'disabled', 'deactivated', 'summary-cleared'].includes(run.cancelReason);
         if (!publish && !xbLog.isEnabled()) return;
@@ -4347,7 +4338,7 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
     const focusRef = normalizedType === 'normal' && lastMessage?.is_user === true
         ? lastMessage
         : null;
-    const { slot: run, path, remainingMs } = recallPrefetch.join({
+    const { slot: run, path } = recallPrefetch.join({
         chatId,
         type: normalizedType,
         focusRef,
@@ -4356,14 +4347,7 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
     const waitStartedAt = performance.now();
     let joinStatus = 'pending';
     try {
-        const outcome = await runWithAbortDeadline(
-            () => run.outcome,
-            {
-                controller: run.controller,
-                timeoutMs: remainingMs,
-                timeoutMessage: 'Story Summary recall deadline exceeded',
-            },
-        );
+        const outcome = await recallPrefetch.waitForOutcome(run);
         if (!outcome?.ok) throw outcome?.error || new Error('Story Summary recall produced no outcome');
 
         const recallResult = await commitMemoryPrompt(outcome.value, run.controller.signal);
@@ -4375,30 +4359,18 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
     } catch (error) {
         // 截止或失败时 fail-open。显式取消的调用方已经清理 Prompt；旧任务
         // 不能在这里清掉替代它的新任务结果。后台残余任务也受最终写入闸门保护。
-        if (run.cancelReason && run.cancelReason !== 'prefetch-timeout') {
+        const failure = recallFailureNotice(run.cancelReason, error);
+        if (!failure) {
             joinStatus = `cancelled:${run.cancelReason}`;
         } else {
             joinStatus = 'failed';
             if (recallPrefetch.getCurrent() !== run || getContext()?.chatId !== run.chatId) return;
             clearExtensionPrompt();
             run.diagnostics.finishedAt ??= performance.now();
-            const failureLog = formatRecallDiagnostics(run.diagnostics, { status: 'failed', error });
+            const failureLog = formatRecallDiagnostics(run.diagnostics, { status: 'failed', reason: failure.issueCode, error });
             postToFrame({ type: 'RECALL_LOG', text: failureLog });
-            xbLog.warn(MODULE_ID,
-                `召回失败或达到 ${STORY_SUMMARY_RECALL_DEADLINE_MS}ms 硬截止，本轮跳过记忆注入`,
-                error
-            );
-            const timedOut = run.cancelReason === 'prefetch-timeout' || run.controller.signal.aborted;
-            const embeddingFailed = error?.code === 'RECALL_EMBEDDING_FAILED'
-                || error?.code === 'RECALL_EMBEDDING_INVALID_RESPONSE';
-            const issueCode = timedOut
-                ? 'recall_timeout'
-                : (embeddingFailed ? 'recall_embedding_failed' : 'recall_failed');
-            const notice = timedOut
-                ? '剧情记忆召回超过 30 秒，本轮已跳过。请检查嵌入 API、重排 API、网络和向量设置后重试。'
-                : (embeddingFailed
-                    ? '剧情记忆嵌入请求失败，本轮已跳过。请检查嵌入 API、网络和向量设置后重试。'
-                    : '剧情记忆召回失败，本轮已跳过。请检查嵌入 API、重排 API、网络和向量设置后重试。');
+            const { issueCode, notice } = failure;
+            xbLog.warn(MODULE_ID, notice, error);
             const { chatId } = getContext();
             if (claimWarningCooldown('recall', chatId, issueCode, RECALL_WARNING_COOLDOWN_MS)) {
                 try {
@@ -4506,6 +4478,15 @@ function notifyStorySummaryAfterAi(data, source) {
 
     const message = chat[messageId];
     if (!message || message.is_user) return;
+
+    // A continuation changes the same floor while send_date stays unchanged.
+    // Schedule directly from completion signals, not the after-AI gate's deduped
+    // UI notification. Render-only hints (including virtualized remounts) do not
+    // start maintenance. The timer rechecks the live continuation boundary.
+    if (source !== 'character_message_rendered' && isStorySummaryConsumableForCurrentChat() && getVectorConfig()?.enabled) {
+        rememberVectorMaintenance(chatId, messageId, 'after_ai');
+        scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, chatId);
+    }
 
     notifyAfterAiHint({
         chatId,
@@ -4927,7 +4908,7 @@ function showBackupManagerModal(initialFiles) {
 // Toggle 监听
 // ═══════════════════════════════════════════════════════════════════════════
 
-$(document).on("xiaobaix:storySummary:toggle", async (_e, enabled) => {
+$(document).on(STORY_SUMMARY_TOGGLE_EVENT, async (_e, enabled) => {
     if (enabled) {
         await registerEvents();
         await handleChatChanged();

@@ -22,7 +22,7 @@ import {
 import { createGameView, type CreateGameViewInput } from '../../../domains/game/view.js';
 import type {
     PendingCommitRecoveryResult,
-    ScopedChatStore,
+    PartitionStore,
     XiaobaiOsFileControls,
     XiaobaiOsFileState,
 } from '../../../kernel/contracts.js';
@@ -140,7 +140,7 @@ function transactionError(result: {
 }
 
 export function createGameService(
-    store: ScopedChatStore<GameDomainV1>,
+    store: PartitionStore<GameDomainV1>,
     files: XiaobaiOsFileControls,
     economyRead: EconomyReadCapability,
     {

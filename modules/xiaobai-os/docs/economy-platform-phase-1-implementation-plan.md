@@ -1,6 +1,6 @@
 # Economy 平台第一阶段施工方案
 
-> **已封存，不得继续照此施工。** 本文只记录旧 metadata 根阶段已经完成过的实现，不再定义现行存储、事务或 APP 接入方式。`root store`、完整根 mutation、metadata 保存与 Economy repository 指令均已失效。当前施工必须使用 [OS Kernel 施工方案](./os-kernel-implementation-plan.md) 与 [Economy 平台终态设计](./economy-platform-target-design.md)：Economy 由 Capability 拥有`economy`分区，资金消费者在 Scoped transaction 中完成一次 sidecar 提交。待 Kernel 切换完成，本历史文档可删除。
+> **已封存，不得继续照此施工。** 本文只记录旧 metadata 根阶段已经完成过的实现，不再定义现行存储、事务或 APP 接入方式。`root store`、完整根 mutation、metadata 保存与 Economy repository 指令均已失效。现行存储边界、资金事务和升级策略统一以 [Economy 平台终态设计](./economy-platform-target-design.md) 为准。
 
 ## 1. 阶段目标
 

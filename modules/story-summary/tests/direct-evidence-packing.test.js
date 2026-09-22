@@ -8,7 +8,7 @@ import {
 
 const costOf = item => item.tokens;
 
-test('oversized evidence does not block a later item that fits', () => {
+test('boundary evidence enters whole rather than being displaced by a smaller lower rank', () => {
     const budget = { used: 0, max: 12 };
     const items = [
         { id: 'large', floor: 1, score: 1, tokens: 20 },
@@ -21,9 +21,10 @@ test('oversized evidence does not block a later item that fits', () => {
     });
     const claimed = new Set(admitted.map(item => item.id));
 
-    assert.deepEqual(admitted.map(item => item.id), ['small']);
-    assert.deepEqual([...claimed], ['small']);
-    assert.equal(budget.used, 7);
+    assert.deepEqual(admitted.map(item => item.id), ['large']);
+    assert.deepEqual([...claimed], ['large']);
+    assert.equal(budget.used, 22);
+    assert.deepEqual(admitDirectEvidenceItems(items, budget, { getTokenCost: costOf }), []);
 });
 
 test('temporal evidence is admitted before a higher-score regular item', () => {
@@ -40,9 +41,9 @@ test('temporal evidence is admitted before a higher-score regular item', () => {
     assert.equal(admitted[0].temporalProtected, true);
 });
 
-test('temporal evidence over the protected budget returns to ordinary relevance', () => {
+test('temporal evidence after the protected budget is exhausted returns to ordinary relevance', () => {
     const budget = { used: 0, max: 20 };
-    const protectedBudget = { used: 0, max: 8 };
+    const protectedBudget = { used: 8, max: 8 };
     const admitted = admitDirectEvidenceItems([
         { id: 'regular', floor: 1, score: 1, tokens: 5 },
         { id: 'temporal-overflow', floor: 2, score: 0.1, tokens: 7, temporal: true },
@@ -55,7 +56,7 @@ test('temporal evidence over the protected budget returns to ordinary relevance'
     assert.deepEqual(admitted.map(item => item.id), ['regular', 'temporal-overflow']);
     assert.equal(admitted[1].temporal, false);
     assert.equal(admitted[1].temporalProtected, false);
-    assert.equal(protectedBudget.used, 0);
+    assert.equal(protectedBudget.used, 8);
 });
 
 test('protected-budget overflow does not preserve a minimum-score exemption', () => {
@@ -71,7 +72,7 @@ test('protected-budget overflow does not preserve a minimum-score exemption', ()
         },
         { id: 'regular', floor: 1, score: 1, tokens: 5 },
     ], budget, {
-        protectedBudget: { used: 0, max: 8 },
+        protectedBudget: { used: 9, max: 8 },
         getTokenCost: costOf,
         floorOverheadTokens: 2,
     });
@@ -94,11 +95,11 @@ test('protected budget includes floor overhead and protects one item per floor',
 
     assert.deepEqual(admitted.map(item => item.id), [
         'floor-1-winner',
-        'floor-1-runner-up',
         'floor-2-overflow',
+        'floor-1-runner-up',
     ]);
-    assert.deepEqual(admitted.map(item => item.temporalProtected), [true, false, false]);
-    assert.equal(protectedBudget.used, 7);
+    assert.deepEqual(admitted.map(item => item.temporalProtected), [true, true, false]);
+    assert.equal(protectedBudget.used, 14);
     assert.equal(budget.used, 16);
 });
 

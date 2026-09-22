@@ -43,7 +43,7 @@ const format = (value: number) => `${(value / 1000).toFixed(1)}k`;
             :style="{ '--context-fill': `${stats ? ratio * 360 : 0}deg` }" :aria-label="stats ? `上下文：约 ${format(used)} / 158k` : '上下文用量'"
             :aria-expanded="open" title="上下文" @click="open = !open"
         >
-            <span>{{ loading ? '…' : failed || !stats ? '—' : Math.round(ratio * 100) }}</span>
+            <span>{{ loading ? '…' : failed || !stats ? '—' : '' }}</span>
         </button>
         <section v-if="open" class="messages-context-popover" aria-label="上下文用量">
             <header><strong>上下文</strong><button type="button" aria-label="关闭上下文用量" @click="open = false">×</button></header>

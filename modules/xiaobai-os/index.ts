@@ -87,3 +87,4 @@ export function cleanupXiaobaiOs(): void {
 }
 
 export { createDefaultXiaobaiOsSettings };
+export { isDiceContinuationPending } from './apps/dice/application/continuation-state.js';

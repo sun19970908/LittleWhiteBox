@@ -21,6 +21,7 @@ import { filterText } from "../vector/utils/text-filter.js";
 import { getSummarySourceEnd } from './source-boundary.js';
 import { normalizeSummaryDelayFloors } from '../data/summary-delay.js';
 import { prepareSummaryResult } from './summary-result.js';
+import { formatModelArcProgress } from './arc-progress.js';
 
 const MODULE_ID = 'summaryGenerator';
 const SUMMARY_SESSION_ID = 'xb9';
@@ -53,7 +54,7 @@ export function formatExistingSummaryForAI(store) {
 
     if (data.arcs?.length) {
         parts.push("【角色弧光】");
-        data.arcs.forEach(a => parts.push(`- ${a.name}：${a.trajectory}（进度${Math.round(a.progress * 100)}%）`));
+        data.arcs.forEach(a => parts.push(`- ${a.name}：${a.trajectory}（progress: ${formatModelArcProgress(a.progress)}）`));
     }
 
     if (data.keywords?.length) {

@@ -19,7 +19,8 @@ test('abundant L1 cannot starve eligible L0 or direct causes', () => {
     assert.equal(result.items.some(item => item.kind === 'l0'), true);
     assert.equal(result.causal.stats.bodies, 1);
     assert.ok(result.items.filter(item => item.kind === 'l1').length >= 10);
-    assert.ok(result.used <= 4000);
+    assert.ok(result.used >= 4000);
+    assert.ok(result.used - result.items.at(-1).tokenCost < 4000);
     assert.equal(result.used, result.items.reduce((sum, item) => sum + item.tokenCost, 0) + result.causal.stats.tokens);
 });
 
@@ -27,12 +28,20 @@ test('unused reservations flow to L1, and unused L1 capacity can admit more L0',
     assert.equal(pack({ l1: Array(20).fill(200) }).used, 4000);
     const result = pack({ l0: Array(10).fill(300), l1: [200] });
     assert.equal(result.items.filter(item => item.kind === 'l0').length, 10);
-    assert.equal(result.l0ProtectedTokens, 900);
+    assert.equal(result.l0ProtectedTokens, 1200);
     assert.equal(result.used, 3200);
 });
 
-test('oversized raw passages cannot evict reserved evidence or block later complete passages', () => {
+test('boundary raw passage retains reserved evidence and closes all later admission phases', () => {
     const result = pack({ l0: [400], l1: [3900, 100, 200], cause: '因'.repeat(100) });
-    assert.deepEqual(result.items.filter(item => item.kind === 'l1').map(item => item.tokenCost), [100, 200]);
+    assert.deepEqual(result.items.filter(item => item.kind === 'l1').map(item => item.tokenCost), [3900]);
+    assert.ok(result.used > 4000);
+    assert.ok(result.used - 3900 < 4000);
     assert.equal(result.causal.stats.bodies, 1);
+});
+
+test('an L0 reservation that crosses the shared pool admits no later L1 or extra L0', () => {
+    const result = pack({ l0: [4100, 1], l1: [1], cause: '因' });
+    assert.deepEqual(result.items.map(item => item.id), ['l0-0']);
+    assert.equal(result.used, result.causal.stats.tokens + 4100);
 });

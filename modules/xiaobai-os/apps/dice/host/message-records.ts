@@ -3,6 +3,8 @@ import { stripCheckMarkers } from '../domain/check-marker.js';
 import type { DiceCandidate } from '../application/action-check-session.js';
 export type { DiceCandidate } from '../application/action-check-session.js';
 import { jsonValuesEqual } from '../../../host/json-values-equal.js';
+import type { ActionCheckRule } from '../types.js';
+import type { Coc7Sheet } from '../domain/coc7-sheet.js';
 
 export interface DiceHostMessage {
     mes: string;
@@ -34,17 +36,19 @@ export interface DiceTarget {
     body: string;
     records: unknown;
     generatedFrom: number;
+    rule: ActionCheckRule;
+    coc7Sheet?: Coc7Sheet | null;
 }
 
 export function readDiceRecords(message: DiceHostMessage): unknown {
     return message.extra?.[DICE_MESSAGE_KEY];
 }
 
-export function captureDiceTarget(source: DiceChat, index: number, generatedFrom: number): DiceTarget | null {
+export function captureDiceTarget(source: DiceChat, index: number, generatedFrom: number, rule: ActionCheckRule = 'd20', coc7Sheet: Coc7Sheet | null = null): DiceTarget | null {
     const message = source.chat[index];
     if (!message || message.is_user || message.is_system || typeof message.mes !== 'string') { return null; }
     return { source, message, index, swipe: message.swipe_id ?? 0, body: message.mes,
-        records: structuredClone(readDiceRecords(message)), generatedFrom };
+        records: structuredClone(readDiceRecords(message)), generatedFrom, rule, coc7Sheet };
 }
 
 export function isDiceTargetCurrent(source: DiceChat | null, target: DiceTarget, body = target.body): boolean {
@@ -62,41 +66,17 @@ function writeRecords(message: { extra?: Record<string, unknown> }, records: unk
     }
 }
 
-/** Only the active candidate is touched; unrelated extra and all other swipes keep their identity. */
-export function stageDiceCandidate(target: DiceTarget, candidate: DiceCandidate): () => void {
+/** Apply once to the live message. Native chat saving owns persistence. */
+export function applyDiceCandidate(source: DiceChat | null, target: DiceTarget, candidate: DiceCandidate): void {
+    if (!isDiceTargetCurrent(source, target) || !jsonValuesEqual(readDiceRecords(target.message), target.records)) {
+        throw new Error('dice_target_changed');
+    }
     const message = target.message;
     const swipeInfo = message.swipe_info?.[target.swipe];
-    const previousSwipeBody = message.swipes?.[target.swipe];
-    const previousSwipeRecords = structuredClone(swipeInfo?.extra?.[DICE_MESSAGE_KEY]);
     message.mes = candidate.body;
     writeRecords(message, candidate.records);
     if (message.swipes) { message.swipes[target.swipe] = candidate.body; }
     if (swipeInfo) { writeRecords(swipeInfo, candidate.records); }
-    return () => {
-        // Never restore a whole-chat snapshot or overwrite concurrent edits/other extension fields.
-        if ((message.swipe_id ?? 0) === target.swipe && jsonValuesEqual(readDiceRecords(message), candidate.records)) {
-            writeRecords(message, target.records);
-            if (message.mes === candidate.body) { message.mes = target.body; }
-        }
-        if (swipeInfo && jsonValuesEqual(swipeInfo.extra?.[DICE_MESSAGE_KEY], candidate.records)) {
-            writeRecords(swipeInfo, previousSwipeRecords);
-        }
-        if (message.swipes?.[target.swipe] === candidate.body && previousSwipeBody !== undefined) {
-            message.swipes[target.swipe] = previousSwipeBody;
-        }
-    };
-}
-
-export function candidateMatchesDisk(value: unknown, target: DiceTarget, candidate: { body: string; records: unknown }): boolean {
-    if (!value || typeof value !== 'object') { return false; }
-    const message = value as DiceHostMessage;
-    if (message.is_user || message.is_system || message.mes !== candidate.body
-        || (message.swipe_id ?? 0) !== target.swipe || message.name !== target.message.name
-        || !jsonValuesEqual(readDiceRecords(message), candidate.records)) { return false; }
-    if (target.message.swipes && message.swipes?.[target.swipe] !== candidate.body) { return false; }
-    if (target.message.swipe_info?.[target.swipe]
-        && !jsonValuesEqual(message.swipe_info?.[target.swipe]?.extra?.[DICE_MESSAGE_KEY], candidate.records)) { return false; }
-    return true;
 }
 
 /** Called only for a newly generated swipe, after the host has copied the previous extra. */

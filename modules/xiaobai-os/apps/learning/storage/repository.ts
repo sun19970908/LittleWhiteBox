@@ -1,6 +1,6 @@
 import { parseLearningData } from '../../../domains/learning/data.js';
 import type { LearningData } from '../../../domains/learning/types.js';
-import type { JsonUserFilePort } from '../../../storage/sidecar-index.js';
+import type { JsonUserFilePort } from '../../../kernel/contracts.js';
 import { XiaobaiOsStorageError } from '../../../storage/storage-port.js';
 import { createLearningId } from '../application/identity.js';
 import { LEARNING_FILENAME, MAX_LEARNING_WRITE_BYTES, parseLearningDocument, sameLearningDocument, type LearningDocument } from './document.js';

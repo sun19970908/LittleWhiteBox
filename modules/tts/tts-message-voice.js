@@ -1,9 +1,10 @@
 import { playTransientVoice, stopTransientVoice } from './tts-playback-runtime.js';
 
 const STYLE_ID = 'xb-tts-message-voice-styles';
-const errorTimers = new Set();
+const errorTimers = new Map();
 
 let activeHandle = null;
+let activeBubble = null;
 let isEnabled = () => false;
 
 function createVoiceBubbleHtml(text, emotion, marker) {
@@ -82,18 +83,20 @@ function decodeAttribute(value) {
 }
 
 function markTemporaryError(bubble) {
+    globalThis.clearTimeout(errorTimers.get(bubble));
     bubble.classList.remove('loading', 'playing');
     bubble.classList.add('error');
     const timer = globalThis.setTimeout(() => {
-        errorTimers.delete(timer);
+        errorTimers.delete(bubble);
         bubble.classList.remove('error');
     }, 3000);
-    errorTimers.add(timer);
+    errorTimers.set(bubble, timer);
 }
 
 export function stopMessageVoicePlayback() {
     const handle = activeHandle;
     activeHandle = null;
+    activeBubble = null;
     if (handle) handle.stop?.();
     else stopTransientVoice();
     globalThis.document?.querySelectorAll?.('[data-xb-tts-message-voice="1"].playing, [data-xb-tts-message-voice="1"].loading').forEach((bubble) => {
@@ -123,6 +126,7 @@ export function hydrateMessageVoiceBubbles(root, options = {}) {
             }
 
             stopMessageVoicePlayback();
+            activeBubble = bubble;
             globalThis.document?.querySelectorAll?.('[data-xb-tts-message-voice="1"].error').forEach(element => element.classList.remove('error'));
             bubble.classList.add('loading');
             let handle = null;
@@ -139,9 +143,11 @@ export function hydrateMessageVoiceBubbles(root, options = {}) {
                         } else if (state === 'ended' || state === 'stopped') {
                             bubble.classList.remove('loading', 'playing');
                             if (activeHandle === handle) activeHandle = null;
+                            if (activeBubble === bubble) activeBubble = null;
                         } else if (state === 'error') {
                             markTemporaryError(bubble);
                             if (activeHandle === handle) activeHandle = null;
+                            if (activeBubble === bubble) activeBubble = null;
                         }
                     },
                 });
@@ -149,6 +155,7 @@ export function hydrateMessageVoiceBubbles(root, options = {}) {
             } catch {
                 markTemporaryError(bubble);
                 activeHandle = null;
+                activeBubble = null;
             }
         };
     });
@@ -160,6 +167,21 @@ export function restoreMessageVoiceBubbles(root = globalThis.document) {
         const marker = decodeAttribute(bubble.dataset.marker);
         if (marker === null || !documentTarget?.createTextNode) return;
         bubble.replaceWith(documentTarget.createTextNode(marker));
+    });
+}
+
+// Release only resources tied to the discarded content; another floor's voice
+// and the independent TTS queue must keep playing.
+export function releaseMessageVoiceBubbles(root) {
+    const selector = '[data-xb-tts-message-voice="1"]';
+    const bubbles = [...(root?.querySelectorAll?.(selector) || [])];
+    if (root?.matches?.(selector)) bubbles.unshift(root);
+    bubbles.forEach(bubble => {
+        if (activeBubble === bubble) stopMessageVoicePlayback();
+        globalThis.clearTimeout(errorTimers.get(bubble));
+        errorTimers.delete(bubble);
+        bubble.onclick = null;
+        delete bubble.dataset.bound;
     });
 }
 

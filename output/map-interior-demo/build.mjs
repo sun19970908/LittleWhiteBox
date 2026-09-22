@@ -5,7 +5,7 @@ import { build } from 'esbuild';
 import { parse, compileScript } from '@vue/compiler-sfc';
 import { validateMapDomain } from '../../modules/xiaobai-os/domains/map/invariants.ts';
 import { createEmptyMapDomain } from '../../modules/xiaobai-os/domains/map/state.ts';
-import { compileSceneIntent } from '../../modules/xiaobai-os/apps/map/maintenance/scene-intent-compiler.ts';
+import { compileSceneIntent } from '../../modules/xiaobai-os/apps/map/tools/scene-intent-compiler.ts';
 import { sceneMapInputs } from '../../modules/xiaobai-os/tests/fixtures/scene-maps.js';
 
 const root = path.dirname(fileURLToPath(import.meta.url));

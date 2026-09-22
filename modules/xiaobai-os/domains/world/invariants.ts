@@ -1,4 +1,4 @@
-import { WORLD_LIMITS, type WorldContent, type WorldDomain, type WorldNews } from './types.js';
+import { WORLD_LIMITS, WORLD_VERSION, type WorldContent, type WorldDomain, type WorldNews } from './types.js';
 
 export class WorldValidationError extends Error {
     constructor(readonly path: string, message: string) { super(message); }
@@ -23,13 +23,12 @@ export function worldText(value: unknown, path: string, max: number, allowEmpty 
     return value;
 }
 
-export function parseWorldNews(value: unknown, path: string): WorldNews {
-    const item = record(value, path, ['id', 'title', 'summary', 'body']);
+export function parseWorldNews(value: unknown, path: string, bodyLimit: number = WORLD_LIMITS.body): WorldNews {
+    const item = record(value, path, ['id', 'title', 'body']);
     return {
         id: worldText(item.id, `${path}.id`, WORLD_LIMITS.id),
         title: worldText(item.title, `${path}.title`, WORLD_LIMITS.title),
-        summary: worldText(item.summary, `${path}.summary`, WORLD_LIMITS.summary),
-        body: worldText(item.body, `${path}.body`, WORLD_LIMITS.body),
+        body: worldText(item.body, `${path}.body`, bodyLimit),
     };
 }
 
@@ -48,9 +47,9 @@ export function parseWorldContent(value: unknown, path = 'world'): WorldContent 
 
 export function parseWorld(value: unknown): WorldDomain {
     const item = record(value, 'world', ['version', 'overview', 'news']);
-    if (item.version !== 2) {
-        throw new WorldValidationError('world', 'Expected version 2.');
+    if (item.version !== WORLD_VERSION) {
+        throw new WorldValidationError('world', `Expected version ${WORLD_VERSION}.`);
     }
-    return { version: 2,
+    return { version: WORLD_VERSION,
         ...parseWorldContent({ overview: item.overview, news: item.news }) };
 }

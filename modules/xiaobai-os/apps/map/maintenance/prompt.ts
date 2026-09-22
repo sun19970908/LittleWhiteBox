@@ -1,5 +1,5 @@
 import type { MaintenanceMode } from '../../../capabilities/maintenance/registry.js';
-import { sceneExamplesPrompt } from './scene-examples.js';
+import { sceneExamplesPrompt } from '../tools/scene-examples.js';
 
 const SCOPE = [
     '# Map domain',

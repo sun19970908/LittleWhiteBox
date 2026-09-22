@@ -1,4 +1,4 @@
-import type { XiaobaiOsChatBindingV1 } from '../kernel/contracts.js';
+import type { JsonUserFilePort, XiaobaiOsChatBindingV1 } from '../kernel/contracts.js';
 import { assertJsonValue, parseXiaobaiOsChatBinding } from '../kernel/envelope.js';
 
 export const XIAOBAI_OS_INDEX_FILENAME = 'LittleWhiteBox_OS_index.json';
@@ -6,11 +6,6 @@ export const XIAOBAI_OS_INDEX_FILENAME = 'LittleWhiteBox_OS_index.json';
 export interface XiaobaiOsIndexV1 {
     formatVersion: 1;
     entries: Record<string, XiaobaiOsChatBindingV1>;
-}
-
-export interface JsonUserFilePort {
-    read(filename: string): Promise<unknown | null>;
-    replace(filename: string, value: unknown): Promise<void>;
 }
 
 export interface SidecarIndex {

@@ -1,6 +1,6 @@
 import { projectTaskRecords } from '../../../domains/tasks/projection.js';
 import type { TaskDomainV1, TaskRecord } from '../../../domains/tasks/types.js';
-import type { PartitionSnapshot, ScopedChatStore } from '../../../kernel/contracts.js';
+import type { PartitionSnapshot, PartitionStore } from '../../../kernel/contracts.js';
 import type { XiaobaiOsAppRuntime } from '../../../types.js';
 
 export interface TaskCompletionNotice {
@@ -20,7 +20,7 @@ function completionNotice(task: TaskRecord): TaskCompletionNotice {
 
 /** Observes confirmed commits even while the OS is closed; history is never replayed as new notices. */
 export function createTaskCompletionRuntime(dependencies: {
-    store: Pick<ScopedChatStore<TaskDomainV1>, 'peekCurrent' | 'subscribe'>;
+    store: Pick<PartitionStore<TaskDomainV1>, 'peekCurrent' | 'subscribe'>;
     notify(notice: TaskCompletionNotice): void;
 }): XiaobaiOsAppRuntime {
     let unsubscribe: (() => void) | null = null;

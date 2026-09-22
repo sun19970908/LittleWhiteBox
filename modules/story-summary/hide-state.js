@@ -1,6 +1,15 @@
 // Automatic hiding owns the host's message visibility while enabled, as before.
 // Host flags are a projection, not a second boundary. All bookkeeping below is
 // session-local; loading/deleting a chat audits its saved flags from scratch.
+export function getHiddenThrough({ enabled, summaryBoundary, vectorBoundary = -1,
+    useVectorBoundary, keepVisibleCount, length }) {
+    if (!enabled || !Number.isInteger(summaryBoundary) || summaryBoundary < 0) return -1;
+    const boundary = useVectorBoundary && Number.isInteger(vectorBoundary) && vectorBoundary >= 0
+        ? vectorBoundary : summaryBoundary;
+    // Clamp before reserving visible messages, including after chat deletion.
+    return Math.max(-1, Math.min(boundary, length - 1) - keepVisibleCount);
+}
+
 export function createHideStateController({
     getState,
     readVectorBoundary,
@@ -35,13 +44,6 @@ export function createHideStateController({
             && state.summaryBoundary === current.summaryBoundary
             && state.useVectorBoundary === current.useVectorBoundary
             && state.keepVisibleCount === current.keepVisibleCount;
-    }
-
-    function hideEnd(state, boundary) {
-        if (!state.enabled || !Number.isInteger(boundary) || boundary < 0) return -1;
-        // Clamp BEFORE reserving visible floors: stale metadata must never hide
-        // the entire shortened chat. This uses message counts, never tokens.
-        return Math.max(-1, Math.min(boundary, state.length - 1) - state.keepVisibleCount);
     }
 
     function apply(state, end) {
@@ -87,12 +89,11 @@ export function createHideStateController({
         if (full) applied = null;
         const version = invalidate();
         const state = capture();
-        let boundary = state.summaryBoundary;
+        let vectorBoundary = -1;
         let readError = null;
-        if (state.chatId && state.length > 0 && state.enabled && boundary >= 0 && state.useVectorBoundary) {
+        if (state.chatId && state.length > 0 && state.enabled && state.summaryBoundary >= 0 && state.useVectorBoundary) {
             try {
-                const vectorBoundary = await readVectorBoundary(state.chatId);
-                if (Number.isInteger(vectorBoundary) && vectorBoundary >= 0) boundary = vectorBoundary;
+                vectorBoundary = await readVectorBoundary(state.chatId);
             } catch (error) {
                 // Only a currently valid summary is a safe fallback. The owner
                 // supplies enabled=false when the summary itself is unusable.
@@ -100,7 +101,7 @@ export function createHideStateController({
             }
         }
         if (!isCurrent(state, version)) return;
-        const changed = apply(state, hideEnd(state, boundary));
+        const changed = apply(state, getHiddenThrough({ ...state, vectorBoundary }));
         if (readError) onError(readError, 'boundary');
         await saveChanges(state, changed);
     }

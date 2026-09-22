@@ -176,7 +176,7 @@ MapDomainV1
 | 位置（相对 `modules/xiaobai-os`） | 责任 |
 | --- | --- |
 | `domains/map/semantics.ts`、`types.ts` | 合法 token 与类型；七组物件词表放在现有 Map 语义层，供工具枚举/说明和物件识别使用，不包含路径、模型高度、贴图或材质槽 |
-| `apps/map/maintenance/tool-contract.ts`、`prompt.ts` | 分工说明、选词与朝向规则；继续复用语义词表，不维护第二份 37 类名单 |
+| `apps/map/tools/tool-contract.ts`、`maintenance/prompt.ts` | 分工说明、选词与朝向规则；继续复用语义词表，不维护第二份 37 类名单 |
 | `apps/map/ui/map-presentation.ts`、`scene-geometry.ts`、二维组件 | 本地符号、尺寸物件识别及平面表示；不依赖 GPU |
 | `apps/map/ui/three/assets/` | 精选 GLB、来源与许可证文件；不包含整包废弃资源 |
 | `apps/map/ui/three/scene3d-asset-catalog.ts` | token/占地到本地资产的映射、允许比例、轴向与材质部件适配数据；不承担语义校验 |
@@ -284,9 +284,9 @@ A + B 的试接确认后，用户已明确要求完成 C–E。37 类已整体�
 | 基线事实 | 代码依据 |
 | --- | --- |
 | 现有 icon 为封闭词表，类型与持久化字段分开定义 | `domains/map/semantics.ts:31`、`domains/map/types.ts:74`、`domains/map/types.ts:131` |
-| 工具接受 icon、材质、闭合与旋转，坐标仍为二维 | `apps/map/maintenance/tool-contract.ts:254`、`:255`、`:257`、`:258` |
-| 编译器与领域校验消费同一 icon 集合 | `apps/map/maintenance/scene-intent-compiler.ts:213`、`domains/map/invariants.ts:61` |
-| 场景读取使用工具词汇的只读投影 | `apps/map/maintenance/scene-reader.ts:25` |
+| 工具接受 icon、材质、闭合与旋转，坐标仍为二维 | `apps/map/tools/tool-contract.ts:254`、`:255`、`:257`、`:258` |
+| 编译器与领域校验消费同一 icon 集合 | `apps/map/tools/scene-intent-compiler.ts:213`、`domains/map/invariants.ts:61` |
+| 场景读取使用工具词汇的只读投影 | `apps/map/tools/scene-reader.ts` |
 | 原始闭合规则与物件识别 | `apps/map/ui/scene-geometry.ts:4`、`:9`、`:20` |
 | 三维 9 类模板与出入口/人物标记边界 | `apps/map/ui/three/scene3d-presentation.ts:4`、`:9` |
 | 二维/三维共用平面几何，三维独立坐标适配 | `apps/map/ui/three/scene3d-geometry.ts:5`、`:11` |

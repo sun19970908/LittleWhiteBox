@@ -19,7 +19,7 @@ const phases = { counting: '计算中', summarizing: '总结中', saving: '保�
             :style="{ '--context-fill': `${ratio * 360}deg` }" :aria-label="`上下文：约 ${format(stats.usedTokens)} / 158k`"
             :aria-expanded="open" title="上下文" @click="open = !open"
         >
-            <span>{{ busy ? '…' : Math.round(ratio * 100) }}</span>
+            <span>{{ busy ? '…' : '' }}</span>
         </button>
         <section v-if="open" class="fourth-wall-context-popover" aria-label="上下文用量">
             <header><strong>上下文</strong><button type="button" aria-label="关闭上下文用量" @click="open = false">×</button></header>

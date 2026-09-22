@@ -1,55 +1,70 @@
-import { sha256 } from 'js-sha256';
 import { parseActionCheckRequest, type ActionCheckRequest, type ActionCheckResult } from './action-check.js';
-import { checkMarker } from './check-marker.js';
+import { checkMarker, checkMarkerIds } from './check-marker.js';
+import { readDiceChecksV1 } from '../storage/records-v1.js';
+import { parseCoc7RecordedRequest, parseCoc7Resolution, type Coc7RecordedRequest, type Coc7Resolution } from './coc7-record.js';
+import { parseCoc7Result, type Coc7Result } from './coc7.js';
 
 export const MAX_ACTION_CHECKS = 8;
 export const DICE_MESSAGE_KEY = 'xiaobaiOsDice';
+export const DICE_RECORDS_SCHEMA_VERSION = 3;
 
-export interface ActionCheckRecord extends ActionCheckResult {
+export interface D20CheckRecord extends ActionCheckResult {
+    rule: 'd20';
     id: string;
     request: ActionCheckRequest;
-    /** Original request boundary, used for continuation eligibility, never for UI placement. */
-    offset: number;
-    prefixDigest: string;
 }
-export interface DiceMessageRecords { schemaVersion: 1; checks: ActionCheckRecord[] }
+export interface Coc7CheckRecord { rule: 'coc7'; id: string; request: Coc7RecordedRequest; result: Coc7Result; resolution?: Coc7Resolution }
+export type ActionCheckRecord = D20CheckRecord | Coc7CheckRecord;
+export interface DiceMessageRecords { schemaVersion: typeof DICE_RECORDS_SCHEMA_VERSION; checks: ActionCheckRecord[] }
 
 export function parseDiceRecords(value: unknown): DiceMessageRecords {
     if (!value || typeof value !== 'object' || Array.isArray(value)) { throw new TypeError('dice_records_invalid'); }
-    const input = value as Record<string, unknown>;
-    if (input.schemaVersion !== 1 || Object.keys(input).length !== 2 || !Array.isArray(input.checks)
+    const raw = value as Record<string, unknown>;
+    const input = raw.schemaVersion === 1
+        ? { schemaVersion: DICE_RECORDS_SCHEMA_VERSION, checks: readDiceChecksV1(raw) } : raw;
+    if (input.schemaVersion !== DICE_RECORDS_SCHEMA_VERSION || Object.keys(input).length !== 2 || !Array.isArray(input.checks)
         || input.checks.length > MAX_ACTION_CHECKS) { throw new TypeError('dice_records_invalid'); }
     const ids = new Set<string>();
-    let previousOffset = -1;
     const checks = input.checks.map((item: unknown) => {
         if (!item || typeof item !== 'object' || Array.isArray(item)) { throw new TypeError('dice_record_invalid'); }
         const record = item as ActionCheckRecord;
-        const keys = ['id', 'request', 'roll', 'dc', 'outcome', 'offset', 'prefixDigest'];
+        const keys = record.rule === 'coc7' ? ['rule', 'id', 'request', 'result'] : ['rule', 'id', 'request', 'roll', 'dc', 'outcome'];
+        if (record.rule === 'coc7' && Object.hasOwn(record, 'resolution')) { keys.push('resolution'); }
         if (Object.keys(record).length !== keys.length || keys.some(key => !Object.hasOwn(record, key))
-            || typeof record.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(record.id) || ids.has(record.id)
-            || !Number.isInteger(record.roll) || record.roll < 1 || record.roll > 20
-            || !Number.isInteger(record.dc) || record.dc < 1
-            || !['critical_failure', 'failure', 'success', 'critical_success'].includes(record.outcome)
-            || !Number.isSafeInteger(record.offset) || record.offset < 0 || record.offset < previousOffset
-            || typeof record.prefixDigest !== 'string' || !/^[a-f0-9]{64}$/.test(record.prefixDigest)) {
+            || typeof record.id !== 'string' || !/^[a-zA-Z0-9_-]+$/.test(record.id) || ids.has(record.id)) {
             throw new TypeError('dice_record_invalid');
         }
         ids.add(record.id);
-        previousOffset = record.offset;
+        if (record.rule === 'coc7') {
+            const request = parseCoc7RecordedRequest(record.request);
+            return { ...record, request, result: parseCoc7Result(record.result),
+                ...(Object.hasOwn(record, 'resolution') ? { resolution: parseCoc7Resolution(record.resolution) } : {}) };
+        }
+        if (record.rule !== 'd20' || !Number.isInteger(record.roll) || record.roll < 1 || record.roll > 20
+            || !Number.isInteger(record.dc) || record.dc < 1
+            || !['critical_failure', 'failure', 'success', 'critical_success'].includes(record.outcome)) {
+            throw new TypeError('dice_record_invalid');
+        }
         // Historical outcomes are stored facts, not recalculated from today's difficulty table.
         return { ...record, request: parseActionCheckRequest(record.request) };
     });
-    return { schemaVersion: 1, checks };
+    return { schemaVersion: DICE_RECORDS_SCHEMA_VERSION, checks };
 }
 
-export function hasValidCheckAnchor(body: string, record: ActionCheckRecord): boolean {
-    return body.startsWith(checkMarker(record.id), record.offset) && sha256(body.slice(0, record.offset)) === record.prefixDigest;
+/**
+ * The body chooses which saved results are referenced and their presentation order.
+ * Unreferenced records remain history, including the number of checks already used.
+ */
+export function referencedActionChecks(body: string, checks: readonly ActionCheckRecord[]): ActionCheckRecord[] {
+    const byId = new Map(checks.map(record => [record.id, record]));
+    return Array.from(checkMarkerIds(body)).flatMap(id => {
+        const record = byId.get(id);
+        return record ? [record] : [];
+    });
 }
 
 export function isCheckContinuationPoint(body: string, record: ActionCheckRecord): boolean {
-    return hasValidCheckAnchor(body, record) && !body.slice(record.offset + checkMarker(record.id).length).trim();
-}
-
-export function createActionCheckRecord(body: string, id: string, request: ActionCheckRequest, result: ActionCheckResult): ActionCheckRecord {
-    return { id, request, ...result, offset: body.length, prefixDigest: sha256(body) };
+    const marker = checkMarker(record.id);
+    const offset = body.indexOf(marker);
+    return offset !== -1 && !body.slice(offset + marker.length).trim();
 }

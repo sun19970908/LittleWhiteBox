@@ -3,21 +3,21 @@ import {
     type EconomyReadCapability,
 } from '../../capabilities/economy/index.js';
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
-import type { XiaobaiOsAppRuntime, XiaobaiOsChatIdentity } from '../../types.js';
+import type { XiaobaiOsAppRuntime } from '../../types.js';
 import { WALLET_APP_DESCRIPTOR } from './descriptor.js';
 import { createWalletController } from './host/controller.js';
 
 export interface WalletModuleDependencies {
-    getChatIdentity: () => XiaobaiOsChatIdentity | { key?: unknown } | string | null;
     createRuntime?(
         economy: EconomyReadCapability,
         execution: AppInstallContext['execution'],
     ): XiaobaiOsAppRuntime;
 }
 
-export function createWalletModule(dependencies: WalletModuleDependencies): XiaobaiOsAppModule {
+export function createWalletModule(dependencies: WalletModuleDependencies = {}): XiaobaiOsAppModule {
     return {
         descriptor: WALLET_APP_DESCRIPTOR,
+        fileScope: 'user',
         capabilities: [ECONOMY_READ_CAPABILITY],
         async install(context) {
             const economy = context.useCapability(ECONOMY_READ_CAPABILITY);
@@ -25,7 +25,7 @@ export function createWalletModule(dependencies: WalletModuleDependencies): Xiao
                 ?? createWalletController({
                     economy,
                     confirmPending: context.files.retryPending,
-                    getChatIdentity: dependencies.getChatIdentity,
+                    adoptServerState: context.files.adoptServerState,
                     execution: context.execution,
                 });
         },

@@ -1,8 +1,8 @@
-import { createAbortError } from '../../../shared/common/abort-utils.js';
+import { createAbortError, throwIfSignalAborted } from '../../../shared/common/abort-utils.js';
 import { createRecallDiagnostics } from '../recall-diagnostics.js';
+import { RECALL_TIMEOUT_MS, RECALL_TIMEOUT_REASONS } from './recall-failure.js';
 
 const DEFAULT_POLL_MS = 16;
-const DEFAULT_MAX_AGE_MS = 30_000;
 
 export function getRecallPrefetchStartAction(type, params, isDryRun) {
     if (isDryRun) return 'ignore';
@@ -30,7 +30,7 @@ export function createRecallPrefetchCoordinator(options) {
     const getContext = options.getContext;
     const prepare = options.prepare;
     const pollMs = Math.max(0, Number(options.pollMs) || DEFAULT_POLL_MS);
-    const maxAgeMs = Math.max(1, Number(options.maxAgeMs) || DEFAULT_MAX_AGE_MS);
+    const maxAgeMs = Math.max(1, Number(options.maxAgeMs) || RECALL_TIMEOUT_MS);
     const schedule = options.setTimeout || globalThis.setTimeout.bind(globalThis);
     const unschedule = options.clearTimeout || globalThis.clearTimeout.bind(globalThis);
     const now = options.now || (() => performance.now());
@@ -75,7 +75,7 @@ export function createRecallPrefetchCoordinator(options) {
         }
         slot.cancelReason = reason;
         slot.phase = 'cancelled';
-        slot.diagnostics.finishedAt ??= performance.now();
+        slot.diagnostics.finishedAt ??= now();
         clearTimers(slot);
         detachDispatch(slot);
         detachSource(slot);
@@ -88,7 +88,8 @@ export function createRecallPrefetchCoordinator(options) {
     }
 
     function expireSlot(slot) {
-        abortSlot(slot, 'prefetch-timeout', false, true);
+        if (slot.phase === 'ready') return;
+        abortSlot(slot, slot.computeStartedAt === null ? RECALL_TIMEOUT_REASONS.host : RECALL_TIMEOUT_REASONS.compute, false, true);
     }
 
     function scheduleExpiry(slot) {
@@ -101,14 +102,32 @@ export function createRecallPrefetchCoordinator(options) {
 
     function startCompute(slot) {
         if (slot.outcome) return;
+        clearTimers(slot);
         slot.computeStartedAt = now();
-        slot.diagnostics.startedAt = performance.now();
+        // Watching for a USER message consumes no recall computation budget.
+        slot.deadlineAt = slot.computeStartedAt + maxAgeMs;
+        slot.diagnostics.startedAt = now();
+        slot.diagnostics.stage = 'prepare';
+        scheduleExpiry(slot);
         slot.outcome = settle(Promise.resolve().then(() => {
             if (slot.controller.signal.aborted) {
                 throw slot.controller.signal.reason || createAbortError('Story Summary recall cancelled');
             }
             return prepare(slot.type, slot.controller.signal, slot.diagnostics);
-        }));
+        })).then(outcome => {
+            // Both success and failure are final outcomes. A late host join must
+            // neither expire a finished result nor replace its original error.
+            if (slot.phase !== 'cancelled' && slot.phase !== 'idle') {
+                if (now() >= slot.deadlineAt) {
+                    expireSlot(slot);
+                } else {
+                    slot.phase = 'ready';
+                    slot.diagnostics.finishedAt ??= now();
+                    clearTimers(slot);
+                }
+            }
+            return outcome;
+        });
     }
 
     function schedulePoll(slot) {
@@ -137,7 +156,7 @@ export function createRecallPrefetchCoordinator(options) {
         }, pollMs);
     }
 
-    function createSlot({ chatId, type, initialLength, phase, deadlineAt = null }) {
+    function createSlot({ chatId, type, initialLength, phase }) {
         return {
             phase,
             chatId,
@@ -146,7 +165,11 @@ export function createRecallPrefetchCoordinator(options) {
             messageIndex: null,
             capturedRef: null,
             controller: new AbortController(),
-            diagnostics: createRecallDiagnostics(chatId, type),
+            diagnostics: {
+                ...createRecallDiagnostics(chatId, type),
+                startedAt: now(),
+                stage: phase === 'watching' ? 'waiting-for-user' : 'prepare',
+            },
             outcome: null,
             pollTimer: null,
             expiryTimer: null,
@@ -158,7 +181,7 @@ export function createRecallPrefetchCoordinator(options) {
             cancelReason: null,
             computeStartedAt: null,
             joinedAt: null,
-            deadlineAt: Number.isFinite(deadlineAt) ? deadlineAt : now() + maxAgeMs,
+            deadlineAt: now() + maxAgeMs,
         };
     }
 
@@ -210,7 +233,6 @@ export function createRecallPrefetchCoordinator(options) {
         focusRef,
         runContext,
         sourceSignal = null,
-        deadlineAt = null,
     }) {
         const context = getContext();
         const chat = Array.isArray(context?.chat) ? context.chat : [];
@@ -219,7 +241,6 @@ export function createRecallPrefetchCoordinator(options) {
             type,
             initialLength: chat.length,
             phase: 'joined',
-            deadlineAt,
         });
         slot.joinedAt = now();
         slot.messageIndex = focusRef ? chat.lastIndexOf(focusRef) : null;
@@ -227,12 +248,10 @@ export function createRecallPrefetchCoordinator(options) {
         current = slot;
         attachSource(slot, sourceSignal);
         if (!slot.controller.signal.aborted) attachDispatch(slot, runContext);
-        if (!slot.controller.signal.aborted && now() >= slot.deadlineAt) expireSlot(slot);
         if (!slot.controller.signal.aborted) {
-            scheduleExpiry(slot);
             startCompute(slot);
         }
-        return { slot, path: 'fallback', remainingMs: Math.max(0, slot.deadlineAt - now()) };
+        return { slot, path: 'fallback' };
     }
 
     function join({ chatId, type, focusRef, runContext }) {
@@ -251,7 +270,7 @@ export function createRecallPrefetchCoordinator(options) {
             && type === 'normal'
             && sameChat;
 
-        if (sameGeneration && now() >= slot.deadlineAt && slot.phase !== 'cancelled') {
+        if (sameGeneration && now() >= slot.deadlineAt && !['cancelled', 'ready'].includes(slot.phase)) {
             expireSlot(slot);
         }
         if (terminalMatches || (sameGeneration && slot.phase === 'cancelled')) {
@@ -263,7 +282,6 @@ export function createRecallPrefetchCoordinator(options) {
             return {
                 slot,
                 path: slot.cancelReason || 'cancelled',
-                remainingMs: 0,
             };
         }
 
@@ -276,7 +294,6 @@ export function createRecallPrefetchCoordinator(options) {
 
         if (!canReuse) {
             const sourceSignal = sameGeneration ? slot?.sourceSignal : null;
-            const deadlineAt = sameGeneration ? slot?.deadlineAt : null;
             if (slot) abortSlot(slot, 'prefetch-mismatch', true);
             return startJoined({
                 chatId,
@@ -284,19 +301,36 @@ export function createRecallPrefetchCoordinator(options) {
                 focusRef,
                 runContext,
                 sourceSignal,
-                deadlineAt,
             });
         }
 
         clearPollTimer(slot);
-        slot.phase = 'joined';
+        if (slot.phase !== 'ready') slot.phase = 'joined';
         slot.joinedAt = now();
         attachDispatch(slot, runContext);
         return {
             slot,
             path: 'prefetch',
-            remainingMs: Math.max(0, slot.deadlineAt - now()),
         };
+    }
+
+    async function waitForOutcome(slot) {
+        const signal = slot.controller.signal;
+        throwIfSignalAborted(signal);
+        let onAbort;
+        const cancelled = new Promise((_, reject) => {
+            onAbort = () => reject(signal.reason);
+            signal.addEventListener('abort', onAbort, { once: true });
+        });
+        try {
+            // The coordinator owns the only deadline. Waiting must still end
+            // immediately if prepare ignores cancellation or never settles.
+            const outcome = await Promise.race([slot.outcome, cancelled]);
+            throwIfSignalAborted(signal);
+            return outcome;
+        } finally {
+            signal.removeEventListener('abort', onAbort);
+        }
     }
 
     function cancel(reason = 'cancelled', options = {}) {
@@ -336,6 +370,7 @@ export function createRecallPrefetchCoordinator(options) {
     return Object.freeze({
         startWatching,
         join,
+        waitForOutcome,
         cancel,
         finish,
         getCurrent: () => current,

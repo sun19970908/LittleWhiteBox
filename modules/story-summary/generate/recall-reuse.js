@@ -85,13 +85,13 @@ function bindingOf({ chatId, sourceRef, sourceIndex, replyStart }) {
     return { chatId, sourceRef, sourceIndex, replyStart };
 }
 
-// Compare only inputs consumed by recall/assembly; generation API preferences
-// and hide flags do not change an adopted memory. keepVisibleCount also controls
-// which recent evidence the assembler includes.
+// Visibility settings determine which original passages assembly may inject.
+// Generation API preferences do not change an adopted memory.
 export function recallConfigKey(config) {
     return JSON.stringify([
         config?.vector, config?.textFilterRules, config?.prompts?.memoryTemplate,
         config?.trigger?.role, config?.trigger?.wrapperHead, config?.trigger?.wrapperTail,
         config?.ui?.keepVisibleCount,
+        config?.ui?.hideSummarized, config?.ui?.useVectorBoundary,
     ]);
 }

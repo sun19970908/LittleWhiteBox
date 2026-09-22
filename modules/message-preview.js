@@ -1041,6 +1041,7 @@ const waitIntercept = () => new Promise((resolve, reject) => {
 });
 
 function cleanup() {
+  $('#xiaobaix_preview_enabled, #xiaobaix_recorded_enabled').off('change.xbMessagePreview');
   removeEvents(); restoreFetch(); disableSend(false);
   removeOwnedHistoryButtons(); $("#message_preview_btn").remove(); cleanupMemory();
   Object.assign(S, { resolve: null, reject: null, isPreview: false, isLong: false, interceptedIds: [], chatLenBefore: 0, sendBtnWasDisabled: false, pendingPurge: false });
@@ -1059,7 +1060,7 @@ function initMessagePreview() {
     S.tailAPI = installEventSourceTail(eventSource);
     const btn = $(`<div id="message_preview_btn" class="fa-regular fa-note-sticky interactable" title="预览消息"></div>`);
     $("#send_but").before(btn); bindBtn();
-    $("#xiaobaix_preview_enabled").prop("checked", set.preview.enabled).on("change", function () {
+    $("#xiaobaix_preview_enabled").prop("checked", set.preview.enabled).on("change.xbMessagePreview", function () {
       if (!geEnabled()) return; set.preview.enabled = $(this).prop("checked"); saveSettingsDebounced();
       $("#message_preview_btn").toggle(set.preview.enabled);
       if (set.preview.enabled) { if (!S.cleanTimer) S.cleanTimer = setInterval(cleanupMemory, C.CLEAN); }
@@ -1067,7 +1068,7 @@ function initMessagePreview() {
       updateFetchState();
       if (!set.preview.enabled && set.recorded.enabled) { addEvents(); addHistoryButtonsDebounced(); }
     });
-    $("#xiaobaix_recorded_enabled").prop("checked", set.recorded.enabled).on("change", function () {
+    $("#xiaobaix_recorded_enabled").prop("checked", set.recorded.enabled).on("change.xbMessagePreview", function () {
       if (!geEnabled()) return; set.recorded.enabled = $(this).prop("checked"); saveSettingsDebounced();
       if (set.recorded.enabled) { addEvents(); addHistoryButtonsDebounced(); }
       else { removeOwnedHistoryButtons(); S.history.length = 0; if (!set.preview.enabled) removeEvents(); }

@@ -8,6 +8,10 @@ export const DICE_CARD_CSS = `
     color: inherit; font: inherit; line-height: 1.45; overflow-wrap: anywhere; text-shadow: none;
     isolation: isolate;
 }
+.xb-dice-card .xb-dice-texture {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    border-radius: inherit; pointer-events: none; opacity: .18; z-index: -1;
+}
 .xb-dice-card[data-outcome="success"] { --xb-dice-tone: #1c9b91; }
 .xb-dice-card[data-outcome="failure"] { --xb-dice-tone: #d47757; }
 .xb-dice-card[data-outcome="critical_success"] { --xb-dice-tone: #c59730; }
@@ -38,6 +42,32 @@ export const DICE_CARD_CSS = `
 .xb-dice-card button:disabled { opacity: .5; cursor: wait; }
 .xb-dice-card :is(button, summary):focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
 .xb-dice-card .xb-dice-rolling-label { grid-area: 1 / 2; font-size: .9em; }
+.xb-dice-card[data-rule="coc7"] { container-type: inline-size; }
+.xb-dice-card .xb-dice-coc7 { display: block; }
+.xb-dice-card .xb-dice-coc7-heading { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .35em .8em; }
+.xb-dice-card .xb-dice-coc7-identity { font-size: .85em; font-weight: 650; }
+.xb-dice-card .xb-dice-coc7-heading .xb-dice-system { font-size: .7em; letter-spacing: .04em; }
+.xb-dice-card .xb-dice-coc7-hero { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr); align-items: center; gap: .75em; max-width: 27em; margin: .4em 0 .7em; }
+.xb-dice-card .xb-dice-percentile-dice { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); align-items: center; grid-area: 1 / 1; max-width: 13em; }
+.xb-dice-card .xb-dice-percentile-die { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.xb-dice-card .xb-dice-d10 { display: block; width: 100%; height: auto; overflow: visible; }
+.xb-dice-card .xb-dice-coc7-hero .xb-dice-verdict { grid-area: 1 / 2; gap: .5em; }
+.xb-dice-card .xb-dice-coc7-hero .xb-dice-outcome { font-size: 1.55em; }
+.xb-dice-card .xb-dice-coc7-comparison { display: flex; flex-wrap: wrap; align-items: flex-end; gap: .4em; }
+.xb-dice-card .xb-dice-coc7-comparison .xb-dice-score { display: flex; flex-direction: column; align-items: flex-start; gap: .05em; }
+.xb-dice-card .xb-dice-coc7-comparison .xb-dice-score-label { font-size: .65em; }
+.xb-dice-card .xb-dice-coc7-comparison .xb-dice-score-value { font-size: 1.6em; font-weight: 750; line-height: 1.15; }
+.xb-dice-card .xb-dice-operator { font-size: 1.15em; line-height: 1.6; opacity: .7; }
+.xb-dice-card .xb-dice-coc7-detail { display: grid; gap: .25em; font-size: .78em; }
+.xb-dice-card .xb-dice-coc7-basis { display: block; opacity: .8; }
+.xb-dice-card .xb-dice-coc7-reason { display: block; }
+.xb-dice-card .xb-dice-coc7-hundred { display: block; opacity: .7; }
+@container (max-width: 14em) {
+    .xb-dice-card .xb-dice-coc7-hero { grid-template-columns: minmax(0, 1fr); gap: .7em; }
+    .xb-dice-card .xb-dice-percentile-dice { width: 100%; max-width: 10em; justify-self: center; }
+    .xb-dice-card .xb-dice-coc7-hero :is(.xb-dice-verdict, .xb-dice-rolling-label) { grid-area: 2 / 1; }
+    .xb-dice-card .xb-dice-coc7-hero .xb-dice-verdict { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; }
+}
 .xb-dice-notice { display: flex; flex-wrap: wrap; gap: .7em; font-size: .9em; }
 .xb-dice-pending { display: flex; align-items: center; gap: .7em; font-size: .9em; }
 .xb-dice-pending::before { content: ''; flex: none; width: 1em; height: 1em; border: 2px solid color-mix(in srgb, currentColor 20%, transparent); border-top-color: currentColor; border-radius: 50%; }

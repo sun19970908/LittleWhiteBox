@@ -5,7 +5,7 @@ import {
 } from '../../../capabilities/economy/index.js';
 import type {
     PendingCommitRecoveryResult,
-    ScopedChatStore,
+    PartitionStore,
     XiaobaiOsFileControls,
     XiaobaiOsFileState,
 } from '../../../kernel/contracts.js';
@@ -130,7 +130,7 @@ function transactionError(result: {
 }
 
 export function createBankService(
-    store: ScopedChatStore<BankDomainV1>,
+    store: PartitionStore<BankDomainV1>,
     files: XiaobaiOsFileControls,
     economy: EconomyReadCapability,
     {

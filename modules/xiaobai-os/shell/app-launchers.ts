@@ -11,6 +11,7 @@ import { WALLET_APP_DESCRIPTOR } from '../apps/wallet/descriptor.js';
 import { WORLD_APP_DESCRIPTOR } from '../apps/world/descriptor.js';
 import { LEARNING_APP_DESCRIPTOR } from '../apps/learning/descriptor.js';
 import { DICE_APP_DESCRIPTOR } from '../apps/dice/descriptor.js';
+import { ADMINISTRATOR_APP_DESCRIPTOR } from '../apps/administrator/descriptor.js';
 
 export interface XiaobaiOsAppLauncher {
     id: string;
@@ -22,6 +23,7 @@ export interface XiaobaiOsAppLauncher {
 // Presentation only: both the host shortcut panel and desktop can read this
 // catalog without importing Vue, APP components, or APP runtimes.
 const launchers: readonly XiaobaiOsAppLauncher[] = [
+    { ...ADMINISTRATOR_APP_DESCRIPTOR, icon: new URL('../apps/administrator/ui/icon.svg', import.meta.url).href },
     { ...DICE_APP_DESCRIPTOR, icon: new URL('../apps/dice/ui/icon.svg', import.meta.url).href },
     { ...AGENT_API_APP_DESCRIPTOR, icon: new URL('../apps/agent-api/ui/icon.svg', import.meta.url).href },
     { ...FOURTH_WALL_APP_DESCRIPTOR, icon: new URL('../apps/fourth-wall/ui/icon.svg', import.meta.url).href },

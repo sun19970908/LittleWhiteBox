@@ -162,11 +162,11 @@ Map participant 自己提供四个高层工具：
 
 `MapSceneEdit`逐 element 编译；合法 sibling 进入 staging，坏项进入`skipped`，不会拖死整批。对外 schema 只公布规范 category 和顶层`icon`；`rect`只认`center+size`，path/curve 至少两点。基于实际模型输出的 terrain 类别别名、`geo.icon`、无关空数组和零值污染只在 compiler 入口吸收，不作为第二套公开写法。工具 schema 与运行时入口同时使用领域容量上限；超限 collection 整次拒绝，不先遍历再依赖最终领域校验，修正后的下一次调用会清理该次调用级失败。
 
-场景读回只在 `maintenance/scene-reader.ts` 做临时工具投影；Map 分区仍是唯一事实来源，不迁移、不新增持久状态，也不保留旧工具输出分支。修正错误只重发相关字段：旋转失败通常只需 `id/rotation`，不要求重发几何。
+场景读回只在 `tools/scene-reader.ts` 做临时工具投影，后台维护与管理员共用；Map 分区仍是唯一事实来源，不迁移、不新增持久状态，也不保留旧工具输出分支。修正错误只重发相关字段：旋转失败通常只需 `id/rotation`，不要求重发几何。
 
 模型契约同时覆盖 Prompt 和工具字段描述：曲线点是实际经过的位置，不是贝塞尔控制柄；面积点按周界依次排列；零度时椅子/沙发靠背与床枕位于上方，椅子/沙发朝南，桥面通行方向南北；森林面积不带 `tree` 图形标识，单树才带。`closed` 工具描述列出类别默认闭合规则；`viewBox` 是进入场景/全图时的范围，普通更新不自动跟随人物。合理布局补全与剧情事件证据分开，补全不能冒充已发生事件。
 
-Prompt 使用 `maintenance/scene-examples.ts` 中的三组「背景→空间组织→首绘→下一轮最小更新」样例（酒馆/溪谷/科幻舱室），通过正式工具与存储测试验证样例可执行；不以样例替代真实模型质量验收。Google 原生参数使用受支持的 Schema 子集：尺寸的严格正数约束留在运行时，可空枚举使用标准 anyOf，经 SDK 转成 nullable 与纯字符串 enum；没有额外供应商分支或依赖。
+Prompt 使用 `tools/scene-examples.ts` 中的三组「背景→空间组织→首绘→下一轮最小更新」样例（酒馆/溪谷/科幻舱室），通过正式工具与存储测试验证样例可执行；不以样例替代真实模型质量验收。Google 原生参数使用受支持的 Schema 子集：尺寸的严格正数约束留在运行时，可空枚举使用标准 anyOf，经 SDK 转成 nullable 与纯字符串 enum；没有额外供应商分支或依赖。
 
 Actor 缺少 actorKey 时使用稳定 element id；非 Actor 的 actorKey 被忽略并返回 warning；玩家永远规范化为`actorKey:"player"`，展示名来自本轮捕获并在接受轮入口规范化到 120 字符领域上限的 SillyTavern 用户身份。同一 Actor 移动时同步 Atlas，并删除旧 Scene 图标。工具统一返回`ok/status/changed/applied/skipped/warnings/hint`，applied/skipped 项携带所属 collection，修参只清除同一 collection 下相同 id 的失败：全坏为 failed、混合结果为 partial、幂等结果为 unchanged。
 

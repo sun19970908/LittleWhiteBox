@@ -1,13 +1,8 @@
 import type { ActionCheckRecord } from '../domain/check-records.js';
-import { createD20 } from './d20.js';
-
-const OUTCOMES = { critical_failure: '大失败', failure: '失败', success: '成功', critical_success: '大成功' };
-
-export function diceSpan(className: string, text = ''): HTMLSpanElement {
-    const element = document.createElement('span');
-    element.className = className; element.textContent = text;
-    return element;
-}
+import { createD20Result } from './d20-result.js';
+import { createCoc7Result } from './coc7-result.js';
+import { diceSpan } from './card-elements.js';
+import { createCardTexture } from './card-texture.js';
 
 /** A saved check's view. It never rolls, saves, or starts generation. */
 export function createCheckCard(record: ActionCheckRecord, pending: boolean) {
@@ -16,27 +11,17 @@ export function createCheckCard(record: ActionCheckRecord, pending: boolean) {
     // retained span into an ordinary text segment, destroying the cached component.
     element.id = `xb-dice-check-${record.id}`;
     element.dataset.diceRecord = record.id;
+    element.dataset.rule = record.rule;
     element.setAttribute('role', 'group');
-    const hero = diceSpan('xb-dice-hero');
-    const die = diceSpan('xb-dice-die');
-    const solid = createD20(record.roll);
-    die.append(solid.element, diceSpan('xb-dice-system', 'D20'));
-    const verdict = diceSpan('xb-dice-verdict');
-    const outcome = diceSpan('xb-dice-outcome');
-    const name = [record.request.character, record.request.stat].filter(Boolean).join(' · ');
+    const result = record.rule === 'coc7' ? createCoc7Result(record) : createD20Result(record);
+    const name = record.rule === 'coc7' ? record.request.stat : [record.request.character, record.request.stat].filter(Boolean).join(' · ');
     const identity = diceSpan('xb-dice-identity', name);
-    const comparison = diceSpan('xb-dice-comparison');
-    const roll = diceSpan('xb-dice-score');
-    roll.append(diceSpan('xb-dice-score-label', '掷骰'), diceSpan('xb-dice-score-value', String(record.roll)));
-    const difficulty = diceSpan('xb-dice-score');
-    difficulty.append(diceSpan('xb-dice-score-label', '难度'), diceSpan('xb-dice-score-value', String(record.dc)));
-    comparison.append(roll, difficulty);
-    verdict.append(outcome, comparison);
+    identity.hidden = record.rule === 'coc7';
     const rolling = diceSpan('xb-dice-rolling-label', '正在掷骰');
-    hero.append(die, verdict, rolling);
+    result.rollingSlot.append(rolling);
     const copy = diceSpan('xb-dice-copy');
     copy.append(diceSpan('xb-dice-action', record.request.action));
-    if (record.request.stakes) {
+    if (record.rule === 'd20' && record.request.stakes) {
         const text = diceSpan('xb-dice-stakes-text', record.request.stakes);
         if (record.request.stakes.length > 96) {
             const details = document.createElement('details'); details.className = 'xb-dice-stakes';
@@ -49,23 +34,24 @@ export function createCheckCard(record: ActionCheckRecord, pending: boolean) {
     }
     const status = diceSpan('xb-dice-status'); status.hidden = true;
     status.setAttribute('role', 'status');
-    element.append(identity, hero, copy, status);
+    element.append(createCardTexture(), identity, result.element, copy, status);
     function settle(): void {
         if (element.dataset.state === 'settled') { return; }
         if (element.dataset.state === 'rolling') { element.dataset.revealed = 'true'; }
-        element.dataset.state = 'settled'; element.dataset.outcome = record.outcome;
-        element.setAttribute('aria-label', `${name}检定：${OUTCOMES[record.outcome]}，掷骰 ${record.roll}，难度 ${record.dc}`);
-        outcome.textContent = OUTCOMES[record.outcome];
-        verdict.hidden = false; copy.hidden = false; rolling.hidden = true;
-        solid.draw(1, true);
+        element.dataset.state = 'settled'; element.dataset.outcome = result.tone;
+        if (record.rule === 'coc7') { element.dataset.verdict = record.result.verdict; }
+        identity.hidden = record.rule === 'coc7';
+        element.setAttribute('aria-label', record.rule === 'coc7' ? result.label : `${name}检定：${result.label}`);
+        copy.hidden = false; rolling.hidden = true;
+        result.settle();
     }
     if (pending) {
         element.dataset.state = 'rolling';
         element.setAttribute('aria-label', `${name}检定，正在掷骰`);
-        verdict.hidden = true; copy.hidden = true;
-        solid.draw(0);
+        copy.hidden = true;
+        result.draw(0);
     } else { settle(); }
-    return { element, status, settle, draw: solid.draw };
+    return { element, status, settle, draw: result.draw };
 }
 
 export type CheckCard = ReturnType<typeof createCheckCard>;

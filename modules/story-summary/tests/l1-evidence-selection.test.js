@@ -18,7 +18,24 @@ function fixture(rows, count = 1) {
     return { parents, data };
 }
 
-test('event background survives low current-query similarity; lexical passages compete without a dense veto', async () => {
+test('visible originals are excluded before lane selection, including temporal and lexical matches', async () => {
+    const marker = '113年11月20日03:38';
+    const { data } = fixture([0, 1, 2, 3].map(floor => ({ floor, vector: [1, 0, 0], text: marker })));
+    const parents = [{ event: { id: 'event', summary: 'range (#1-4)' } }];
+    const options = { queryVector: [1, 0, 0], hiddenThrough: 1,
+        sourceTurns: [{ floor: 2, contextFloor: 1 }, { floor: 0 }],
+        lexicalScores: [{ chunkId: 'c-3', score: 100 }], temporalCarrier: { marker } };
+    const result = await selectL1Evidence(parents, data, options);
+    assert.deepEqual(new Set(result.items.map(item => item.floor)), new Set([0, 1]));
+    assert.equal(result.stats.sourceCandidates, 2);
+    const visible = await selectL1Evidence(parents, data, { ...options, hiddenThrough: -1 });
+    assert.deepEqual(visible.items, []);
+    assert.equal(visible.stats.sourceCandidates, 0);
+    const hidden = await selectL1Evidence(parents, data, { ...options, hiddenThrough: 3 });
+    assert.equal(hidden.stats.sourceCandidates, 4);
+});
+
+test('summary similarity alone cannot admit irrelevant background; query and lexical detail survive', async () => {
     const { parents, data } = fixture([
         { vector: [1, 0, 0], text: '当时受到威胁，无法赴约' },
         { vector: [0, 1, 0], text: '后来因此不再信任她' },
@@ -26,9 +43,8 @@ test('event background survives low current-query similarity; lexical passages c
         { vector: [-1, -1, 0], text: '完全无关' },
     ]);
     const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0], lexicalScores: [{ chunkId: 'c-2', score: 5 }] });
-    assert.deepEqual(new Set(result.items.map(item => item.chunkId)), new Set(['c-0', 'c-1', 'c-2']));
-    assert.equal(result.items.find(item => item.chunkId === 'c-0').evidenceLane, 'event');
-    assert.equal(result.items.every(item => item.ownerEventId === 'evt-0'), true);
+    assert.deepEqual(new Set(result.items.map(item => item.chunkId)), new Set(['c-1', 'c-2']));
+    assert.equal(result.items.some(item => 'ownerEventId' in item || 'eventScore' in item), false);
     assert.equal(result.stats.lexicalItems, 1);
     assert.equal(result.items.some(item => 'vector' in item || 'atom' in item), false);
 });
@@ -40,12 +56,13 @@ test('MMR diversifies additional passages without treating separate sources as d
         { vector: [0.94, -0.34117, 0], text: '另一角度' },
         { vector: [0.95, 0.31225, 0], text: '约定' },
     ]);
-    const result = await selectL1Evidence(parents, data, { queryVector: [0, 0, 1] });
-    assert.deepEqual(result.items.slice(0, 2).map(item => item.chunkId), ['c-0', 'c-2']);
+    const result = await selectL1Evidence(parents, data, { queryVector: [1, 0, 0] });
+    assert.ok(result.items.some(item => item.chunkId === 'c-2'));
+    assert.ok(result.items.some(item => item.chunkId === 'c-3'));
     assert.equal(new Set(result.items.map(item => item.chunkId)).size, result.items.length);
 });
 
-test('overlapping ranges allocate shared sources in actual rounds before the 4000-token budget', async () => {
+test('overlapping ranges cannot duplicate or reorder query evidence', async () => {
     const { parents, data } = fixture([
         { floor: 0, vector: [1, 0, 0] },
         { floor: 1, vector: [0, 0, 1] },
@@ -57,7 +74,8 @@ test('overlapping ranges allocate shared sources in actual rounds before the 400
     data.eventVectorsById.set('evt-2', { vector: [0.8, 0, 0.6] });
     const result = await selectL1Evidence(parents, data, { queryVector: [0, 0, 1] });
     assert.equal(result.items[1].chunkId, 'c-2');
-    assert.equal(result.items[1].ownerEventId, 'evt-2');
+    const reversed = await selectL1Evidence([...parents].reverse(), data, { queryVector: [0, 0, 1] });
+    assert.deepEqual(result.items, reversed.items);
     assert.equal(new Set(result.items.map(item => item.chunkId)).size, result.items.length);
     const budget = { used: 0, max: 4000 };
     const admitted = admitDirectEvidenceItems(result.items.map((chunk, index) => ({
@@ -65,8 +83,7 @@ test('overlapping ranges allocate shared sources in actual rounds before the 400
         owner: { event: { id: chunk.ownerEventId } },
     })), budget, { floorOverheadTokens: 10 });
     assert.ok(admitted.some(item => item.id === 'c-2'));
-    assert.ok(admitted.length < result.items.length);
-    assert.ok(budget.used <= 4000);
+    assert.equal(budget.used, admitted.length * 210);
 });
 
 test('identical words from different speakers or turns survive; overlapping events cannot duplicate a source', async () => {
@@ -81,32 +98,23 @@ test('identical words from different speakers or turns survive; overlapping even
     assert.equal(new Set(result.items.map(item => item.chunkId)).size, 3);
 });
 
-test('five-item lane rotation preserves each lane and admits conversation evidence under a tight budget', async () => {
+test('three query-oriented lanes share a tight budget without duplicate sources', async () => {
     const { parents, data } = fixture(Array.from({ length: 30 * 12 }, (_, i) => ({ floor: Math.floor(i / 12), vector: [1, 1, 0] })), 30);
-    const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0] });
-    assert.equal(new Set(result.items.map(item => item.ownerEventId)).size, 30);
-    for (const lane of ['event', 'conversation']) {
-        assert.deepEqual(result.items.filter(item => item.evidenceLane === lane).map(item => item.ownerEventId),
-            Array.from({ length: 3 }, () => parents.map(parent => parent.event.id)).flat());
-    }
-    for (let start = 0; start < result.items.length; start += 10) {
-        assert.deepEqual(result.items.slice(start, start + 10).map(item => item.evidenceLane),
-            [...Array(5).fill('event'), ...Array(5).fill('conversation')]);
-    }
-    for (const parent of parents) {
-        for (const lane of ['event', 'conversation']) assert.ok(result.items.filter(item => item.ownerEventId === parent.event.id && item.evidenceLane === lane).length <= 3);
-    }
-    assert.equal(result.items.length, 180);
-    assert.equal(new Set(result.items.map(item => item.chunkId)).size, 180);
+    const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0],
+        sourceTurns: Array.from({ length: 30 }, (_, floor) => ({ floor })) });
+    assert.equal(new Set(result.items.map(item => item.floor)).size, 30);
+    assert.ok(result.items.length <= 270);
+    assert.equal(new Set(result.items.map(item => item.chunkId)).size, result.items.length);
+    assert.equal(result.stats.queryItems + result.stats.floorItems + result.stats.conversationItems, result.items.length);
     const relevance = buildRankRelevance(result.items, item => item.chunkId);
-    const budget = { used: 0, max: 2050 };
+    const budget = { used: 0, max: 1800 };
     const admitted = admitDirectEvidenceItems(result.items.map(chunk => ({
         id: chunk.chunkId, floor: chunk.floor, lane: chunk.evidenceLane,
         score: relevance.get(chunk.chunkId), tokenCost: 200, owner: { event: { id: chunk.ownerEventId } },
-    })), budget, { floorOverheadTokens: 10 });
+    })), budget);
     assert.deepEqual(admitted.map(item => item.lane),
-        [...Array(5).fill('event'), ...Array(5).fill('conversation')]);
-    assert.equal(budget.used, 2050);
+        [...Array(3).fill('query'), ...Array(3).fill('floor'), ...Array(3).fill('conversation')]);
+    assert.equal(budget.used, 1800);
 });
 
 test('lane rotation drains empty or short lanes without losing the other lane or its order', async () => {
@@ -114,13 +122,14 @@ test('lane rotation drains empty or short lanes without losing the other lane or
         const { parents, data } = fixture(Array.from({ length: events + conversations }, (_, floor) => ({
             floor, vector: floor < events ? [1, 0, 0] : [0, 1, 0],
         })), events + conversations);
-        const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0] });
-        const expected = [];
-        for (let start = 0; start < Math.max(events, conversations); start += 5) {
-            for (let i = start; i < Math.min(start + 5, events); i++) expected.push(`c-${i}`);
-            for (let i = start; i < Math.min(start + 5, conversations); i++) expected.push(`c-${events + i}`);
+        const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0],
+            lexicalScores: Array.from({ length: events }, (_, i) => ({ chunkId: `c-${i}`, score: 1 })) });
+        assert.equal(result.items.length, events + conversations);
+        assert.equal(new Set(result.items.map(item => item.chunkId)).size, events + conversations);
+        for (const lane of ['query', 'floor', 'conversation']) {
+            const floors = result.items.filter(item => item.evidenceLane === lane).map(item => item.floor);
+            assert.deepEqual(floors, [...floors].sort((a, b) => a - b));
         }
-        assert.deepEqual(result.items.map(item => item.chunkId), expected, `${events}/${conversations}`);
     }
 });
 
@@ -129,7 +138,7 @@ test('partial vectors retain usable lexical evidence and report degradation; uns
     const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0], lexicalScores: [{ chunkId: 'c-1', score: 1 }] });
     assert.equal(result.status, 'partial-vectors');
     assert.equal(result.stats.missingVectors, 1);
-    assert.deepEqual(result.items.map(item => item.chunkId), ['c-0', 'c-1']);
+    assert.deepEqual(result.items.map(item => item.chunkId), ['c-1']);
     assert.equal(result.stats.sourceCandidates, 2);
 });
 
@@ -141,7 +150,7 @@ test('exact-time carrier survives low semantic relevance but does not gain ordin
     assert.equal(carrier._directEvidencePassedMinScore, false);
 });
 
-test('event background cannot steal the selected exact-time passage on the same speaker floor', async () => {
+test('irrelevant background cannot steal exact-time protection on the same speaker floor', async () => {
     const marker = '113年11月20日03:38';
     const { parents, data } = fixture([
         { vector: [1, 0, 0], isUser: false, text: '走廊里挂着旧画。' },
@@ -153,20 +162,19 @@ test('event background cannot steal the selected exact-time passage on the same 
     });
     const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0], temporalCarrier });
     assert.equal(result.status, 'applied');
-    assert.deepEqual(result.items.map(item => item.chunkId), ['c-0', 'c-1']);
-    assert.equal(result.items[0]._directEvidenceTemporalCarrier, false);
-    assert.equal(result.items[1]._directEvidenceTemporalCarrier, true);
-    assert.equal(result.items[1]._directEvidencePassedMinScore, false);
+    assert.deepEqual(result.items.map(item => item.chunkId), ['c-1']);
+    assert.equal(result.items[0]._directEvidenceTemporalCarrier, true);
+    assert.equal(result.items[0]._directEvidencePassedMinScore, false);
     assert.equal(result.stats.temporalProtectedCandidates, 1);
     const pack = protectedMax => admitDirectEvidenceItems(result.items.map((chunk, index) => ({
         id: chunk.chunkId, floor: chunk.floor, score: 1 / (index + 1), tokenCost: 100,
         temporal: chunk._directEvidenceTemporalCarrier, ordinaryEligible: chunk._directEvidencePassedMinScore,
     })), { used: 0, max: 4000 }, { protectedBudget: { used: 0, max: protectedMax } });
-    assert.deepEqual(pack(1600).map(item => item.id), ['c-1', 'c-0']);
-    assert.deepEqual(pack(0).map(item => item.id), ['c-0']);
+    assert.deepEqual(pack(1600).map(item => item.id), ['c-1']);
+    assert.deepEqual(pack(0).map(item => item.id), []);
 });
 
-test('an exact-time winner keeps its identity when an overlapping owner selects it through the event lane', async () => {
+test('an exact-time winner is unique across overlapping source ranges', async () => {
     const { parents, data } = fixture([
         { vector: [1, 0, 0], text: '背景' },
         { vector: [0, 0.4, Math.sqrt(0.84)], text: '113年11月20日03:38 约定' },
@@ -179,8 +187,7 @@ test('an exact-time winner keeps its identity when an overlapping owner selects 
     const protectedItems = result.items.filter(item => item._directEvidenceTemporalCarrier);
     assert.equal(protectedItems.length, 1);
     assert.equal(protectedItems[0].chunkId, 'c-1');
-    assert.equal(protectedItems[0].ownerEventId, 'evt-1');
-    assert.equal(protectedItems[0].evidenceLane, 'event');
+    assert.equal(protectedItems[0]._directEvidencePassedMinScore, false);
 });
 
 test('temporal candidates remain bounded and excess low-score floors cannot bypass ordinary eligibility', async () => {
@@ -213,13 +220,13 @@ test('bounded diversity work retains lexical and exact-time routes in a large de
     assert.ok(result.stats.mmrComparisons > 0 && result.stats.mmrComparisons < 2000);
 });
 
-test('shared shortlists refill past claimed sources so later owners still receive all their rounds', async () => {
+test('duplicating an event range cannot multiply passage quotas or change selection', async () => {
     const { parents, data } = fixture(Array.from({ length: 300 }, () => ({ vector: [1, 1, 0] })), 30);
     for (const parent of parents) parent.event.summary = '重叠事件 (#1)';
     const result = await selectL1Evidence(parents, data, { queryVector: [0, 1, 0] });
-    assert.equal(result.items.length, 180);
-    assert.equal(new Set(result.items.map(item => item.chunkId)).size, 180);
-    for (const parent of parents) assert.equal(result.items.filter(item => item.ownerEventId === parent.event.id).length, 6);
+    const single = await selectL1Evidence(parents.slice(0, 1), data, { queryVector: [0, 1, 0] });
+    assert.deepEqual(result.items, single.items);
+    assert.equal(new Set(result.items.map(item => item.chunkId)).size, result.items.length);
     assert.ok(result.stats.maxMmrCandidates <= 96);
     assert.ok(result.stats.mmrComparisons < 60_000);
 });
@@ -237,8 +244,47 @@ test('fusion happens before shortlisting so a joint hit is not lost behind two s
             { chunkId: 'c-64', score: 1 },
         ],
     });
-    assert.equal(result.items[0].chunkId, 'c-64');
-    assert.equal(result.items[0].evidenceLane, 'conversation');
+    assert.equal(result.items.find(item => item.evidenceLane === 'conversation').chunkId, 'c-64');
+});
+
+test('query evidence prioritizes multiple strong passages from one parent ahead of weaker parent heads', async () => {
+    const { parents, data } = fixture([
+        { floor: 0, vector: [1, 0, 0] },
+        { floor: 0, vector: [0, 1, 0] },
+        { floor: 0, vector: [0, 0.99, 0.1] },
+        { floor: 0, vector: [0, 0.98, 0.2] },
+        { floor: 1, vector: [0.8, 0.6, 0] },
+        { floor: 2, vector: [0, 0, 1] },
+        { floor: 9, vector: [0, 1, 0] },
+    ], 3);
+    const result = await selectL1Evidence(parents, data, {
+        queryVector: [0, 1, 0], lexicalScores: [{ chunkId: 'c-5', score: 100 }],
+    });
+    assert.deepEqual(result.items.slice(0, 3).map(item => item.chunkId), ['c-1', 'c-2', 'c-3']);
+    assert.ok(result.items.slice(0, 3).every(item => item.evidenceLane === 'query'));
+    assert.equal(result.items.some(item => item.chunkId === 'c-6'), false);
+    assert.equal(result.items.some(item => item.chunkId === 'c-0'), false);
+    assert.ok(result.items.some(item => item.chunkId === 'c-5'));
+    const queryScores = result.items.filter(item => item.evidenceLane === 'query').map(item => item.queryScore);
+    assert.deepEqual(queryScores, [...queryScores].sort((a, b) => b - a));
+});
+
+test('query promotion preserves exact-time protection without preassigning a display owner', async () => {
+    const { parents, data } = fixture([
+        { vector: [1, 0, 0] }, { vector: [0, 1, 0], text: '113年11月20日03:38 约定' },
+    ], 2);
+    parents[1].event.summary = '重叠事件 (#1)';
+    data.eventVectorsById.set('evt-1', { vector: [0, 1, 0] });
+    const result = await selectL1Evidence(parents, data, {
+        queryVector: [0, 1, 0], temporalCarrier: { marker: '113年11月20日03:38' },
+    });
+    const promoted = result.items[0];
+    assert.equal(promoted.chunkId, 'c-1');
+    assert.equal(promoted.evidenceLane, 'query');
+    assert.equal('ownerEventId' in promoted, false);
+    assert.equal(promoted._directEvidenceTemporalCarrier, true);
+    assert.equal(result.items.filter(item => item.chunkId === 'c-1').length, 1);
+    assert.equal(result.stats.temporalProtectedCandidates, 1);
 });
 
 test('cancelled or released sessions stop local selection without returning late evidence', async () => {
@@ -247,6 +293,56 @@ test('cancelled or released sessions stop local selection without returning late
     controller.abort();
     await assert.rejects(selectL1Evidence(parents, data, { signal: controller.signal }), { name: 'AbortError' });
     await assert.rejects(selectL1Evidence(parents, data, { isCurrent: () => false }), { name: 'AbortError' });
+});
+
+test('first-rerank source turns survive absent L2 and preserve preceding USER context only when supplied', async () => {
+    const { data } = fixture([
+        { floor: 71, vector: [0, 1, 0], isUser: true },
+        { floor: 72, vector: [0, 0.9, 0.1] },
+        { floor: 73, vector: [0, 1, 0] },
+    ]);
+    const result = await selectL1Evidence([], data, {
+        queryVector: [0, 1, 0], sourceTurns: [{ floor: 72, contextFloor: 71 }],
+    });
+    assert.deepEqual(new Set(result.items.map(item => item.floor)), new Set([71, 72]));
+    assert.equal(result.status, 'applied');
+    const withoutContext = await selectL1Evidence([], data, { queryVector: [0, 1, 0], sourceTurns: [{ floor: 72 }] });
+    assert.deepEqual(withoutContext.items.map(item => item.floor), [72]);
+});
+
+test('later passages from the first reranked turn stay ahead of weaker turn heads', async () => {
+    const { parents, data } = fixture([
+        ...Array.from({ length: 9 }, (_, floor) => ({ floor, vector: [1, 0, 0] })),
+        ...[0.9, 0.8, 0.7, 0.6].map(score => ({ floor: 72, vector: [score, Math.sqrt(1 - score * score), 0] })),
+        { floor: 74, vector: [0.95, Math.sqrt(1 - 0.95 ** 2), 0] },
+    ], 9);
+    const result = await selectL1Evidence(parents, data, {
+        queryVector: [1, 0, 0], sourceTurns: [{ floor: 72 }, { floor: 74 }],
+    });
+    assert.deepEqual(result.items.slice(3, 6).map(item => item.chunkId), ['c-9', 'c-10', 'c-11']);
+    assert.ok(result.items.slice(6).some(item => item.floor === 74));
+    assert.ok(result.items.slice(6).some(item => item.chunkId === 'c-12'));
+});
+
+test('floor rerank order reaches admission independently of L2 order and event vectors', async () => {
+    const { parents, data } = fixture([
+        ...Array.from({ length: 9 }, (_, floor) => ({ floor, vector: [0, 1, 0] })),
+        { floor: 72, vector: [0, 0.7, 0.7] },
+        { floor: 74, vector: [0, 0.8, 0.6] },
+    ], 9);
+    const options = { queryVector: [0, 1, 0], sourceTurns: [{ floor: 72 }, { floor: 74 }] };
+    const result = await selectL1Evidence(parents, data, options);
+    const floorHits = result.items.filter(item => item.evidenceLane === 'floor');
+    assert.deepEqual(floorHits.map(item => item.floor), [72, 74]);
+    const packed = admitDirectEvidenceItems(result.items.map((item, i) => ({
+        id: item.chunkId, floor: item.floor, score: 1 / (i + 1), tokenCost: 100,
+    })), { used: 0, max: 400 });
+    assert.equal(packed.at(-1).floor, 72);
+    data.eventVectorsById.clear();
+    for (const parent of parents) parent.event.summary = `Changed subject (#${Number(parent.event.id.slice(4)) + 1})`;
+    const reordered = await selectL1Evidence([...parents].reverse(), data, options);
+    assert.deepEqual(result.items, reordered.items);
+    assert.equal(reordered.status, 'applied');
 });
 
 test('selection yields during a wide event and observes cancellation before producing output', async (t) => {

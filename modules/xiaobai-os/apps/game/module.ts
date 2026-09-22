@@ -4,7 +4,7 @@ import {
     type EconomyReadCapability,
 } from '../../capabilities/economy/index.js';
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
-import type { ScopedChatStore } from '../../kernel/contracts.js';
+import type { PartitionStore } from '../../kernel/contracts.js';
 import type { GameDomainV1 } from '../../domains/game/types.js';
 import type { XiaobaiOsAppRuntime } from '../../types.js';
 import {
@@ -39,7 +39,7 @@ export function createGameModule(dependencies: GameModuleDependencies): XiaobaiO
             if (!context.partition) {throw new Error('Game partition store is unavailable');}
             const economy = context.useCapability(ECONOMY_READ_CAPABILITY);
             const game = createGameService(
-                context.partition as ScopedChatStore<GameDomainV1>,
+                context.partition as PartitionStore<GameDomainV1>,
                 context.files,
                 economy,
                 dependencies.service,
@@ -53,6 +53,5 @@ export function createGameModule(dependencies: GameModuleDependencies): XiaobaiO
             });
         },
         dispose: dependencies.dispose,
-        clearData: context => context.removePartition(GAME_PARTITION.key),
     };
 }

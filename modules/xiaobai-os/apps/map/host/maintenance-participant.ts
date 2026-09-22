@@ -4,7 +4,7 @@ import type { MaintenanceMode, MaintenanceParticipant } from '../../../capabilit
 import type { AcceptedTurnSource } from '../../../capabilities/maintenance/accepted-turn-source.js';
 import { createMapMaintenanceSession } from '../maintenance/session.js';
 
-export { MAP_MAINTENANCE_TOOL_NAMES } from '../maintenance/tool-contract.js';
+export { MAP_MAINTENANCE_TOOL_NAMES } from '../tools/tool-contract.js';
 
 export interface MapMaintenanceParticipantDependencies {
     readonly map: MapService;

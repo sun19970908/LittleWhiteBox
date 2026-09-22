@@ -17,11 +17,13 @@ import {
     hasMessageVoiceMarker,
     hydrateMessageVoiceBubbles,
     initMessageVoiceUi,
+    releaseMessageVoiceBubbles,
     stopMessageVoicePlayback,
 } from './tts-message-voice.js';
 import { synthesizeV3, FREE_DEFAULT_VOICE } from "./tts-api.js";
 import { 
     ensureTtsPanel, 
+    mountTtsPanel,
     updateTtsPanel, 
     removeAllTtsPanels, 
     initTtsPanelStyles, 
@@ -55,6 +57,38 @@ const HTML_PATH = `${extensionFolderPath}/modules/tts/tts-overlay.html`;
 const TTS_DIRECTIVE_REGEX = /\[tts:([^\]]*)\]/gi;
 let playbackOwnership = null;
 let externalSpeech = null;
+let runtimeOptions = { ownsMessageDom: true, onUiChanged: null };
+
+export function configureTtsRuntime({ ownsMessageDom = true, onUiChanged = null } = {}) {
+    runtimeOptions = { ownsMessageDom, onUiChanged };
+}
+
+export function mountTtsMessagePanel(element, messageId) {
+    if (!isModuleEnabled() || getContext().chat?.[messageId]?.is_user) return;
+    const release = mountTtsPanel(element, messageId, handleMessagePlayClick);
+    updateTtsPanel(messageId, ensureMessageState(messageId));
+    return release;
+}
+
+export function mountTtsMessageContent(content) {
+    if (!isModuleEnabled()) return;
+    enhanceTtsMessageContent(content);
+    // Draw can replace inline text after the content commit. Observe only this
+    // content lease, never the whole host-owned chat projection.
+    const observer = new MutationObserver(records => {
+        for (const record of records) {
+            for (const node of record.removedNodes) {
+                if (!content.contains(node)) releaseMessageVoiceBubbles(node);
+            }
+        }
+        if (isModuleEnabled() && hasTtsMessageMarkup(content)) enhanceTtsMessageContent(content);
+    });
+    observer.observe(content, { childList: true, subtree: true });
+    return () => {
+        observer.disconnect();
+        releaseMessageVoiceBubbles(content);
+    };
+}
 
 const FREE_VOICE_KEYS = new Set([
     'female_1', 'female_2', 'female_3', 'female_4',
@@ -92,6 +126,7 @@ function scheduleNdRerender(mesText) {
 }
 
 function setupNovelDrawObserver() {
+    if (!runtimeOptions.ownsMessageDom) return;
     if (ndImageObserver) return;
     
     const chatEl = document.getElementById('chat');
@@ -849,6 +884,7 @@ function enhanceTtsMessageContent(container) {
 }
 
 function enhanceAllTtsDirectives() {
+    if (!runtimeOptions.ownsMessageDom) return;
     if (!isModuleEnabled()) return;
     document.querySelectorAll('#chat .mes .mes_text').forEach(mesText => {
         observeDirective(mesText);
@@ -857,6 +893,7 @@ function enhanceAllTtsDirectives() {
 
 
 function handleDirectiveEnhance(data) {
+    if (!runtimeOptions.ownsMessageDom) return;
     if (!isModuleEnabled()) return;
     setTimeout(() => {
         if (!isModuleEnabled()) return;
@@ -876,6 +913,7 @@ function handleDirectiveEnhance(data) {
 }
 
 function onGenerationEnd() {
+    if (!runtimeOptions.ownsMessageDom) return;
     if (!isModuleEnabled()) return;
     setTimeout(enhanceAllTtsDirectives, 150);
 }
@@ -884,6 +922,10 @@ function onGenerationEnd() {
 
 function renderExistingMessageUIs() {
     if (!isModuleEnabled()) return;
+    if (!runtimeOptions.ownsMessageDom) {
+        runtimeOptions.onUiChanged?.();
+        return;
+    }
 
     document.querySelectorAll('#chat .mes .mes_text').forEach((mesText) => {
         enhanceMessageVoiceTextNodes(mesText, true);
@@ -914,6 +956,7 @@ function prepareCharacterMessageUi(messageId) {
     const chat = context.chat;
     const message = chat?.[messageId];
     if (!message || message.is_user) return false;
+    if (!runtimeOptions.ownsMessageDom) return true;
 
     const messageEl = getMessageElement(messageId);
     if (!messageEl) return false;
@@ -1339,8 +1382,10 @@ export async function initTts() {
     afterAiGateDispose = registerAfterAiHandler(MODULE_ID, ({ chatId, messageId }) => {
         if (!isModuleEnabled()) return;
         if (String(getContext()?.chatId || '') !== String(chatId || '')) return;
-        const message = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
-        if (message) enhanceTtsMessageContent(message);
+        if (runtimeOptions.ownsMessageDom) {
+            const message = document.querySelector(`#chat .mes[mesid="${messageId}"] .mes_text`);
+            if (message) enhanceTtsMessageContent(message);
+        }
         if (!config?.autoSpeak) return;
         void speakMessage(messageId, { mode: 'auto' });
     });

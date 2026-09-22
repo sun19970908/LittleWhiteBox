@@ -107,35 +107,20 @@ function previewText(text, maxLen = DEBUG_RAW_PREVIEW_LEN) {
     return raw.length > maxLen ? `${raw.slice(0, maxLen)} ...(truncated)` : raw;
 }
 
-const ACTION_STRIP_WORDS = [
-    '突然', '非常', '有些', '有点', '轻轻', '悄悄', '缓缓', '立刻',
-    '马上', '然后', '并且', '而且', '开始', '继续', '再次', '正在',
-];
-
 function clamp(v, min, max) {
     return Math.max(min, Math.min(max, v));
 }
 
 function sanitizeActionPhrase(raw) {
-    let text = String(raw || '')
+    const text = String(raw || '')
         .normalize('NFKC')
         .replace(/[\u200B-\u200D\uFEFF]/g, '')
         .trim();
-    if (!text) return '';
-
-    text = text
-        .replace(/[，。！？、；：,.!?;:"'“”‘’()（）[\]{}<>《》]/g, '')
-        .replace(/\s+/g, '');
-
-    for (const word of ACTION_STRIP_WORDS) {
-        text = text.replaceAll(word, '');
-    }
-
-    text = text.replace(/(地|得|了|着|过)+$/g, '');
-
-    if (text.length < 2) return '';
-    if (text.length > 12) text = text.slice(0, 12);
-    return text;
+    // Persist the relation's meaning, including repetition, aspect and objects.
+    // Word deletion and character clipping are not text hygiene; they can change
+    // an event or erase its recipient before any retrieval policy sees it.
+    const content = text.replace(/[\s，。！？、；：,.!?;:"'“”‘’()（）[\]{}<>《》]/g, '');
+    return content.length < 2 ? '' : text;
 }
 
 function calcAtomQuality(scene, edges, where) {

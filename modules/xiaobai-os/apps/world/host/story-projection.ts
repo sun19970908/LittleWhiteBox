@@ -1,13 +1,13 @@
 import { escapePromptData } from '../../../capabilities/maintenance/prompt-safety.js';
 import type { WorldContent } from '../../../domains/world/types.js';
 
-export const MAX_WORLD_STORY_MESSAGE_CHARS = 2_000;
+export const MAX_WORLD_STORY_MESSAGE_CHARS = 8_000;
 
 export function buildWorldStoryPrompt(world: WorldContent | null): string {
     if (!world || (!world.overview && !world.news.length)) { return ''; }
     const sections = [
         ...(world.overview ? [escapePromptData(world.overview)] : []),
-        ...world.news.map(item => `• ${escapePromptData(item.summary)}`),
+        ...world.news.map(item => `• ${escapePromptData(item.title)}\n${escapePromptData(item.body)}`),
     ];
     const render = (included: string[], partial = false) => [
         '<world_background>',

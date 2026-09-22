@@ -1,15 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { Buffer } from 'node:buffer';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { setImmediate } from 'node:timers/promises';
 import { build } from 'esbuild';
 import { prepareActionCheck } from '../apps/dice/application/prepare-action-check.ts';
 import { captureDiceTarget } from '../apps/dice/host/message-records.ts';
-import { buildActionCheckPrompt } from '../apps/dice/protocol/prompt.ts';
+import { buildActionCheckPrompt, projectActionCheckResults } from '../apps/dice/protocol/prompt.ts';
+import { parseDiceRecords } from '../apps/dice/domain/check-records.ts';
+import { generateCoc7Sheet } from '../apps/dice/domain/coc7-creation.ts';
 
 // These regressions live at the native event/API boundary, which the session's continuation stub cannot cover.
-// Run the actual adapter, readiness barrier, session, saver and protocol; replace native I/O only.
+// Run the actual adapter, readiness barrier, session and protocol; replace native I/O only.
 const compiled = await build({
     stdin: { contents: `export { createDiceGenerationAdapter } from '../apps/dice/host/generation-adapter.ts';
         export { captureDiceChat, waitForDiceHost } from '../apps/dice/host/sillytavern-port.ts';
@@ -27,9 +30,15 @@ const compiled = await build({
             export let is_send_press = false;
             export const host = {
                 source: null, get busy() { return is_send_press; }, set busy(value) { is_send_press = value; },
-                draft: '', enabled: true, requests: [], prompts: new Map(), writes: 0,
+                get savingActive() { return isChatSaving; },
+                draft: '', enabled: true, requests: [], prompts: new Map(), diceWrites: 0, ids: 0, nativeSaves: [],
                 preflight: async () => {}, controller: null, stream: null, reply: normalReply, editing: false,
-                save: async () => ({status:'confirmed'}), generate,
+                generate,
+                async saveNative() {
+                    isChatSaving = true;
+                    try { await Promise.resolve(); host.nativeSaves.push(JSON.parse(JSON.stringify(host.source.chat))); }
+                    finally { isChatSaving = false; }
+                },
                 async emit(name, ...args) { for (const fn of [...(listeners.get(name) ?? [])]) await fn(...args); },
                 listen(name, fn) {
                     if (!listeners.has(name)) listeners.set(name, new Set());
@@ -43,9 +52,9 @@ const compiled = await build({
                 stop: stopGeneration,
                 async intercept(type) { let aborted = false; await host.interceptor([], 0, () => { aborted = true; }, type); return aborted; },
                 reset(source) {
-                    Object.assign(host, { source, busy: false, draft: '', enabled: true, requests: [], writes: 0,
+                    Object.assign(host, { source, busy: false, draft: '', enabled: true, requests: [], diceWrites: 0, ids: 0, nativeSaves: [],
                         preflight: async () => {}, controller: null, stream: null, reply: normalReply, editing: false,
-                        save: async () => ({status:'confirmed'}), stopVisible: false, dataGenerating: false, locks: 0 });
+                        stopVisible: false, dataGenerating: false, locks: 0 });
                     host.prompts.clear(); is_group_generating = false; isChatSaving = false; is_send_press = false;
                 },
             };
@@ -62,7 +71,7 @@ const compiled = await build({
             export const unregisterGenerateInterceptor = () => { host.interceptor = null; };
             export const GENERATE_INTERCEPTOR_ORDER = {};
             export const setSillyTavernPrompt = (key, value) => host.prompts.set(key, value);
-            export const uuidv4 = () => 'generated-' + host.writes;
+            export const uuidv4 = () => 'generated-' + host.ids++;
             export const getContext = () => ({ ...host.source, name2: host.source.characterName, generate,
                 streamingProcessor: host.stream,
                 characters: { [host.source.characterId]: { avatar:host.source.avatar, name:host.source.characterName } } });
@@ -71,9 +80,7 @@ const compiled = await build({
             export const getScriptsByType = () => [];
             export const saveScriptsByType = () => host.preflight();
             export const getRequestHeaders = () => ({});
-            export const saveSillyTavernChat = async guard => {
-                if (!guard()) throw new Error('stale target'); host.writes++; return host.save();
-            };
+            export const saveSillyTavernChat = async () => { host.diceWrites++; throw new Error('Unexpected Dice chat save'); };
             // Match ST 1.14's native boundary: live flags, without an isGenerating export.
             export const setSendButtonState = value => { is_send_press = value; };
             export const deactivateSendButtons = () => { host.stopVisible = true; host.dataGenerating = true; host.locks++; };
@@ -103,8 +110,13 @@ const compiled = await build({
                 }
                 host.lock();
                 if (await host.intercept(type) || options.signal?.aborted) { activateSendButtons(); return; }
-                host.requests.push({type, signal:host.controller.signal, busy:is_send_press || is_group_generating, prompt:host.prompts.get('xiaobai_os_dice')});
-                try { await host.reply(host.controller.signal); }
+                const prompt = host.prompts.get('xiaobai_os_dice');
+                await host.emit('GENERATE_AFTER_DATA', {}, false);
+                host.requests.push({type, signal:host.controller.signal, busy:is_send_press || is_group_generating, prompt});
+                try {
+                    await host.reply(host.controller.signal);
+                    if (!host.stream?.isStopped) await host.saveNative();
+                }
                 finally { activateSendButtons(); }
             }
             async function normalReply() {
@@ -124,9 +136,15 @@ const compiled = await build({
 const { createDiceGenerationAdapter, captureDiceChat, waitForDiceHost, host } = await import(`data:text/javascript;base64,${Buffer.from(compiled.outputFiles[0].text).toString('base64')}`);
 
 const call = 'Attempt.\n\n<xb_action_check>{"action":"Climb","stat":"Agility","difficulty":"hard"}</xb_action_check>';
+const cocCall = '<xb_action_check>' + JSON.stringify({ action: 'Force the door', stat: 'body', difficulty: 'regular' }) + '</xb_action_check>';
 const message = mes => ({ name: 'Mira', mes, extra: {} });
 function setup(t, group = false, reveal = async () => {}) {
     t.mock.method(console, 'error', () => {});
+    const network = t.mock.method(globalThis, 'fetch', async () => { throw new Error('Unexpected Dice network request'); });
+    t.after(() => {
+        assert.equal(host.diceWrites, 0, 'checks and retries never issue an extra chat save');
+        assert.equal(network.mock.calls.length, 0, 'checks and retries never read back or write chat over HTTP');
+    });
     const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
     const previousDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
     Object.defineProperty(globalThis, 'document', { configurable: true, value: {
@@ -138,7 +156,11 @@ function setup(t, group = false, reveal = async () => {}) {
     host.reset({ key: group ? 'group:g:chat' : 'character:mira.png:chat', chatId: 'chat', chat: [message('Old reply')],
         characterId: 0, characterName: 'Mira', avatar: 'mira.png', ...(group ? { groupId: 'g' } : {}) });
     host.frequency = 'standard';
-    const adapter = createDiceGenerationAdapter(() => host.enabled, () => host.frequency, () => {}, reveal);
+    host.rule = 'd20';
+    host.sheet = generateCoc7Sheet(() => 0.5);
+    host.sheetReads = 0;
+    host.busyViews = [];
+    const adapter = createDiceGenerationAdapter(() => host.enabled, () => host.frequency, () => host.busyViews.push(adapter.isBusy()), reveal, () => host.rule, () => { host.sheetReads++; return host.sheet; });
     adapter.start();
     t.after(() => adapter.stop());
     return adapter;
@@ -151,36 +173,213 @@ async function received() { await host.emit('MESSAGE_RECEIVED', host.source.chat
 async function settled(adapter) {
     for (let count = 0; count < 50; count++) {
         await setImmediate();
-        if (!adapter.view() || ['invalid','save-error','continue-error'].includes(adapter.view().phase.kind)) return;
+        if (!adapter.view() || ['invalid','continue-error'].includes(adapter.view().phase.kind)) return;
     }
     assert.fail('Dice chain did not settle');
 }
+
+const upstreamMessage = JSON.parse(readFileSync(new URL('./fixtures/dice-message-a32c28d0.json', import.meta.url), 'utf8'));
+
+test('continuation injection follows retained markers after edits, moves, deletions and reinsertion', async t => {
+    setup(t);
+    const target = structuredClone(upstreamMessage);
+    host.source.chat = [target];
+    const raw = structuredClone(target.extra.xiaobaiOsDice);
+    const [wall, door] = parseDiceRecords(raw).checks;
+    for (const frequency of ['standard', 'active']) {
+        host.frequency = frequency;
+        for (const [body, referenced] of [
+            ['Rewritten approach. [dice:wall] Different transition. [dice:door]', [wall, door]],
+            ['Door first. [dice:door] Wall afterward. [dice:wall]', [door, wall]],
+            ['Only the wall remains. [dice:wall]', [wall]],
+            ['All references removed.', []],
+            ['Restored door. [dice:door]', [door]],
+        ]) {
+            target.mes = body;
+            await begin('continue');
+            assert.equal(await host.intercept('continue'), false);
+            const prompt = host.prompts.get('xiaobai_os_dice');
+            if (referenced.length) {
+                assert.deepEqual(JSON.parse(prompt.split('\n').at(-1)), projectActionCheckResults(referenced));
+            } else {
+                assert.equal(prompt, buildActionCheckPrompt(body, [], frequency), 'deletion keeps the check instructions installed');
+            }
+            assert.deepEqual(target.extra.xiaobaiOsDice, raw, 'reading a migrated result never rewrites saved history');
+        }
+    }
+});
+
+test('same-roll recovery accepts an edited terminal marker even after removing a later saved check', async t => {
+    const adapter = setup(t);
+    const target = structuredClone(upstreamMessage);
+    const raw = structuredClone(target.extra.xiaobaiOsDice);
+    const wall = parseDiceRecords(raw).checks[0];
+    host.source.chat = [target];
+    t.mock.method(Math, 'random', () => assert.fail('retained markers never reroll'));
+    for (const body of ['Edited approach. [dice:wall]', 'Reordered. [dice:door] Moved wall. [dice:wall]']) {
+        target.mes = body;
+        await adapter.retry(0);
+        assert.equal(target.mes, body + '\n\nAfterward.');
+        assert.deepEqual(JSON.parse(host.requests.at(-1).prompt.split('\n').at(-1)).at(-1), projectActionCheckResults([wall])[0]);
+        assert.equal(adapter.view(), null);
+        assert.deepEqual(target.extra.xiaobaiOsDice, raw);
+    }
+    assert.equal(host.requests.length, 2);
+});
 
 // The native event boundary is the cheapest place to verify installation, request projection and cleanup together.
 test('each generation uses the current frequency, including continuations with already-confirmed results', async t => {
     setup(t);
     const prompts = new Set();
-    for (const frequency of ['light', 'standard', 'active']) {
+    for (const frequency of ['standard', 'active']) {
         host.frequency = frequency;
         await begin();
         await host.intercept('normal');
-        assert.equal(host.prompts.get('xiaobai_os_dice'), buildActionCheckPrompt([], frequency));
+        assert.equal(host.prompts.get('xiaobai_os_dice'), buildActionCheckPrompt(host.source.chat.at(-1).mes, [], frequency));
         prompts.add(host.prompts.get('xiaobai_os_dice'));
     }
-    assert.equal(prompts.size, 3, 'the three preferences produce distinct model instructions');
+    assert.equal(prompts.size, 2, 'the two preferences produce distinct model instructions');
     const saved = prepareActionCheck({ body: call, generatedFrom: 0, id: 'saved', random: () => 0.4 });
     host.source.chat.push({ ...message(saved.body), extra: { xiaobaiOsDice: saved.records } });
-    for (const frequency of ['light', 'active']) {
+    for (const frequency of ['standard', 'active']) {
         host.frequency = frequency;
         await begin('continue');
         await host.intercept('continue');
-        assert.equal(host.prompts.get('xiaobai_os_dice'), buildActionCheckPrompt(saved.records.checks, frequency));
+        assert.equal(host.prompts.get('xiaobai_os_dice'), buildActionCheckPrompt(saved.body, saved.records.checks, frequency));
         assert.deepEqual(host.source.chat.at(-1).extra.xiaobaiOsDice, saved.records, 'switching frequency preserves rolled results');
     }
     host.enabled = false;
     await begin();
     await host.intercept('normal');
     assert.equal(host.prompts.get('xiaobai_os_dice'), '');
+});
+
+test('CoC checks apply once and retry a failed continuation without rolling or revealing again', async t => {
+    let reveals = 0;
+    const adapter = setup(t, false, async () => { reveals++; });
+    host.rule = 'coc7';
+    const samples = [0.5, 0.1];
+    let draws = 0;
+    t.mock.method(Math, 'random', () => { assert.ok(draws < samples.length); return samples[draws++]; });
+    const original = cocCall + '\n</fictional_scenarios>';
+    host.source.chat = [{ ...message(original), swipe_id: 1, swipes: ['Inactive', original],
+        swipe_info: [{ extra: { foreign: 1 } }, { extra: { foreign: 2 } }] }];
+    await begin(); await host.intercept('normal');
+    await host.saveNative();
+    host.reply = async () => { throw new Error('provider unavailable'); };
+    await received(); await received(); await settled(adapter);
+    assert.equal(adapter.view().phase.kind, 'continue-error');
+    assert.equal(draws, 2);
+    assert.equal(reveals, 1);
+    const current = host.source.chat[0];
+    const records = structuredClone(current.extra.xiaobaiOsDice);
+    assert.equal(current.mes, `[dice:${records.checks[0].id}]`, 'continuation starts at the saved result, without the preset suffix');
+    assert.equal(records.checks.length, 1);
+    assert.equal(records.checks[0].rule, 'coc7');
+    assert.equal(records.checks[0].result.verdict, 'achieved');
+    assert.equal(current.swipes[1], current.mes);
+    assert.deepEqual(current.swipe_info[1].extra.xiaobaiOsDice, records);
+    assert.deepEqual(current.swipe_info[0], { extra: { foreign: 1 } });
+    assert.equal(current.swipes[0], 'Inactive');
+    host.rule = 'd20'; adapter.cancel();
+    host.reply = async () => { current.mes += '\nThe door opens.'; await host.emit('MESSAGE_RECEIVED', 0, 'appendFinal'); };
+    await adapter.retry(0);
+    assert.equal(draws, 2);
+    assert.equal(reveals, 1);
+    assert.equal(host.nativeSaves.length, 2, 'only the native pre-check and completed continuation saves');
+    assert.deepEqual(parseDiceRecords(host.nativeSaves.at(-1)[0].extra.xiaobaiOsDice), records);
+    assert.equal(host.requests.length, 2);
+    assert.deepEqual(JSON.parse(host.requests.at(-1).prompt.split('\n').at(-1)), projectActionCheckResults(records.checks));
+    assert.equal(adapter.isBusy(), false);
+});
+
+test('retrying a retained CoC chain does not read the current player sheet again', async t => {
+    const adapter = setup(t);
+    host.rule = 'coc7';
+    host.source.chat = [message(cocCall)];
+    host.reply = async () => { throw new Error('provider unavailable'); };
+    await begin(); await host.intercept('normal'); await received(); await settled(adapter);
+    const reads = host.sheetReads;
+    const records = structuredClone(host.source.chat[0].extra.xiaobaiOsDice);
+    host.sheet = null;
+    host.reply = async () => { host.source.chat[0].mes += '\nFinished.'; await host.emit('MESSAGE_RECEIVED', 0, 'appendFinal'); };
+    await adapter.retry(0);
+    assert.equal(host.sheetReads, reads);
+    assert.deepEqual(host.source.chat[0].extra.xiaobaiOsDice, records);
+});
+
+test('native stream UI ending before MESSAGE_RECEIVED still resolves CoC; failures without a message release the selector', async t => {
+    const adapter = setup(t);
+    host.rule = 'coc7';
+    host.source.chat = [message(cocCall)];
+    await begin(); host.lock(); await host.intercept('normal');
+    assert.equal(adapter.isBusy(), true);
+    assert.equal(host.busyViews.at(-1), true, 'the settings page receives native generation occupancy');
+    host.unlock(); // ST 1.18 finalizeIntermediaryMessage unlocks before emitting the reply.
+    await received(); await settled(adapter);
+    assert.equal(host.source.chat[0].extra.xiaobaiOsDice.checks[0].rule, 'coc7');
+    assert.equal(adapter.isBusy(), false);
+    await begin(); host.lock(); await host.intercept('normal');
+    host.unlock(); // A provider error without MESSAGE_RECEIVED must not leave a persistent UI lock.
+    assert.equal(adapter.isBusy(), false);
+});
+
+test('the reply snapshot survives edits and rule changes; next replies capture the new configuration', async t => {
+    const adapter = setup(t);
+    host.rule = 'coc7';
+    Object.assign(host.sheet.attributes, { body: 40, mind: 50, will: 60, appearance: 50 });
+    host.source.chat = [message(cocCall)];
+    await begin(); await host.intercept('normal');
+    Object.assign(host.sheet.attributes, { body: 80, mind: 50, will: 20, appearance: 50 });
+    host.rule = 'd20';
+    let continuations = 0;
+    host.reply = async () => {
+        host.source.chat[0].mes += ++continuations === 1 ? '\n\n' + cocCall : '\nFinished.';
+        await host.emit('MESSAGE_RECEIVED', 0, 'appendFinal');
+    };
+    await received(); await settled(adapter);
+    const records = host.source.chat[0].extra.xiaobaiOsDice.checks;
+    assert.deepEqual(records.map(record => [record.rule, record.result.value]), [['coc7',40],['coc7',40]]);
+    host.rule = 'coc7';
+    host.source.chat = [message(cocCall)];
+    await begin(); await host.intercept('normal');
+    await received(); await settled(adapter);
+    assert.equal(host.source.chat[0].extra.xiaobaiOsDice.checks[0].result.value, 80);
+});
+
+test('uninitialized CoC has no request prompt and cannot roll, but saved results can still resume', async t => {
+    const adapter = setup(t);
+    host.rule = 'coc7'; host.sheet = null;
+    host.source.chat = [message('Ordinary conversation.')];
+    await begin(); await host.intercept('normal');
+    assert.equal(host.prompts.get('xiaobai_os_dice'), '');
+    await received(); await settled(adapter);
+    assert.equal(host.source.chat[0].extra.xiaobaiOsDice, undefined);
+    const retained = prepareActionCheck({ body: cocCall, rule: 'coc7', coc7Sheet: generateCoc7Sheet(() => 0.5), generatedFrom: 0, id: 'retained' });
+    host.source.chat = [{ ...message(retained.body), extra: { xiaobaiOsDice: retained.records } }];
+    t.mock.method(Math, 'random', () => assert.fail('history retry must not roll'));
+    await adapter.retry(0);
+    assert.deepEqual(host.source.chat[0].extra.xiaobaiOsDice, retained.records);
+    assert.equal(adapter.view(), null);
+});
+
+test('a damaged stored sheet does not abort ordinary chat or enable CoC rolls', async t => {
+    const adapter = setup(t);
+    host.rule = 'coc7';
+    host.sheet = { ...host.sheet, luck: '50' };
+    const raw = structuredClone(host.sheet);
+    t.mock.method(Math, 'random', () => assert.fail('a damaged sheet must not roll'));
+    host.source.chat = [message('Ordinary conversation.')];
+    await begin();
+    assert.equal(await host.intercept('normal'), false);
+    assert.equal(host.prompts.get('xiaobai_os_dice'), '');
+    await received(); await settled(adapter);
+    assert.equal(host.source.chat[0].extra.xiaobaiOsDice, undefined);
+    host.source.chat = [message(cocCall)];
+    await begin(); await host.intercept('normal'); await received(); await settled(adapter);
+    assert.equal(adapter.view().phase.kind, 'invalid');
+    assert.equal(host.source.chat[0].extra.xiaobaiOsDice, undefined);
+    assert.deepEqual(host.sheet, raw);
 });
 
 test('final requests hide Dice markers without changing source messages, non-text parts or result data', async t => {
@@ -228,7 +427,6 @@ test('historical Dice markers filter for text requests and previews even with ch
         assert.equal(data.max_length, 80);
         assert.equal(host.prompts.get('xiaobai_os_dice'), dryRun ? 'Pending result data' : '');
     }
-    assert.equal(host.writes, 0);
     assert.equal(host.requests.length, 0);
 });
 
@@ -240,7 +438,6 @@ test('NovelAI input hides Dice markers without requiring or adding a prompt fiel
         await host.emit('GENERATE_AFTER_DATA', data, dryRun);
         assert.deepEqual(data, { input: 'Before\nAfter [ordinary]', model: 'kayra-v1', use_string: true });
     }
-    assert.equal(host.writes, 0);
 });
 
 test('CFG requests hide Dice markers in both positive and negative context', async t => {
@@ -253,7 +450,6 @@ test('CFG requests hide Dice markers in both positive and negative context', asy
     assert.deepEqual(data, { prompt: 'History\nContinuation', negative_prompt: 'History\nContinuation\nAvoid repetition',
         guidance_scale: 1.5, stopping_strings: ['[dice:keep]'] });
     assert.equal(host.source.chat.at(-1).mes, source);
-    assert.equal(host.writes, 0);
 });
 
 test('Dice request filtering detaches on stop and reattaches on restart', async t => {
@@ -274,7 +470,7 @@ test('ordinary prose, examples and invalid requests never acquire post-processin
     const block = call.slice(call.indexOf('<xb_action_check>'));
     const bodies = ['Plain reply.', '```json\n' + block + '\n```', '~~~\n' + block + '\n~~~',
         '`' + block + '`', '> ' + block, '> Example:\n' + block, '    ' + block,
-        block.slice(0, -4), block.replace('hard', 'unknown'), block + '\nAfterward.', block + '\n' + block];
+        block.slice(0, -4), block.replace('hard', 'unknown'), '<xb_action_check>{bad}</xb_action_check>\n</fictional_scenarios>', block + '\n' + block];
     for (const body of bodies) {
         await begin(); await host.intercept('normal');
         host.lock();
@@ -284,7 +480,6 @@ test('ordinary prose, examples and invalid requests never acquire post-processin
         host.unlock(); await setImmediate();
         assert.equal(host.stopVisible, false, body);
         assert.equal(host.busy, false, body);
-        assert.equal(host.writes, 0, body);
         assert.equal(host.requests.length, 0, body);
     }
     host.source.chat.push(message(call));
@@ -293,34 +488,35 @@ test('ordinary prose, examples and invalid requests never acquire post-processin
     await received();
     assert.equal(adapter.view(), null, 'an old request is not a newly generated check');
     assert.equal(host.busy, false);
-    assert.equal(host.writes, 0);
 });
 
-test('valid checks stay visibly busy from native finalization through saving, reveal and continuation', async t => {
-    const saving = Promise.withResolvers();
+test('one check uses only native pre-check and post-continuation saves while busy ownership spans reveal', async t => {
     const revealing = Promise.withResolvers();
     const continuing = Promise.withResolvers();
     const adapter = setup(t, false, () => revealing.promise);
     t.mock.timers.enable({ apis: ['setTimeout'] });
     await begin(); await host.intercept('normal');
-    host.lock(); host.source.chat.push(message(call));
-    host.save = () => saving.promise;
+    host.lock();
+    const target = { ...message(call), swipe_id: 0, swipes: [call], swipe_info: [{ extra: { foreign: true } }] };
+    host.source.chat.push(target);
     const reply = host.reply;
     host.reply = async () => { await continuing.promise; await reply(); };
     await received(); await received();
     assert.equal(adapter.view().phase.kind, 'settling');
-    assert.equal(host.writes, 0, 'native finalization must release the message first');
+    assert.equal(target.extra.xiaobaiOsDice, undefined, 'native generation occupancy must be released before rolling');
+    await host.saveNative();
     host.unlock(); await setImmediate();
     assert.equal(host.busy, true);
     assert.equal(host.stopVisible, true);
     assert.equal(host.dataGenerating, true, 'native cleanup must not erase the processing indicator');
     t.mock.timers.tick(40); await setImmediate();
-    assert.equal(adapter.view().phase.kind, 'saving');
-    assert.equal(host.writes, 1);
+    assert.equal(adapter.view().phase.kind, 'revealing');
+    assert.equal(host.nativeSaves.length, 1);
+    assert.equal(host.nativeSaves[0].at(-1).mes, call);
+    assert.equal(host.nativeSaves[0].at(-1).extra.xiaobaiOsDice, undefined);
+    assert.equal(target.extra.xiaobaiOsDice.checks.length, 1);
     assert.equal(host.busy, true);
     assert.equal(host.requests.length, 0);
-    saving.resolve({ status: 'confirmed' }); await setImmediate();
-    assert.equal(adapter.view().phase.kind, 'revealing');
     assert.equal(host.stopVisible, true);
     revealing.resolve(); await setImmediate();
     assert.equal(adapter.view().phase.kind, 'continuing');
@@ -330,13 +526,22 @@ test('valid checks stay visibly busy from native finalization through saving, re
     assert.equal(host.busy, false);
     assert.equal(host.stopVisible, false);
     assert.equal(host.dataGenerating, false);
-    assert.equal(host.writes, 1, 'duplicate completion events cannot roll twice');
+    assert.equal(target.extra.xiaobaiOsDice.checks.length, 1, 'duplicate completion events cannot roll twice');
+    assert.equal(host.nativeSaves.length, 2, 'there is no intermediate Dice save');
+    const reloaded = JSON.parse(JSON.stringify(host.nativeSaves.at(-1))).at(-1);
+    assert.equal(reloaded.mes, target.mes);
+    assert.deepEqual(reloaded.extra.xiaobaiOsDice, target.extra.xiaobaiOsDice);
+    assert.deepEqual(reloaded.swipe_info[0].extra.xiaobaiOsDice, target.extra.xiaobaiOsDice);
+    assert.equal(reloaded.swipe_info[0].extra.foreign, true);
+    // A normal next floor uses the finished prose, not the preceding floor's roll injection.
+    await begin('normal'); await host.intercept('normal');
+    assert.equal(host.prompts.get('xiaobai_os_dice'), buildActionCheckPrompt(target.mes));
 });
 
 for (const replacement of [false, true]) {
-    test(`${replacement ? 'a replacement generation' : 'Stop'} cancels delayed saving without late continuation or control theft`, async t => {
-        const saving = Promise.withResolvers();
-        const adapter = setup(t);
+    test(`${replacement ? 'a replacement generation' : 'Stop'} cancels delayed reveal without late continuation or control theft`, async t => {
+        const revealing = Promise.withResolvers();
+        const adapter = setup(t, false, () => revealing.promise);
         await adapter.stop();
         const otherListener = Promise.withResolvers();
         const event = replacement ? 'GENERATION_STARTED' : 'GENERATION_STOPPED';
@@ -344,9 +549,8 @@ for (const replacement of [false, true]) {
         t.after(host.listen(event, () => blocked ? otherListener.promise : undefined));
         adapter.start();
         await begin(); await host.intercept('normal');
-        host.save = () => saving.promise;
         host.source.chat.push(message(call)); await received(); await setImmediate();
-        assert.equal(adapter.view().phase.kind, 'saving');
+        assert.equal(adapter.view().phase.kind, 'revealing');
         assert.equal(host.stopVisible, true);
         blocked = true;
         let starting;
@@ -357,7 +561,7 @@ for (const replacement of [false, true]) {
         assert.equal(adapter.view(), null, 'cancellation must precede unrelated slow native listeners');
         assert.equal(host.busy, replacement);
         assert.equal(host.stopVisible, replacement);
-        saving.resolve({ status: 'confirmed' }); await adapter.settled(); await setImmediate();
+        revealing.resolve(); await setImmediate();
         assert.equal(host.requests.length, 0);
         assert.equal(host.busy, replacement);
         assert.equal(host.stopVisible, replacement);
@@ -434,28 +638,124 @@ test('Stop during replacement handoff prevents the incoming native call from dis
     assert.equal(adapter.view(), null);
 });
 
-test('same-roll retry after Stop waits for the cancelled native continuation to finish', async t => {
+// Explicit same-roll recovery must not wait for a cancelled native call's I/O.
+// Exercise the real adapter with delayed requests/saves and out-of-order completion.
+for (const rule of ['d20', 'coc7']) {
+    for (const pending of ['request', 'save']) {
+        test(`${rule} retry after Stop dispatches before the old ${pending} finishes and retains ownership`, async t => {
+            let reveals = 0;
+            const adapter = setup(t, false, async () => { reveals++; });
+            host.rule = rule;
+            const cleanup = Promise.withResolvers();
+            const retryReply = Promise.withResolvers();
+            t.after(() => { cleanup.resolve(); retryReply.resolve(); });
+            const nativeSave = host.saveNative;
+            let saves = 0;
+            t.mock.method(host, 'saveNative', async () => {
+                if (++saves === 1 && pending === 'save') { await cleanup.promise; }
+                await nativeSave();
+            });
+            host.reply = async signal => {
+                if (host.requests.length === 1) {
+                    if (pending === 'request') { await cleanup.promise; signal.throwIfAborted(); }
+                    host.unlock();
+                    await host.emit('MESSAGE_RECEIVED', 1, 'continue');
+                } else {
+                    await retryReply.promise;
+                    signal.throwIfAborted();
+                    host.source.chat.at(-1).mes += '\n\nAfterward.';
+                    await host.emit('MESSAGE_RECEIVED', 1, 'continue');
+                }
+            };
+            await begin(); await host.intercept('normal');
+            const target = message(rule === 'd20' ? call : cocCall); host.source.chat.push(target);
+            await received(); await setImmediate();
+            assert.equal(host.requests.length, 1);
+            const saved = structuredClone(target.extra.xiaobaiOsDice);
+            host.stop(); await setImmediate();
+            assert.equal(host.requests[0].signal.aborted, true);
+            const retry = adapter.retry(1); await setImmediate();
+            assert.equal(host.requests.length, 2, 'retry dispatch must precede old I/O completion');
+            await assert.rejects(adapter.retry(1));
+            assert.equal(host.ids, 1);
+            assert.equal(reveals, 1);
+            cleanup.resolve(); await setImmediate();
+            assert.equal(host.requests[1].signal.aborted, false);
+            assert.equal(adapter.view().phase.kind, 'continuing');
+            assert.equal(host.busy, true);
+            assert.equal(host.stopVisible, true);
+            retryReply.resolve(); await retry;
+            assert.equal(host.requests.length, 2);
+            assert.deepEqual(target.extra.xiaobaiOsDice, saved);
+            assert.equal(adapter.view(), null);
+            assert.equal(host.busy, false);
+        });
+    }
+}
+
+for (const failed of [false, true]) {
+    test(`cancelled preparation ${failed ? 'failure' : 'completion'} cannot clear the retry prompt`, async t => {
+        const adapter = setup(t);
+        await begin(); await host.intercept('normal');
+        const preparing = Promise.withResolvers();
+        const assembly = Promise.withResolvers();
+        t.after(() => { preparing.resolve(); assembly.resolve(); });
+        let preparations = 0;
+        host.preflight = async () => { if (++preparations === 1) { await preparing.promise; } };
+        // Native prompt assembly continues asynchronously after extension interceptors.
+        const intercept = host.intercept;
+        t.mock.method(host, 'intercept', async type => {
+            const aborted = await intercept(type);
+            if (!aborted) { await assembly.promise; }
+            return aborted;
+        });
+        const target = message(call); host.source.chat.push(target);
+        await received(); await setImmediate();
+        const saved = structuredClone(target.extra.xiaobaiOsDice);
+        host.stop(); await setImmediate();
+        const retry = adapter.retry(1); await setImmediate();
+        const retryPrompt = host.prompts.get('xiaobai_os_dice');
+        assert.ok(retryPrompt);
+        if (failed) { preparing.reject(new Error('preparation_failed')); }
+        else { preparing.resolve(); }
+        await setImmediate();
+        assert.equal(host.prompts.get('xiaobai_os_dice'), retryPrompt);
+        assert.equal(host.busy, true);
+        assembly.resolve(); await retry;
+        assert.equal(host.requests.length, 1, 'only the retry reaches the provider');
+        assert.equal(host.requests[0].prompt, retryPrompt);
+        assert.equal(host.ids, 1);
+        assert.deepEqual(target.extra.xiaobaiOsDice, saved);
+        assert.equal(adapter.view(), null);
+    });
+}
+
+test('a stopped call finishing after its successful retry cannot revive the old Dice run', async t => {
     const adapter = setup(t);
     const cleanup = Promise.withResolvers();
     t.after(() => cleanup.resolve());
+    const nativeSave = host.saveNative;
+    let saves = 0;
+    t.mock.method(host, 'saveNative', async () => {
+        if (++saves === 1) { await cleanup.promise; }
+        await nativeSave();
+    });
     const normalReply = host.reply;
-    host.reply = async signal => {
-        if (host.requests.length === 1) { await cleanup.promise; signal.throwIfAborted(); }
-        else await normalReply();
-    };
+    host.reply = async () => { if (host.requests.length > 1) { await normalReply(); } };
     await begin(); await host.intercept('normal');
     const target = message(call); host.source.chat.push(target);
     await received(); await setImmediate();
-    const saved = structuredClone(target.extra.xiaobaiOsDice);
     host.stop(); await setImmediate();
     const retry = adapter.retry(1); await setImmediate();
-    assert.equal(host.requests.length, 1);
-    cleanup.resolve(); await retry;
     assert.equal(host.requests.length, 2);
-    assert.equal(host.writes, 1);
-    assert.deepEqual(target.extra.xiaobaiOsDice, saved);
+    await retry;
+    const completed = structuredClone(target);
+    assert.equal(adapter.view(), null);
+    cleanup.resolve(); await setImmediate();
+    assert.deepEqual(target, completed);
     assert.equal(adapter.view(), null);
     assert.equal(host.busy, false);
+    assert.equal(host.ids, 1);
 });
 
 test('native auto-swipe can re-enter Generate from the completed continuation without waiting on itself', { timeout: 2000 }, async t => {
@@ -475,38 +775,69 @@ test('native auto-swipe can re-enter Generate from the completed continuation wi
     host.source.chat.push(message(call)); await received();
     await completed.promise; await setImmediate();
     assert.equal(host.requests.length, 2);
-    assert.equal(host.writes, 1);
     assert.equal(host.source.chat.at(-1).extra.xiaobaiOsDice, undefined);
     assert.equal(adapter.view(), null);
     assert.equal(host.busy, false);
     assert.equal(host.stopVisible, false);
 });
 
-for (const failure of ['save', 'continue']) {
-    test(`Stop cancels a ${failure} retry waiting for native saving without another save or continuation`, async t => {
-        const adapter = setup(t);
-        t.mock.timers.enable({ apis: ['setTimeout'] });
-        await begin(); await host.intercept('normal');
-        host.source.chat.push(message(call));
-        if (failure === 'save') host.save = async () => ({ status: 'failed', error: 'not saved' });
-        else host.reply = async () => { throw new Error('provider unavailable'); };
-        await received(); await settled(adapter);
-        assert.equal(adapter.view().phase.kind, `${failure}-error`);
-        const writes = host.writes, requests = host.requests.length;
-        host.saving(true);
-        const retry = adapter.retry(1);
-        await setImmediate();
-        assert.equal(host.busy, true);
-        assert.equal(host.stopVisible, true);
-        host.stop(); await setImmediate();
-        assert.equal(adapter.view(), null);
-        assert.equal(host.busy, false);
-        assert.equal(host.stopVisible, false);
-        host.saving(false); t.mock.timers.tick(40); await retry;
-        assert.equal(host.writes, writes);
-        assert.equal(host.requests.length, requests);
-    });
-}
+test('continuation progress follows native preparation and response events without inventing a save wait', async t => {
+    const adapter = setup(t);
+    const prepared = prepareActionCheck({ body: call, generatedFrom: 0, id: 'progress', random: () => .3 });
+    host.source.chat = [message(prepared.body)];
+    host.source.chat[0].extra.xiaobaiOsDice = prepared.records;
+    const preparing = Promise.withResolvers(), requesting = Promise.withResolvers(), reply = Promise.withResolvers();
+    const normalReply = host.reply;
+    let now = 1000;
+    t.mock.method(Date, 'now', () => now);
+    host.preflight = () => preparing.promise;
+    host.reply = async () => { requesting.resolve(); await reply.promise; await normalReply(); };
+    const operation = adapter.retry(0);
+    await setImmediate();
+    assert.deepEqual(adapter.view().continuation, { stage: 'preparing', elapsedSeconds: 0 });
+    now += 3500;
+    assert.deepEqual(adapter.view().continuation, { stage: 'preparing', elapsedSeconds: 3 });
+    await host.emit('GENERATE_AFTER_DATA', {}, true);
+    assert.equal(adapter.view().continuation.stage, 'preparing', 'dry runs cannot advance the live request');
+    preparing.resolve(); await requesting.promise;
+    assert.deepEqual(adapter.view().continuation, { stage: 'requesting', elapsedSeconds: 0 });
+    now += 7000;
+    assert.equal(adapter.view().continuation.elapsedSeconds, 7);
+    await host.emit('STREAM_TOKEN_RECEIVED', '');
+    assert.deepEqual(adapter.view().continuation, { stage: 'responding', elapsedSeconds: 0 });
+    assert.equal(host.source.chat[0].mes, prepared.body, 'response chunks need not contain visible prose yet');
+    now += 2000;
+    await host.emit('STREAM_TOKEN_RECEIVED', '');
+    assert.equal(adapter.view().continuation.elapsedSeconds, 2, 'more chunks do not reset stage time');
+    reply.resolve(); await operation;
+    assert.equal(adapter.view(), null);
+    assert.equal(host.requests.length, 1);
+    assert.deepEqual(host.source.chat[0].extra.xiaobaiOsDice, prepared.records);
+});
+
+test('Stop cancels a continuation retry during native preparation without another request', async t => {
+    const adapter = setup(t);
+    await begin(); await host.intercept('normal');
+    host.source.chat.push(message(call));
+    host.reply = async () => { throw new Error('provider unavailable'); };
+    await received(); await settled(adapter);
+    assert.equal(adapter.view().phase.kind, 'continue-error');
+    const requests = host.requests.length;
+    const preparing = Promise.withResolvers();
+    host.preflight = () => preparing.promise;
+    host.stream = { isStopped: false };
+    const retry = adapter.retry(1);
+    await setImmediate();
+    assert.equal(adapter.view().continuation.stage, 'preparing');
+    assert.equal(host.busy, true);
+    assert.equal(host.stopVisible, true);
+    host.stop(); await setImmediate();
+    assert.equal(adapter.view(), null);
+    assert.equal(host.busy, false);
+    assert.equal(host.stopVisible, false);
+    preparing.resolve(); await retry;
+    assert.equal(host.requests.length, requests);
+});
 
 test('successive checks in one reply retain busy ownership across native continuation unlocks', async t => {
     const adapter = setup(t);
@@ -519,7 +850,6 @@ test('successive checks in one reply retain busy ownership across native continu
         host.reply = finalReply;
     };
     await received(); await settled(adapter);
-    assert.equal(host.writes, 2);
     assert.equal(host.requests.length, 2);
     assert.ok(host.requests.every(request => request.busy));
     assert.equal(host.source.chat.at(-1).extra.xiaobaiOsDice.checks.length, 2);
@@ -562,7 +892,6 @@ test('native regenerate deletion preserves the new generation, but a later user 
     host.source.chat.push(message(call));
     await received();
     await settled(adapter);
-    assert.equal(host.writes, 1);
     assert.equal(host.requests.length, 1);
     assert.equal(host.source.chat[0].extra.xiaobaiOsDice.checks.length, 1);
 
@@ -574,7 +903,6 @@ test('native regenerate deletion preserves the new generation, but a later user 
     await host.emit('MESSAGE_DELETED', 0);
     await received();
     await settled(adapter);
-    assert.equal(host.writes, 1, 'a later deletion must not revive the canceled observation');
     assert.equal(host.requests.length, 1);
 });
 
@@ -602,6 +930,50 @@ test('reveal owns native busy/Stop controls and late completion cannot unlock a 
     assert.equal(host.source.chat.at(-1).extra.xiaobaiOsDice.checks.length, 1);
 });
 
+for (const change of ['edit', 'chat', 'swipe']) {
+    test(`${change} during reveal keeps the local result but prevents late continuation`, async t => {
+        const revealing = Promise.withResolvers();
+        let signal;
+        const adapter = setup(t, false, async (_target, _candidate, currentSignal) => { signal = currentSignal; await revealing.promise; });
+        await begin(); await host.intercept('normal');
+        const target = message(call); host.source.chat.push(target);
+        await received(); await setImmediate();
+        const records = structuredClone(target.extra.xiaobaiOsDice);
+        if (change === 'edit') { target.mes = 'User edit. [dice:generated-0]'; await host.emit('MESSAGE_EDITED', 1); }
+        if (change === 'chat') { host.source = { ...host.source, key: 'other', chat: [message('Other chat')] }; await host.emit('CHAT_CHANGED'); }
+        if (change === 'swipe') { target.swipe_id = 1; target.mes = 'Other swipe'; await host.emit('MESSAGE_SWIPED', 1); }
+        const body = target.mes;
+        assert.equal(signal.aborted, true);
+        revealing.resolve(); await setImmediate();
+        assert.equal(adapter.view(), null);
+        assert.equal(host.requests.length, 0);
+        assert.equal(target.mes, body);
+        assert.deepEqual(target.extra.xiaobaiOsDice, records);
+    });
+}
+
+test('shutdown does not roll back the local result, while reload only sees the last native save', async t => {
+    const revealing = Promise.withResolvers();
+    const adapter = setup(t, false, () => revealing.promise);
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    await begin(); await host.intercept('normal');
+    host.lock(); const target = message(call); host.source.chat.push(target);
+    await received(); await host.saveNative(); host.unlock();
+    t.mock.timers.tick(40); await setImmediate();
+    assert.equal(adapter.view().phase.kind, 'revealing');
+    const records = structuredClone(target.extra.xiaobaiOsDice);
+    adapter.stop();
+    assert.equal(adapter.view(), null);
+    assert.deepEqual(target.extra.xiaobaiOsDice, records, 'stopping leaves the result in the current message');
+    host.source.chat = structuredClone(host.nativeSaves[0]);
+    assert.equal(host.source.chat.at(-1).mes, call);
+    assert.equal(host.source.chat.at(-1).extra.xiaobaiOsDice, undefined, 'an unsaved result is not restored from a separate cache');
+    adapter.start(); revealing.resolve(); await setImmediate();
+    assert.equal(host.requests.length, 0, 'reload never re-executes a historical request');
+    assert.equal(host.nativeSaves.length, 1);
+    assert.equal(adapter.view(), null);
+});
+
 test('disabled checks still isolate a new swipe and preserve the old candidate and unrelated fields', async t => {
     setup(t);
     const original = prepareActionCheck({ body: call, generatedFrom: 0, id: 'old', random: () => .4 });
@@ -617,7 +989,6 @@ test('disabled checks still isolate a new swipe and preserve the old candidate a
     assert.equal(target.swipe_info[1].extra.xiaobaiOsDice, undefined);
     assert.deepEqual(target.swipe_info[0].extra.xiaobaiOsDice, original.records);
     assert.equal(target.extra.other, 'retained');
-    assert.equal(host.writes, 0);
     assert.equal(host.requests.length, 0);
 });
 
@@ -630,43 +1001,85 @@ test('a target changed during continuation preparation is rejected before any pr
     host.preflight = async () => { host.source.chat.push({ mes: 'New user message', is_user: true, extra: {} }); };
     await received();
     await settled(adapter);
-    assert.equal(host.writes, 1, 'the original roll is already confirmed');
     assert.equal(target.extra.xiaobaiOsDice.checks.length, 1);
     assert.equal(host.requests.length, 0);
     assert.equal(host.source.chat.at(-1).mes, 'New user message');
     assert.equal(host.busy, false);
 });
 
-test('readiness waits through stream finalization, saving and generation but releases an abandoned stopped stream', async t => {
+test('readiness follows native generation occupancy without waiting for or clearing the stream', async t => {
     setup(t);
     t.mock.timers.enable({ apis: ['setTimeout'] });
     const target = captureDiceTarget(captureDiceChat(), 0, 0);
-    host.stream = { isStopped: false, isFinished: true };
+    host.saving(true);
+    const stream = { isStopped: false, isFinished: true };
+    host.stream = stream; host.busy = true;
     let ready = false;
     const operation = waitForDiceHost(target, new AbortController().signal, false).then(() => { ready = true; });
     await setImmediate();
-    assert.equal(ready, false, 'finished tokens do not mean finalization has released the message');
-    const stopped = { isStopped: true, isFinished: false };
-    host.stream = stopped; host.saving(true);
-    t.mock.timers.tick(40); await setImmediate();
-    assert.equal(ready, false, 'a stopped stream cannot bypass an active save');
-    host.saving(false); host.busy = true;
-    t.mock.timers.tick(40); await setImmediate();
-    assert.equal(ready, false, 'a stopped stream cannot bypass another generation');
+    assert.equal(ready, false, 'native generation occupancy still blocks admission');
     host.group(true); host.busy = false;
     t.mock.timers.tick(40); await setImmediate();
     assert.equal(ready, false, 'the group wrapper remains busy between member generations');
     host.group(false);
     t.mock.timers.tick(40); await operation;
     assert.equal(ready, true);
-    assert.equal(host.stream, stopped, 'Dice must not clear native processor state');
+    assert.equal(host.stream, stream, 'Dice must not clear native processor state');
 
-    host.stream = { isStopped: false };
+    host.busy = true;
     const controller = new AbortController();
     const cancelled = waitForDiceHost(target, controller.signal, false);
     controller.abort();
     await assert.rejects(cancelled);
 });
+
+// Native continuation admission does not require save-idle or processor cleanup.
+// Both rules must dispatch with that internal work pending; native code owns cleanup.
+for (const rule of ['d20', 'coc7']) {
+    for (const entry of ['automatic', 'reloaded-request', 'reloaded-result']) {
+        test(`${rule} ${entry} continues while native saving and stream cleanup remain pending`, async t => {
+            const adapter = setup(t);
+            host.rule = rule;
+            const body = rule === 'd20' ? call : cocCall;
+            const target = message(body);
+            let saved;
+            if (entry === 'reloaded-result') {
+                const candidate = prepareActionCheck({ body, records: undefined, generatedFrom: 0,
+                    rule, coc7Sheet: host.sheet, id: 'persisted-check', random: () => 0.5 });
+                assert.equal(candidate.kind, 'candidate');
+                target.mes = candidate.body;
+                target.extra.xiaobaiOsDice = candidate.records;
+                saved = structuredClone(candidate.records);
+            }
+            if (entry === 'automatic') { await begin(); await host.intercept('normal'); }
+            host.source.chat.push(JSON.parse(JSON.stringify(target)));
+            const savingAtDispatch = [];
+            const streamsAtDispatch = [];
+            const normalReply = host.reply;
+            host.reply = async () => {
+                savingAtDispatch.push(host.savingActive);
+                streamsAtDispatch.push(host.stream);
+                await normalReply();
+            };
+            const stream = { isStopped: false, isFinished: true };
+            host.stream = stream;
+            host.saving(true);
+            const operation = entry === 'automatic' ? received() : adapter.retry(1);
+            await setImmediate();
+            assert.deepEqual(savingAtDispatch, [true], 'native continuation starts without waiting for the save flag');
+            assert.deepEqual(streamsAtDispatch, [stream], 'Dice leaves the previous processor to the host');
+            await operation;
+            await settled(adapter);
+            assert.equal(host.requests.length, 1);
+            const records = host.source.chat.at(-1).extra.xiaobaiOsDice;
+            assert.equal(records.checks.length, 1);
+            assert.equal(host.ids, saved ? 0 : 1);
+            if (saved) { assert.deepEqual(records, saved); }
+            assert.equal(adapter.view(), null);
+            assert.equal(host.busy, false);
+        });
+    }
+}
 
 test('a failed incoming stream never rolls, and its residual processor cannot reject the next non-streaming reply', async t => {
     const adapter = setup(t);
@@ -677,7 +1090,6 @@ test('a failed incoming stream never rolls, and its residual processor cannot re
     host.stream = { isStopped: true, isFinished: false };
     await received();
     await settled(adapter);
-    assert.equal(host.writes, 0);
     assert.equal(host.requests.length, 0);
     assert.equal(failedReply.extra.xiaobaiOsDice, undefined);
 
@@ -688,9 +1100,102 @@ test('a failed incoming stream never rolls, and its residual processor cannot re
     host.source.chat.push(message(call));
     await received();
     await settled(adapter);
-    assert.equal(host.writes, 1);
     assert.equal(host.requests.length, 1);
     assert.equal(host.source.chat.at(-1).extra.xiaobaiOsDice.checks.length, 1);
+});
+
+// Host waiting is a recoverable condition, not an invalid model request. These
+// exercise the real readiness timer and adapter rather than a session-only stub.
+test('native generation occupancy reports elapsed time, then pauses without rolling and retries once', async t => {
+    const adapter = setup(t);
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+    await begin(); await host.intercept('normal');
+    const target = message(call); host.source.chat.push(target);
+    host.lock();
+    host.stream = { isStopped: false }; host.saving(true);
+    await received();
+    assert.deepEqual(adapter.view().wait, { blockers: ['generation'], elapsedSeconds: 0 });
+    t.mock.timers.tick(1000); await setImmediate();
+    assert.deepEqual(adapter.view().wait, { blockers: ['generation'], elapsedSeconds: 1 });
+    t.mock.timers.tick(9000); await setImmediate();
+    assert.equal(adapter.view().phase.kind, 'wait-error');
+    assert.equal(adapter.view().wait.elapsedSeconds, 10);
+    assert.equal(host.busy, true, 'pausing does not release the native generation');
+    assert.equal(target.mes, call);
+    assert.equal(target.extra.xiaobaiOsDice, undefined);
+    assert.equal(host.ids, 0);
+    assert.equal(host.requests.length, 0);
+
+    host.unlock();
+    const first = adapter.retry(1);
+    await assert.rejects(adapter.retry(1)); // Native busy state also guards repeated UI clicks.
+    assert.equal(adapter.view().wait, null);
+    await first;
+    assert.equal(target.extra.xiaobaiOsDice.checks.length, 1);
+    assert.equal(host.requests.length, 1);
+    assert.equal(host.ids, 1);
+    assert.equal(adapter.view(), null);
+});
+
+test('reload offers explicit recovery of only the latest unrolled request and never rolls by displaying it', async t => {
+    const adapter = setup(t);
+    host.source.chat = [message(call), message(call)];
+    assert.equal(adapter.canRetryRequest(0), false);
+    assert.equal(adapter.canRetryRequest(1), true);
+    assert.equal(host.ids, 0);
+    assert.equal(host.requests.length, 0);
+    host.busy = true;
+    assert.equal(adapter.canRetryRequest(1), false);
+    host.busy = false;
+    await adapter.retry(1);
+    assert.equal(host.source.chat[0].mes, call);
+    assert.equal(host.source.chat[1].extra.xiaobaiOsDice.checks.length, 1);
+    assert.equal(host.requests.length, 1);
+    assert.equal(adapter.canRetryRequest(1), false);
+});
+
+test('pausing Dice releases only its own controls while a native generation is still pending', async t => {
+    const adapter = setup(t);
+    t.mock.timers.enable({ apis: ['setTimeout', 'Date'], now: 1000 });
+    await begin(); await host.intercept('normal');
+    host.source.chat.push(message(call));
+    host.lock();
+    await received();
+    assert.deepEqual(adapter.view().wait.blockers, ['generation']);
+    t.mock.timers.tick(10000); await setImmediate();
+    assert.equal(adapter.view().phase.kind, 'wait-error');
+    assert.equal(host.busy, true, 'native generation still owns the send controls');
+    assert.equal(host.ids, 0);
+    host.unlock();
+    await adapter.retry(1);
+    assert.equal(host.requests.length, 1);
+    assert.equal(host.busy, false);
+});
+
+test('retrying a saved result ignores pending native cleanup and cannot start a duplicate continuation', async t => {
+    const adapter = setup(t);
+    await begin(); await host.intercept('normal');
+    const target = message(call); host.source.chat.push(target);
+    host.reply = async () => {};
+    await received(); await settled(adapter);
+    const saved = structuredClone(target.extra.xiaobaiOsDice);
+    const ids = host.ids;
+    const stream = { isStopped: false, isFinished: true };
+    host.stream = stream; host.saving(true);
+    const continuing = Promise.withResolvers();
+    host.reply = () => continuing.promise;
+    const retry = adapter.retry(1);
+    await setImmediate();
+    assert.equal(adapter.view().phase.kind, 'continuing');
+    assert.deepEqual(adapter.view().phase.candidate.records, saved);
+    await assert.rejects(adapter.retry(1));
+    assert.equal(adapter.view().wait, null);
+    assert.equal(host.ids, ids);
+    assert.equal(host.requests.length, 2);
+    assert.equal(host.stream, stream);
+    continuing.resolve(); await retry;
+    assert.equal(adapter.view().phase.kind, 'continue-error');
+    assert.deepEqual(target.extra.xiaobaiOsDice, saved);
 });
 
 for (const partial of [false, true]) {
@@ -709,7 +1214,6 @@ for (const partial of [false, true]) {
         await received();
         await settled(adapter);
         const saved = structuredClone(target.extra.xiaobaiOsDice);
-        assert.equal(host.writes, 1);
         assert.equal(host.requests.length, 1);
         assert.equal(saved.checks.length, 1);
         assert.equal(adapter.view().phase.error, '', 'native stream failures are not repeated in Dice feedback');
@@ -723,7 +1227,6 @@ for (const partial of [false, true]) {
             host.reply = normalReply;
             await adapter.retry(1);
             assert.equal(host.requests.length, 2);
-            assert.equal(host.writes, 1, 'retry does not save or roll again');
             assert.equal(target.mes, 'Attempt.\n\n[dice:generated-0]\n\nAfterward.');
             assert.equal(adapter.view(), null);
         }
@@ -744,7 +1247,6 @@ for (const group of [false, true]) {
         await received();
         if (group) await host.emit('GROUP_MEMBER_DRAFTED');
         await settled(adapter);
-        assert.equal(host.writes, 0);
         assert.equal(host.requests.length, 0, 'no Dice follow-up is dispatched');
         assert.equal(target.mes, call);
         assert.equal(adapter.view().phase.kind, 'invalid');
@@ -772,7 +1274,6 @@ test('host rejection keeps silent same-roll recovery while Dice preparation fail
     host.preflight = async () => {}; host.reply = normalReply;
     await adapter.retry(1);
     assert.equal(host.requests.length, 2);
-    assert.equal(host.writes, 1);
     assert.deepEqual(target.extra.xiaobaiOsDice, saved);
     assert.equal(adapter.view(), null);
 });
@@ -783,19 +1284,16 @@ test('an open native message editor blocks both new checks and same-roll continu
     const target = message(call); host.source.chat.push(target);
     host.editing = true;
     await received(); await settled(adapter);
-    assert.equal(host.writes, 0);
     assert.equal(host.requests.length, 0);
     assert.equal(target.mes, call);
 
     host.editing = false;
     await begin(); await host.intercept('normal');
     await received(); await settled(adapter);
-    assert.equal(host.writes, 1, 'the saved roll survives opening the editor during reveal');
     assert.equal(host.requests.length, 0, 'Dice cannot continue into a message editor');
     const saved = structuredClone(target.extra.xiaobaiOsDice);
     host.editing = false;
     await adapter.retry(1);
     assert.equal(host.requests.length, 1);
-    assert.equal(host.writes, 1);
     assert.deepEqual(target.extra.xiaobaiOsDice, saved);
 });

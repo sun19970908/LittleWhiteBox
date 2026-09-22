@@ -1,4 +1,4 @@
-import type { ScopedChatStore } from '../../../kernel/contracts.js';
+import type { PartitionStore } from '../../../kernel/contracts.js';
 import { jsonValuesEqual } from '../../../host/json-values-equal.js';
 import { createDefaultFourthWallChatState } from '../domain/defaults.js';
 import { parseFourthWallChatState } from '../domain/state.js';
@@ -37,7 +37,7 @@ function transactionError(result: {
 }
 
 export function createFourthWallRepository(
-    store: ScopedChatStore<FourthWallStoredPartition>,
+    store: PartitionStore<FourthWallStoredPartition>,
     {
         now = Date.now,
         upgradeSource,

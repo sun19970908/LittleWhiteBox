@@ -7,6 +7,8 @@ import WalletBalanceCard from './WalletBalanceCard.vue';
 import WalletNotice, { type WalletNoticeTone } from './WalletNotice.vue';
 import WalletTransactionList from './WalletTransactionList.vue';
 import WalletTransactionDetail from './WalletTransactionDetail.vue';
+import AppDialog from '../../../shell/app-src/components/AppDialog.vue';
+import { WALLET_COPY as copy } from '../copy.js';
 import './wallet-ui.css';
 import './wallet.css';
 
@@ -18,10 +20,11 @@ const loadingMore = ref(false);
 const errorMessage = ref('');
 const loadMoreError = ref('');
 const selectedTransaction = ref<WalletTransactionView | null>(null);
+const confirmingAdopt = ref(false);
 let unsubscribe = () => {};
 let requestGeneration = 0;
 
-const requiresConfirmation = computed(() => state.value.status === 'unconfirmed');
+const requiresConfirmation = computed(() => ['unconfirmed', 'conflict', 'blocked'].includes(state.value.status));
 const actionBusy = computed(() => refreshing.value || state.value.status === 'loading' || state.value.status === 'saving');
 const refreshDisabled = computed(() => actionBusy.value || requiresConfirmation.value || state.value.status === 'conflict');
 const noticeVisible = computed(() => Boolean(state.value.message || errorMessage.value));
@@ -34,19 +37,18 @@ const noticeTone = computed<WalletNoticeTone>(() => {
 
 const noticeTitle = computed(() => {
     if (state.value.status === 'conflict') {return '账本有变化';}
-    if (state.value.status === 'blocked') {return '钱包暂时无法读取';}
+    if (state.value.status === 'blocked') {return copy.blockedTitle;}
     return '保存情况';
 });
 
 function readableError(error: unknown): string {
     const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('聊天已切换')) {return '聊天已切换，请重新打开钱包。';}
     if (message === 'host_request_timeout') {return '暂时没收到结果，请稍后重新加载。';}
-    return '钱包数据暂时无法读取，请稍后重试。';
+    return copy.unavailable;
 }
 
-function binding(): { chatIdentity: string } {
-    return { chatIdentity: state.value.chatIdentity };
+function binding(): { activationId: string } {
+    return { activationId: state.value.activationId };
 }
 
 function applyState(next: WalletClientState): void {
@@ -74,16 +76,17 @@ async function refresh(): Promise<void> {
     }
 }
 
-async function confirmSave(): Promise<void> {
+async function confirmSave(adopt = false): Promise<void> {
     if (actionBusy.value) {return;}
     const generation = ++requestGeneration;
     refreshing.value = true;
     errorMessage.value = '';
     try {
-        const response = await props.bridge.request('wallet/confirm-save', binding(), REQUEST_TIMEOUT_MS) as {
+        const response = await props.bridge.request(adopt ? 'wallet/adopt-save' : 'wallet/confirm-save', binding(), REQUEST_TIMEOUT_MS) as {
             result: { state: WalletClientState };
         };
         if (generation === requestGeneration) {applyState(response.result.state);}
+        confirmingAdopt.value = false;
     } catch (error) {
         if (generation === requestGeneration) {errorMessage.value = readableError(error);}
     } finally {
@@ -146,10 +149,11 @@ onBeforeUnmount(() => {
                 :title="noticeTitle"
                 :message="errorMessage || state.message"
             >
-                <button v-if="requiresConfirmation" type="button" class="wallet-ui-text-button" :disabled="refreshing" @click="confirmSave">
-                    {{ refreshing ? '正在检查…' : '检查保存' }}
+                <button v-if="requiresConfirmation" type="button" class="wallet-ui-text-button" :disabled="refreshing" @click="confirmSave()">
+                    {{ refreshing ? copy.checking : copy.checkSave }}
                 </button>
-                <button v-else-if="state.status === 'blocked' || errorMessage" type="button" class="wallet-ui-text-button" :disabled="refreshDisabled" @click="refresh">
+                <button v-if="requiresConfirmation" type="button" class="wallet-ui-text-button" :disabled="refreshing" @click="confirmingAdopt = true">{{ copy.adopt }}</button>
+                <button v-else-if="errorMessage" type="button" class="wallet-ui-text-button" :disabled="refreshDisabled" @click="refresh">
                     {{ refreshing ? '正在读取…' : '重新加载' }}
                 </button>
             </WalletNotice>
@@ -171,5 +175,13 @@ onBeforeUnmount(() => {
             </section>
         </div>
         <WalletTransactionDetail v-if="selectedTransaction" :transaction="selectedTransaction" @close="selectedTransaction = null" />
+        <AppDialog v-if="confirmingAdopt" class="wallet-adopt-dialog" :busy="refreshing" aria-labelledby="wallet-adopt-title" @close="confirmingAdopt = false">
+            <h2 id="wallet-adopt-title">{{ copy.adoptQuestion }}</h2>
+            <p>{{ copy.adoptNotice }}</p>
+            <div class="wallet-adopt-actions">
+                <button type="button" :disabled="refreshing" @click="confirmingAdopt = false">{{ copy.cancel }}</button>
+                <button type="button" :disabled="refreshing" @click="confirmSave(true)">{{ copy.confirm }}</button>
+            </div>
+        </AppDialog>
     </main>
 </template>

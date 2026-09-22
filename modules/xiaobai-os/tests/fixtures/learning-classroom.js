@@ -8,6 +8,8 @@ import { createTransactionCoordinator } from '../../kernel/transaction-coordinat
 import { XiaobaiOsExecutionScope } from '../../kernel/execution-scope.js';
 import { XiaobaiOsStorageError } from '../../storage/storage-port.js';
 import { declaredTeacher } from './learning-reply.js';
+import { createUserTransactions } from '../../kernel/user-transactions.js';
+import { LEARNING_REWARDS_PARTITION } from '../../apps/learning/reward-partition.js';
 
 // Fixed teaching responses at the Provider boundary. No network, account, key, or audio service.
 export const fixtureLesson = {
@@ -20,7 +22,7 @@ export const fixtureLesson = {
 };
 
 export async function createClassroomFixture({ listening = false, lesson: lessonInput = fixtureLesson, getTtsFacade = () => undefined, agentConfig = {} } = {}) {
-    let chat = 'runtime-a'; let envelope = null; let userFile = null; let serial = 0;
+    let chat = 'runtime-a'; let envelope = null; let userFile = null; let walletFile = null; let serial = 0;
     const flags = { userFailure: false, userRejected: false, heldUser: null, ledgerFailure: false, ledgerUnknown: false, heldLedger: null, providerFailure: false, providerGate: null, prepareReply: null, profileReply: null, talkTools: null, teacherResponse: null };
     const counts = { provider: 0, userWrites: 0, ledgerWrites: 0 };
     const failures = [];
@@ -28,16 +30,26 @@ export async function createClassroomFixture({ listening = false, lesson: lesson
         reference: envelope ? { formatVersion: 1, osId: envelope.osId } : null });
     const capabilities = createCapabilityRegistry(createEconomyCapabilityRegistrations());
     const partitions = new XiaobaiOsPartitionRegistry(); partitions.register(LEARNING_PARTITION); partitions.register(ECONOMY_PARTITION);
+    partitions.register(LEARNING_REWARDS_PARTITION);
     const coordinator = createTransactionCoordinator({ partitions, capabilityBinder: capabilities, createId: () => `ledger-${++serial}`,
         chatReferences: { capture: reference, isCurrent: captured => captured.identityKey === reference().identityKey, install: async () => ({ status: 'confirmed' }) },
         storage: { read: async () => structuredClone(envelope), delete: async () => 'missing', replace: async ({ candidate }) => {
-            counts.ledgerWrites++;
-            if (flags.ledgerFailure) { return { status: 'failed', error: { code: 'fixture', message: 'fixed failure', retryable: true } }; }
-            if (flags.ledgerUnknown) { flags.heldLedger = structuredClone(candidate); return { status: 'unconfirmed', observed: structuredClone(envelope) }; }
             envelope = structuredClone(candidate); return { status: 'confirmed' };
         } },
     });
-    await capabilities.install({ createStore: (registration, allowedCapabilities) => coordinator.createScopedStore(registration, { allowedCapabilities }), files: coordinator });
+    const wallet = createUserTransactions({ partitions, binder: capabilities, references: { capture: reference },
+        resolveStory: async () => reference(),
+        initialPartitions: async () => ({ economy: ECONOMY_PARTITION.createInitial(), 'learning-rewards': LEARNING_REWARDS_PARTITION.createInitial() }),
+        storage: { read: async () => structuredClone(walletFile), replace: async (_name, candidate) => {
+            counts.ledgerWrites++;
+            if (flags.ledgerFailure) { throw new XiaobaiOsStorageError('fixture_rejected', 'fixed rejection', false, { httpStatus: 403 }); }
+            if (flags.ledgerUnknown) { flags.heldLedger = structuredClone(candidate); throw new Error('fixture response lost'); }
+            walletFile = structuredClone(candidate);
+        } },
+    });
+    await capabilities.install({ createStore: (registration, allowed) => wallet.createStore(registration, allowed), files: wallet });
+    await wallet.prepare();
+    const rewardStore = wallet.createStore(LEARNING_REWARDS_PARTITION, [ECONOMY_TRANSACTION_CAPABILITY]);
     const store = coordinator.createScopedStore(LEARNING_PARTITION, { allowedCapabilities: [ECONOMY_TRANSACTION_CAPABILITY] });
     const repository = createLearningRepository({ read: async () => structuredClone(userFile), replace: async (_name, value) => {
         counts.userWrites++;
@@ -94,7 +106,7 @@ export async function createClassroomFixture({ listening = false, lesson: lesson
     const listeners = new Set(); const waiters = new Set();
     const execution = new XiaobaiOsExecutionScope(error => failures.push(error));
     const economy = capabilities.require(ECONOMY_READ_CAPABILITY);
-    const runtime = createLearningRuntime({ repository, store, files: coordinator, economy, agent: gateway, execution,
+    const runtime = createLearningRuntime({ repository, store, files: coordinator, rewardStore, rewardFiles: wallet, economy, agent: gateway, execution,
         chatIdentity: () => chat, playerName: () => '小白', people: () => [{ name: '林老师', aliases: [], text: '温和而认真的老师' }],
         capture: async () => ({ teacherDetails: '熟悉你，也认真对待你的目标。', snapshot: { player: { displayName: '小白', persona: '' },
             characters: [], storyEvents: '一起看过城里的夏天。', recentMessages: [], worldInfo: { before: '', after: '', depth: [] } } }),
@@ -119,14 +131,14 @@ export async function createClassroomFixture({ listening = false, lesson: lesson
         if (state.busy) { await new Promise(resolve => waiters.add(resolve)); }
         return structuredClone(state);
     }
-    return { runtime, bridge, repository, store, coordinator, economy, flags, counts, failures, command, profile,
+    return { runtime, bridge, repository, store, coordinator, wallet, economy, flags, counts, failures, command, profile,
         state: () => structuredClone(state),
         async openLesson() { await command('teacher', { teacher: { name: '林老师', note: '' } }); await command('profile', { message: '想备考四级，当前高中基础。' }); await command('prepare', { message: '开始一课。' }); return state; },
         async reenter() { runtime.deactivate(); active = true; state = await runtime.activate(context()); return state; },
         async changeChat() { chat = 'runtime-b'; envelope = null; coordinator.invalidateCurrent(); runtime.handleChatChanged(); state = await runtime.activate(context()); return state; },
         confirmUser() { userFile = flags.heldUser; flags.userFailure = false; },
         replaceUser(value) { userFile = structuredClone(value); },
-        confirmLedger() { envelope = flags.heldLedger; flags.ledgerUnknown = false; },
+        confirmLedger() { walletFile = flags.heldLedger; flags.ledgerUnknown = false; },
         async dispose() { active = false; await execution.dispose(); await capabilities.dispose(); },
     };
 }

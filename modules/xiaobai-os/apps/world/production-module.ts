@@ -2,6 +2,7 @@ import { normalizeAgentSettings } from '../../../agent-core/config.js';
 import { isSillyTavernProvider, resolveActiveProviderConfig } from '../../../agent-core/provider-resolution.js';
 import { createAppRuntimeGroup } from '../../kernel/runtime-group.js';
 import { createWorldModule } from './module.js';
+import { createWorldManagement } from './management/participant.js';
 import { createWorldController } from './host/controller.js';
 import { createWorldMaintenanceParticipant } from './host/maintenance-participant.js';
 import { createWorldPromptRuntime, type WorldPromptEventHandlers } from './host/prompt-runtime.js';
@@ -16,7 +17,8 @@ export function createProductionWorldModule(dependencies: {
     return createWorldModule({
         settings: dependencies.settings,
         getChatIdentity: dependencies.getChatIdentity,
-        install({ world, maintenance, agent, execution }) {
+        install({ world, maintenance, management, agent, execution }) {
+            execution.addCleanup(management.register(createWorldManagement(world)));
             const unregister = maintenance.registerParticipant(createWorldMaintenanceParticipant(world, () => dependencies.settings.read()!.apps.world));
             execution.addCleanup(unregister);
             const controller = createWorldController({ world, settings: dependencies.settings, maintenance: maintenance.runner,

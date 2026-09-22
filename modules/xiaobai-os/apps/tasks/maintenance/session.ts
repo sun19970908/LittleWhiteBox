@@ -6,9 +6,9 @@ import type {
 } from '../../../capabilities/maintenance/registry.js';
 import type { TaskRecord } from '../../../domains/tasks/types.js';
 import type { TaskMaintenanceCommand, TasksService } from '../application/service.js';
-import { compileTaskMaintenanceCommand } from './command-compiler.js';
+import { compileTaskMaintenanceCommand } from '../tools/command-compiler.js';
 import { buildTaskMaintenanceDataMessage, TASK_MAINTENANCE_PROMPT } from './prompt.js';
-import { TASK_MAINTENANCE_TOOLS } from './tool-contract.js';
+import { TASK_MAINTENANCE_TOOLS } from '../tools/tool-contract.js';
 
 export function createTaskMaintenanceSession(
     tasks: Pick<TasksService, 'readCurrent' | 'createActionId' | 'commitMaintenance'>,
@@ -72,7 +72,7 @@ export function createTaskMaintenanceSession(
             assertActive();
             if (!staged.size) {return tasks.readCurrent();}
             const guard = (): boolean => {
-                assertActive();
+                if (invalidated) {throw new Error('tasks_maintenance_session_invalid');}
                 if (!beforeCommit()) {throw new Error('tasks_maintenance_commit_guard_rejected');}
                 return true;
             };

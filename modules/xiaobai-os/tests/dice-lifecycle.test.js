@@ -5,6 +5,9 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { createKernelComposition } from '../host/kernel-composition.ts';
 import { createSettingsRepository } from '../host/settings-repository.ts';
+import { createEconomyCapabilityRegistrations, ECONOMY_PARTITION } from '../capabilities/economy/index.ts';
+import { DICE_PARTITION } from '../apps/dice/partition.ts';
+import { userEconomyHarness } from './user-economy-harness.js';
 
 // Keep the production module, controller and message cleanup. Replace native I/O and inactive UI workers.
 const compiled = await build({
@@ -19,19 +22,20 @@ const compiled = await build({
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `
             export let is_send_press = false;
             export const is_group_generating = false;
-            export const host = { source: null, save: null, settled: Promise.resolve(),
-                get busy() { return is_send_press; }, set busy(value) { is_send_press = value; }, cancelled: false };
-            export const isChatSaving = false;
+            export const host = { source: null, save: null, editing: -1,
+                get busy() { return is_send_press; }, set busy(value) { is_send_press = value; },
+                get saving() { return isChatSaving; }, set saving(value) { isChatSaving = value; }, cancelled: false };
+            export let isChatSaving = false;
             export const captureDiceChat = () => host.source;
             export const ensureDiceDisplayRule = async () => {};
-            export const isDiceMessageBeingEdited = () => false;
+            export const isDiceMessageBeingEdited = index => host.editing === index;
             export const updateMessageBlock = () => {};
             export const saveSillyTavernChat = guard => host.save(guard);
             export const createDiceGenerationAdapter = (_enabled, frequency) => {
                 host.frequency = frequency;
-                return { start() {}, stop() {}, cancel() { host.cancelled = true; }, settled: () => host.settled };
+                return { start() { host.actionStarted = true; }, stop() { host.actionStarted = false; }, isBusy: () => host.busy, cancel() { host.cancelled = true; } };
             };
-            export const createEncounterRuntime = () => ({ start() {}, stop() {}, cancel() {} });
+            export const createEncounterRuntime = () => ({ start() { host.encounterStarted = true; }, stop() { host.encounterStarted = false; }, cancel() {} });
             export const createEncounterDisplay = () => ({ start() {}, stop() {}, refresh() {} });
             export const createDiceMessageDisplay = (_runtime, enabled) => {
                 const refresh = () => { host.displayEnabled = enabled(); };
@@ -50,14 +54,16 @@ for (const startsWithChat of [false, true]) {
         let capture = null;
         let writes = 0;
         host.source = null;
-        host.settled = Promise.resolve();
         const root = {};
         const settings = createSettingsRepository({ getExtensionSettings: () => root, saveSettings() {} });
         await settings.prepare();
         await settings.setDiceFeature('actionChecksEnabled', true);
         await settings.setDiceFeature('encountersEnabled', true);
+        let userDocument = null;
         const kernel = createKernelComposition({
-            modules: [createProductionDiceModule(settings, async () => ({world:false,summary:false}), () => false)], capabilities: [],
+            modules: [createProductionDiceModule(settings, async () => ({world:false,summary:false}), () => false)], capabilities: createEconomyCapabilityRegistrations(),
+            user: { storage: { read: async () => userDocument, replace: async (_name, value) => { userDocument = value; } },
+                initialPartitions: async () => ({ economy: ECONOMY_PARTITION.createInitial(), dice: DICE_PARTITION.createInitial() }), resolveStory: async () => capture },
             storage: {
                 async read() { throw new Error('The binding lifecycle already loaded this file'); },
                 async replace() { writes++; throw new Error('Lifecycle must not write preferences'); },
@@ -110,24 +116,32 @@ for (const startsWithChat of [false, true]) {
     });
 }
 
-test('cleanup disables first, waits for pending writes, preserves narrative/foreign fields and removes the partition only after same-chat confirmation', async () => {
+test('chat cleanup disables Dice and saves its message cleanup without deleting the paid global sheet', async () => {
     for (const mode of ['confirmed', 'unconfirmed', 'switched', 'busy']) {
         const userMessage = { is_user: true, mes: 'User prose', extra: { foreign: 1, xiaobaiOsDice: { schemaVersion: 1, encounter: { outcome: 'medium' } } } };
         const message = { mes: 'Narrative', extra: { xiaobaiOsDice: { checks: [] }, other: 'retained' },
             swipes: ['Old', 'Narrative'], swipe_info: [{ extra: { xiaobaiOsDice: {}, reasoning: 'old' } }, { extra: { xiaobaiOsDice: {} } }] };
         host.source = { key: 'chat-a', chat: [userMessage, message] }; host.busy = mode === 'busy'; host.cancelled = false;
-        let release;
-        host.settled = new Promise(resolve => { release = resolve; });
         const root = {};
-        const settings = createSettingsRepository({ getExtensionSettings: () => root, saveSettings() {} });
+        let persist = () => {};
+        const settings = createSettingsRepository({ getExtensionSettings: () => root, saveSettings: () => persist() });
         await settings.prepare();
         await settings.setDiceFeature('actionChecksEnabled', true);
         await settings.setDiceFeature('encountersEnabled', true);
         let writes = 0;
         let removed = false;
+        persist = () => {
+            assert.ok(message.extra.xiaobaiOsDice, 'message data remains while disabling preferences');
+            assert.ok(userMessage.extra.xiaobaiOsDice);
+            assert.equal(writes, 0);
+        };
+        const saving = Promise.withResolvers();
+        const confirmation = Promise.withResolvers();
         const module = createProductionDiceModule(settings, async () => ({world:false,summary:false}), () => false);
-        await module.install({ execution: { addCleanup() {} } });
+        const wallet = await userEconomyHarness();
+        await module.install({ execution: { addCleanup() {} }, partition: wallet.store(DICE_PARTITION), files: wallet.transactions });
         host.save = async guard => {
+            saving.resolve();
             writes++;
             assert.equal(guard(), true);
             assert.equal(settings.read().apps.dice.actionChecksEnabled, false);
@@ -135,19 +149,22 @@ test('cleanup disables first, waits for pending writes, preserves narrative/fore
             assert.equal(host.cancelled, true);
             assert.equal(message.extra.xiaobaiOsDice, undefined);
             assert.equal(userMessage.extra.xiaobaiOsDice, undefined);
-            if (mode === 'switched') { host.source = { key: 'chat-b', chat: [] }; }
-            return { status: mode === 'unconfirmed' ? 'unconfirmed' : 'confirmed' };
+            return confirmation.promise;
         };
         const operation = module.clearData({ async removePartition(key) {
-            assert.equal(key, 'dice'); assert.equal(writes, 1); assert.equal(host.source.key, 'chat-a'); removed = true;
+            removed = true; assert.fail(`Chat cleanup must not remove user partition ${key}`);
         } });
         const result = operation.then(() => null, error => error);
-        await Promise.resolve(); await Promise.resolve();
-        assert.equal(writes, 0);
-        assert.ok(message.extra.xiaobaiOsDice);
-        release();
+        if (mode !== 'busy') {
+            await saving.promise;
+            assert.equal(writes, 1);
+            assert.equal(removed, false, 'partition removal must wait for the cleanup save acknowledgement');
+            if (mode === 'switched') { host.source = { key: 'chat-b', chat: [] }; }
+            confirmation.resolve({ status: mode === 'unconfirmed' ? 'unconfirmed' : 'confirmed' });
+        }
         const error = await result;
-        assert.equal(removed, mode === 'confirmed');
+        assert.equal(writes, mode === 'busy' ? 0 : 1);
+        assert.equal(removed, false);
         assert.equal(Boolean(error), mode !== 'confirmed');
         assert.equal(message.mes, 'Narrative');
         assert.equal(userMessage.mes, 'User prose');
@@ -155,6 +172,13 @@ test('cleanup disables first, waits for pending writes, preserves narrative/fore
         assert.deepEqual(message.swipes, ['Old', 'Narrative']);
         assert.equal(message.extra.other, 'retained');
         assert.equal(message.swipe_info[0].extra.reasoning, 'old');
-        if (mode !== 'busy') { assert.ok(message.swipe_info.every(info => !Object.hasOwn(info.extra, 'xiaobaiOsDice'))); }
+        if (mode === 'busy') {
+            assert.equal(host.cancelled, false);
+            assert.equal(settings.read().apps.dice.actionChecksEnabled, true);
+            assert.equal(settings.read().apps.dice.encountersEnabled, true);
+            assert.ok(message.extra.xiaobaiOsDice);
+            assert.ok(userMessage.extra.xiaobaiOsDice);
+            assert.ok(message.swipe_info.every(info => Object.hasOwn(info.extra, 'xiaobaiOsDice')));
+        } else { assert.ok(message.swipe_info.every(info => !Object.hasOwn(info.extra, 'xiaobaiOsDice'))); }
     }
 });

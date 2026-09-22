@@ -5,7 +5,7 @@ import { executeSlashCommand } from "./core/slash-command.js";
 import { EventCenter } from "./core/event-manager.js";
 import { initPluginUpdate } from "./modules/plugin-update/plugin-update.js";
 import { initTasks } from "./modules/scheduled-tasks/scheduled-tasks.js";
-import { initMessagePreview, addHistoryButtonsDebounced, configureMessagePreviewRuntime, removeOwnedHistoryButtons } from "./modules/message-preview.js";
+import { initMessagePreview, addHistoryButtonsDebounced, removeOwnedHistoryButtons } from "./modules/message-preview.js";
 import {
     cleanupChatMessageImages,
     initChatMessageImages,
@@ -17,11 +17,12 @@ import {
     cleanupXiaobaiOs,
     createDefaultXiaobaiOsSettings,
     initXiaobaiOs,
+    isDiceContinuationPending,
     prepareXiaobaiOsSettings,
     setXiaobaiOsEnabled,
 } from "./modules/xiaobai-os/dist/xiaobai-os-host.js";
-import { configureButtonCollapseRuntime, initButtonCollapse } from "./widgets/button-collapse.js";
-import { initVariablesPanel, cleanupVariablesPanel, configureVariablesPanelRuntime } from "./modules/variables/variables-panel.js";
+import { initButtonCollapse } from "./widgets/button-collapse.js";
+import { initVariablesPanel, cleanupVariablesPanel } from "./modules/variables/variables-panel.js";
 import { initStreamingGeneration } from "./modules/streaming-generation.js";
 import { initVariablesCore, cleanupVariablesCore } from "./modules/variables/variables-core.js";
 import { initControlAudio } from "./modules/control-audio.js";
@@ -51,17 +52,24 @@ import {
     clearSharedImageRequests as clearSharedImageRequestsRuntime,
     generateSharedImage as generateSharedImageRuntime,
 } from "./modules/draw/shared/generated-image-runtime.js";
-import { configureStorySummaryRuntime } from "./modules/story-summary/story-summary.js";
-import { configureStoryOutlineRuntime } from "./modules/story-outline/story-outline.js";
+// Preserve feature startup side effects in their original order; TT only configures them.
+import "./modules/story-summary/story-summary.js";
+import { STORY_SUMMARY_TOGGLE_EVENT } from './modules/story-summary/runtime-events.js';
+import { configureL0ContinuationCheck } from './modules/story-summary/vector/pipeline/l0-eligibility.js';
+import "./modules/story-outline/story-outline.js";
 import { initTts, cleanupTts } from "./modules/tts/tts.js";
 import { initEnaPlanner, cleanupEnaPlanner } from "./modules/ena-planner/ena-planner.js";
 import { initAssistant, cleanupAssistant } from "./modules/assistant/assistant.js";
 import { initEbook, cleanupEbook } from "./modules/ebook/ebook.js";
 import {
     activateTauriTavernChatSurface,
+    configureTauriTavernRuntime,
     isTauriTavernChatSurfaceManaged,
     lockTauriTavernChatSurfaceSettings,
-} from "./integrations/tauritavern-chat-surface/index.js";
+    syncTauriTavernEnabledState,
+    syncTauriTavernMessageDecorators,
+    isTauriTavernControlLocked,
+} from "./integrations/tauritavern/index.js";
 
 extension_settings[EXT_ID] = extension_settings[EXT_ID] || {
     enabled: true,
@@ -101,14 +109,8 @@ settings.audio.enabled = true;
 settings.wrapperIframe = true;
 
 const CHAT_SURFACE_MANAGED = isTauriTavernChatSurfaceManaged();
-configureMessagePreviewRuntime({
-    ownsHistoryButtons: !CHAT_SURFACE_MANAGED,
-    supportsPreview: !CHAT_SURFACE_MANAGED,
-});
-configureVariablesPanelRuntime({ ownsMessageButtons: !CHAT_SURFACE_MANAGED });
-configureStorySummaryRuntime({ ownsMessageButtons: !CHAT_SURFACE_MANAGED });
-configureStoryOutlineRuntime({ enabled: !CHAT_SURFACE_MANAGED });
-configureButtonCollapseRuntime({ ownsMessageButtons: !CHAT_SURFACE_MANAGED });
+configureTauriTavernRuntime();
+configureL0ContinuationCheck(isDiceContinuationPending);
 
 const DRAW_PROVIDER_VALUES = new Set(['disabled', 'novelai', 'sdwebui', 'comfyui']);
 let tavernModulePromise = null;
@@ -416,6 +418,11 @@ function installDrawFacade() {
         buildPromptData(input = {}) {
             return buildDrawPromptData(input);
         },
+        mountMessagePanel(element, messageId) {
+            const currentProvider = () => getDrawProviderFacade(normalizeDrawProvider(settings.drawProvider));
+            if (isXiaobaixEnabled) currentProvider()?.mountMessagePanel?.(element, messageId, { force: true });
+            return () => currentProvider()?.releaseMessagePanel?.(element, messageId);
+        },
         prepareGeneration(input = {}) {
             return prepareDrawGeneration(input);
         },
@@ -497,6 +504,21 @@ function initImageJobRecoveryRuntime() {
         providerAdoptionEffects: { novelai: applyNovelDrawRunAutoLearn },
     });
     registerModuleCleanup('imageJobRecovery', stopImageJobRecovery);
+}
+
+async function initDrawFeatures() {
+    try {
+        await initActiveDrawProvider();
+    } catch (e) {
+        console.error('[LittleWhiteBox] 初始化画图 provider 失败:', e);
+    }
+    initImageJobRecoveryRuntime();
+    try {
+        initChatMessageImages();
+        registerModuleCleanup('chatMessageImages', cleanupChatMessageImages);
+    } catch (e) {
+        console.error('[LittleWhiteBox] 初始化聊天图片失败:', e);
+    }
 }
 
 function removeSkeletonStyles() {
@@ -597,6 +619,12 @@ function syncFeatureActionButtons() {
     lockTauriTavernChatSurfaceSettings();
 }
 
+async function initEnabledXiaobaiOs() {
+    if (xiaobaiOsSettingsError || !settings.xiaobaiOs?.enabled) return;
+    await initXiaobaiOs();
+    registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
+}
+
 async function toggleAllFeatures(enabled) {
     if (enabled) {
         await xiaobaiOsSettingsReady;
@@ -615,7 +643,7 @@ async function toggleAllFeatures(enabled) {
             { condition: true, init: initControlAudio },
             { condition: extension_settings[EXT_ID].variablesPanel?.enabled, init: initVariablesPanel },
             { condition: extension_settings[EXT_ID].variablesCore?.enabled, init: initVariablesCore },
-            { condition: !CHAT_SURFACE_MANAGED && extension_settings[EXT_ID].tts?.enabled, init: initTts },
+            { condition: extension_settings[EXT_ID].tts?.enabled, init: initTts },
             { condition: extension_settings[EXT_ID].enaPlanner?.enabled, init: initEnaPlanner },
             { condition: true, init: initEbook },
             { condition: true, init: () => { void initTavernSafely(); } },
@@ -625,24 +653,8 @@ async function toggleAllFeatures(enabled) {
         moduleInits.forEach(({ condition, init }) => {
             if (condition) init();
         });
-        if (!CHAT_SURFACE_MANAGED) {
-            try {
-                await initActiveDrawProvider();
-            } catch (e) {
-                console.error('[LittleWhiteBox] 初始化画图 provider 失败:', e);
-            }
-            initImageJobRecoveryRuntime();
-            try {
-                initChatMessageImages();
-                registerModuleCleanup('chatMessageImages', cleanupChatMessageImages);
-            } catch (e) {
-                console.error('[LittleWhiteBox] 初始化聊天图片失败:', e);
-            }
-            if (!xiaobaiOsSettingsError && settings.xiaobaiOs?.enabled) {
-                await initXiaobaiOs();
-                registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
-            }
-        }
+        await initDrawFeatures();
+        await initEnabledXiaobaiOs();
         if (extension_settings[EXT_ID].preview?.enabled || extension_settings[EXT_ID].recorded?.enabled) {
             setTimeout(initMessagePreview, 200);
         }
@@ -659,7 +671,7 @@ async function toggleAllFeatures(enabled) {
                 document.head.appendChild(Object.assign(document.createElement('script'), { id: 'xb-worldbook', type: 'module', src: `${extensionFolderPath}/bridges/worldbook-bridge.js` }));
         } catch (e) { }
         if (extension_settings[EXT_ID].storySummary?.enabled) {
-            $(document).trigger('xiaobaix:storySummary:toggle', [true]);
+            $(document).trigger(STORY_SUMMARY_TOGGLE_EVENT, [true]);
         }
         document.dispatchEvent(new CustomEvent('xiaobaixEnabledChanged', { detail: { enabled: true } }));
         $(document).trigger('xiaobaix:enabled:toggle', [true]);
@@ -686,11 +698,12 @@ async function toggleAllFeatures(enabled) {
         try { window.cleanupWorldbookHostBridge && window.cleanupWorldbookHostBridge(); document.getElementById('xb-worldbook')?.remove(); } catch (e) { }
         try { window.cleanupCallGenerateHostBridge && window.cleanupCallGenerateHostBridge(); document.getElementById('xb-callgen')?.remove(); } catch (e) { }
         if (extension_settings[EXT_ID].storySummary?.enabled) {
-            $(document).trigger('xiaobaix:storySummary:toggle', [false]);
+            $(document).trigger(STORY_SUMMARY_TOGGLE_EVENT, [false]);
         }
         document.dispatchEvent(new CustomEvent('xiaobaixEnabledChanged', { detail: { enabled: false } }));
         $(document).trigger('xiaobaix:enabled:toggle', [false]);
     }
+    syncTauriTavernEnabledState();
 }
 
 async function setupSettings() {
@@ -717,7 +730,7 @@ async function setupSettings() {
         if (!settings.enabled) toggleSettingsControls(false);
 
         $("#xiaobaix_os_enabled").prop("checked", settings.xiaobaiOs?.enabled === true).on("change", async function () {
-            if (!isXiaobaixEnabled || CHAT_SURFACE_MANAGED) return;
+            if (!isXiaobaixEnabled) return;
             const enabled = $(this).prop('checked') === true;
             const previous = settings.xiaobaiOs?.enabled === true;
             this.disabled = true;
@@ -765,6 +778,7 @@ async function setupSettings() {
         moduleConfigs.forEach(({ id, key, init, cleanup }) => {
             $(`#${id}`).prop("checked", settings[key]?.enabled || false).on("change", async function () {
                 if (!isXiaobaixEnabled) return;
+                if (isTauriTavernControlLocked(id)) return;
                 const enabled = $(this).prop('checked');
                 if (!enabled && key === 'tts') {
                     try { cleanupTts(); } catch (e) { }
@@ -782,14 +796,21 @@ async function setupSettings() {
                 }
                 if (!enabled && cleanup) cleanup();
                 if (enabled && init) await init();
+                if (CHAT_SURFACE_MANAGED && key === 'recorded' && enabled) initMessagePreview();
                 if (key === 'storySummary') {
-                    $(document).trigger('xiaobaix:storySummary:toggle', [enabled]);
+                    $(document).trigger(STORY_SUMMARY_TOGGLE_EVENT, [enabled]);
                 }
                 if (key === 'storyOutline') {
                     $(document).trigger('xiaobaix:storyOutline:toggle', [enabled]);
                 }
                 syncFeatureActionButtons();
+                if (key === 'tts') syncTauriTavernEnabledState();
+                else syncTauriTavernMessageDecorators();
             });
+        });
+
+        $('#xiaobaix_xposition_btn').on('click', () => {
+            if (CHAT_SURFACE_MANAGED) queueMicrotask(syncTauriTavernMessageDecorators);
         });
 
         $("#xiaobaix_draw_provider")
@@ -815,6 +836,7 @@ async function setupSettings() {
                 }
                 try { refreshChatMessageImages(); } catch { }
                 syncFeatureActionButtons();
+                syncTauriTavernEnabledState();
             });
         syncFeatureActionButtons();
 
@@ -898,11 +920,12 @@ async function setupSettings() {
 
         $("#xiaobaix_render_enabled").prop("checked", settings.renderEnabled !== false).on("change", async function () {
             if (!isXiaobaixEnabled) return;
-            if (CHAT_SURFACE_MANAGED) return;
             const wasEnabled = settings.renderEnabled !== false;
             settings.renderEnabled = $(this).prop("checked");
             saveSettingsDebounced();
-            if (!settings.renderEnabled && wasEnabled) {
+            if (CHAT_SURFACE_MANAGED) {
+                syncTauriTavernEnabledState();
+            } else if (!settings.renderEnabled && wasEnabled) {
                 cleanupRenderer();
             } else if (settings.renderEnabled && !wasEnabled) {
                 initRenderer();
@@ -924,18 +947,17 @@ async function setupSettings() {
             .val(Number.isFinite(settings.maxRenderedMessages) ? settings.maxRenderedMessages : 5)
             .on("input change", function () {
                 if (!isXiaobaixEnabled) return;
-                if (CHAT_SURFACE_MANAGED) return;
                 const v = normalizeMaxRendered($(this).val());
                 $(this).val(v);
                 settings.maxRenderedMessages = v;
                 saveSettingsDebounced();
-                try { shrinkRenderedWindowFull(); } catch (e) { }
+                if (CHAT_SURFACE_MANAGED) syncTauriTavernEnabledState();
+                else { try { shrinkRenderedWindowFull(); } catch (e) { } }
             });
 
         $(document).off('click.xbreset', '#xiaobaix_reset_btn').on('click.xbreset', '#xiaobaix_reset_btn', async function (e) {
             e.preventDefault();
             e.stopPropagation();
-            if (CHAT_SURFACE_MANAGED) return;
             const MAP = {
                 recorded: 'xiaobaix_recorded_enabled',
                 immersive: 'xiaobaix_immersive_enabled',
@@ -953,6 +975,7 @@ async function setupSettings() {
             const ON = ['templateEditor', 'tasks', 'variablesCore', 'storySummary', 'recorded'];
             const OFF = ['preview', 'immersive', 'variablesPanel', 'storyOutline', 'tts', 'enaPlanner'];
             function setChecked(id, val) {
+                if (isTauriTavernControlLocked(id)) return;
                 const el = document.getElementById(id);
                 if (el) {
                     el.checked = !!val;
@@ -980,6 +1003,7 @@ async function setupSettings() {
             refreshChatMessageImages();
             notifyTavernDrawStatusChanged();
             syncFeatureActionButtons();
+            syncTauriTavernEnabledState();
             setChecked('xiaobaix_use_blob', false);
             settings.wrapperIframe = true;
             settings.audio ||= {};
@@ -1103,7 +1127,7 @@ jQuery(async () => {
                 { condition: !CHAT_SURFACE_MANAGED && settings.templateEditor?.enabled, init: initTemplateEditor },
                 { condition: settings.variablesPanel?.enabled, init: initVariablesPanel },
                 { condition: settings.variablesCore?.enabled, init: initVariablesCore },
-                { condition: !CHAT_SURFACE_MANAGED && settings.tts?.enabled, init: initTts },
+                { condition: settings.tts?.enabled, init: initTts },
                 { condition: settings.enaPlanner?.enabled, init: initEnaPlanner },
                 { condition: true, init: initEbook },
                 { condition: true, init: () => { void initTavernSafely(); } },
@@ -1111,24 +1135,8 @@ jQuery(async () => {
                 { condition: !CHAT_SURFACE_MANAGED, init: initButtonCollapse }
             ];
             moduleInits.forEach(({ condition, init }) => { if (condition) init(); });
-            try {
-                await initActiveDrawProvider();
-            } catch (e) {
-                console.error('[LittleWhiteBox] 初始化画图 provider 失败:', e);
-            }
-            if (!CHAT_SURFACE_MANAGED) {
-                initImageJobRecoveryRuntime();
-                try {
-                    initChatMessageImages();
-                    registerModuleCleanup('chatMessageImages', cleanupChatMessageImages);
-                } catch (e) {
-                    console.error('[LittleWhiteBox] 初始化聊天图片失败:', e);
-                }
-                if (!xiaobaiOsSettingsError && settings.xiaobaiOs?.enabled) {
-                    await initXiaobaiOs();
-                    registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
-                }
-            }
+            await initDrawFeatures();
+            await initEnabledXiaobaiOs();
 
             if (settings.preview?.enabled || settings.recorded?.enabled) {
                 setTimeout(initMessagePreview, 1500);

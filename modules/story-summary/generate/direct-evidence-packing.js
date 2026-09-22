@@ -1,3 +1,5 @@
+import { tryConsumeWholeItem } from './token-budget.js';
+
 function finiteNumber(value, fallback = 0) {
     const number = Number(value);
     return Number.isFinite(number) ? number : fallback;
@@ -60,10 +62,7 @@ export function admitDirectEvidenceItems(items, budget, options = {}) {
         const groupKey = `${item.owner?.event?.id || ''}:${item.floor}`;
         const overhead = admittedGroups.has(groupKey) ? 0 : floorOverheadTokens;
         const cost = Math.max(0, finiteNumber(getTokenCost(item))) + overhead;
-        if (budget.used + cost > budget.max) return false;
-        if (protectedLane && protectedBudget.used + cost > protectedBudget.max) return false;
-        budget.used += cost;
-        if (protectedLane) protectedBudget.used += cost;
+        if (!tryConsumeWholeItem(cost, budget, ...(protectedLane ? [protectedBudget] : []))) return false;
         admittedGroups.add(groupKey);
         admittedSources.add(item);
         admitted.push(protectedLane

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import { createTaskMaintenanceParticipant } from '../apps/tasks/host/maintenance-participant.js';
-import { TASK_MAINTENANCE_TOOL_NAMES, TASK_MAINTENANCE_TOOLS } from '../apps/tasks/maintenance/tool-contract.js';
+import { TASK_MAINTENANCE_TOOL_NAMES, TASK_MAINTENANCE_TOOLS } from '../apps/tasks/tools/tool-contract.js';
 import { MAX_TASK_PROGRESS_SUMMARY_LENGTH, MAX_TASK_RESULT_SUMMARY_LENGTH } from '../domains/tasks/invariants.js';
 
 function source(assistantCount = 5) {
@@ -53,6 +53,7 @@ function record(overrides = {}) {
 function createHarness(records = [record()]) {
     const state = { autoMaintenance: false, actionIds: 0, commits: [] };
     const tasks = {
+        getWriteState: () => 'ready',
         readCurrent: () => ({ domain: null, records: structuredClone(records), playerBalance: 100, writeState: 'ready' }),
         createActionId: () => `task-action-${++state.actionIds}`,
         async commitMaintenance(input, guard) {

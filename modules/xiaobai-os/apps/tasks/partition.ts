@@ -5,6 +5,7 @@ import { TASKS_APP_DESCRIPTOR } from './descriptor.js';
 
 export const TASKS_PARTITION: PartitionRegistration<TaskDomainV1> = Object.freeze({
     key: 'tasks',
+    storage: 'user-story',
     ownerId: TASKS_APP_DESCRIPTOR.id,
     schemaVersion: 1,
     parse(value: unknown) {

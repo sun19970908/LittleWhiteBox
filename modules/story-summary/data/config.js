@@ -5,6 +5,8 @@ import { CommonSettingStorage } from "../../../core/server-storage.js";
 import { CHARACTER_ALIAS_OUTPUT_TEMPLATE } from './character-aliases.js';
 import { EVENT_MEMORY_ROLES } from "./events.js";
 import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './summary-delay.js';
+import { ARC_PROGRESS_MAX } from '../generate/arc-progress.js';
+import { RELATION_TRENDS } from './fact-predicates.js';
 
 const MODULE_ID = "summaryConfig";
 const SUMMARY_CONFIG_KEY = "storySummaryPanelConfig";
@@ -29,8 +31,8 @@ Incremental_Summary_Requirements:
   - Retrieval_Readiness: event.summary 必须面向未来召回，不得写成泛化剧情概括
   - Event_Memory_Role: Identify what each event leaves for later context, using the Memory Role definitions below.
   - Causal_Chain: causedBy links an event to its direct causes or explicit motives. Reference syntax is defined in Event References below.
-  - Character_Dynamics: 识别新角色，追踪关系趋势（破裂/厌恶/反感/陌生/投缘/亲密/交融）
-  - Arc_Tracking: 更新角色弧光轨迹与成长进度(0.0-1.0)
+  - Character_Dynamics: 识别新角色，追踪关系趋势
+  - Arc_Tracking: 更新角色弧光轨迹与成长进度
   - Fact_Tracking: 维护 SPO 三元组知识图谱。追踪生死、物品归属、位置、关系、稳定辨识性身体特征等硬性事实。采用 KV 覆盖模型（s+p 为键）。
 </task_settings>
 ---
@@ -52,7 +54,7 @@ analysis_task:
     behavior: >-
       To compare new dialogue against existing summary, identify genuinely
       new events and character interactions, identify each event's memory
-      role, track character arc progression with percentage,
+      role, track character arc progression,
       maintain facts as SPO triples with clear semantics,
       and output structured JSON containing only incremental updates.
       Must strictly avoid repeating any existing summary content.
@@ -119,11 +121,11 @@ These roles are different uses of memory, not importance levels. Choose the main
      6月12日，周柠在旅馆浴室门口盯着林雨锁骨上的咬痕，追问6月11日晚和谁在一起，林雨一边整理湿透的白衬衫一边嘴硬否认，最后答应6月13日晚还去旧码头见她。 (#88-91)
 
 [Relationship Trend Scale]
-破裂 ← 厌恶 ← 反感 ← 陌生 → 投缘 → 亲密 → 交融
+${RELATION_TRENDS.slice(0, 4).join(' ← ')} → ${RELATION_TRENDS.slice(4).join(' → ')}
 
 [Arc Progress Tracking]
 ├─ trajectory: 当前阶段描述(15字内)
-├─ progress: 0.0 to 1.0
+├─ progress: an integer from 0 to ${ARC_PROGRESS_MAX}, used for both existing and updated arcs
 └─ newMoment: 仅记录本次新增的关键时刻
 Each arc update contains name, trajectory and numeric progress. newMoment is optional. Omit arcUpdates when no arc changes.
 
@@ -142,7 +144,7 @@ Core rules:
 4) Relationship facts:
    - Use predicate format: "对X的看法" (X is the target person)
    - trend is required for relationship facts, one of:
-     破裂 | 厌恶 | 反感 | 陌生 | 投缘 | 亲密 | 交融
+     ${RELATION_TRENDS.join(' | ')}
 5) Retraction (deletion):
    - To delete a fact, output: {s, p, retracted: true}
 6) Predicate normalization:
@@ -207,7 +209,7 @@ Before generating, observe the USER and analyze carefully:
 - 外貌类统一使用谓词 p="身体特征"；只记录稳定、有辨识度的特征，不记录临时衣着、姿势、表情和普通伤势
 - "身体特征" 的 o 必须写当前完整值。由于相同 s+p 会覆盖旧值，新增特征时必须把已有特征一并写全，不能只写新增部分
 - 例：已有 {"s":"鹿椿若","p":"身体特征","o":"头顶白色分叉鹿角","isState":true}，后续发现鹿耳时应输出 {"s":"鹿椿若","p":"身体特征","o":"头顶白色分叉鹿角，鹿耳","isState":true}，不能只写"鹿耳"
-- 关系类: p="对X的看法"，trend 必填（破裂|厌恶|反感|陌生|投缘|亲密|交融）
+- 关系类: 按 doc 中的“Fact Tracking”填写谓词和 trend
 - 删除: {s, p, retracted: true}，不需要 o 字段
 - 更新: {s, p, o, isState, trend?}
 - 谓词规范化: 复用已有谓词，不要发明同义词
@@ -245,7 +247,7 @@ Before generating, observe the USER and analyze carefully:
   ],
   "newCharacters": ["仅本次首次出现的角色名"],
   "arcUpdates": [
-    {"name": "角色名，不要使用人称代词或别名，只用正式人名", "trajectory": "当前阶段描述(15字内)", "progress": 0.0-1.0, "newMoment": "本次新增的关键时刻"}
+    {"name": "角色名，不要使用人称代词或别名，只用正式人名", "trajectory": "当前阶段描述(15字内)", "progress": 75, "newMoment": "本次新增的关键时刻"}
   ],
   "factUpdates": [
     {"s": "主体", "p": "谓词", "o": "当前值", "isState": true},

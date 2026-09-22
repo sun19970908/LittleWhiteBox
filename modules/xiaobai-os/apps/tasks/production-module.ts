@@ -10,6 +10,7 @@ import { createTaskMaintenanceParticipant } from './host/maintenance-participant
 import { createTaskPromptRuntime, type TaskPromptEventHandlers } from './host/prompt-runtime.js';
 import { createTaskSettingsRuntime } from './host/settings-runtime.js';
 import { createTasksModule } from './module.js';
+import { createTasksManagement } from './management/participant.js';
 
 export interface ProductionTasksModuleDependencies {
     settings: XiaobaiOsSettingsRepository;
@@ -26,7 +27,8 @@ export function createProductionTasksModule(dependencies: ProductionTasksModuleD
     return createTasksModule({
         getPlayerDisplayName: dependencies.getPlayerDisplayName,
         getObservedAssistantCount: dependencies.getObservedAssistantCount,
-        async install({ tasks, store, economy, agent, maintenance, mapContext, worldContext, execution }) {
+        async install({ tasks, store, economy, agent, maintenance, management, mapContext, worldContext, execution }) {
+            execution.addCleanup(management.register(createTasksManagement(tasks, dependencies.getObservedAssistantCount)));
             const unregisterParticipant = maintenance.registerParticipant(createTaskMaintenanceParticipant({
                 tasks,
                 readSettings: () => dependencies.settings.read()?.apps.tasks ?? null,

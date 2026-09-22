@@ -1,5 +1,7 @@
 import { EXT_ID } from '../../core/constants.js';
 import { __setChatMetadata } from './shims/script.js';
+import { getContext, __setReplayContext } from './shims/extensions.js';
+import { getSummaryPanelConfig, applySummaryPanelConfigSnapshot } from '../../modules/story-summary/data/config.js';
 
 // Exercise the final production prompt, with only the replay host boundary.
 // Marker strings are fixture content, not assertions about source or wording.
@@ -15,7 +17,7 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
     );
     const build = async (events, causes = [], options = {}) => {
         const store = {
-            lastSummarizedMesId: options.lastSummarizedMesId ?? -1,
+            lastSummarizedMesId: options.lastSummarizedMesId ?? 200,
             json: {
                 events: events.map(item => item.event),
                 facts: options.facts || [],
@@ -54,6 +56,38 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
     });
 
     try {
+        const originalPanel = getSummaryPanelConfig();
+        const originalChat = getContext().chat;
+        const visibility = [];
+        try {
+            __setReplayContext({ chat: Array.from({ length: 10 }, () => ({ is_user: false, mes: 'fixture' })) });
+            for (const ui of [
+                { hideSummarized: true, useVectorBoundary: true, keepVisibleCount: 2 },
+                { hideSummarized: true, useVectorBoundary: false, keepVisibleCount: 2 },
+                { hideSummarized: false, useVectorBoundary: true, keepVisibleCount: 2 },
+                { hideSummarized: true, useVectorBoundary: true, keepVisibleCount: 0 },
+                { hideSummarized: true, useVectorBoundary: true, keepVisibleCount: 50 },
+            ]) {
+                applySummaryPanelConfigSnapshot({ ...originalPanel, ui });
+                const raw = [chunk('hidden-raw', 2), chunk('boundary-user', 6, 0, true), chunk('visible-ai', 7)];
+                const options = { lastSummarizedMesId: 4, lastChunkFloor: 8,
+                    directEvidenceL1: raw,
+                    l0Selected: [anchor('owned-anchor', 7), anchor('distant-anchor', 3)],
+                    l1ByFloor: new Map([[7, { userTop1: raw[1], aiTop1: raw[2] }],
+                        [3, { userTop1: raw[0], aiTop1: raw[2] }]]) };
+                const owners = [event('evt-7', 'VISIBILITY_OWNER (#8)')];
+                const direct = await build(owners, [], options);
+                const fallback = await build(owners, [], { ...options, directEvidenceStatus: 'failed', directEvidenceL1: [] });
+                const noSummary = await build(owners, [], { ...options, lastSummarizedMesId: -1 });
+                const present = result => raw.filter(c => result.promptText.includes(c.text.trim())).map(c => c.floor);
+                visibility.push({ ui, direct: present(direct), fallback: present(fallback), noSummary: present(noSummary),
+                    eventPreserved: direct.promptText.includes('VISIBILITY_OWNER'),
+                    l0Preserved: direct.promptText.includes('owned-anchor') });
+            }
+        } finally {
+            applySummaryPanelConfigSnapshot(originalPanel);
+            __setReplayContext({ chat: originalChat });
+        }
         const owner = event('evt-100', 'OWNER_BODY (#101)', ['evt-1']);
         const baseline = await build([owner]);
         const ordinary = await build([owner], [cause('evt-1', 'CAUSE_BODY')]);
@@ -104,9 +138,15 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
             event('evt-300', 'LATER_FITTING_EVENT'),
         ]);
         const droppedOwner = await build([
-            event('evt-100', '甲'.repeat(5100), ['evt-1']),
-            event('evt-200', 'KEPT_OWNER'),
+            event('evt-100', '甲'.repeat(5100)),
+            event('evt-200', 'DROPPED_OWNER', ['evt-1']),
         ], [cause('evt-1', 'UNOWNED_CAUSE')]);
+        const related = await build([
+            ...[1, 2, 3].map(i => ({
+                ...event(`evt-${i}`, `RELATED_${i} ${'甲'.repeat(300)}`), _recallType: 'RELATED',
+            })),
+            event('evt-4', 'DIRECT_AFTER_RELATED'),
+        ]);
 
         // Saturate every independent pool in one final prompt, including the
         // unchanged recent-memory path sourced from chat metadata.
@@ -129,7 +169,7 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
             directEvidenceL1: [ownedRaw],
             l0Selected: [
                 anchor('OWNED_ANCHOR', 59),
-                anchor('OVERSIZED_GROUP', 30, 0, 10),
+                anchor('OVERSIZED_GROUP', 30, 0, 7),
                 anchor('HIGH_ANCHOR', 60, 150, 9),
                 anchor('LOW_ANCHOR', 20, 400, 3),
                 { id: 'edge', floor: 40, atom: { semantic: `EDGE_MATCH ${'丙'.repeat(150)}`, edges: [{ s: '角色', t: '城镇' }] }, rerankScore: 8 },
@@ -159,8 +199,19 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
         ], [], {
             l0Selected: [anchor('ANCHOR_FIRST', 100)],
             directEvidenceStatus: 'partial-vectors',
-            directEvidenceL1: [{ ...chunk('RAW_SECOND', 100), ownerEventId: 'evt-101' }],
+            directEvidenceL1: [chunk('RAW_SECOND', 100)],
         });
+        const independentRaw = chunk('INDEPENDENT_RAW', 72, 500);
+        const independent = await build([], [], {
+            directEvidenceL1: [independentRaw, independentRaw],
+            lastSummarizedMesId: 100,
+            l0Selected: [anchor('INDEPENDENT_ANCHOR', 72)],
+            l1ByFloor: new Map([[72, { aiTop1: independentRaw }]]),
+        });
+        const parentOverBudget = await build([
+            event('evt-full', `${'甲'.repeat(5100)} (#1)`),
+            event('evt-parent', 'UNSELECTED_L2 (#73)'),
+        ], [], { directEvidenceL1: [independentRaw] });
         const protectedMix = await build([owner], [cause('evt-1', 'PROTECTED_CAUSE', 200)], {
             l0Selected: [anchor('PROTECTED_L0', 100, 750)],
             directEvidenceL1: Array.from({ length: 20 }, (_, i) => ({ ...chunk(`RAW_${i}`, 100, 250), ownerEventId: owner.event.id })),
@@ -168,12 +219,24 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
 
         return {
             newEvidence: {
-                overlapPositions: ['OWNER_FIRST', 'ANCHOR_FIRST', 'OWNER_SECOND', 'RAW_SECOND'].map(marker => overlapping.promptText.indexOf(marker)),
+                overlapPositions: ['OWNER_FIRST', 'ANCHOR_FIRST', 'RAW_SECOND', 'OWNER_SECOND'].map(marker => overlapping.promptText.indexOf(marker)),
                 overlapCopies: overlapping.promptText.split('RAW_SECOND').length - 1,
+                independent: {
+                    copies: independent.promptText.split('INDEPENDENT_RAW').length - 1,
+                    eventCount: independent.injectionStats.event.selected,
+                    admitted: independent.evidenceTrace.eventEvidence,
+                    budget: budgetSnapshot(independent),
+                    parentOverBudget: {
+                        rendered: parentOverBudget.promptText.includes('INDEPENDENT_RAW'),
+                        ownerRendered: parentOverBudget.promptText.includes('UNSELECTED_L2'),
+                        admitted: parentOverBudget.evidenceTrace.eventEvidence,
+                    },
+                },
                 protectedRendered: ['PROTECTED_L0', 'PROTECTED_CAUSE', 'RAW_0'].map(marker => protectedMix.promptText.includes(marker)),
                 protectedTokens: protectedMix.metrics.evidence.l0ProtectedTokens,
                 budget: budgetSnapshot(protectedMix),
             },
+            visibility,
             charging: {
                 baselineEventTokens: baseline.injectionStats.event.tokens,
                 eventTokens: ordinary.injectionStats.event.tokens,
@@ -215,6 +278,10 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
                 factsRendered: ['FIRST_FACT', 'LATER_FACT', 'WORLD_FACT'].map(marker => facts.promptText.includes(marker)),
                 injectedFacts: facts.metrics.constraint.injected,
                 laterEventRendered: events.promptText.includes('LATER_FITTING_EVENT'),
+                boundaryEventRenderedWhole: events.promptText.includes('乙'.repeat(500)),
+                boundaryFactRenderedWhole: facts.promptText.includes('甲'.repeat(2100)),
+                relatedRendered: ['RELATED_1', 'RELATED_2', 'RELATED_3', 'DIRECT_AFTER_RELATED']
+                    .map(marker => related.promptText.includes(marker)),
                 droppedOwnerCauseRendered: droppedOwner.promptText.includes('UNOWNED_CAUSE'),
                 droppedOwnerLinks: droppedOwner.injectionStats.causalEvidence.links,
             },
@@ -233,7 +300,7 @@ export async function runPromptPackingChecks(buildVectorPrompt, createMetrics, o
                         'OVERSIZED_GROUP', 'OVERSIZED_RAW', 'LOW_ANCHOR', 'OTHER_PERSON', 'UNSUMMARIZED_ANCHOR',
                     ].map(marker => [marker, history.promptText.includes(marker)])),
                     copies: ['OWNED_ANCHOR', 'OWNED_RAW'].map(marker => history.promptText.split(marker).length - 1),
-                    positions: ['EDGE_MATCH', 'HIGH_ANCHOR', 'BOUNDARY_ANCHOR'].map(marker => history.promptText.indexOf(marker)),
+                    positions: ['OVERSIZED_GROUP', 'EDGE_MATCH', 'HIGH_ANCHOR'].map(marker => history.promptText.indexOf(marker)),
                     units: history.injectionStats.distantEvidence.units,
                     dropped: history.metrics.evidence.distantEvidenceDroppedByBudget,
                     budget: budgetSnapshot(history),

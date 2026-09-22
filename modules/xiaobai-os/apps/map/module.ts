@@ -1,7 +1,8 @@
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
-import type { ScopedChatStore } from '../../kernel/contracts.js';
+import type { PartitionStore } from '../../kernel/contracts.js';
 import type { XiaobaiOsAppRuntime } from '../../types.js';
 import { AGENT_CAPABILITY, type AgentCapability } from '../../capabilities/agent/index.js';
+import { MANAGEMENT_CAPABILITY, type ManagementRegistry } from '../../capabilities/management/index.js';
 import {
     MAINTENANCE_CAPABILITY,
     type MaintenanceCapability,
@@ -20,6 +21,7 @@ export interface MapModuleInstallContext {
     map: MapService;
     agent: AgentCapability;
     maintenance: MaintenanceCapability;
+    management: ManagementRegistry;
     mapContext: MapContextCapability;
     execution: AppInstallContext['execution'];
 }
@@ -33,11 +35,11 @@ export function createMapModule(dependencies: MapModuleDependencies): XiaobaiOsA
     return {
         descriptor: MAP_APP_DESCRIPTOR,
         partition: MAP_PARTITION,
-        capabilities: [AGENT_CAPABILITY, MAINTENANCE_CAPABILITY, MAP_CONTEXT_CAPABILITY],
+        capabilities: [AGENT_CAPABILITY, MAINTENANCE_CAPABILITY, MANAGEMENT_CAPABILITY, MAP_CONTEXT_CAPABILITY],
         install(context) {
             if (!context.partition) { throw new Error('Map partition store is unavailable'); }
             const map = createMapService(
-                context.partition as ScopedChatStore<MapDomainV1>,
+                context.partition as PartitionStore<MapDomainV1>,
                 context.files,
             );
             context.execution.addCleanup(map.dispose);
@@ -51,6 +53,7 @@ export function createMapModule(dependencies: MapModuleDependencies): XiaobaiOsA
                 map,
                 agent: context.useCapability(AGENT_CAPABILITY),
                 maintenance: context.useCapability(MAINTENANCE_CAPABILITY),
+                management: context.useCapability(MANAGEMENT_CAPABILITY),
                 mapContext,
                 execution: context.execution,
             });

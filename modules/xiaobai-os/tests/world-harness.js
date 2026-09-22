@@ -7,7 +7,7 @@ import { XiaobaiOsPartitionRegistry } from '../kernel/partition-registry.js';
 import { createTransactionCoordinator } from '../kernel/transaction-coordinator.js';
 import { createSettingsRepository } from '../host/settings-repository.js';
 
-export const article = (id = 'canal') => ({ id, title: '旧运河重新通航', summary: '修缮后的运河恢复通航，沿岸周末市集也随之重开。',
+export const article = (id = 'canal') => ({ id, title: '旧运河重新通航',
     body: '清早的第一艘渡船驶过石桥。船主把旧票亭重新刷成了蓝色。\n\n沿岸商户约定周末摆起小摊，卖热汤和二手书。' });
 export const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 export function deferred() {

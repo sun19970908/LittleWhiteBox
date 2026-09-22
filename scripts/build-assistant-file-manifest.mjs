@@ -91,6 +91,8 @@ function buildPluginEntries() {
             // The manifest cannot describe itself: recording its own sizeBytes changes
             // that size, so the entry would always report the previous build.
             if (relativePath === MANIFEST_RELATIVE_PATH) return false;
+            // Local previews and verification output are not plugin source.
+            if (relativePath.startsWith('output/')) return false;
             return !relativePath.startsWith('modules/assistant/dist/');
         });
     const ignoredFiles = getIgnoredFiles(pluginRoot, candidates);

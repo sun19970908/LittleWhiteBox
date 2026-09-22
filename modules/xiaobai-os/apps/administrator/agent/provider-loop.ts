@@ -1,0 +1,127 @@
+import { resolveResultToolCalls } from '../../../../agent-core/runtime/protocol.js';
+import type { AgentMessage } from '../../../../agent-core/runtime/conversation.js';
+import type { XiaobaiOsAgentGateway } from '../../../capabilities/agent/gateway.js';
+import { safePromptJson } from '../../../capabilities/maintenance/prompt-safety.js';
+import { ADMINISTRATOR_POLICY as POLICY } from '../domain/policy.js';
+import type { AdministratorContextUsage } from '../domain/types.js';
+import { administratorContext, administratorTurnMessages, contextUsage, retainedAdministratorTurns, summarizeAdministrator,
+    type AdministratorHistory, type AgentRecord } from './history.js';
+
+// These are provider protocol errors, not a guessed window size or a generic HTTP 400.
+export function isAdministratorContextOverflow(error: unknown): boolean {
+    if (!error || typeof error !== 'object') { return false; }
+    const value = error as { status?: number; code?: string; message?: string; error?: { code?: string } };
+    return [value.code, value.error?.code].includes('context_length_exceeded')
+        || [400, 413, 422].includes(value.status ?? 0) && /maximum context length|context (?:window|length).*(?:exceed|too (?:long|large))|prompt is too long|input token count.*exceeds/iu.test(value.message ?? '');
+}
+
+export async function runAdministratorLoop(options: {
+    gateway: XiaobaiOsAgentGateway; config: unknown; system: string; prefix: AgentRecord[];
+    request: AgentRecord; requestForCounting: AgentRecord; imageCount: number;
+    tools: AgentRecord[]; state: AdministratorHistory; signal: AbortSignal;
+    execute(name: string, args: unknown, callId: string, messageIndex: number): Promise<unknown>;
+    save(): Promise<void>;
+    onText(text: string): void; onPhase(phase: 'replying' | 'summarizing'): void;
+    onContext(usage: AdministratorContextUsage): void;
+    onToolPreview?(names: string[]): void;
+}): Promise<string> {
+    const { state, signal } = options;
+    const turn = state.turns.at(-1)!;
+    let agent = await options.gateway.openSession(options.config);
+    let responses: AgentRecord[] | undefined;
+    let overflowRetried = false;
+    let rounds = 0;
+    const usage = () => {
+        const projected = administratorContext(state, options.requestForCounting);
+        return contextUsage(options.system, options.tools, options.prefix, projected, options.imageCount, agent.providerConfig);
+    };
+    async function save() {
+        await options.save();
+        signal.throwIfAborted();
+    }
+    async function compact(): Promise<boolean> {
+        const before = usage().used;
+        const retained = retainedAdministratorTurns(state);
+        const last = retained.filter(item => item.turn !== turn || item.toolOffset < turn.toolMessages.length).at(-1);
+        if (!last) { return false; }
+        options.onPhase('summarizing');
+        const text = await summarizeAdministrator({ gateway: options.gateway, config: options.config, signal,
+            summary: state.summary?.text ?? '', messages: retained.flatMap(item => administratorTurnMessages(item.turn, item.toolOffset, item.turn === turn ? options.requestForCounting : undefined)) });
+        signal.throwIfAborted();
+        if (!text) { throw new Error('administrator_summary_failed'); }
+        const previous = state.summary;
+        state.summary = { text, throughId: last.turn.id, throughToolMessage: last.turn === turn ? turn.toolMessages.length : null };
+        if (usage().used >= before) { state.summary = previous; throw new Error('administrator_summary_failed'); }
+        await save();
+        return true;
+    }
+    async function executeTools(result: AgentRecord, calls: NonNullable<AgentMessage['toolCalls']>) {
+        const assistant: AgentMessage = { role: 'assistant', content: String(result.text ?? ''), toolCalls: calls,
+            ...(result.providerPayload && typeof result.providerPayload === 'object' ? { providerPayload: result.providerPayload as AgentRecord } : {}) };
+        const results: AgentMessage[] = calls.map(call => ({ role: 'tool', toolName: call.name, toolCallId: call.id,
+            content: safePromptJson({ ok: false, status: 'failed', code: 'tool_not_executed' }) }));
+        // A complete protocol group is saved before dispatch; placeholders explicitly mean no execution.
+        turn.toolMessages.push(assistant, ...results);
+        options.onText('');
+        await save();
+        const responses: AgentRecord[] = [];
+        for (const [index, call] of calls.entries()) {
+            signal.throwIfAborted();
+            let args: unknown;
+            try { args = JSON.parse(call.arguments); } catch { args = null; }
+            // Until the executor returns, no outcome is confirmed, including across write-receipt saves.
+            results[index].content = safePromptJson({ ok: false, status: 'unconfirmed', code: 'tool_result_unconfirmed' });
+            const value = await options.execute(call.name, args, `${rounds}:${call.id}`, turn.toolMessages.indexOf(results[index]));
+            results[index].content = safePromptJson(value);
+            responses.push({ id: call.id, name: call.name, response: value, ...(Object.hasOwn(call, 'providerId') ? { providerId: call.providerId } : {}) });
+            await save();
+        }
+        return responses;
+    }
+    try {
+        while (rounds < POLICY.maxToolRounds) {
+            signal.throwIfAborted();
+            const compacted = usage().used >= POLICY.summaryTrigger && await compact();
+            if (compacted && responses) { agent = await options.gateway.openSession(options.config); responses = undefined; }
+            const currentUsage = usage(); options.onContext(currentUsage);
+            if (currentUsage.used > POLICY.inputBudget) { throw new Error('administrator_context_full'); }
+            options.onPhase('replying'); options.onText('');
+            let result: AgentRecord;
+            let streaming = true;
+            try {
+                const native = agent.supportsSessionToolLoop && responses !== undefined;
+                result = await agent.run({ systemPrompt: options.system, messages: native ? [] : [...options.prefix, ...administratorContext(state, options.request).messages],
+                    tools: options.tools, signal, ...(native ? { toolResponses: responses } : {}), onStreamProgress: snapshot => {
+                        if (!streaming || signal.aborted) { return; }
+                        options.onText(String(snapshot.text ?? ''));
+                        options.onToolPreview?.(Array.isArray(snapshot.toolCalls) ? snapshot.toolCalls.map(call => String(call.name ?? '')).filter(Boolean) : []);
+                    } });
+            } catch (error) {
+                streaming = false;
+                if (!signal.aborted && !overflowRetried && isAdministratorContextOverflow(error) && await compact()) {
+                    overflowRetried = true; agent = await options.gateway.openSession(options.config); responses = undefined; continue;
+                }
+                throw error;
+            } finally { streaming = false; }
+            rounds++;
+            options.onToolPreview?.([]);
+            signal.throwIfAborted();
+            if (result.refused) { throw new Error('administrator_model_refused'); }
+            const calls = resolveResultToolCalls(result, agent.providerConfig, { fallbackPrefix: `administrator-${rounds}` }) as NonNullable<AgentMessage['toolCalls']>;
+            if (!calls.length) {
+                const text = String(result.text ?? '').trim();
+                if (!text) { throw new Error('administrator_empty_response'); }
+                turn.assistant = text;
+                turn.status = 'finished'; turn.error = '';
+                if (result.providerPayload && typeof result.providerPayload === 'object') { turn.assistantPayload = result.providerPayload as AgentRecord; }
+                options.onText(text);
+                return text;
+            }
+            if (calls.length > 24) { throw new Error('administrator_tool_batch_too_large'); }
+            responses = await executeTools(result, calls);
+        }
+        throw new Error('administrator_tool_round_limit');
+    } finally {
+        options.onContext(usage());
+    }
+}

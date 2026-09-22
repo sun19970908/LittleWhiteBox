@@ -11,6 +11,7 @@ function parseBankPartition(value: unknown): BankDomainV1 {
 
 export const BANK_PARTITION: PartitionRegistration<BankDomainV1> = Object.freeze({
     key: 'bank',
+    storage: 'user-story',
     ownerId: BANK_APP_DESCRIPTOR.id,
     schemaVersion: 1,
     parse(value: unknown) {

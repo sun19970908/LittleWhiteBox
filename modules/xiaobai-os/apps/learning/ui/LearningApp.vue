@@ -138,11 +138,11 @@ async function exportData() {
                 <article v-for="completion in harvest" :key="completion.unitId" class="learning-harvest-entry">
                     <small>{{ new Date(completion.completedAt).toLocaleDateString() }}</small>
                     <h2>+{{ completion.amount }}<span>小白币</span></h2><p>{{ completion.summary }}</p>
-                    <p class="learning-muted">{{ completion.paid ? '已到账' : !completion.originHere ? '请回到开课的原聊天领取' : '学习已完成，等待到账' }}</p>
-                    <button v-if="!completion.paid && completion.originHere" type="button" :disabled="!writable" @click="request('reward', { unitId: completion.unitId, openWallet: !state.walletOpen })">{{ state.walletOpen ? '检查并补领' : '开通钱包并领取' }}</button>
+                    <p class="learning-muted">{{ completion.rewardStatus === 'paid' ? '已到账' : completion.rewardStatus === 'retired' ? '经济重置前的课程，不再补发奖励' : '学习已完成，等待到账' }}</p>
+                    <button v-if="completion.rewardStatus !== 'paid' && completion.rewardStatus !== 'retired'" type="button" :disabled="!writable || state.walletStorage !== 'ready'" @click="request('reward', { unitId: completion.unitId, openWallet: !state.walletOpen })">{{ state.walletOpen ? '检查并补领' : '开通钱包并领取' }}</button>
                 </article>
-                <button v-if="state.chatStorage === 'unconfirmed' || state.chatStorage === 'conflict' || state.chatStorage === 'failed'" type="button" :disabled="pending || state.busy" @click="request('verify-wallet')">检查账本保存</button>
-                <button v-if="state.chatStorage === 'conflict'" type="button" :disabled="pending || state.busy" @click="askConfirm('adopt-wallet', {}, '使用服务器上已保存的聊天账本？这次尚未确认保存的修改将被放弃。已完成的课程仍可检查并补领奖励。')">使用已保存账本</button>
+                <button v-if="state.walletStorage === 'unconfirmed' || state.walletStorage === 'conflict' || state.walletStorage === 'failed'" type="button" :disabled="pending || state.busy" @click="request('verify-wallet')">检查账本保存</button>
+                <button v-if="state.walletStorage === 'conflict'" type="button" :disabled="pending || state.busy" @click="askConfirm('adopt-wallet', {}, '使用服务器上已保存的全局账本？这次尚未确认保存的修改将被放弃。')">使用已保存账本</button>
                 <div v-if="state.completions.length > 20" class="learning-row"><button type="button" :disabled="harvestPage === 0" @click="harvestPage--">上一页</button><button type="button" :disabled="(harvestPage + 1) * 20 >= state.completions.length" @click="harvestPage++">下一页</button></div>
             </section>
             <section v-if="page === 'settings'" class="learning-settings-page">

@@ -1,7 +1,7 @@
 import type {
     CapabilityToken,
     PartitionRegistration,
-    ScopedChatStore,
+    PartitionStore,
     XiaobaiOsFileControls,
 } from './contracts.js';
 import type {
@@ -23,15 +23,19 @@ export interface AppDataCleanupContext {
 
 export interface AppInstallContext {
     ownerId: string;
-    partition: ScopedChatStore<unknown> | null;
+    partition: PartitionStore<unknown> | null;
     useCapability<C>(token: CapabilityToken<C>): C;
     execution: XiaobaiOsExecutionScope;
     files: XiaobaiOsFileControls;
+    storeFor<T>(registration: PartitionRegistration<T>): PartitionStore<T>;
+    filesFor(registration: PartitionRegistration<unknown>): XiaobaiOsFileControls;
 }
 
 export interface XiaobaiOsAppModule {
     descriptor: Readonly<XiaobaiOsAppDescriptor>;
     partition?: PartitionRegistration<unknown>;
+    additionalPartitions?: readonly PartitionRegistration<unknown>[];
+    fileScope?: 'user';
     capabilities: readonly CapabilityToken<unknown>[];
     install(context: AppInstallContext): Promise<XiaobaiOsAppRuntime>;
     dispose?(runtime: XiaobaiOsAppRuntime): Promise<void>;
@@ -42,10 +46,11 @@ export interface AppModuleRegistryOptions {
     createStore(
         registration: PartitionRegistration<unknown>,
         allowedCapabilities: readonly CapabilityToken<unknown>[],
-    ): ScopedChatStore<unknown>;
+    ): PartitionStore<unknown>;
     hasCapability(token: CapabilityToken<unknown>): boolean;
     requireCapability<C>(token: CapabilityToken<C>): C;
     files: XiaobaiOsFileControls;
+    filesFor?(registration?: PartitionRegistration<unknown>, scope?: 'user'): XiaobaiOsFileControls;
 }
 
 export interface AppModuleRegistry {
@@ -189,7 +194,7 @@ export function createAppModuleRegistry(
                 void releaseApp(app, 'app-background-failed');
             });
             app.execution = execution;
-            let partition: ScopedChatStore<unknown> | null = null;
+            let partition: PartitionStore<unknown> | null = null;
             if (app.module.partition) {
                 phase = 'partition';
                 publish(appId, { state: 'loading', phase });
@@ -201,7 +206,19 @@ export function createAppModuleRegistry(
                 ownerId: appId,
                 partition,
                 execution,
-                files: options.files,
+                files: options.filesFor?.(app.module.partition, app.module.fileScope) ?? options.files,
+                storeFor<T>(registration: PartitionRegistration<T>): PartitionStore<T> {
+                    if (registration.ownerId !== appId || !app.module.additionalPartitions?.includes(registration)) {
+                        throw new Error('App partition access was not declared');
+                    }
+                    return options.createStore(registration, app.module.capabilities) as PartitionStore<T>;
+                },
+                filesFor(registration) {
+                    if (registration.ownerId !== appId || !app.module.additionalPartitions?.includes(registration)) {
+                        throw new Error('App partition access was not declared');
+                    }
+                    return options.filesFor?.(registration) ?? options.files;
+                },
                 useCapability<C>(token: CapabilityToken<C>): C {
                     if (!allowed.has(token.id)) {
                         throw Object.assign(new Error(`${appId} did not declare capability ${token.id}`), {

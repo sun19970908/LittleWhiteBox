@@ -295,7 +295,7 @@ test('main generation starting while Agent config loads cancels before opening a
 });
 
 test('world reference updates do not cancel board or candidate generation, but story changes still do', async t => {
-    const publication = { overview: '港城近况', news: [{ id: 'canal', title: '运河通航', summary: '运河恢复通航。', body: '第一艘船经过石桥。' }] };
+    const publication = { overview: '港城近况', news: [{ id: 'canal', title: '运河通航', body: '第一艘船经过石桥。' }] };
     const candidate = { name: '船工', description: '熟悉港口，想赚运费。', pitch: '我来送。', capability: '识水路', risk: '不擅陆路' };
     const record = { taskId: 'delivery', taskRevision: 1, eventId: 'posted', source: 'published', status: 'recruiting',
         issuer: { displayName: '玩家' }, title: '送箱子', objective: '送到仓库', location: '港口', risk: '破损', reward: 100, candidates: [] };

@@ -128,7 +128,7 @@ useAppBack(() => {
             <section v-if="state.world.news.length" class="world-news-list" aria-label="各处见闻">
                 <article v-for="item in state.world.news" :key="item.id" class="world-news-item">
                     <button type="button" :data-article-id="item.id" @click="openArticle(item)">
-                        <span class="world-item-text"><h2>{{ item.title }}</h2><span class="world-item-summary">{{ item.summary }}</span></span>
+                        <span class="world-item-text"><h2>{{ item.title }}</h2><span class="world-item-preview">{{ item.body }}</span></span>
                     </button>
                 </article>
             </section>

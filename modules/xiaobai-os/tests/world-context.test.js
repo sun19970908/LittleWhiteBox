@@ -175,7 +175,7 @@ test('background capture rejects another chat and an unavailable optional provid
 test('map and task material share the bounded reference projection while task snapshots retain full content', async () => {
     const content = { overview: '&'.repeat(WORLD_LIMITS.overview),
         news: Array.from({ length: WORLD_LIMITS.news }, (_, i) => ({ ...article(String(i)),
-            summary: '&'.repeat(WORLD_LIMITS.summary), body: '<'.repeat(WORLD_LIMITS.body),
+            body: '<'.repeat(WORLD_LIMITS.body),
         })),
     };
     const snapshot = normalizeTaskGenerationContext({ worldContent: content });

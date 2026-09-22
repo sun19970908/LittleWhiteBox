@@ -111,7 +111,9 @@ async function main() {
     const anchors = await scoreRecallRuntimeAnchors(chatId, [1, 0]);
     const events = await scoreRecallRuntimeEvents(chatId, [1, 0]);
     const evidence = await selectRecallRuntimeL1Evidence(chatId,
-        [{ event: { id: 'evt-1', summary: 'alpha event (#2)' } }], { queryVector: [0, 1] });
+        [], { queryVector: [0, 1], sourceTurns: [{ floor: 1 }], hiddenThrough: 1 });
+    const visibleEvidence = await selectRecallRuntimeL1Evidence(chatId,
+        [], { queryVector: [0, 1], sourceTurns: [{ floor: 1 }], hiddenThrough: 0 });
     const evidenceStats = getRecallRuntimeStats().find(item => item.chatId === chatId);
     const diffusion = await diffuseRecallRuntimeL0(chatId, [{ atomId: 'atom-1', floor: 1, similarity: 1 }], [{ atomId: 'atom-1', floor: 1, semantic: 'alpha memory' }], [1, 0], { name1: 'A' });
     const stats = getRecallRuntimeStats().find((item) => item.chatId === chatId) || getRecallRuntimeStats()[0] || {};
@@ -141,11 +143,11 @@ async function main() {
         ['anchorScore', anchors?.scores?.[0]?.atomId === expectedAnchors[0]?.atomId && scoreClose(anchors?.scores?.[0]?.similarity, expectedAnchors[0]?.similarity)],
         ['eventScore', events?.scores?.[0]?.eventId === expectedEvents[0]?.eventId && scoreClose(events?.scores?.[0]?.similarity, expectedEvents[0]?.similarity)],
         ['l1Exact', top?.chunkId === expectedL1[0]?.chunkId && scoreClose(top?._cosineScore, expectedL1[0]?._cosineScore)],
-        ['eventEvidence', evidence.status === 'applied' && evidence.items.length === 2
-            && evidence.items[0].chunkId === 'c-1-0' && evidence.items[0].evidenceLane === 'event'
-            && evidence.items[1].chunkId === 'c-1-1' && evidence.items[1].evidenceLane === 'conversation'
-            && evidence.items.every(item => item.ownerEventId === 'evt-1' && !('vector' in item))],
+        ['independentL1Evidence', evidence.status === 'applied' && evidence.items.length === 1
+            && evidence.items.some(item => item.chunkId === 'c-1-1')
+            && evidence.items.every(item => !('ownerEventId' in item) && !('vector' in item))],
         ['eventEvidenceRuntimeStats', evidenceStats?.chunkVectors === 2 && evidenceStats?.eventVectors === 1],
+        ['visibleEvidenceExcluded', visibleEvidence.items.length === 0 && visibleEvidence.stats.sourceCandidates === 0],
         ['diffusionSmoke', !!diffusion?.metrics],
         ['retainClearProtectActiveSession', top?.chunkId === 'c-1-0' && anchors?.scores?.length > 0 && events?.scores?.length > 0],
         ['sessionReleased', endStats?.status === 'session-cache idle' && !endStats.chunkVectors && !endStats.eventVectors && !endStats.stateVectors],

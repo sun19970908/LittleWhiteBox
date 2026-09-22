@@ -28,6 +28,7 @@ import { getContext } from "../../../../../st-context.js";
 import { streamingGeneration } from "../streaming-generation.js";
 import { EXT_ID, extensionFolderPath } from "../../core/constants.js";
 import { createModuleEvents, event_types } from "../../core/event-manager.js";
+import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
 import { StoryOutlineStorage } from "../../core/server-storage.js";
 import { promptManager } from "../../../../../openai.js";
 import {
@@ -49,7 +50,7 @@ const DEBUG_KEY = 'LittleWhiteBox_StoryOutline_Debug';
 const OVERLAY_LAYOUT_KEY = 'LittleWhiteBox_StoryOutline_OverlayLayout';
 
 let overlayCreated = false, frameReady = false, pendingMsgs = [], presetCleanup = null, step1Cache = null;
-let runtimeEnabled = true;
+const messageButtonOwnership = createMessageButtonOwnership();
 
 // ==================== 2. 通用工具 ====================
 
@@ -1443,8 +1444,13 @@ window.addEventListener('resize', () => {
 let eventsRegistered = false;
 
 function addBtnToMsg(mesId) {
-    if (!getSettings().storyOutline?.enabled) return;
+    if (!messageButtonOwnership.ownsButtons()) return;
     const msg = document.querySelector(`#chat .mes[mesid="${mesId}"]`);
+    if (msg) mountStoryOutlineButton(msg, mesId);
+}
+
+export function mountStoryOutlineButton(msg, mesId) {
+    if (!getSettings().storyOutline?.enabled) return;
     if (!msg || msg.querySelector('.xiaobaix-story-outline-btn')) return;
     const btn = document.createElement('div');
     btn.className = 'mes_btn xiaobaix-story-outline-btn';
@@ -1452,11 +1458,14 @@ function addBtnToMsg(mesId) {
     btn.dataset.mesid = mesId;
     btn.innerHTML = '<i class="fa-regular fa-map"></i>';
     btn.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); if (!getSettings().storyOutline?.enabled) return; showOverlay(); loadAndSend(); });
-    if (window.registerButtonToSubContainer?.(mesId, btn)) return;
-    msg.querySelector('.flex-container.flex1.alignitemscenter')?.appendChild(btn);
+    if (!window.registerButtonToSubContainer?.(mesId, btn)) {
+        msg.querySelector('.flex-container.flex1.alignitemscenter')?.appendChild(btn);
+    }
+    return () => btn.remove();
 }
 
 function initBtns() {
+    if (!messageButtonOwnership.ownsButtons()) return;
     if (!getSettings().storyOutline?.enabled) return;
     $("#chat .mes").each((_, el) => { const id = el.getAttribute("mesid"); if (id != null) addBtnToMsg(id); });
 }
@@ -1490,7 +1499,7 @@ function registerEvents() {
 function cleanup() {
     events.cleanup();
     eventsRegistered = false;
-    $(".xiaobaix-story-outline-btn").remove();
+    messageButtonOwnership.runOwnedCleanup(() => $(".xiaobaix-story-outline-btn").remove());
     hideOverlay();
     overlayCreated = false; frameReady = false; pendingMsgs = [];
     window.removeEventListener("message", handleMsg);
@@ -1502,7 +1511,6 @@ function cleanup() {
 // ==================== Toggle 监听（始终注册）====================
 
 $(document).on("xiaobaix:storyOutline:toggle", (_e, enabled) => {
-    if (!runtimeEnabled) return;
     if (enabled) {
         registerEvents();
         initBtns();
@@ -1513,7 +1521,6 @@ $(document).on("xiaobaix:storyOutline:toggle", (_e, enabled) => {
 });
 
 document.addEventListener('xiaobaixEnabledChanged', e => {
-    if (!runtimeEnabled) return;
     if (!e?.detail?.enabled) {
         cleanup();
     } else if (getSettings().storyOutline?.enabled) {
@@ -1543,12 +1550,11 @@ async function initSettingsFromServer() {
     } catch { }
 }
 
-function configureStoryOutlineRuntime({ enabled = true } = {}) {
-    runtimeEnabled = enabled;
+function configureStoryOutlineRuntime({ ownsMessageButtons = true } = {}) {
+    messageButtonOwnership.configure(ownsMessageButtons);
 }
 
 jQuery(() => {
-    if (!runtimeEnabled) return;
     if (!getSettings().storyOutline?.enabled) return;
     initSettingsFromServer();
     initPromptConfigFromServer();

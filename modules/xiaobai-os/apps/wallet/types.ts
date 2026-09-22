@@ -21,7 +21,7 @@ export interface WalletTransactionPageView {
 }
 
 export interface WalletClientState extends WalletTransactionPageView {
-    chatIdentity: string;
+    activationId: string;
     currency: '小白币';
     balance: number;
     transactionCount: number;

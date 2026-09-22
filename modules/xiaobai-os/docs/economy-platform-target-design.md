@@ -1,116 +1,63 @@
 # Economy 平台终态设计
 
-## 1. 目标
+## 所有权与唯一事实
 
-Economy 为普通小白 OS 提供一套小而可靠的资金事实：开户、余额、流水、幂等、多资金腿 action、显式冲正和跨领域原子提交。
+普通小白 OS 的钱包属于当前 SillyTavern 用户，不属于聊天。小白酒馆是另一套应用，不接入本次存储。
 
-它不是剧情系统，不判断消息因果，不拥有任务进度，也不随编辑、swipe、删除或分支自动倒账。
+资金规则由 `domains/economy` 拥有；读写授权、分区注册由 `capabilities/economy` 拥有。余额只从账本交易派生，不另存余额、锁或分页缓存。现行字段与版本以 [账本类型](../domains/economy/types.ts) 为准。
 
-## 2. 开工检查结论
+用户文件格式与文件名由 [user-document.ts](../kernel/user-document.ts) 定义；资金消费者仍拥有自己的业务模型，Kernel 不判断任务进度或赌局输赢。
 
-| 项目 | 结论 |
-| --- | --- |
-| 功能所有者 | `domains/economy`拥有资金规则；`capabilities/economy`拥有 Economy 分区与受限读写能力 |
-| 唯一事实来源 | `EconomyLedgerV2.transactions` |
-| 持久态 | 不可变交易 |
-| 临时态 | Kernel 文件写队列、未确认候选、余额和分页投影 |
-| 外部依赖 | Kernel Scoped transaction、时间与 ID 生成器 |
-| 注册入口 | Capability catalog 中的 Economy Capability 与`economy`分区注册 |
-| 删除路径 | 先处理资金消费者，再删除 Capability/domain 注册并清理`economy`分区 |
-| 兼容对象 | 当前正式线没有 Economy 数据；测试线旧 metadata 根不迁移 |
-| 最少测试 | 账本不变量、幂等/冲正、sidecar 保存失败、跨分区原子资金 |
+| 数据 | 所有者 | 存储范围 |
+| --- | --- | --- |
+| 账本 | Economy | 用户文件的全局分区 |
+| 人物属性 | Dice | 用户文件的全局分区 |
+| 升级前不再兑付的课程 ID | Learning | 用户文件的全局分区 |
+| 银行、游戏、商店、任务 | 各 APP | 用户文件内，以稳定 osId 隔离的故事分区 |
+| 学习成果 | Learning | 原用户学习文件 |
+| 老师选择、消息、世界、地图等 | 各 APP | 原聊天 sidecar |
 
-## 3. 持久格式
+`PartitionRegistration.storage` 是路由的唯一声明。Composition 分别注册聊天与用户分区，两个事务根不能跨文件取得彼此的分区。Wallet 没有业务分区，明确使用用户文件的恢复入口。
 
-```ts
-interface EconomyLedgerV2 {
-    schemaVersion: 2;
-    transactions: EconomyTransaction[];
-}
+## 事务与恢复
 
-interface EconomyTransaction {
-    id: string;
-    sequence: number;
-    idempotencyKey: string;
-    actionId: string;
-    fromAccountId: string;
-    toAccountId: string;
-    amount: number;
-    kind: string;
-    title: string;
-    note: string;
-    sourceDomain: string;
-    sourceId: string;
-    createdAt: number;
-    reversalOfTransactionId?: string;
-}
-```
+需要结算的 APP 先准备自己的业务事件，再在同一事务调用 Economy Capability；业务与资金组成一个用户文件候选，一次上传。新故事先确认稳定聊天引用，再准备经济业务；用户钱包和人物属性不要求打开聊天，也不建立聊天引用。
 
-不持久化 balance、快照、锁、当前页、剧情楼层、消息 hash 或分支指针。
+交易的 `sourceDomain` 来自调用者身份；`sourceScope` 来自可信存储作用域。经济边界限定 action、幂等键和业务账户的故事命名空间；APP 核账只收到自己来源、自己故事的本地 ID 视图。不同聊天的第一笔银行事件、同名托管账户不能碰撞。
 
-## 4. 账本不变量
+明确拒绝不发布候选余额或业务。需要保留随机结果的操作可保留失败候选；未知保存保留原候选并冻结用户文件的新写入。普通聊天文件不因此冻结。
 
-1. `sequence`从 1 连续递增，交易 ID 唯一。
-2. 金额为正安全整数；转出与转入账户不同。
-3. 玩家账户不得透支。
-4. 同一 action 的多条资金腿连续出现，不能被其他 action 穿插。
-5. 同一 idempotencyKey 重放必须与原意图完全相同；不同意图报冲突。
-6. 开户 action 固定为`economy:opening-grant:v1`且只能出现一次，赠送 100 小白币；action、source 与金额共同构成不可修改的创世事实。
-7. reversal 是一笔方向相反的新交易；被冲正交易、来源和金额可验证，开户赠礼不可冲正。
+检查保存先读回；确认原 commit 后发布完整快照，即使原业务条件已经失效也不撤销已落盘的操作。必要重发只上传原候选，不重跑业务、随机数或 ID 生成；原 `commitGuard` 和取消信号仍生效，`beforeRetry` 只能追加条件，不能替换原校验。未确认、冲突或失败时，钱包均提供明确采用服务器完整版本的入口；不能混用本地业务与服务器余额。
 
-余额只是对所有资金腿的投影。
+队列、候选、页面激活标识与投影只在当前进程内。没有待确认候选时，读取和事务准备均重读服务器；上传前再次核验原版本，已发生的外部更新进入冲突，不由旧页面覆盖。SillyTavern 的用户文件接口提供单文件原子替换，**不提供服务端 CAS**；版本检查与上传之间仍有竞态窗口，不宣称多设备同时写入安全。
 
-100 小白币不是“当前开户活动”或可调整常量。直接修改它会使所有既有账本在加载时失效；若未来需要改变新账户的创世规则，必须先定义明确的新账本版本/升级边界，不能让当前 validator 用新金额重判历史。
+## 升级与数据策略
 
-旧测试线 Economy V1 不属于兼容对象。生产切换后只解析 sidecar 中当前`economy`分区格式，不保留 anchor、旧根读取器或日常清洗器。
+正式线 `a32c28d0` 已包含旧聊天经济系统。本次经济重置是用户明确批准的产品调整，不以“测试线无人使用”为前提。
 
-## 5. 跨领域原子提交
+首次建立用户文件：
 
-Bank、Game、Shop、Tasks 不是先写业务再调用钱包。各 application service 在自己的 Scoped transaction 中调用 Economy Transaction Capability：
+- 创建唯一开户赠礼，金额以 [经济规则](../domains/economy/types.ts) 为准。
+- 不导入任何聊天的余额、流水、存款、投资、赌局、库存或任务经济记录。
+- 保留学习文件，记录升级前已完成课程的 ID，阻止它们在新钱包补领奖励。
+- 把设置中的原人物属性复制进 Dice 分区，用户文件确认后才删除旧设置字段；失败不先删源数据。
 
-```text
-Kernel 强读当前 sidecar
-→ 只解析业务分区与 Economy 分区
-→ 校验业务 CAS/actionId
-→ 生成领域事件
-→ Economy Capability 生成资金腿
-→ 安装到同一个 sidecar candidate
-→ 校验业务 + Economy + 交叉不变量
-→ 以一个 commitId 上传一次
-```
+旧聊天经济分区在 sidecar 加载入口一次性清除，规则在 [reset-chat-economy.ts](../storage/reset-chat-economy.ts)。宿主没有遍历全部用户文件的接口，因此不声称已经物理清理未打开的旧聊天；运行时从不使用其中的旧资产。
 
-任何校验或明确保存失败都不发布业务与 Economy 新快照，不允许出现“扣了钱但没商品”“赌局结束但没派彩”。保存结果不确定时，Kernel 保留同一个已序列化 candidate 并冻结当前聊天全部新写入；重试不得重新执行 command、抽随机或生成 ID。
+普通聊天正文、学习成果、老师选择、地图、世界等非经济数据保留。分支获得新 osId，不复制经济资产，也不重新发开户礼。重命名保留原 osId；银行期限仍按其所属聊天的回复轮数计算，不改为跨聊天计数。
 
-## 6. 聊天与分支
+## 业务与界面
 
-Economy 位于当前聊天 sidecar 的`economy`分区。Kernel 用稳定 osId 绑定聊天，切聊后排队或迟到动作必须在上传前因 activation/binding guard 失败。
+Wallet 可在没有聊天时打开，展示同一用户的钱包。重新进入或切卡不会重建账户；旧页面请求由临时激活标识拒绝，而不是用聊天身份定义钱包。
 
-Economy 不读取消息正文。编辑、swipe、删除不会自动产生 reversal，也不会删除流水。创建分支时由 Kernel 复制父 sidecar 的已确认 partitions 并生成新 osId；之后两个 sidecar 分别写入。
+Dice 首次建档、普通编辑不收费；确认重置才按 [重置价格](../apps/dice/domain/coc7-reset.ts) 扣费。清空属性和扣款同一次提交；无已保存属性时不重复收费，余额不足保留原属性。清理聊天骰子记录不删除全局人物属性。
 
-如果未来某业务需要“随剧情撤销”，应由该业务状态机定义明确的补偿动作，再以普通 Economy action 记账；不能让 Economy 猜测剧情含义或裁流水历史。
+Learning 保留课程的内容可见范围，但新奖励可跨卡领取。课程完成、账本入账和学习回执仍有各自保存确认；稳定课程键保证回执保存失败后重领不重复入账。升级前完成的课程显示为不再补发，不伪装成新钱包的已到账记录。
 
-## 7. Capability 与保存状态
+任务后台在自己的经济存储不可写时不创建维护会话。管理员通过任务服务使用同一个资金事务，不更改 agent loop。
 
-Economy Capability 对消费者只暴露两类窄接口：
+## 删除路径与验证
 
-- Wallet 使用只读口读取玩家余额与分页流水；
-- Game、Bank、Shop、Tasks 使用 caller-bound 事务口读取余额、提交资金 action，并且只能读取自己来源的核账流水；
-- 消费者不能取得可写 Ledger、任意账户转账口或伪造`sourceDomain`；
-- 文件级`ready/saving/unconfirmed/conflict`由 Kernel 提供，不由 Economy 复制。
+禁用 APP 或删除聊天不删除共享钱包、不自动退款。银行、游戏、商店、任务不再暴露分区独立清空钩子：直接删业务、保留其资金腿会破坏核账。移除整个经济功能前须明确处理各消费者及学习奖励策略，再一次清理用户文件和注册；不得留下能向新账本再次兑现的旧资产。
 
-Kernel 负责 osId/binding、单页写队列、强读、candidate、上传、commitId 读回确认与冲突状态。Economy 的订阅和投影均为临时态，不进入分区。
-
-## 8. UI 边界
-
-Wallet 是只读投影，不拥有调账入口。Kernel 已加载当前 sidecar 时，打开 Wallet 不另存聊天或扫描消息；首次开户走一次明确的 Economy transaction 并显示`loading`。`unconfirmed`表示上一次 sidecar 上传结果未知，不表示正在核对剧情。
-
-## 9. 验收
-
-- 同一聊天只开户一次；
-- `opening-grant:v1`的身份与 100 小白币金额保持冻结，产品调整不重判既有账本；
-- 幂等重试不重复保存或扣款；
-- 多资金腿一次提交，失败无半条 action；
-- Bank/Game/Shop/Tasks 的业务事件与资金交叉不变量能拒绝伪造分区组合；
-- 聊天文本变化不改变账本；
-- APP 不能越权读取或写入 Economy 分区；
-- typecheck、测试、lint、build 全部通过。
+最低回归覆盖：全局账户首赠一次、跨故事同名资金腿、业务与资金原子失败、未知保存重试不重扣、分支空业务、学习跨卡单次支付和旧奖励停发、COC 取消/不足/失败保留、局域网 HTTP、聊天根与经济根隔离。类型、lint、构建与真实组件交互共同验证。

@@ -61,17 +61,7 @@
 .learning-messages:empty { display: none; }
 .learning-output { min-width: 0; }
 .learning-output.is-streaming .learning-markdown > :last-child::after { content: ' ▍'; color: var(--learn-blue); }
-.learning-markdown { font-size: 15px; line-height: 1.85; overflow-wrap: anywhere; }
-.learning-markdown > * + * { margin-top: 12px; }
-.learning-markdown :is(ul, ol) { padding-left: 1.5em; }
-.learning-markdown blockquote { border-left: 2px solid var(--learn-rule); padding-left: 14px; color: var(--learn-muted); }
-.learning-markdown :is(h1, h2, h3, h4, h5, h6) { font-size: 1.1em; line-height: 1.6; }
-.learning-markdown table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
-.learning-markdown :is(td, th) { padding: 6px 10px; border: 1px solid var(--learn-rule); }
-.learning-markdown pre { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--learn-tint); border-radius: 6px; padding: 12px; margin: 0; }
-.learning-markdown code { font: .9em/1.7 monospace; }
-.learning-codeblock { position: relative; padding-top: 38px; background: var(--learn-tint); border-radius: 6px; }
-.learning-code-copy { position: absolute; top: 0; right: 0; }
+.learning-markdown { --markdown-rule: var(--learn-rule); --markdown-muted: var(--learn-muted); --markdown-tint: var(--learn-tint); --markdown-accent: var(--learn-blue); font-size: 15px; line-height: 1.85; }
 .learning-reasoning { color: var(--learn-muted); font-size: 13px; margin-bottom: 8px; }
 .learning-tool-entry { border-left: 2px solid var(--learn-rule); padding-left: 12px; min-width: 0; }
 .learning-tool-entry.is-running, .learning-tool-entry.is-generating { border-color: var(--learn-blue); }

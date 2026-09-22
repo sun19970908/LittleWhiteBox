@@ -37,6 +37,7 @@ export function createAppComponentLoader(importer: () => Promise<ComponentModule
 }
 
 const importers: Readonly<Record<string, () => Promise<ComponentModule>>> = Object.freeze({
+    administrator: () => import('../apps/administrator/ui/AdministratorApp.vue'),
     dice: () => import('../apps/dice/ui/DiceApp.vue'),
     'agent-api': () => import('../apps/agent-api/ui/AgentApiApp.vue'),
     'fourth-wall': () => import('../apps/fourth-wall/ui/FourthWallApp.vue'),

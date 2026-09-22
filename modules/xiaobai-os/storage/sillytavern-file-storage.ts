@@ -1,4 +1,5 @@
 import type {
+    JsonUserFilePort,
     StorageFailure,
     StorageReplaceInput,
     StorageReplaceResult,
@@ -10,7 +11,6 @@ import {
     sameSidecarRevision,
     serializeXiaobaiOsEnvelope,
 } from '../kernel/envelope.js';
-import type { JsonUserFilePort } from './sidecar-index.js';
 import { XiaobaiOsStorageError } from './storage-port.js';
 
 // Native saves have no short client deadline. A slow VPS is not evidence of a failed write.

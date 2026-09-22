@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import { formatExistingSummaryForAI } from '../../modules/story-summary/generate/generator.js';
+import { prepareSummaryResult } from '../../modules/story-summary/generate/summary-result.js';
+import { DEFAULT_SUMMARY_USER_JSON_FORMAT_PROMPT } from '../../modules/story-summary/data/config.js';
 
 export async function runSummaryRequestCheck() {
     const { generateSummary, parseSummaryJson } = await import('../../modules/story-summary/generate/llm.js');
@@ -14,7 +16,11 @@ export async function runSummaryRequestCheck() {
         { id: 'evt-7', timeLabel: '6月12日', title: '搬家', summary: '小红搬入新家。 (#1)' },
         { id: 'evt-12', title: '回家', summary: '我买了牛肉面。 (#2)' },
     ];
-    const existingSummary = formatExistingSummaryForAI({ json: { events: existingEvents } });
+    const existingArcs = [0, 0.01, 0.29, 0.75, 1].map((progress, index) => ({ name: `角色${index}`, trajectory: '建立信任', progress }));
+    const existingSummary = formatExistingSummaryForAI({ json: { events: existingEvents, arcs: existingArcs } });
+    // Execute the actual model-facing arc example as an external protocol fixture.
+    const example = JSON.parse(DEFAULT_SUMMARY_USER_JSON_FORMAT_PROMPT.match(/```json\s*([\s\S]*?)```/u)[1]);
+    assert.equal(prepareSummaryResult({ events: [], arcUpdates: example.arcUpdates }, {}).arcUpdates[0].progress, 0.75);
 
     // Capture the two outgoing transport boundaries without calling a model.
     globalThis.fetch = async (_url, options) => {
@@ -73,6 +79,10 @@ export async function runSummaryRequestCheck() {
                 assert.ok(request.messages.at(-1).content.trim(), `${label}: final instruction is present`);
                 baselineMessages ??= request.messages;
                 assert.deepEqual(request.messages, baselineMessages, `${label}: identical prompt across transports`);
+                // External progress representation: bare integer scores, not ratios or percent strings.
+                const progressValues = [...request.messages.flatMap(message => [...message.content.matchAll(/\(progress: ([^)]+)\)|（progress: ([^）]+)）/gu)])]
+                    .map(match => Number(match[1] ?? match[2]));
+                assert.deepEqual(progressValues, [0, 1, 29, 75, 100]);
                 const eventLines = request.messages.flatMap(message => message.content.split('\n'))
                     .filter(line => line.startsWith('[evt-'));
                 assert.deepEqual(eventLines, [

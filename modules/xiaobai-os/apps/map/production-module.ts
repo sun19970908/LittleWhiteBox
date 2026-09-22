@@ -6,17 +6,20 @@ import { createMapMaintenanceParticipant } from './host/maintenance-participant.
 import { createMapPromptRuntime, type MapPromptEventHandlers } from './host/prompt-runtime.js';
 import { createMapSettingsRuntime } from './host/settings-runtime.js';
 import { createMapModule } from './module.js';
+import { createMapManagement } from './management/participant.js';
 
 export interface ProductionMapModuleDependencies {
     settings: XiaobaiOsSettingsRepository;
     getChatIdentity: () => XiaobaiOsChatIdentity | null;
+    getPlayerDisplayName: () => string;
     setPrompt(value: string): void;
     subscribePrompt(handlers: MapPromptEventHandlers): () => void;
 }
 
 export function createProductionMapModule(dependencies: ProductionMapModuleDependencies) {
     return createMapModule({
-        async install({ map, maintenance, execution }) {
+        async install({ map, maintenance, management, execution }) {
+            execution.addCleanup(management.register(createMapManagement(map, () => ({ actorKey: 'player', displayName: dependencies.getPlayerDisplayName() }))));
             const unregisterParticipant = maintenance.registerParticipant(createMapMaintenanceParticipant({
                 map,
                 readSettings: () => dependencies.settings.read()?.apps.map ?? null,

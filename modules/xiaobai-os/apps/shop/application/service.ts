@@ -4,7 +4,7 @@ import {
 } from '../../../capabilities/economy/index.js';
 import type {
     PendingCommitRecoveryResult,
-    ScopedChatStore,
+    PartitionStore,
     ScopedTransactionResult,
     XiaobaiOsFileControls,
     XiaobaiOsFileState,
@@ -95,7 +95,7 @@ function transactionError(result: {
 }
 
 export function createShopService(
-    store: ScopedChatStore<ShopDomainV2>,
+    store: PartitionStore<ShopDomainV2>,
     files: XiaobaiOsFileControls,
     economy: EconomyReadCapability,
     {

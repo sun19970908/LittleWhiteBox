@@ -8,7 +8,7 @@ export interface TaskMaintenanceSettings {
 }
 
 interface TaskMaintenanceParticipantDependencies {
-    readonly tasks: Pick<TasksService, 'readCurrent' | 'createActionId' | 'commitMaintenance'>;
+    readonly tasks: Pick<TasksService, 'readCurrent' | 'createActionId' | 'commitMaintenance' | 'getWriteState'>;
     readonly readSettings: () => TaskMaintenanceSettings | null;
 }
 
@@ -24,6 +24,9 @@ export function createTaskMaintenanceParticipant({
         },
         createSession(source: AcceptedTurnSource, mode: MaintenanceMode) {
             if (mode === 'rebuild') {return null;}
+            if (tasks.getWriteState() !== 'ready') {
+                throw Object.assign(new Error('Task economy storage is not ready'), { code: 'storage_unconfirmed' });
+            }
             const records = tasks.readCurrent().records.filter(record => (
                 record.status === 'active'
                 && source.assistantCount > record.lastObservedAssistantCount

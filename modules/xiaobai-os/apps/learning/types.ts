@@ -1,4 +1,5 @@
 import type { LearningClassView } from './application/projection.js';
+import type { XiaobaiOsFileState } from '../../kernel/contracts.js';
 import type { LearningAction } from './agent/session.js';
 import type { LearningDialogueView } from './application/message-view.js';
 import type { LearningMediaState, LearningVoice } from './host/media-adapter.js';
@@ -10,6 +11,7 @@ export interface LearningClientState extends LearningClassView {
     candidates: { name: string; aliases: string[] }[];
     storage: 'unloaded' | 'ready' | 'unconfirmed' | 'conflict';
     chatStorage: string;
+    walletStorage: XiaobaiOsFileState;
     busy: boolean;
     message: string;
     reply: { text: string; action: LearningAction['kind']; exerciseId?: string } | null;

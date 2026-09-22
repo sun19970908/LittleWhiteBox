@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { LearningMessageView } from '../application/message-view.js';
-import LearningMarkdown from './LearningMarkdown.vue';
+import MessageMarkdown from '../../../shell/app-src/components/MessageMarkdown.vue';
 
 const props = defineProps<{ messages: LearningMessageView[]; running: boolean }>();
 // Display batches are derived from the same assistant/tool messages used for provider replay.
@@ -44,7 +44,7 @@ function problem(result?: string) {
         <template v-for="(batch, index) in batches" :key="index">
             <p v-if="batch.message.hasReasoning && batch.message.streaming && !batch.message.content && !batch.tools.length" class="learning-reasoning" role="status">正在思考…</p>
             <div v-if="batch.message.content" class="learning-output" :class="{ 'is-streaming': batch.message.streaming }">
-                <LearningMarkdown v-if="batch.message.content" :text="batch.message.content" />
+                <MessageMarkdown v-if="batch.message.content" class="learning-markdown" :text="batch.message.content" />
             </div>
             <div v-for="tool in batch.tools" :key="tool.call.id" class="learning-tool-entry" :class="`is-${tool.status}`">
                 <details>

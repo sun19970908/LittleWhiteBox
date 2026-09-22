@@ -5,6 +5,7 @@ import {
     createRecallPrefetchCoordinator,
     getRecallPrefetchStartAction,
 } from '../generate/recall-prefetch.js';
+import { RECALL_TIMEOUT_MS, RECALL_TIMEOUT_REASONS, recallFailureNotice } from '../generate/recall-failure.js';
 
 function createScheduler() {
     let clock = 0;
@@ -197,7 +198,7 @@ test('system-only changes and a throttled watcher fall back without an early req
     assert.equal(scheduler.pendingCount(), 0);
 });
 
-test('an expired watcher is joined as timed out without repeating the request', async () => {
+test('waiting for the host without starting recall reports host waiting, not a recall timeout', async () => {
     let calls = 0;
     const { context, coordinator, scheduler } = createHarness(() => {
         calls++;
@@ -223,8 +224,10 @@ test('an expired watcher is joined as timed out without repeating the request', 
         focusRef: null,
     });
     await flushMicrotasks();
-    assert.equal(joined.path, 'prefetch-timeout');
-    assert.equal(joined.remainingMs, 0);
+    assert.equal(joined.path, RECALL_TIMEOUT_REASONS.host);
+    assert.equal(recallFailureNotice(joined.slot.cancelReason).issueCode, 'recall_host_wait_timeout');
+    assert.equal(joined.slot.diagnostics.stage, 'waiting-for-user');
+    await assert.rejects(coordinator.waitForOutcome(joined.slot), { name: 'AbortError' });
     assert.equal(calls, 0);
     coordinator.finish(joined.slot);
     assert.equal(coordinator.getCurrent(), null);
@@ -260,7 +263,6 @@ test('an object-reference mismatch aborts the prefetched run and recomputes once
     await flushMicrotasks();
 
     assert.equal(joined.path, 'fallback');
-    assert.equal(joined.remainingMs, 10);
     assert.equal(prefetched.controller.signal.aborted, true);
     assert.equal(signals[0].aborted, true);
     assert.equal(calls, 2);
@@ -308,7 +310,7 @@ test('moving the captured USER object to another floor invalidates the prefetch'
     assert.equal(calls, 2);
 });
 
-test('joining a prefetch keeps the original absolute deadline', async () => {
+test('joining pending recall keeps its computation deadline without counting the earlier host wait', async () => {
     let release;
     const pending = new Promise(resolve => { release = resolve; });
     let calls = 0;
@@ -330,16 +332,164 @@ test('joining a prefetch keeps the original absolute deadline', async () => {
         focusRef: userMessage,
     });
     assert.equal(joined.path, 'prefetch');
-    assert.equal(joined.remainingMs, 10);
     assert.equal(calls, 1);
 
-    scheduler.advanceBy(10);
-    assert.equal(joined.slot.cancelReason, 'prefetch-timeout');
+    const waiting = coordinator.waitForOutcome(joined.slot);
+    const rejected = assert.rejects(waiting, { name: 'AbortError' });
+    scheduler.advanceBy(25);
+    assert.equal(joined.slot.controller.signal.aborted, false);
+    scheduler.advanceBy(1);
+    await rejected;
+    assert.equal(joined.slot.cancelReason, RECALL_TIMEOUT_REASONS.compute);
+    assert.equal(recallFailureNotice(joined.slot.cancelReason).issueCode, 'recall_timeout');
     assert.equal(joined.slot.controller.signal.aborted, true);
     assert.equal(calls, 1);
     release({ text: 'late' });
     await joined.slot.outcome;
+    await assert.rejects(coordinator.waitForOutcome(joined.slot), { name: 'AbortError' });
     coordinator.finish(joined.slot);
+});
+
+test('a completed recall survives a host join beyond the recall budget without repeating work', async () => {
+    let calls = 0;
+    const expected = { text: 'memory' };
+    const { context, coordinator, scheduler } = createHarness(() => {
+        calls++;
+        return expected;
+    }, { maxAgeMs: RECALL_TIMEOUT_MS });
+    const userMessage = { is_user: true, mes: 'focus' };
+    const slot = coordinator.startWatching({ chatId: context.chatId, initialLength: 0 });
+    context.chat.push(userMessage);
+    scheduler.advanceBy(16);
+    const outcome = await slot.outcome;
+    const finishedAt = slot.diagnostics.finishedAt;
+
+    scheduler.advanceBy(RECALL_TIMEOUT_MS + 1000);
+    const joined = coordinator.join({ chatId: context.chatId, type: 'normal', focusRef: userMessage });
+    assert.equal(joined.path, 'prefetch');
+    assert.equal(await coordinator.waitForOutcome(joined.slot), outcome);
+    assert.equal(outcome.value, expected);
+    assert.equal(slot.controller.signal.aborted, false);
+    assert.equal(slot.diagnostics.finishedAt, finishedAt);
+    assert.equal(calls, 1);
+    assert.equal(scheduler.pendingCount(), 0);
+    coordinator.finish(slot);
+});
+
+test('a failed recall preserves its original API error when the host joins late', async () => {
+    const expected = Object.assign(new Error('embedding request failed'), {
+        code: 'RECALL_EMBEDDING_FAILED', cause: new Error('HTTP 503'),
+    });
+    const { context, coordinator, scheduler } = createHarness(() => { throw expected; });
+    const userMessage = { is_user: true, mes: 'focus' };
+    const slot = coordinator.startWatching({ chatId: context.chatId, initialLength: 0 });
+    context.chat.push(userMessage);
+    scheduler.advanceBy(16);
+    await slot.outcome;
+    scheduler.advanceBy(1000);
+
+    const joined = coordinator.join({ chatId: context.chatId, type: 'normal', focusRef: userMessage });
+    const outcome = await coordinator.waitForOutcome(joined.slot);
+    assert.equal(outcome.ok, false);
+    assert.equal(outcome.error, expected);
+    assert.equal(slot.controller.signal.aborted, false);
+    assert.equal(recallFailureNotice(slot.cancelReason, outcome.error).issueCode, 'recall_embedding_failed');
+    assert.equal(scheduler.pendingCount(), 0);
+    coordinator.finish(slot);
+});
+
+test('waiting for USER nearly exhausts the host budget but leaves a full recall budget', async () => {
+    let release;
+    const { context, coordinator, scheduler } = createHarness(() => new Promise(resolve => { release = resolve; }));
+    const userMessage = { is_user: true, mes: 'focus' };
+    coordinator.startWatching({ chatId: context.chatId, initialLength: 0 });
+    scheduler.advanceBy(90);
+    context.chat.push(userMessage);
+    scheduler.advanceBy(6);
+    await flushMicrotasks();
+    scheduler.advanceBy(99);
+    const joined = coordinator.join({ chatId: context.chatId, type: 'normal', focusRef: userMessage });
+    assert.equal(joined.slot.controller.signal.aborted, false);
+    const expected = { text: 'memory' };
+    release(expected);
+    assert.deepEqual(await coordinator.waitForOutcome(joined.slot), { ok: true, value: expected });
+    assert.equal(scheduler.pendingCount(), 0);
+    coordinator.finish(joined.slot);
+});
+
+test('replacing the source of a ready result computes new memory with a fresh budget', async () => {
+    let calls = 0;
+    let release;
+    const { context, coordinator, scheduler } = createHarness(() => {
+        calls++;
+        return calls === 1 ? { text: 'old' } : new Promise(resolve => { release = resolve; });
+    });
+    const userMessage = { is_user: true, mes: 'old source' };
+    const old = coordinator.startWatching({ chatId: context.chatId, initialLength: 0 });
+    context.chat.push(userMessage);
+    scheduler.advanceBy(16);
+    await old.outcome;
+    scheduler.advanceBy(1000);
+
+    const replacement = { is_user: true, mes: 'new source' };
+    context.chat[0] = replacement;
+    const joined = coordinator.join({ chatId: context.chatId, type: 'normal', focusRef: replacement });
+    await flushMicrotasks();
+    scheduler.advanceBy(99);
+    assert.equal(old.controller.signal.aborted, true);
+    assert.equal(joined.slot.controller.signal.aborted, false);
+    assert.equal(calls, 2);
+    const expected = { text: 'current memory' };
+    release(expected);
+    assert.deepEqual(await coordinator.waitForOutcome(joined.slot), { ok: true, value: expected });
+    coordinator.finish(joined.slot);
+});
+
+test('completed results remain cancellable by stop, source signal, dispatch, chat change, and supersede', async t => {
+    const actions = {
+        stop: ({ coordinator }) => coordinator.cancel('generation-stopped', { retainForJoin: true }),
+        source: ({ host }) => host.abort(),
+        dispatch: ({ coordinator, context, userMessage }) => {
+            const dispatch = new AbortController();
+            coordinator.join({ chatId: context.chatId, type: 'normal', focusRef: userMessage,
+                runContext: { signal: dispatch.signal } });
+            dispatch.abort();
+        },
+        chat: ({ coordinator, context }) => {
+            context.chatId = 'chat-b';
+            coordinator.cancel('chat-changed');
+        },
+        supersede: ({ coordinator, context }) => coordinator.startWatching({
+            chatId: context.chatId, initialLength: context.chat.length,
+        }),
+    };
+    for (const [name, cancel] of Object.entries(actions)) {
+        await t.test(name, async () => {
+            const { context, coordinator, scheduler } = createHarness(() => ({ text: 'memory' }));
+            const host = new AbortController();
+            const userMessage = { is_user: true, mes: 'focus' };
+            const slot = coordinator.startWatching({ chatId: context.chatId, initialLength: 0, signal: host.signal });
+            context.chat.push(userMessage);
+            scheduler.advanceBy(16);
+            await slot.outcome;
+            cancel({ coordinator, context, host, userMessage });
+            await assert.rejects(coordinator.waitForOutcome(slot), { name: 'AbortError' });
+            assert.equal(recallFailureNotice(slot.cancelReason), null);
+            coordinator.cancel('test-finished');
+            assert.equal(scheduler.pendingCount(), 0);
+        });
+    }
+});
+
+test('failure classification distinguishes actual deadlines, API failures, errors, and cancellation', () => {
+    assert.equal(recallFailureNotice(RECALL_TIMEOUT_REASONS.host).issueCode, 'recall_host_wait_timeout');
+    assert.equal(recallFailureNotice(RECALL_TIMEOUT_REASONS.compute).issueCode, 'recall_timeout');
+    for (const code of ['RECALL_EMBEDDING_FAILED', 'RECALL_EMBEDDING_INVALID_RESPONSE']) {
+        assert.equal(recallFailureNotice(null, { code }).issueCode, 'recall_embedding_failed');
+    }
+    assert.equal(recallFailureNotice(null, new Error('internal failure')).issueCode, 'recall_failed');
+    assert.equal(recallFailureNotice(null, new DOMException('request aborted', 'AbortError')).issueCode, 'recall_failed');
+    assert.equal(recallFailureNotice('generation-stopped', new Error('late failure')), null);
 });
 
 test('the optional generation signal cancels prefetch without a fallback retry', async () => {
@@ -376,7 +526,7 @@ test('the optional generation signal cancels prefetch without a fallback retry',
         focusRef: userMessage,
     });
     assert.equal(joined.path, 'generation-signal-aborted');
-    assert.equal(joined.remainingMs, 0);
+    await assert.rejects(coordinator.waitForOutcome(joined.slot), { name: 'AbortError' });
     assert.equal(calls, 1);
 
     release({ text: 'late' });
@@ -396,7 +546,7 @@ test('a stopped generation remains claimable and never starts a fallback recall'
         type: 'normal',
         initialLength: 0,
     });
-    coordinator.cancel('prefetch-timeout', {
+    coordinator.cancel(RECALL_TIMEOUT_REASONS.host, {
         retainForJoin: true,
         chatId: context.chatId,
     });
@@ -416,7 +566,7 @@ test('a stopped generation remains claimable and never starts a fallback recall'
     });
     assert.equal(joined.slot, watching);
     assert.equal(joined.path, 'generation-stopped');
-    assert.equal(joined.remainingMs, 0);
+    await assert.rejects(coordinator.waitForOutcome(joined.slot), { name: 'AbortError' });
     assert.equal(calls, 0);
     assert.equal(scheduler.pendingCount(), 0);
     coordinator.finish(joined.slot);

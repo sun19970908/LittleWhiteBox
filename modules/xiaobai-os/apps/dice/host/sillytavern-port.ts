@@ -1,11 +1,10 @@
 import { extension_settings, getContext } from '../../../../../../../../extensions.js';
-import { getRequestHeaders, isChatSaving } from '../../../../../../../../../script.js';
 import { isGenerating } from '../../../host/sillytavern-generation-state.js';
 import { getScriptsByType, saveScriptsByType, SCRIPT_TYPES } from '../../../../../../../../extensions/regex/engine.js';
-import { saveSillyTavernChat } from '../../../host/sillytavern-chat-save.js';
 import { repairDiceDisplayRules } from './display-rule.js';
 import { showDiceDisplayRule } from './managed-rule-display.js';
 import { isDiceTargetCurrent, type DiceChat, type DiceHostMessage, type DiceTarget } from './message-records.js';
+import { DiceHostWaitTimeout, type DiceHostWait, type DiceHostBlocker } from '../application/host-wait.js';
 
 export interface DiceHostContext {
     chat: DiceHostMessage[]; chatId: string; groupId?: string; characterId?: number;
@@ -41,35 +40,26 @@ export async function ensureDiceDisplayRule(): Promise<void> {
     showDiceDisplayRule(document);
 }
 
-export async function readDiceChat(source: DiceChat): Promise<unknown[]> {
-    const body = source.groupId ? { id: source.chatId }
-        : { ch_name: source.characterName, file_name: source.chatId, avatar_url: source.avatar };
-    const controller = new AbortController();
-    const timer = globalThis.setTimeout(() => controller.abort(), 15_000);
-    try {
-        const response = await fetch(source.groupId ? '/api/chats/group/get' : '/api/chats/get', {
-            method: 'POST', headers: getRequestHeaders(), cache: 'no-store', body: JSON.stringify(body), signal: controller.signal,
-        });
-        if (!response.ok) { throw new Error(`读取聊天失败（${response.status}）`); }
-        const data: unknown = await response.json();
-        if (!Array.isArray(data) || !data[0] || !Object.hasOwn(data[0], 'chat_metadata')) { throw new Error('聊天读取格式无效。'); }
-        return data.slice(1);
-    } finally { globalThis.clearTimeout(timer); }
-}
-
-export const diceSavePort = { capture: captureDiceChat, save: saveSillyTavernChat, read: readDiceChat };
-
 export async function waitForDiceHost(target: DiceTarget, signal: AbortSignal, inGroup: boolean,
-    generationPending: () => boolean = isGenerating): Promise<void> {
-    const deadline = Date.now() + 20_000;
+    generationPending: () => boolean = isGenerating, report?: (wait: DiceHostWait) => void): Promise<void> {
+    const started = Date.now();
+    const deadline = started + 10_000;
+    let previous: DiceHostWait | undefined;
     while (true) {
         if (signal.aborted || !isDiceTargetCurrent(captureDiceChat(), target)) { throw new Error('聊天或回复已变化。'); }
         if (isDiceMessageBeingEdited(target.index)) { throw new Error('请先结束消息编辑。'); }
-        const stream = diceHostContext().streamingProcessor;
-        // ST 1.18 retains a stopped processor after stream errors. A normally finished stream,
-        // however, still owns finalization/saving until the host releases its processor.
-        if ((!stream || stream.isStopped) && !isChatSaving && (inGroup || !generationPending())) { return; }
-        if (Date.now() >= deadline) { throw new Error('酒馆仍在生成或保存，请结束后再试。'); }
+        // Match native continuation admission. Saving and processor cleanup belong to ST;
+        // neither is an additional Dice gate, and Dice must not clear the host's processor.
+        const blockers: DiceHostBlocker[] = [];
+        if (!inGroup && generationPending()) { blockers.push('generation'); }
+        if (!blockers.length) { return; }
+        const now = Date.now();
+        const wait = { blockers, elapsedSeconds: Math.floor((now - started) / 1000) };
+        if (!previous || previous.elapsedSeconds !== wait.elapsedSeconds || previous.blockers.join() !== blockers.join()) {
+            report?.(wait);
+            previous = wait;
+        }
+        if (now >= deadline) { throw new DiceHostWaitTimeout(wait); }
         await new Promise<void>((resolve, reject) => {
             const cancel = () => { globalThis.clearTimeout(timer); reject(new Error('已停止')); };
             const timer = globalThis.setTimeout(() => { signal.removeEventListener('abort', cancel); resolve(); }, 40);

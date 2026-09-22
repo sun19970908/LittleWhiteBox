@@ -929,7 +929,7 @@ function renderMarkdownReport(report) {
         lines.push(`- l1_cache_fallback_db: ${recallCase.metrics?.evidence?.l1CacheFallbackDbTime ?? 0}ms`);
         lines.push(`- floor_rerank (L0楼层): ${recallCase.metrics?.evidence?.rerankTime ?? 0}ms`);
         lines.push(`- L2 event rerank: ${recallCase.metrics?.event?.rerank?.status || 'not-run'}`);
-        lines.push(`- L1 local selection: ${recallCase.metrics?.evidence?.directEvidenceStatus || 'not-run'}; event=${recallCase.metrics?.evidence?.directEvidenceEventItems || 0}, conversation=${recallCase.metrics?.evidence?.directEvidenceConversationItems || 0}`);
+        lines.push(`- L1 local selection: ${recallCase.metrics?.evidence?.directEvidenceStatus || 'not-run'}; query=${recallCase.metrics?.evidence?.directEvidenceQueryItems || 0}, floor=${recallCase.metrics?.evidence?.directEvidenceFloorItems || 0}, conversation=${recallCase.metrics?.evidence?.directEvidenceConversationItems || 0}`);
         lines.push(`- event evidence budget: ${recallCase.metrics?.evidence?.eventEvidenceBudgetUsed || 0}/${recallCase.metrics?.evidence?.eventEvidenceBudgetMax || 0}`);
         lines.push(`- round1_embed: ${recallCase.metrics?.timing?.round1Embed ?? 0}ms`);
         lines.push(`- round2_embed: ${recallCase.metrics?.timing?.round2Embed ?? 0}ms`);
@@ -1059,7 +1059,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
     globalThis.localStorage.setItem('summary_panel_config', JSON.stringify({
         prompts: { memoryTemplate: '{$剧情记忆}' },
         trigger: { wrapperHead: '', wrapperTail: '' },
-        ui: { keepVisibleCount: 0 },
+        ui: { hideSummarized: true, useVectorBoundary: true, keepVisibleCount: 0 },
         // Former user setting: assembly must ignore it and use the plugin budget.
         vector: { enabled: true, summarizedEvidenceBudget: 3000 },
     }));
@@ -1071,7 +1071,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
     ]);
 
     const store = {
-        lastSummarizedMesId: -1,
+        lastSummarizedMesId: 200,
         json: {
             keywords: [],
             events: [],
@@ -1085,7 +1085,7 @@ export async function runStorySummaryPromptAssemblyCheck() {
     __setChatMetadata({ extensions: { [EXT_ID]: { storySummary: store } } });
     __setReplayContext({
         chatId: 'story-summary-prompt-assembly-check',
-        chat: [],
+        chat: Array.from({ length: 401 }, () => ({ is_user: false, mes: 'fixture' })),
         name1: '用户',
         name2: '角色',
         groupId: null,
@@ -1215,6 +1215,8 @@ export async function runStorySummaryPromptAssemblyCheck() {
                 temporalProtectionBudgetMax: metrics.evidence.directEvidenceTemporalProtectionBudgetMax,
                 temporalProtectedItems: metrics.evidence.directEvidenceTemporalProtectedItems,
                 temporalProtectedTokens: metrics.evidence.directEvidenceTemporalProtectedTokens,
+                temporalProtectedCosts: built.evidenceTrace.eventEvidence
+                    .filter(item => item.admitted && item.temporal).map(item => item.tokenCost),
                 enumerated: metrics.evidence.directEvidenceEnumerated,
                 admitted: metrics.evidence.directEvidenceAdmitted,
                 skippedByBudget: metrics.evidence.directEvidenceSkippedByBudget,

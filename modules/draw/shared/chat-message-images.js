@@ -10,7 +10,7 @@ import {
 
 const events = createModuleEvents('chatMessageImages');
 const STYLE_ID = 'xb-chat-message-image-styles';
-const activeControllers = new Set();
+const activeControllers = new Map();
 const pendingTimers = new Set();
 
 let imageObserver = null;
@@ -148,6 +148,19 @@ function enhanceMessage(container) {
     hydrateSlots(container);
 }
 
+// A host-owned content lease can be replaced without a chat/message event.
+// Release only this content's observers and requests, leaving other floors live.
+export function mountChatMessageImages(content) {
+    enhanceMessage(content);
+    return () => {
+        for (const slot of content.querySelectorAll('[data-xb-draw-chat-image="1"]')) {
+            imageObserver?.unobserve(slot);
+            activeControllers.get(slot)?.abort();
+            activeControllers.delete(slot);
+        }
+    };
+}
+
 function processAllMessages() {
     if (!initialized) return;
     restoreWhenUnavailable();
@@ -179,7 +192,7 @@ async function loadImage(slot, tags) {
     // eslint-disable-next-line no-unsanitized/property
     slot.innerHTML = '<div class="xb-img-loading"><i class="fa-solid fa-spinner"></i> 检查缓存...</div>';
     const controller = new AbortController();
-    activeControllers.add(controller);
+    activeControllers.set(slot, controller);
     try {
         const generateSharedImage = window.xiaobaixDraw?.generateSharedImage;
         if (typeof generateSharedImage !== 'function') throw new Error('画图共享运行时未初始化');
@@ -217,7 +230,7 @@ async function loadImage(slot, tags) {
         slot.innerHTML = `<div class="xb-img-error"><i class="fa-solid fa-exclamation-triangle"></i><div>${escapeHtml(error?.message || '失败')}</div><button class="xb-img-retry" data-tags="${encodeURIComponent(tags)}">重试</button></div>`;
         bindRetryButton(slot);
     } finally {
-        activeControllers.delete(controller);
+        if (activeControllers.get(slot) === controller) activeControllers.delete(slot);
     }
 }
 

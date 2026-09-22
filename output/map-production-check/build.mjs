@@ -3,7 +3,7 @@ import { build } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { validateMapDomain } from '../../modules/xiaobai-os/domains/map/invariants.ts';
 import { createEmptyMapDomain } from '../../modules/xiaobai-os/domains/map/state.ts';
-import { compileSceneIntent } from '../../modules/xiaobai-os/apps/map/maintenance/scene-intent-compiler.ts';
+import { compileSceneIntent } from '../../modules/xiaobai-os/apps/map/tools/scene-intent-compiler.ts';
 import { sceneMapInputs } from '../../modules/xiaobai-os/tests/fixtures/scene-maps.js';
 import { sceneObjectInputs } from '../../modules/xiaobai-os/tests/fixtures/scene-map-objects.js';
 const fixtures = Object.fromEntries([...sceneMapInputs, ...sceneObjectInputs].map(input => {

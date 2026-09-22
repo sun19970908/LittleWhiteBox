@@ -6,8 +6,8 @@ export const L0_PROTECTED_TOKENS = 1000;
 /** One shared ledger: causal/L0 reservations are actual admitted text, not idle quotas. */
 export function packEventEvidence({ l0Items, l1Items, fallbackItems = [], causalOwners, causesById,
     budget, estimateTokens, getTokenCost, floorOverheadTokens, protectedBudget }) {
-    // Causal rules stay direct-only, globally <=1000 and per owner <=400 for
-    // the 4000 pool. Reserving before raw admission prevents starvation.
+    // Direct causes and L0 reserve space before raw admission. Every quota is
+    // soft by one complete item, charged to the same shared evidence pool.
     const causal = packCausalEvidence(causalOwners, causesById, budget, estimateTokens);
     const options = { getTokenCost, floorOverheadTokens, protectedBudget, admittedGroups: new Set() };
     const l0Budget = { used: budget.used, max: Math.min(budget.max, budget.used + L0_PROTECTED_TOKENS) };

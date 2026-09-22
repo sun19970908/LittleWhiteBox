@@ -154,11 +154,13 @@ test('hiding and background data changes preserve the adopted text and original 
 test('only recall and assembly config changes affect the config key', () => {
     const config = { vector: { enabled: true }, trigger: { role: 'system' }, ui: { keepVisibleCount: 6 } };
     const key = recallConfigKey(config);
-    assert.equal(recallConfigKey({ ...config, ui: { ...config.ui, hideSummarized: true }, api: { model: 'other' } }), key);
+    assert.equal(recallConfigKey({ ...config, api: { model: 'other' } }), key);
     for (const changed of [
         { ...config, vector: { enabled: false } },
         { ...config, trigger: { role: 'user' } },
         { ...config, ui: { keepVisibleCount: 4 } },
+        { ...config, ui: { ...config.ui, hideSummarized: true } },
+        { ...config, ui: { ...config.ui, useVectorBoundary: false } },
         { ...config, textFilterRules: [] },
         { ...config, prompts: { memoryTemplate: 'changed' } },
     ]) assert.notEqual(recallConfigKey(changed), key);

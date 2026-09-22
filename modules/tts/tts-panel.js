@@ -1280,7 +1280,7 @@ export function initTtsPanelStyles() {
     injectStyles();
 }
 
-export function ensureTtsPanel(messageEl, messageId, onPlay) {
+export function ensureTtsPanel(messageEl, messageId, onPlay, { immediate = false } = {}) {
     const config = getConfigFn?.();
     if (config?.showFloorButton === false) return null;
 
@@ -1294,7 +1294,7 @@ export function ensureTtsPanel(messageEl, messageId, onPlay) {
     }
 
     const rect = messageEl.getBoundingClientRect();
-    if (rect.top < window.innerHeight + 300 && rect.bottom > -300) {
+    if (immediate || (rect.top < window.innerHeight + 300 && rect.bottom > -300)) {
         return mountFloorPanel(messageEl, messageId, onPlay);
     }
 
@@ -1377,6 +1377,16 @@ export function removeTtsPanel(messageId) {
         panelMap.delete(messageId);
     }
     pendingCallbacks.delete(messageId);
+}
+
+// A host-owned floor bypasses the legacy visibility observer. Releasing an old
+// floor must not remove a replacement panel with the same message ID.
+export function mountTtsPanel(messageEl, messageId, onPlay) {
+    const panel = ensureTtsPanel(messageEl, messageId, onPlay, { immediate: true });
+    if (!panel) return;
+    return () => {
+        if (panelMap.get(messageId) === panel) removeTtsPanel(messageId);
+    };
 }
 
 export function removeAllTtsPanels() {

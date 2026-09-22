@@ -4,7 +4,7 @@ import {
     OPENING_GRANT_AMOUNT,
     OPENING_GRANT_IDEMPOTENCY_KEY,
     EconomyError,
-    type EconomyLedgerV2,
+    type EconomyLedger,
     type EconomyTransaction,
 } from './types.js';
 
@@ -22,6 +22,7 @@ const TRANSACTION_KEYS = [
     'title',
     'note',
     'sourceDomain',
+    'sourceScope',
     'sourceId',
     'createdAt',
 ] as const;
@@ -59,6 +60,7 @@ function assertOpeningGrant(transaction: EconomyTransaction): void {
         transaction.amount !== OPENING_GRANT_AMOUNT ||
         transaction.kind !== 'opening_grant' ||
         transaction.sourceDomain !== 'economy' ||
+        transaction.sourceScope !== 'user' ||
         transaction.sourceId !== 'opening-grant:v1' ||
         transaction.reversalOfTransactionId !== undefined
     ) {
@@ -66,8 +68,8 @@ function assertOpeningGrant(transaction: EconomyTransaction): void {
     }
 }
 
-export function validateLedger(value: unknown): asserts value is EconomyLedgerV2 {
-    const ledger = exactRecord(value, ['schemaVersion', 'transactions'], 'economy ledger') as unknown as Partial<EconomyLedgerV2>;
+export function validateLedger(value: unknown): asserts value is EconomyLedger {
+    const ledger = exactRecord(value, ['schemaVersion', 'transactions'], 'economy ledger') as unknown as Partial<EconomyLedger>;
     if (ledger.schemaVersion !== ECONOMY_SCHEMA_VERSION) {
         throw new EconomyError('economy_unsupported_version', 'unsupported economy schema version');
     }
@@ -101,6 +103,7 @@ export function validateLedger(value: unknown): asserts value is EconomyLedgerV2
             throw new EconomyError('economy_invalid_transaction', 'note must be a string up to 1000 characters');
         }
         requireString(transaction.sourceDomain, 'sourceDomain', 80);
+        requireString(transaction.sourceScope, 'sourceScope', 160);
         requireString(transaction.sourceId, 'sourceId', 200);
         if (
             typeof transaction.fromAccountId !== 'string' ||
@@ -145,7 +148,7 @@ export function validateLedger(value: unknown): asserts value is EconomyLedgerV2
         }
         if (previous?.actionId === transaction.actionId) {
             if (
-                previous.sourceDomain !== transaction.sourceDomain ||
+                previous.sourceDomain !== transaction.sourceDomain || previous.sourceScope !== transaction.sourceScope ||
                 previous.sourceId !== transaction.sourceId
             ) {
                 throw new EconomyError('economy_inconsistent_action', 'transactions for one action must share a source');

@@ -42,7 +42,7 @@ export interface MaintenanceJobExecutorHooks {
         participantId: string,
         patch: { state: 'running' | 'error'; mode: MaintenanceQueuedJob['mode']; message: string; reason?: string },
     ) => void;
-    onWriteUnconfirmed: (job: MaintenanceQueuedJob, reason: string) => void;
+    onWriteUnconfirmed: (reason: string) => void;
     captureBackground: (
         source: AcceptedTurnSource,
         mode: MaintenanceQueuedJob['mode'],
@@ -115,6 +115,7 @@ export function createMaintenanceJobExecutor(
     ): Promise<MaintenanceRunOutcome> {
         const results: MaintenanceParticipantOutcome[] = [...job.earlyResults];
         const committedIds: string[] = [];
+        let saveUnconfirmed = false;
         const cancelRun = (run: MaintenanceSessionRun, reason: string): void => {
             invalidate(run, reason);
             if (!results.some(result => result.participantId === run.participant.id)) {
@@ -127,6 +128,7 @@ export function createMaintenanceJobExecutor(
             }
         };
         for (const run of job.sessions) {
+            if (saveUnconfirmed) { cancelRun(run, 'save-unconfirmed'); continue; }
             if (!guardRun(job, run)) {
                 cancelRun(run, job.cancelledReason || (guardJob(job) ? 'participant-disabled' : 'source-invalidated'));
                 continue;
@@ -163,7 +165,8 @@ export function createMaintenanceJobExecutor(
                 }
                 job.committing = true;
                 try {
-                    await run.session.commit(() => writeGate.getState() === 'ready' && guardRun(job, run));
+                    // Kernel owns the write gate; this constraint must remain valid during pending recovery.
+                    await run.session.commit(() => guardRun(job, run));
                     committedIds.push(run.participant.id);
                 } catch (error) {
                     if (
@@ -176,7 +179,8 @@ export function createMaintenanceJobExecutor(
                         )
                     ) {
                         domainResult = { status: 'failed' as const, changed: false, reason: 'save-unconfirmed' };
-                        onWriteUnconfirmed(job, 'save-unconfirmed');
+                        saveUnconfirmed = true;
+                        onWriteUnconfirmed('save-unconfirmed');
                     } else {
                         report(error);
                         domainResult = { status: 'failed' as const, changed: false, reason: 'save-failed' };
@@ -189,7 +193,7 @@ export function createMaintenanceJobExecutor(
         }
 
         const invalidatedAfterCommit = !guardJob(job);
-        if (invalidatedAfterCommit && !committedIds.length && job.cancelledReason !== 'save-unconfirmed') {
+        if (invalidatedAfterCommit && !committedIds.length && !saveUnconfirmed) {
             return cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated');
         }
         const status = aggregateMaintenanceStatus(results, loop.status === 'finished' ? 'unchanged' : 'failed');
@@ -199,7 +203,7 @@ export function createMaintenanceJobExecutor(
             participantIds: jobParticipantIds(job),
             committedParticipantIds: committedIds,
             participantResults: results,
-            ...(job.cancelledReason === 'save-unconfirmed'
+            ...(saveUnconfirmed
                 ? { reason: 'save-unconfirmed' }
                 : loop.status !== 'finished'
                     ? { reason: loop.reason || loop.status }

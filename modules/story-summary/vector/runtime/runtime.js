@@ -1020,6 +1020,8 @@ export async function selectRecallRuntimeL1Evidence(chatId, parents, options = {
         chatId,
         parents: parents.map(({ event }) => ({ event: { id: event.id, summary: event.summary } })),
         options: {
+            sourceTurns: options.sourceTurns,
+            hiddenThrough: options.hiddenThrough,
             queryVector: options.queryVector,
             lexicalScores: options.lexicalScores,
             temporalCarrier: options.temporalCarrier,
