@@ -14,12 +14,6 @@
 
 import { getContext, extension_settings } from "../../../../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../../../../script.js";
-import {
-    resolveFloorBoundary,
-    isFloorBlocked,
-    isEventRangeBlocked,
-    formatBoundaryLog,
-} from "../vector/retrieval/floor-boundary.js";
 import { xbLog } from "../../../core/debug-core.js";
 import { getSummaryStore, getFacts } from "../data/store.js";
 import { isRelationFact } from "../data/fact-predicates.js";
@@ -1174,23 +1168,8 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     };
 
     // 从 recallResult 解构
-    //
-    // 末端屏蔽：无论走哪条召回路径（dense / lexical / PPR 扩散 / direct 展开 /
-    // must-keep 保底 / L0→L2 反向查找），近处楼层都在此统一剔除。
-    // recent 通道是区间直给而非召回，不经过这里，不受影响。
-    const boundary = resolveFloorBoundary(getContext().chat);
-    const l0SelectedAll = recallResult?.l0Selected || [];
-    const l1ByFloorAll = recallResult?.l1ByFloor || new Map();
-    const l0Selected = boundary.enabled
-        ? l0SelectedAll.filter(l0 => !isFloorBlocked(l0?.floor, boundary))
-        : l0SelectedAll;
-    const l1ByFloor = boundary.enabled
-        ? new Map([...l1ByFloorAll].filter(([floor]) => !isFloorBlocked(floor, boundary)))
-        : l1ByFloorAll;
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedL0 += l0SelectedAll.length - l0Selected.length;
-        metrics.floorBoundary.blockedL1Floors += l1ByFloorAll.size - l1ByFloor.size;
-    }
+    const l0Selected = recallResult?.l0Selected || [];
+    const l1ByFloor = recallResult?.l1ByFloor || new Map();
     const evidenceTrace = options.captureEvidenceTrace ? createEvidenceTraceRecorder(causalById) : null;
 
     // 装配结果
@@ -1323,13 +1302,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     // ═══════════════════════════════════════════════════════════════════════
     // [Events] L2 Events → 直接命中 + 相似命中 + 因果链 + EvidenceGroup
     // ═══════════════════════════════════════════════════════════════════════
-    const eventsAll = (recallResult?.events || []).filter(e => e?.event?.summary);
-    const candidates = boundary.enabled
-        ? eventsAll.filter(e => !isEventRangeBlocked(parseEventRange(e?.event?.summary), boundary))
-        : eventsAll;
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedEvents += eventsAll.length - candidates.length;
-    }
+    const candidates = (recallResult?.events || []).filter(e => e?.event?.summary);
     const eventRankingScore = item => Number.isFinite(item?._eventRerankScore)
         ? item._eventRerankScore
         : Number(item?.similarity || 0);
@@ -1453,22 +1426,9 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
         deferredDirectEvidenceContext = null;
     }
     const hasSelectedL1 = ['applied', 'partial-vectors'].includes(directEvidenceStatus);
-    const directL1Source = hasSelectedL1
+    const directL1Candidates = hasSelectedL1
         ? (directEvidenceL1 || [])
         : l1FallbackFromPairs(l1ByFloor);
-    // 末端屏蔽：跨边界事件展开出的近处原文在此剔除
-    const directL1Candidates = boundary.enabled
-        ? directL1Source.filter(chunk => !isFloorBlocked(chunk?.floor, boundary))
-        : directL1Source;
-    if (metrics?.floorBoundary) {
-        metrics.floorBoundary.blockedDirectItems += directL1Source.length - directL1Candidates.length;
-        // 末端补齐窗口信息后一次性输出（top 数据已在 recall 阶段累加）
-        metrics.floorBoundary.enabled = boundary.enabled;
-        metrics.floorBoundary.lookback = boundary.lookback;
-        metrics.floorBoundary.latestFloor = boundary.latestFloor;
-        metrics.floorBoundary.blockedFrom = boundary.enabled ? boundary.blockedFrom : null;
-        console.info(formatBoundaryLog(metrics.floorBoundary));
-    }
     const directEvidenceRelevance = {
         l0ByFloor: buildRankRelevance(l0Selected, l0 => l0.floor),
         l1ByChunkId: hasSelectedL1
