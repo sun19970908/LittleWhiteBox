@@ -215,7 +215,7 @@ async function evaluateActiveTicket(triggerReason) {
 
     if (safeNow() - ticket.lastStillGeneratingLogAt >= STILL_GENERATING_LOG_INTERVAL_MS) {
         ticket.lastStillGeneratingLogAt = safeNow();
-        xbLog.info(MODULE_ID, `host still generating chat=${ticket.chatId} message=${ticket.messageId}`);
+        //xbLog.info(MODULE_ID, `host still generating chat=${ticket.chatId} message=${ticket.messageId}`);
     }
 
     ensurePoll();
