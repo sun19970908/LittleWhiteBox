@@ -3,6 +3,8 @@
 // StateAtoms 是 LLM 提取的事实数据；StateVectors 是可独立重建的派生数据。
 // ============================================================================
 
+import { buildRAggregateText } from './state-vector-input.js';
+import { inputDigest } from '../utils/vector-input-digest.js';
 import { getContext } from '../../../../../../../extensions.js';
 import { xbLog } from '../../../../core/debug-core.js';
 import {
@@ -44,7 +46,6 @@ const MODULE_ID = 'state-integration';
 const DEFAULT_CONCURRENCY = 10;
 const STAGGER_DELAY = 15;
 const DEBUG_CONCURRENCY = true;
-const R_AGG_MAX_CHARS = 256;
 // 单个楼层跨会话的累计失败上限。达到后视为终态，不再入队重试。
 const L0_FLOOR_MAX_ATTEMPTS = 3;
 
@@ -129,17 +130,6 @@ function buildL0InputText(userMessage, aiMessage) {
     return parts.join('\n\n---\n\n').trim();
 }
 
-function buildRAggregateText(atom) {
-    const uniq = new Set();
-    for (const edge of (atom?.edges || [])) {
-        const r = String(edge?.r || '').trim();
-        if (!r) continue;
-        uniq.add(r);
-    }
-    const joined = [...uniq].join(' ; ');
-    if (!joined) return String(atom?.semantic || '').trim();
-    return joined.length > R_AGG_MAX_CHARS ? joined.slice(0, R_AGG_MAX_CHARS) : joined;
-}
 
 export async function incrementalExtractAtoms(chatId, chat, onProgress, options = {}) {
     beginL0MetadataBatch('incrementalExtractAtoms');
@@ -522,6 +512,8 @@ export async function vectorizeMissingStateAtoms(chatId, onProgress, options = {
                     floor: atom.floor,
                     vector: semVectors[j],
                     rVector: rVectors[j] || semVectors[j],
+                    sourceHash: inputDigest('state', semBatch[j]),
+                    relationHash: inputDigest('relation', rBatch[j]),
                 });
             }
 

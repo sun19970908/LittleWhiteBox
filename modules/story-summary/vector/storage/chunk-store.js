@@ -53,18 +53,20 @@ export async function getMeta(chatId) {
     };
 }
 
-export async function updateMeta(chatId, updates) {
-    await db.transaction('rw', metaTable, async () => {
-        const current = await metaTable.get(chatId);
-        await metaTable.put({
-            chatId,
-            fingerprint: null,
-            lastChunkFloor: -1,
-            ...(current || {}),
-            ...updates,
-            updatedAt: Date.now(),
-        });
+async function writeMeta(chatId, updates) {
+    const current = await metaTable.get(chatId);
+    await metaTable.put({
+        chatId,
+        fingerprint: null,
+        lastChunkFloor: -1,
+        ...(current || {}),
+        ...updates,
+        updatedAt: Date.now(),
     });
+}
+
+export async function updateMeta(chatId, updates) {
+    await db.transaction('rw', metaTable, () => writeMeta(chatId, updates));
     applyRecallRuntimeMutationBestEffort(chatId, {
         type: 'meta',
         meta: updates,
@@ -75,7 +77,7 @@ export async function updateMeta(chatId, updates) {
 // Chunks 表操作
 // ═══════════════════════════════════════════════════════════════════════════
 
-function makeChunkRecords(chatId, chunks) {
+export function makeChunkRecords(chatId, chunks) {
     return chunks.map(chunk => ({
         chatId,
         chunkId: chunk.chunkId,
@@ -169,7 +171,7 @@ export async function clearAllChunks(chatId) {
 // ChunkVectors 表操作
 // ═══════════════════════════════════════════════════════════════════════════
 
-function makeChunkVectorRecords(chatId, items, fingerprint) {
+export function makeChunkVectorRecords(chatId, items, fingerprint) {
     let expectedDimensions = null;
     return items.map((item, index) => {
         const dims = assertFiniteVector(item.vector, `chunk vector ${index}`, expectedDimensions);
@@ -180,6 +182,7 @@ function makeChunkVectorRecords(chatId, items, fingerprint) {
             vector: float32ToBuffer(new Float32Array(item.vector)),
             dims,
             fingerprint,
+            ...(item.sourceHash ? { sourceHash: item.sourceHash } : {}),
         };
     });
 }
@@ -203,6 +206,38 @@ export async function saveChunkRepairs(chatId, chunks, items, fingerprint) {
     });
     applyRecallRuntimeMutationBestEffort(chatId, { type: 'upsertChunks', chunks: chunkRecords });
     applyRecallRuntimeMutationBestEffort(chatId, { type: 'upsertChunkVectors', items: vectorRecords });
+}
+
+// A watermark can precede already-restored chunks. Commit the entire incremental
+// batch atomically so failure/cancellation restores overwritten records as well
+// as removing new ones. Runtime invalidation must follow commit, not each write.
+export async function saveIncrementalChunks(chatId, chunks, items, fingerprint, lastChunkFloor, assertCurrent) {
+    const chunkRecords = makeChunkRecords(chatId, chunks);
+    const updates = { lastChunkFloor, fingerprint };
+    let vectorRecords;
+    let code = 'vector_write_failed';
+    try {
+        vectorRecords = makeChunkVectorRecords(chatId, items, fingerprint);
+        await db.transaction('rw', chunksTable, chunkVectorsTable, metaTable, async () => {
+            assertCurrent();
+            code = 'chunk_write_failed';
+            await chunksTable.bulkPut(chunkRecords);
+            assertCurrent();
+            code = 'vector_write_failed';
+            await chunkVectorsTable.bulkPut(vectorRecords);
+            assertCurrent();
+            code = 'metadata_write_failed';
+            await writeMeta(chatId, updates);
+            assertCurrent();
+        });
+    } catch (cause) {
+        const error = new Error(cause.message, { cause });
+        error.code = code;
+        throw error;
+    }
+    applyRecallRuntimeMutationBestEffort(chatId, { type: 'upsertChunks', chunks: chunkRecords });
+    applyRecallRuntimeMutationBestEffort(chatId, { type: 'upsertChunkVectors', items: vectorRecords });
+    applyRecallRuntimeMutationBestEffort(chatId, { type: 'meta', meta: updates });
 }
 
 export async function getChunkVectorDescriptors(chatId) {
@@ -251,9 +286,9 @@ export async function getChunkVectorsByIds(chatId, chunkIds, options = {}) {
 // EventVectors 表操作
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function saveEventVectors(chatId, items, fingerprint) {
+export function makeEventVectorRecords(chatId, items, fingerprint) {
     let expectedDimensions = null;
-    const records = items.map((item, index) => {
+    return items.map((item, index) => {
         const dims = assertFiniteVector(item.vector, `event vector ${index}`, expectedDimensions);
         expectedDimensions ??= dims;
         return {
@@ -262,8 +297,13 @@ export async function saveEventVectors(chatId, items, fingerprint) {
             vector: float32ToBuffer(new Float32Array(item.vector)),
             dims,
             fingerprint,
+            ...(item.sourceHash ? { sourceHash: item.sourceHash } : {}),
         };
     });
+}
+
+export async function saveEventVectors(chatId, items, fingerprint) {
+    const records = makeEventVectorRecords(chatId, items, fingerprint);
     await eventVectorsTable.bulkPut(records);
     applyRecallRuntimeMutationBestEffort(chatId, {
         type: 'upsertEventVectors',

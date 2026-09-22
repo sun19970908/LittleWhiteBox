@@ -4,6 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
+import { inputDigest } from '../../modules/story-summary/vector/utils/vector-input-digest.js';
 
 import { indexedDB, IDBKeyRange } from 'fake-indexeddb';
 import {
@@ -118,7 +119,7 @@ function ensureNodeReplayGlobals() {
 }
 
 async function loadReplayModules(extSettings) {
-    const [{ EXT_ID }, configModule, storeModule, generatorModule, promptModule, chunkStoreModule, chunkBuilderModule, stateStoreModule, stateIntegrationModule, recallModule, eventRerankModule, metricsModule, embedderModule, lexicalIndexModule] = await Promise.all([
+    const [{ EXT_ID }, configModule, storeModule, generatorModule, promptModule, chunkStoreModule, chunkBuilderModule, chunkTextModule, stateStoreModule, stateIntegrationModule, recallModule, eventRerankModule, metricsModule, embedderModule, lexicalIndexModule] = await Promise.all([
         import('../../core/constants.js'),
         import('../../modules/story-summary/data/config.js'),
         import('../../modules/story-summary/data/store.js'),
@@ -126,6 +127,7 @@ async function loadReplayModules(extSettings) {
         import('../../modules/story-summary/generate/prompt.js'),
         import('../../modules/story-summary/vector/storage/chunk-store.js'),
         import('../../modules/story-summary/vector/pipeline/chunk-builder.js'),
+        import('../../modules/story-summary/vector/pipeline/chunk-text.js'),
         import('../../modules/story-summary/vector/storage/state-store.js'),
         import('../../modules/story-summary/vector/pipeline/state-integration.js'),
         import('../../modules/story-summary/vector/retrieval/recall.js'),
@@ -144,6 +146,7 @@ async function loadReplayModules(extSettings) {
         ...promptModule,
         ...chunkStoreModule,
         ...chunkBuilderModule,
+        ...chunkTextModule,
         ...stateStoreModule,
         ...stateIntegrationModule,
         ...recallModule,
@@ -643,6 +646,7 @@ async function vectorizeEventSummaries(modules, chatId, vectorConfig, events) {
         const items = batch.map((item, batchIndex) => ({
             eventId: item.id,
             vector: vectors[batchIndex],
+            sourceHash: inputDigest('event', item.text),
         }));
         await modules.saveEventVectors(chatId, items, fingerprint);
         built += items.length;

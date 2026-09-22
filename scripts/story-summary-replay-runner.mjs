@@ -134,6 +134,7 @@ function runtimeAliasPlugin() {
     return {
         name: 'story-summary-replay-alias',
         setup(buildApi) {
+            buildApi.onResolve({ filter: /\/lib\.js$/ }, () => ({ path: path.join(replayDir, 'shims', 'lib.js') }));
             buildApi.onResolve({ filter: /extensions\.js$/ }, (args) => {
                 if (!args.importer) return null;
                 return { path: shimExtensions };
@@ -176,7 +177,7 @@ async function buildBundle() {
         bundle: true,
         format: 'esm',
         platform: 'node',
-        external: ['@google/genai'],
+        external: ['@google/genai', 'js-sha256'],
         outfile: bundlePath,
         sourcemap: 'inline',
         plugins: [runtimeAliasPlugin()],

@@ -1,8 +1,9 @@
 import { getAllChunks, getChunkVectorDescriptors, getMeta, updateMeta, saveChunkRepairs } from '../storage/chunk-store.js';
-import { chunkMessage } from './chunk-builder.js';
+import { chunkMessage } from './chunk-text.js';
 import { embed, getEngineFingerprint } from '../utils/embedder.js';
 import { getEmbeddingFailureDetails } from '../llm/embedding-failure.js';
 import { selectChunksForRepair } from './chunk-repair-policy.js';
+import { inputDigest } from '../utils/vector-input-digest.js';
 
 /** 完成楼层只用于自动增量；手动修补核对实际记录，包括中间缺口，保留已有材料。 */
 export async function repairMissingChunks({ chatId, chat, vectorConfig, signal, shouldCancel, onProgress }) {
@@ -31,7 +32,7 @@ export async function repairMissingChunks({ chatId, chat, vectorConfig, signal, 
             if (isCancelled()) return cancelled();
             phase = 'write';
             await saveChunkRepairs(chatId, batch.filter(chunk => !storedIds.has(chunk.chunkId)), batch.map((chunk, index) => ({
-                chunkId: chunk.chunkId, vector: embeddings[index],
+                chunkId: chunk.chunkId, vector: embeddings[index], sourceHash: inputDigest('chunk', chunk.text),
             })), fingerprint);
             repaired += batch.length;
             onProgress?.(repaired, missing.length);

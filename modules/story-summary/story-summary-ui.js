@@ -7,6 +7,10 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
 (function () {
     'use strict';
 
+    function formatVectorPackageCounts(result) {
+        return `${result.stateVectorCount} 锚点向量、${result.chunkCount} 片段向量、${result.eventCount} 事件向量`;
+    }
+
     function normalizeApiBaseUrl(url) {
         return String(url || '').trim().replace(/\/+$/, '');
     }
@@ -2697,7 +2701,7 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
             case 'VECTOR_IMPORT_RESULT':
                 $('btn-import-vectors').disabled = false;
                 if (d.success) {
-                    let msg = `导入成功: ${d.chunkCount} 片段, ${d.eventCount} 事件`;
+                    let msg = `导入成功: ${formatVectorPackageCounts(d)}`;
                     if (d.warnings?.length) {
                         msg += '\n⚠️ ' + d.warnings.join('\n⚠️ ');
                     }
@@ -2711,7 +2715,7 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
             case 'VECTOR_BACKUP_RESULT':
                 $('btn-backup-server').disabled = false;
                 if (d.success) {
-                    $('server-io-status').textContent = `☁️ 备份成功: ${(d.size / 1024 / 1024).toFixed(2)}MB (${d.chunkCount} 片段, ${d.eventCount} 事件)`;
+                    $('server-io-status').textContent = `☁️ 备份成功: ${(d.size / 1024 / 1024).toFixed(2)}MB (${formatVectorPackageCounts(d)})`;
                 } else {
                     $('server-io-status').textContent = '备份失败: ' + (d.error || '未知错误');
                 }
@@ -2720,7 +2724,7 @@ import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './dat
             case 'VECTOR_RESTORE_RESULT':
                 $('btn-restore-server').disabled = false;
                 if (d.success) {
-                    let msg = `☁️ 恢复成功: ${d.chunkCount} 片段, ${d.eventCount} 事件`;
+                    let msg = `☁️ 恢复成功: ${formatVectorPackageCounts(d)}`;
                     if (d.warnings?.length) {
                         msg += '\n⚠️ ' + d.warnings.join('\n⚠️ ');
                     }
