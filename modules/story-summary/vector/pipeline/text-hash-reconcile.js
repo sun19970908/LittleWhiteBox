@@ -33,7 +33,7 @@
 //   改成基于 message.is_user 或其他显式信号。
 
 import { getAllChunks } from '../storage/chunk-store.js';
-import { chunkMessage } from './chunk-builder.js';
+import { chunkMessage } from './chunk-text.js';
 
 const EMPTY = 0;
 
