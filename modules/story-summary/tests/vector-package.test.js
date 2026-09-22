@@ -5,7 +5,6 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { build } from 'esbuild';
-import { sha256 } from 'js-sha256';
 import 'fake-indexeddb/auto';
 import { zipSync, unzipSync, strFromU8, strToU8 } from '../../../libs/fflate.mjs';
 
@@ -14,11 +13,12 @@ import { zipSync, unzipSync, strFromU8, strToU8 } from '../../../libs/fflate.mjs
 // are replaced; assertions concern persisted data, not source-code spelling.
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const fixture = JSON.parse(await readFile(new URL('./fixtures/vector-package-v2.json', import.meta.url), 'utf8'));
-const host = globalThis.__vectorPackageTest = { metadata: {}, context: {}, filters: [], config: {}, sha256 };
+const host = globalThis.__vectorPackageTest = { metadata: {}, context: {}, filters: [], config: {} };
 const shims = {
     'extensions.js': 'export const getContext=()=>globalThis.__vectorPackageTest.context; export const saveMetadataDebounced=()=>{globalThis.__vectorPackageTest.metadataWrites++;};',
     'script.js': 'export const chat_metadata=globalThis.__vectorPackageTest.metadata; export const isChatSaving=false; export const getRequestHeaders=()=>({});',
-    'lib.js': 'export const sha256=globalThis.__vectorPackageTest.sha256;',
+    // Older supported hosts do not export SHA-256; digesting belongs to the plugin.
+    'lib.js': 'export {};',
     'debug-core.js': 'export const xbLog={info(){},warn(){},error(){},debug(){}};',
     'config.js': 'export const getVectorConfig=()=>globalThis.__vectorPackageTest.config; export const getTextFilterRules=()=>globalThis.__vectorPackageTest.filters;',
     'runtime.js': 'export const refreshRecallRuntime=async()=>{globalThis.__vectorPackageTest.runtimeInvalidations++;}; export const applyRecallRuntimeMutationBestEffort=()=>{globalThis.__vectorPackageTest.runtimeMutations++;}; export const clearRecallRuntime=async()=>{};',
