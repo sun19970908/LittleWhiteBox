@@ -11,8 +11,8 @@ import 'fake-indexeddb/auto';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const host = globalThis.__l0ContinuationTest = { context: {}, metadata: {}, calls: 0 };
 const shims = {
-    'extensions.js': 'export const getContext=()=>globalThis.__l0ContinuationTest.context; export const saveMetadataDebounced=()=>{};',
-    'script.js': 'export const chat_metadata=globalThis.__l0ContinuationTest.metadata; export const isChatSaving=false; export const getRequestHeaders=()=>({});',
+    'extensions.js': 'export const getContext=()=>globalThis.__l0ContinuationTest.context; export const saveMetadataDebounced=()=>{}; export const extension_settings=globalThis.__l0ContinuationTest.extensionSettings;',
+    'script.js': 'export const chat_metadata=globalThis.__l0ContinuationTest.metadata; export const isChatSaving=false; export const getRequestHeaders=()=>({}); export const saveSettingsDebounced=()=>{globalThis.__l0ContinuationTest.settingsWrites++;};',
     'debug-core.js': 'export const xbLog={info(){},warn(){},error(){},debug(){}};',
     'config.js': 'export const getVectorConfig=()=>({enabled:true}); export const getTextFilterRules=()=>[];',
     'runtime.js': 'export const applyRecallRuntimeMutationBestEffort=()=>{}; export const clearRecallRuntime=async()=>{};',

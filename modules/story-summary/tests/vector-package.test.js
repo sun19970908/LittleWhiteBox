@@ -15,8 +15,8 @@ const root = fileURLToPath(new URL('../../../', import.meta.url));
 const fixture = JSON.parse(await readFile(new URL('./fixtures/vector-package-v2.json', import.meta.url), 'utf8'));
 const host = globalThis.__vectorPackageTest = { metadata: {}, context: {}, filters: [], config: {} };
 const shims = {
-    'extensions.js': 'export const getContext=()=>globalThis.__vectorPackageTest.context; export const saveMetadataDebounced=()=>{globalThis.__vectorPackageTest.metadataWrites++;};',
-    'script.js': 'export const chat_metadata=globalThis.__vectorPackageTest.metadata; export const isChatSaving=false; export const getRequestHeaders=()=>({});',
+    'extensions.js': 'export const getContext=()=>globalThis.__vectorPackageTest.context; export const saveMetadataDebounced=()=>{globalThis.__vectorPackageTest.metadataWrites++;}; export const extension_settings=globalThis.__vectorPackageTest.extensionSettings;',
+    'script.js': 'export const chat_metadata=globalThis.__vectorPackageTest.metadata; export const isChatSaving=false; export const getRequestHeaders=()=>({}); export const saveSettingsDebounced=()=>{globalThis.__vectorPackageTest.settingsWrites++;};',
     // Older supported hosts do not export SHA-256; digesting belongs to the plugin.
     'lib.js': 'export {};',
     'debug-core.js': 'export const xbLog={info(){},warn(){},error(){},debug(){}};',
