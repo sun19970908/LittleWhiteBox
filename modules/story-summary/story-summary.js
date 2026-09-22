@@ -4063,7 +4063,7 @@ function clearExtensionPrompt() {
 // 整轮硬截止：召回在宿主 generate_interceptor 的 await 内执行，必须有兜底，
 // 不能把宿主发送流程无限卡住。30s 为初始护栏值，进入浏览器 E2E 后需结合
 // 真实 p50/p95 与首 token 体感校准。
-const STORY_SUMMARY_RECALL_DEADLINE_MS = 6000000;
+const STORY_SUMMARY_RECALL_DEADLINE_MS = 30000;
 const RECALL_WARNING_COOLDOWN_MS = 10000;
 const RECALL_REASONS_THAT_ABORT_GENERATION = new Set([
     'chat-changed',
