@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-19T09:51:32.420Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-19T09:49:20.160Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1789811360160_814s40w",
+            "interval": 0,
+            "name": "l1过滤",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n( async () => { const mod = await import ( '/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/generate/prompt.js' ); const keywords = [ '肉棒' , '小穴' ]; const floors = [ 5 , 12 , 30 ];\n    // ====== 修改这里 ======\n    const FILTER_USER = false;  // true = 过滤用户楼层；false = 显示（默认关闭）\n    // =====================\n\n    mod. setL1FilterKeywords (keywords);\n    mod. setL1BlockedFloors (floors);\n    mod. setL1FilterUser (FILTER_USER); window . toastr ?. success ( `L1 过滤已写入：关键词 ${keywords.length} 条，楼层 ${floors.length} 个，用户侧 ${FILTER_USER ? '已过滤' : '显示中'}` );\n})();\n<</taskjs>>"
+        }
+    ]
+}

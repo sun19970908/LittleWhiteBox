@@ -163,12 +163,16 @@ export function toggleBlankL1Speaker() {
     return next;
 }
 
-// ── L1 渲染过滤（并集：关键词或楼层命中即弃）──────────
-// 两个数组直接写进 settings，空数组 = 不过滤，不加布尔开关。
+// ── L1 渲染过滤（并集：关键词 / 楼层 / 用户侧，任一命中即弃）──────
+// 关键词、楼层：数组直接写进 settings，空数组 = 不过滤，不加开关。
+// 用户侧：布尔开关，默认 false = 不过滤（与上游一致）。
 // 关键词：L1 chunk 文本包含任一关键词（大小写不敏感）即整条丢弃。
 // 楼层：L1 chunk.floor 在列表内即整条丢弃。
+// 用户侧：isUser === true 的 chunk 整条丢弃。判定只认 is_user，
+//   不受隐藏楼层影响（hide-state 只翻 is_system，不动 is_user）。
 const L1_KEYWORDS_KEY = "l1FilterKeywords";
 const L1_BLOCKED_FLOORS_KEY = "l1BlockedFloors";
+const L1_FILTER_USER_KEY = "l1FilterUser";
 
 export function getL1FilterKeywords() {
     const v = extension_settings?.[EXT_ID]?.storySummary?.[L1_KEYWORDS_KEY];
@@ -200,6 +204,19 @@ export function setL1BlockedFloors(list) {
         : [];
     if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
     return getL1BlockedFloors();
+}
+
+export function isL1FilterUserEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[L1_FILTER_USER_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function setL1FilterUser(enabled) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[L1_FILTER_USER_KEY] = enabled === true;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isL1FilterUserEnabled();
 }
 
 // ── L2 下方 L0 渲染 开关 ───────────────────────────────
@@ -569,7 +586,8 @@ function buildL0DisplayText(l0) {
  * @returns {string} 格式化后的行（命中过滤则返回空串）
  */
 function formatL1Line(chunk, isUser) {
-    // L1 渲染过滤（并集）：关键词命中或楼层命中即整条丢弃
+    // L1 渲染过滤（并集）：用户侧开关 / 关键词 / 楼层，任一命中即整条丢弃
+    if (isUser && isL1FilterUserEnabled()) return "";
     const text = String(chunk?.text || "").trim();
     if (text && getL1FilterKeywords().some(kw => text.toLowerCase().includes(kw.toLowerCase()))) return "";
     if (Number.isInteger(chunk?.floor) && getL1BlockedFloors().includes(chunk.floor)) return "";
