@@ -2,7 +2,7 @@
 
 原仓库：https://github.com/RT15548/LittleWhiteBox
 本仓库：https://github.com/sun19970908/LittleWhiteBox
-修改部分包括：index.js 、story summary  、\integrations\tauritavern-chat-surface、variables、draw、scheduled-tasks
+修改部分包括：story summary  、variables、draw、scheduled-tasks
 几乎所有更改都有开关，功能默认关闭
 
 # 所需循环任务在仓库里
