@@ -144,25 +144,6 @@ export function setPromptBudgets(patch) {
     return applyPromptBudgets();
 }
 
-// ── L1 行 speaker 置空 开关 ─────────────────────────────
-// 默认关闭：保持显示说话者（与上游一致）；打开后 L1 行 USER 侧说话者置空。
-// 由循环任务 toggleBlankL1Speaker() 切换。
-const BLANK_L1_SPEAKER_KEY = "blankL1Speaker";
-
-export function isBlankL1SpeakerEnabled() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[BLANK_L1_SPEAKER_KEY];
-    return v === undefined ? false : v === true;
-}
-
-export function toggleBlankL1Speaker() {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    const next = !isBlankL1SpeakerEnabled();
-    root.storySummary[BLANK_L1_SPEAKER_KEY] = next;
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return next;
-}
-
 // ── L1 渲染过滤（并集：关键词 / 楼层 / 用户侧，任一命中即弃）──────
 // 关键词、楼层：数组直接写进 settings，空数组 = 不过滤，不加开关。
 // 用户侧：布尔开关，默认 false = 不过滤（与上游一致）。
@@ -593,11 +574,7 @@ function formatL1Line(chunk, isUser) {
     if (Number.isInteger(chunk?.floor) && getL1BlockedFloors().includes(chunk.floor)) return "";
 
     const { name1, name2 } = getContext();
-    // L1 行 speaker 置空开关（默认关闭 = 显示说话者，与上游一致）
-    const blankSpeaker = isUser && isBlankL1SpeakerEnabled();
-    const speaker = blankSpeaker
-        ? ""
-        : (isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色"));
+    const speaker = isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色");
     const symbol = isUser ? "┌" : "›";
     return `    ${symbol} #${chunk.floor + 1} [${speaker}] ${text}`;
 }
