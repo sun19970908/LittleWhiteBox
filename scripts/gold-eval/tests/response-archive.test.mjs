@@ -86,3 +86,23 @@ test('archive hits spend no budget; misses remain bounded and fetch is restored 
         assert.equal(globalThis.fetch, provider);
     } finally { globalThis.fetch = original; }
 });
+
+test('explicit source-only probe reuses old receipts but buys only changed rerank calls', async t => {
+    const source = await fixture(t);
+    const api = { url: 'https://archive.invalid/v1', model: 'fixture-embedding' };
+    const config = { responseArchive: [source], prepared: { maxRequests: 1 }, summaryApi: api,
+        vectorConfig: { l0Api: api, embeddingApi: api, rerankApi: api },
+        goldEval: { probeCaseIds: ['turn-2'] } };
+    const originalFetch = globalThis.fetch;
+    let networkCalls = 0;
+    globalThis.fetch = async () => { networkCalls++; return Response.json({ ok: true }); };
+    try {
+        await withPreparedRequestBudget(config, async () => {
+            assert.equal((await fetch(url, { method: 'POST', body })).preparedReceipt.source, 'archive');
+            await assert.rejects(fetch(url, { method: 'POST', body: '{}' }),
+                error => error.goldFailure?.kind === 'probe-unexpected-request');
+            await fetch('https://archive.invalid/v1/rerank', { method: 'POST', body: '{}' });
+        });
+        assert.equal(networkCalls, 1);
+    } finally { globalThis.fetch = originalFetch; }
+});

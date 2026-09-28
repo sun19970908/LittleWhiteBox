@@ -1,7 +1,6 @@
 import {
     assertFreshTaskIdentities,
     collectTaskIdentityIds,
-    normalizeObservedAssistantCount,
     normalizeTaskActionId,
     normalizeTaskDisplayName,
     normalizeTaskIdentity,
@@ -65,8 +64,18 @@ export function appendTaskEvent(
         schemaVersion: TASK_DOMAIN_SCHEMA_VERSION,
         revision: domain.revision + 1,
         board: structuredClone(domain.board),
+        storyLabel: domain.storyLabel,
         events: [...structuredClone(domain.events), event],
+        checks: structuredClone(domain.checks),
     };
+    if (event.kind === 'accepted' || event.kind === 'assigned') {
+        next.checks[event.taskId] = { taskRevision: event.taskRevision,
+            digest: environment.evidenceDigest ?? '', phase: 'baseline' };
+    } else if (event.kind === 'completed' || event.kind === 'failed' || event.kind === 'cancelled') {
+        delete next.checks[event.taskId];
+    } else if (next.checks[event.taskId]) {
+        next.checks[event.taskId].taskRevision = event.taskRevision;
+    }
     validateTaskDomain(next);
     const record = projectTaskRecord(next, event.taskId);
     if (!record) {throw new TaskError('task_invalid_domain', 'created.record');}
@@ -84,7 +93,8 @@ export function replaceTaskBoard(domain: TaskDomainV1, input: ReplaceTaskBoardIn
     assertFreshTaskIdentities(domain, [boardId, ...listings.map(listing => listing.listingId)]);
     const board = { boardId, listings, generatedAt };
     const next: TaskDomainV1 = { schemaVersion: TASK_DOMAIN_SCHEMA_VERSION, revision: domain.revision + 1,
-        board: structuredClone(board), events: structuredClone(domain.events) };
+        board: structuredClone(board), storyLabel: domain.storyLabel,
+        events: structuredClone(domain.events), checks: structuredClone(domain.checks) };
     validateTaskDomain(next);
     return { domain: next, board: structuredClone(board) };
 }
@@ -96,19 +106,18 @@ export function acceptTaskListing(
 ): TaskCommandResult {
     validateTaskDomain(domain);
     const command = requireTaskCommandKeys(input, [
-        'actionId', 'taskId', 'boardId', 'listingId', 'playerDisplayName', 'observedAssistantCount',
+        'actionId', 'taskId', 'boardId', 'listingId', 'playerDisplayName',
     ]);
     const actionId = normalizeTaskActionId(command.actionId);
     const taskId = normalizeTaskIdentity(command.taskId);
     const boardId = normalizeTaskIdentity(command.boardId);
     const listingId = normalizeTaskIdentity(command.listingId);
     const playerDisplayName = normalizeTaskDisplayName(command.playerDisplayName);
-    const observedAssistantCount = normalizeObservedAssistantCount(command.observedAssistantCount);
     const existing = domain.events.find(event => event.actionId === actionId);
     if (existing) {
         if (existing.kind !== 'accepted' || existing.taskId !== taskId || existing.boardId !== boardId
             || existing.listingId !== listingId || existing.assignee.displayName !== playerDisplayName
-            || existing.observedAssistantCount !== observedAssistantCount) {throw new TaskError('task_action_conflict');}
+            ) {throw new TaskError('task_action_conflict');}
         return taskReplayResult(domain, existing);
     }
     if (!domain.board || domain.board.boardId !== boardId) {throw new TaskError('task_board_missing');}
@@ -119,7 +128,7 @@ export function acceptTaskListing(
     }
     assertFreshTaskIdentities(domain, [actionId, taskId, `board:${taskId}`]);
     return appendTaskEvent(domain, {
-        kind: 'accepted', actionId, taskId, observedAssistantCount, boardId, listingId,
+        kind: 'accepted', actionId, taskId, boardId, listingId,
         issuer: { kind: 'world', partyId: `board:${taskId}`, displayName: '任务终端托管',
             description: '匿名委托报酬的内部结算来源' },
         assignee: { kind: 'player', displayName: playerDisplayName },
@@ -134,25 +143,24 @@ export function publishTask(
 ): TaskCommandResult {
     validateTaskDomain(domain);
     const command = requireTaskCommandKeys(input, [
-        'actionId', 'taskId', 'form', 'playerDisplayName', 'observedAssistantCount',
+        'actionId', 'taskId', 'form', 'playerDisplayName',
     ]);
     const actionId = normalizeTaskActionId(command.actionId);
     const taskId = normalizeTaskIdentity(command.taskId);
     const form = normalizeTaskPublishedForm(command.form);
     const playerDisplayName = normalizeTaskDisplayName(command.playerDisplayName);
-    const observedAssistantCount = normalizeObservedAssistantCount(command.observedAssistantCount);
     const existing = domain.events.find(event => event.actionId === actionId);
     if (existing) {
         const expected = { kind: 'published', taskId, issuer: { kind: 'player', displayName: playerDisplayName },
-            ...form, observedAssistantCount };
+            ...form };
         const actual = existing.kind === 'published' ? { kind: existing.kind, taskId: existing.taskId,
             issuer: existing.issuer, title: existing.title, objective: existing.objective,
             ...(existing.requirements ? { requirements: existing.requirements } : {}), location: existing.location,
-            risk: existing.risk, reward: existing.reward, observedAssistantCount: existing.observedAssistantCount } : null;
+            risk: existing.risk, reward: existing.reward } : null;
         if (!actual || !sameTaskValue(actual, expected)) {throw new TaskError('task_action_conflict');}
         return taskReplayResult(domain, existing);
     }
     assertFreshTaskIdentities(domain, [actionId, taskId]);
-    return appendTaskEvent(domain, { kind: 'published', actionId, taskId, observedAssistantCount,
+    return appendTaskEvent(domain, { kind: 'published', actionId, taskId,
         issuer: { kind: 'player', displayName: playerDisplayName }, ...form }, environment);
 }

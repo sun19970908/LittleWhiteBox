@@ -83,41 +83,6 @@ export function removeSceneSlotPlaceholders(sourceText, slotIds = [], markerName
     );
 }
 
-// 后台任务提交前唯一允许写入占位符的入口。CAS 本身保持同步；保存失败时只移除本批槽位，
-// 因而不会覆盖保存等待期间发生的用户编辑或其它任务写入。
-export async function commitRecoverableScenePlacements({
-    getCurrentChatId,
-    getCurrentMessage,
-    expectedChatId,
-    messageId,
-    message,
-    originalText,
-    plannedText,
-    slotIds,
-    isEditing = () => false,
-    persist,
-    syncAfterRollback,
-} = {}) {
-    if (getCurrentChatId?.() !== expectedChatId) return false;
-    if (getCurrentMessage?.(messageId) !== message) return false;
-    if (isEditing(messageId)) return false;
-    if (message?.mes !== originalText) return false;
-
-    setActiveMessageText(message, plannedText);
-    try {
-        await persist?.();
-        return true;
-    } catch (error) {
-        setActiveMessageText(message, removeSceneSlotPlaceholders(message.mes, slotIds));
-        try {
-            await syncAfterRollback?.(message.mes);
-        } catch (syncError) {
-            console.warn('[ScenePlacement] 占位符保存失败后的界面同步未完成:', syncError);
-        }
-        throw error;
-    }
-}
-
 // 三家 provider 共用的槽位交付顺序。后台链路在每个持久化步骤前都通过 guard 续租；
 // 用户在任一步期间删除槽位时，只回滚本次刚写入的事实，不重建槽位。
 export async function commitSceneSlotDelivery({
@@ -152,24 +117,6 @@ export async function commitSceneSlotDelivery({
         return false;
     }
     return true;
-}
-
-// 本地链路的排版提交：占位符不提前落盘，而是在生成结束时一次性写入正文，
-// 所以这里的基准必然是规划文本，只把「什么结果都没有」的槽位剔掉。
-//
-// 刻意不接受原始正文快照：旧实现在「一张都没成功」时整段回写 originalText，会连带抹掉
-// 用户在生成期间做的任何编辑。真正需要表达的只是「没有结果的槽位不要写进去」，
-// 一张都没成功时把全部槽位剔掉自然就得到接近原文的结果，不需要回滚这个动作。
-//
-// 这不是结算。后台链路的占位符在提交前就已经持久化，它的结算发生在当前活着的正文上，
-// 用的是 removeSceneSlotPlaceholders，基准绝不能是任何快照。
-export function commitSettledScenePlacements(plannedText, { allSlotIds = [], settledSlotIds = [] } = {}) {
-    const settled = new Set((Array.isArray(settledSlotIds) ? settledSlotIds : [])
-        .map((slotId) => String(slotId || '').trim())
-        .filter(Boolean));
-    const unsettled = (Array.isArray(allSlotIds) ? allSlotIds : [])
-        .filter((slotId) => !settled.has(String(slotId || '').trim()));
-    return removeSceneSlotPlaceholders(plannedText, unsettled);
 }
 
 export function insertScenePlacements(sourceText, insertions = [], options = {}) {

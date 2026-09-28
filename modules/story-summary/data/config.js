@@ -5,8 +5,11 @@ import { CommonSettingStorage } from "../../../core/server-storage.js";
 import { CHARACTER_ALIAS_OUTPUT_TEMPLATE } from './character-aliases.js';
 import { EVENT_MEMORY_ROLES } from "./events.js";
 import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './summary-delay.js';
-import { ARC_PROGRESS_MAX } from '../generate/arc-progress.js';
-import { RELATION_TRENDS } from './fact-predicates.js';
+import { DEFAULT_MEMORY_MAINTENANCE_ENABLED } from '../maintenance/settings.js';
+import {
+    SUMMARY_ALIAS_RULES, SUMMARY_ARC_RULES, SUMMARY_EVENT_STYLE_RULES, SUMMARY_FACT_TRACKING_RULES,
+    SUMMARY_FACT_UPDATE_RULES, SUMMARY_MEMORY_ROLE_RULES, SUMMARY_PLAIN_STYLE_RULES, SUMMARY_RELATION_TREND_RULES,
+} from './generation-rules.js';
 
 const MODULE_ID = "summaryConfig";
 const SUMMARY_CONFIG_KEY = "storySummaryPanelConfig";
@@ -92,63 +95,15 @@ export const DEFAULT_SUMMARY_ASSISTANT_DOC_PROMPT = `
 Summary Specialist:
 Acknowledged. Now reviewing the incremental summarization specifications:
 
-[Memory Role]
-memoryRole describes what an event leaves for later context. Choose one role based on its main evidenced result:
-- 状态变化: A status is established, changed or ended: identity, relationship, residence, ownership or ongoing circumstances.
-- 约定承诺: A plan, promise, rule or responsibility is agreed, fulfilled or cancelled. An intention alone is not a completed state change.
-- 信息揭示: Someone learns an identity, secret, reason or truth. Preserve who learned it in the summary.
-- 偏好习惯: An explicitly stated preference, aversion or taboo, or a recurring behavior supported by the available history. A single action alone does not establish a habit.
-- 具体经历: A recognizable interaction or experience, including daily life, conflict, comfort or adventure, whose main contribution is the episode itself.
-These roles are different uses of memory, not importance levels. Choose the main result; keep other relevant details in the summary. Continuous actions and reactions about the same occurrence stay together rather than being split to fill roles.
+${SUMMARY_MEMORY_ROLE_RULES}
 
-[Event Summary Style]
-- summary 不是剧情概括，而是高召回的回忆卡片
-- timeLabel 和 summary 的时间优先用原文日期或明确事件定位，沿用已有时间基准；不单独写“今天、昨天、明晚”等相对时间，不编造日期或间隔。
-- 必须优先保留原词：正式人名、原文称呼/昵称/别称、地点、关键物件、动作、情绪态度、关系变化、约定/承诺/交换条件、秘密或羞辱/暧昧/冲突钩子
-- 信息无法全部容纳时，严格按此顺序压缩或删除：气氛描写 → 次要反应 → 心理描写 → 动作过程；必须先删完前一类，才可压缩后一类
-- 与本事件直接相关的具名实体（人名、地点、具名物件）、辨识性特征和15字以内的关键原话属于最后保留层；仅在上述四类都已不足以继续压缩时才考虑舍弃；无关名词不要强行塞入
-- 不要写“两人发生冲突”“关系恶化”“有暧昧互动”“揭示了一个秘密”这种空话，必须写清是谁在什么地方拿着什么、对谁做了什么、结果怎样
-- 优先写成 1 句；信息确实过多且确有必要时可写 2 句，但不要拆成空泛铺垫 + 具体补充
-- 允许 summary 略密实，但必须让未来一句口语提法也能认出这段
-- 示例只展示具体度，不要求模仿题材、语气或句式
-- 不合格：
-  1. 二人在酒馆发生冲突，关系恶化。
-  2. 两人有暧昧互动，并约定再次见面。
-  3. 她揭示了一个秘密，对方受到打击。
-- 合格：
-  1. 苏晚在黑鹭酒馆当众把欠条拍到顾衡胸口，骂他拿她母亲的旧宅做赌注，顾衡想抓她手腕被她甩开，周围赌客起哄，两人彻底撕破脸。 (#120-123)
-  2. 原文明确当前为6月12日，追问“昨晚”的去向并约定“明晚”见面：
-     6月12日，周柠在旅馆浴室门口盯着林雨锁骨上的咬痕，追问6月11日晚和谁在一起，林雨一边整理湿透的白衬衫一边嘴硬否认，最后答应6月13日晚还去旧码头见她。 (#88-91)
+${SUMMARY_EVENT_STYLE_RULES}
 
-[Relationship Trend Scale]
-${RELATION_TRENDS.slice(0, 4).join(' ← ')} → ${RELATION_TRENDS.slice(4).join(' → ')}
+${SUMMARY_RELATION_TREND_RULES}
 
-[Arc Progress Tracking]
-├─ trajectory: 当前阶段描述(15字内)
-├─ progress: an integer from 0 to ${ARC_PROGRESS_MAX}, used for both existing and updated arcs
-└─ newMoment: 仅记录本次新增的关键时刻
-Each arc update contains name, trajectory and numeric progress. newMoment is optional. Omit arcUpdates when no arc changes.
+${SUMMARY_ARC_RULES}
 
-[Fact Tracking - SPO / World Facts]
-We maintain a small "world state" as SPO triples.
-Each update is a JSON object: {s, p, o, isState, trend?, retracted?}
-
-Core rules:
-1) Keyed by (s + p). If a new update has the same (s+p), it overwrites the previous value.
-2) Only output facts that are NEW or CHANGED in the new dialogue. Do NOT repeat unchanged facts.
-3) isState meaning:
-   - isState: true  -> core constraints that must stay stable and should NEVER be auto-deleted
-                    (identity, location, life/death, ownership, relationship status,
-                      stable distinctive physical traits, binding rules)
-   - isState: false -> non-core facts / soft memories that may be pruned by capacity limits later
-4) Relationship facts:
-   - Use predicate format: "对X的看法" (X is the target person)
-   - trend is required for relationship facts, one of:
-     ${RELATION_TRENDS.join(' | ')}
-5) Retraction (deletion):
-   - To delete a fact, output: {s, p, retracted: true}
-6) Predicate normalization:
-   - Reuse existing predicates whenever possible, avoid inventing synonyms.
+${SUMMARY_FACT_TRACKING_RULES}
 
 Ready to process incremental summary requests with strict deduplication.`;
 
@@ -202,26 +157,9 @@ Before generating, observe the USER and analyze carefully:
 - What arc PROGRESS was made?
 - What facts changed? (status/position/ownership/relationships/stable distinctive physical traits)
 
-## factUpdates 规则
-- 目的: 纠错 & 世界一致性约束，只记录硬性事实
-- s+p 为键，相同键会覆盖旧值
-- isState: true=核心约束(位置/身份/生死/关系/稳定辨识性身体特征)，false=有容量上限会被清理
-- 外貌类统一使用谓词 p="身体特征"；只记录稳定、有辨识度的特征，不记录临时衣着、姿势、表情和普通伤势
-- "身体特征" 的 o 必须写当前完整值。由于相同 s+p 会覆盖旧值，新增特征时必须把已有特征一并写全，不能只写新增部分
-- 例：已有 {"s":"鹿椿若","p":"身体特征","o":"头顶白色分叉鹿角","isState":true}，后续发现鹿耳时应输出 {"s":"鹿椿若","p":"身体特征","o":"头顶白色分叉鹿角，鹿耳","isState":true}，不能只写"鹿耳"
-- 关系类: 按 doc 中的“Fact Tracking”填写谓词和 trend
-- 删除: {s, p, retracted: true}，不需要 o 字段
-- 更新: {s, p, o, isState, trend?}
-- 谓词规范化: 复用已有谓词，不要发明同义词
-- 只输出有变化的条目，确保少、硬、稳定
+${SUMMARY_FACT_UPDATE_RULES}
 
-## characterAliasUpdates 规则（可选）
-- 目的: 维护同一角色的不同写法，让称号、昵称、缩写、不同语言或译名都能指向同一人
-- 当前对话与既有总结能确认两种名称是同一角色时输出。明确揭示身份、稳定称号或昵称、唯一缩写、不同语言/译名/书写形式都可以作为依据
-- 称号、昵称、缩写必须在当前剧情和既有资料中只指向这一位角色。亲昵称呼、亲属称呼、泛称、普通职位、代词、仅因读音/字形相近的名称不构成同一人依据
-- to: 已有总结中稳定使用的主名；from: 其他写法数组；evidence: 简短说明确认依据
-- 例: {"to":"五条悟","from":["悟","Gojo Satoru"],"evidence":"当前中文称呼“悟”与既有日文名五条悟均指同一角色"}
-- 不要列出要修改哪些事件/事实/弧光，系统会自动合并
+${SUMMARY_ALIAS_RULES}
 
 ## Output Format
 \`\`\`json
@@ -266,8 +204,7 @@ Before generating, observe the USER and analyze carefully:
 - factUpdates 可为空数组
 - characterAliasUpdates 是可选字段；没有可靠的同一人依据时不要输出这个 key
 - 合法JSON，字符串值内部避免英文双引号
-- 用朴实、白描、有烟火气的笔触记录事实，避免比喻和意象
-- 严谨、注重细节，避免使用模糊的概括性语言，应用具体的动词描述动作，例:谁,在什么时间/地点,通过什么方式,对谁,做了什么事,出现了什么道具,结果如何。
+${SUMMARY_PLAIN_STYLE_RULES}
 
 ## 楼层覆盖约束（确保 marker 无空洞）
 - 所有事件 marker 取并集 S 必须完全覆盖本批所有楼层，无任何一楼遗漏
@@ -418,6 +355,7 @@ function normalizeVectorConfig(rawVector = null) {
 
 function createDefaultSummaryPanelConfig() {
     const defaults = {
+        memoryMaintenanceEnabled: DEFAULT_MEMORY_MAINTENANCE_ENABLED,
         api: { provider: "st", url: "", key: "", model: "", modelCache: [] },
         gen: { temperature: null, top_p: null, top_k: null, presence_penalty: null, frequency_penalty: null },
         trigger: {
@@ -457,6 +395,9 @@ function assertSummaryConfigPersisted(expected, actual) {
     if (!actual || typeof actual !== "object") {
         throw new Error("保存后读取配置失败");
     }
+    if (actual.memoryMaintenanceEnabled !== expected.memoryMaintenanceEnabled) {
+        throw new Error('memory_maintenance_setting_not_saved');
+    }
 
     const expectedApi = expected?.api || {};
     const actualApi = actual?.api || {};
@@ -491,6 +432,7 @@ function normalizeSummaryPanelConfig(rawConfig = null) {
         : {};
 
     const result = {
+        memoryMaintenanceEnabled: rawConfig.memoryMaintenanceEnabled === true,
         api: { ...defaults.api, ...(rawConfig.api || {}) },
         gen: { ...defaults.gen, ...(rawConfig.gen || {}) },
         trigger: { ...defaults.trigger, ...(rawConfig.trigger || {}) },

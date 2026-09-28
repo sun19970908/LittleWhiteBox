@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { administratorHarness, settled, tick } from './administrator-harness.js';
+import { administratorHarness, settled, tick, withLoadedTools } from './administrator-harness.js';
 import { createAdministratorData } from '../apps/administrator/domain/data.js';
 import { createWorldManagement } from '../apps/world/management/participant.js';
 
 const call = (name, args) => ({ toolCalls: [{ id: 'call', name, arguments: JSON.stringify(args) }] });
 async function interruptedWrite({ applied = false, stopped = false } = {}) {
     const h = await administratorHarness(); let release, step = 0;
-    h.state.generate = async () => ++step === 1 ? call('ChatRead', { from: 55 }) : call('WorldEdit', { overview: 'changed' });
+    h.state.generate = withLoadedTools(['world'], async () => ++step === 1 ? call('ChatRead', { from: 55 }) : call('WorldEdit', { overview: 'changed' }));
     h.state.replace = async input => {
         if (input.candidate.partitions.world?.overview === 'changed') {
             return new Promise(resolve => { release = () => {
@@ -265,9 +265,9 @@ test('a confirmed business write superseded later does not block activation or r
 
 test('regeneration after confirming a pre-dispatch receipt does not dispatch the old business write', async () => {
     const h = await administratorHarness(); let step = 0, businessWrites = 0, fail = true;
-    h.state.generate = async () => ++step === 1 ? call('WorldEdit', { overview: 'changed' }) : { text: 'done' };
+    h.state.generate = withLoadedTools(['world'], async () => ++step === 1 ? call('WorldEdit', { overview: 'changed' }) : { text: 'done' });
     h.state.replace = async input => {
-        if (fail && input.candidate.partitions.administrator?.turns[0]?.operations.length) {
+        if (fail && input.candidate.partitions.administrator?.turns[0]?.operations.some(operation => operation.status === 'unconfirmed')) {
             fail = false; return { status: 'unconfirmed', observed: h.state.persisted };
         }
         if (input.candidate.partitions.world?.overview !== h.state.persisted.partitions.world?.overview) { businessWrites++; }
@@ -276,7 +276,8 @@ test('regeneration after confirming a pre-dispatch receipt does not dispatch the
     const { turnId } = await h.request('send', { text: '修改概况' }); await settled(h.runtime);
     assert.equal(businessWrites, 0);
     await h.request('confirm');
-    assert.equal(h.conversation.read().turns[0].operations.length, 1);
+    assert.equal(h.conversation.read().turns[0].operations.length, 2);
+    h.state.generate = async () => ({ text: 'done' });
     await h.request('regenerate', { turnId }); await settled(h.runtime);
     const operations = h.conversation.read().turns[0].operations;
     assert.deepEqual(operations, []);

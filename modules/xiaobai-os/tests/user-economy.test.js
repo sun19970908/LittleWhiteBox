@@ -5,6 +5,7 @@ import { ECONOMY_PARTITION, ECONOMY_TRANSACTION_CAPABILITY, createEconomyCapabil
 import { projectBalances } from '../domains/economy/ledger.js';
 import { createBankService } from '../apps/bank/application/service.js';
 import { BANK_PARTITION } from '../apps/bank/partition.js';
+import { TASKS_PARTITION } from '../apps/tasks/partition.js';
 import { DICE_PARTITION } from '../apps/dice/partition.js';
 import { createDiceSheetService } from '../apps/dice/application/sheet-service.js';
 import { generateCoc7Sheet } from '../apps/dice/domain/coc7-creation.js';
@@ -79,7 +80,7 @@ test('lost acknowledgement is confirmed by readback without charging twice', asy
     assert.equal(h.document().partitions.economy.transactions.length, 2);
 });
 
-test('equal local bank event/action/escrow IDs in two stories do not collide or cross-settle', async () => {
+test('bank positions are global: switching stories sees the same deposit and settles it only once', async () => {
     const h = await userEconomyHarness();
     await h.economy.refresh();
     // Banks need two deposits to exercise a same-ID collision, not an impossible overdraft.
@@ -90,41 +91,46 @@ test('equal local bank event/action/escrow IDs in two stories do not collide or 
             amount: 100, kind: 'fixture', sourceDomain: 'fixture', sourceId: 'fixture' });
         tx.replace(ledger);
     });
+    let eventId = 0;
     const bank = () => createBankService(h.store(BANK_PARTITION), h.transactions, h.economy, {
-        createEventId: () => 'event-1', createPositionId: () => 'position-1', createActivityId: () => 'activity-1',
+        createEventId: () => `event-${++eventId}`, createPositionId: () => 'position-1', createActivityId: () => 'activity-1',
         getCurrentAssistantTurn: () => 0, isMainGenerationActive: () => false,
     });
-    for (const story of ['a', 'b']) {
-        h.switchStory(story);
-        const service = bank();
-        const view = await service.refreshCurrent();
-        const saved = await service.openDeposit({ actionId: 'open-1', expectedRevision: view.revision, expectedEventId: view.eventId,
-            productId: 'short-term', amount: 100 });
-        assert.equal(saved.deposits.length, 1);
-        await service.refreshCurrent();
-        service.dispose();
-    }
-    assert.equal(h.economy.getPlayerBalance(), 0);
+    const service = bank();
+    const view = await service.refreshCurrent();
+    await service.openDeposit({ actionId: 'open-1', expectedRevision: view.revision, expectedEventId: view.eventId,
+        productId: 'short-term', amount: 100 });
+    h.switchStory('b');
+    assert.equal((await service.refreshCurrent()).deposits[0].id, 'position-1');
+    await service.advanceTurns(10);
+    assert.equal(service.readCurrent().deposits[0].claimable, true);
     const balances = projectBalances(h.document().partitions.economy);
-    assert.equal(balances['escrow:bank:a:position-1'], 100);
-    assert.equal(balances['escrow:bank:b:position-1'], 100);
+    assert.equal(balances['escrow:bank:position-1'], 100);
     h.switchStory('branch');
-    assert.equal((await h.store(BANK_PARTITION).read()).value, null);
-    assert.equal(h.economy.getPlayerBalance(), 0);
+    assert.equal((await h.store(BANK_PARTITION).read()).value.events.length, 1);
+    const claimed = await service.settleDue({ actionId: 'claim-1', expectedRevision: service.readCurrent().revision,
+        expectedEventId: service.readCurrent().eventId });
+    assert.equal(claimed.deposits.length, 0);
+    assert.equal(claimed.balance, 206);
+    service.dispose();
 });
 
-test('user-story creation confirms a reference before preparing money; a queued switch cancels the operation', async () => {
+test('global Bank does not create a story reference; story-owned Tasks still confirms one and rejects a queued switch', async () => {
     const h = await userEconomyHarness();
     h.switchStory('fresh', false);
     const result = await h.store(BANK_PARTITION).transact(tx => { tx.replace(tx.currentOrInitial()); });
     assert.equal(result.status, 'confirmed');
+    assert.equal(h.state.referencesCreated, 0);
+    assert.ok(h.document().partitions.bank);
+    const storyResult = await h.store(TASKS_PARTITION).transact(tx => { tx.replace(tx.currentOrInitial()); });
+    assert.equal(storyResult.status, 'confirmed');
     assert.equal(h.state.referencesCreated, 1);
-    assert.ok(h.document().stories['new-story'].bank);
+    assert.ok(h.document().stories['new-story'].tasks);
     let release;
     const hold = new Promise(resolve => { release = resolve; });
     const first = h.store(DICE_PARTITION).transact(async () => { await hold; });
     let executed = false;
-    const queued = h.store(BANK_PARTITION).transact(() => { executed = true; });
+    const queued = h.store(TASKS_PARTITION).transact(() => { executed = true; });
     h.switchStory('other'); release();
     await first;
     assert.equal((await queued).status, 'failed');
@@ -148,23 +154,34 @@ test('upgrade discards only old chat economics, retaining conversation-owned dat
     assert.equal(projectBalances(initial.economy).player, 100);
 });
 
-test('business callers cannot spend another story escrow or forge ledger scope', async () => {
+test('global Bank keeps its account across cards while story-owned Tasks cannot spend another story escrow', async () => {
     const h = await userEconomyHarness();
     await h.economy.refresh();
     const bank = h.store(BANK_PARTITION);
     await bank.transact(tx => tx.useCapability(ECONOMY_TRANSACTION_CAPABILITY).postAction({ legs: [{
-        actionId: 'stake', idempotencyKey: 'stake', fromAccountId: 'player', toAccountId: 'escrow:bank:position', amount: 100,
+        actionId: 'stake', idempotencyKey: 'stake', fromAccountId: 'player', toAccountId: 'escrow:bank:position', amount: 50,
         sourceId: 'position', kind: 'deposit', title: 'deposit', sourceScope: 'b',
     }] }));
     const transaction = h.document().partitions.economy.transactions.at(-1);
-    assert.equal(transaction.sourceScope, 'a');
+    assert.equal(transaction.sourceScope, 'user');
+    const tasks = h.store(TASKS_PARTITION);
+    await tasks.transact(tx => tx.useCapability(ECONOMY_TRANSACTION_CAPABILITY).postAction({ legs: [{
+        actionId: 'commission', idempotencyKey: 'commission', fromAccountId: 'player', toAccountId: 'escrow:task:position', amount: 50,
+        sourceId: 'position', kind: 'task_funding', title: 'commission', sourceScope: 'b',
+    }] }));
+    assert.equal(h.document().partitions.economy.transactions.at(-1).sourceScope, 'a');
     h.switchStory('b');
-    const result = await bank.transact(tx => {
+    const global = await bank.transact(tx => {
+        const economy = tx.useCapability(ECONOMY_TRANSACTION_CAPABILITY);
+        assert.equal(economy.getAccountBalance('escrow:bank:position'), 50);
+    });
+    assert.equal(global.status, 'unchanged');
+    const isolated = await tasks.transact(tx => {
         const economy = tx.useCapability(ECONOMY_TRANSACTION_CAPABILITY);
         assert.equal(economy.listOwnedTransactions().length, 0);
-        assert.equal(economy.getAccountBalance('escrow:bank:position'), 0);
+        assert.equal(economy.getAccountBalance('escrow:task:position'), 0);
     });
-    assert.equal(result.status, 'unchanged');
+    assert.equal(isolated.status, 'unchanged');
 });
 
 test('retired learning completions never pay the new wallet, with or without an old receipt', async () => {

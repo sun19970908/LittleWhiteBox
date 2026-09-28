@@ -1,4 +1,5 @@
-import { countAssistantTurns } from './assistant-turn-count.js';
+import { countStoryAssistantMessages, storyMessageRole } from '../../host/story-message.js';
+import { sha256 } from 'js-sha256';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -18,6 +19,7 @@ export interface NormalizedMessageSnapshot {
     readonly text: string;
     readonly swipeId: number | string | null;
     readonly speakerName: string;
+    readonly sendDate: string | number | null;
 }
 
 export interface AcceptedTurnPlayer {
@@ -51,6 +53,7 @@ interface NormalizedHostMessage {
     readonly text: string;
     readonly swipeId: number | string | null;
     readonly speakerName: string;
+    readonly sendDate: string | number | null;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
@@ -63,12 +66,7 @@ function isChatSurface(value: unknown): value is AcceptedTurnChatSurface {
 }
 
 function readRole(message: UnknownRecord): NormalizedHostMessage['role'] {
-    if (message.is_system === true) { return 'system'; }
-    if (message.is_user === true) { return 'user'; }
-    if (message.role === 'system' || message.role === 'user' || message.role === 'assistant') {
-        return message.role;
-    }
-    return 'assistant';
+    return storyMessageRole(message);
 }
 
 function readText(message: UnknownRecord): string {
@@ -82,6 +80,11 @@ function readSwipeId(message: UnknownRecord): number | string | null {
     const swipeId = message.swipe_id;
     if (typeof swipeId === 'string') { return swipeId; }
     return typeof swipeId === 'number' && Number.isFinite(swipeId) ? swipeId : null;
+}
+
+function readSendDate(message: UnknownRecord): string | number | null {
+    const date = message.send_date;
+    return typeof date === 'string' || typeof date === 'number' && Number.isFinite(date) ? date : null;
 }
 
 function normalizeParticipantName(value: unknown, fallback: string): string {
@@ -120,6 +123,7 @@ function normalizeMessage(
         text: readText(value),
         swipeId: readSwipeId(value),
         speakerName: normalizeSpeakerName(value, role, surface),
+        sendDate: readSendDate(value),
     };
 }
 
@@ -140,6 +144,7 @@ function ordinaryMessage(
         text: message.text,
         swipeId: message.swipeId,
         speakerName: message.speakerName,
+        sendDate: message.sendDate,
     });
 }
 
@@ -153,7 +158,7 @@ function createSource(
         chatIdentity: surface.identityKey,
         messages: Object.freeze([...messages]),
         messageCount,
-        assistantCount: countAssistantTurns(surface.messages, messageCount),
+        assistantCount: countStoryAssistantMessages(surface.messages, messageCount),
         player: Object.freeze({
             actorKey: 'player' as const,
             displayName: normalizeParticipantName(surface.playerName, 'User'),
@@ -181,8 +186,9 @@ function captureTrailingTurn(surface: AcceptedTurnChatSurface): readonly Normali
     }
     if (accepted.length === 0) { return null; }
     const user = ordinaryMessage(surface.messages[index], index, surface);
-    if (!user || user.role !== 'user') { return null; }
-    accepted.unshift(user);
+    if (user?.role === 'user') {accepted.unshift(user);}
+    else if (surface.messages.slice(0, index + 1).some((value, previousIndex) =>
+        normalizeMessage(value, previousIndex, surface)?.role === 'user')) {return null;}
     return accepted;
 }
 
@@ -266,7 +272,8 @@ function sameMessage(
         && actual.role === expected.role
         && actual.text === expected.text
         && actual.swipeId === expected.swipeId
-        && actual.speakerName === expected.speakerName;
+        && actual.speakerName === expected.speakerName
+        && actual.sendDate === expected.sendDate;
 }
 
 export function matchesAcceptedTurnSource(
@@ -295,5 +302,20 @@ export function matchesAcceptedTurnSource(
     return source.messages.length > 0
         && source.messages.every(message => sameMessage(surface.messages, message, source.messageCount, surface))
         && (!source.trigger || sameMessage(surface.messages, source.trigger, source.messageCount, surface))
-        && countAssistantTurns(surface.messages, source.messageCount) === source.assistantCount;
+        && countStoryAssistantMessages(surface.messages, source.messageCount) === source.assistantCount;
+}
+
+/** Content identity is distinct from the already-checked chat binding and display state. */
+export function taskEvidenceDigest(source: AcceptedTurnSource): string {
+    return sha256(JSON.stringify(source.messages.map(message =>
+        [message.role, message.speakerName, message.text, message.sendDate ?? null])));
+}
+
+export function latestTaskEvidenceDigest(surface: AcceptedTurnChatSurface | null): string {
+    if (!surface) {return '';}
+    let end = surface.messages.length - 1;
+    while (end >= 0 && ordinaryMessage(surface.messages[end], end, surface)?.role !== 'assistant') {end -= 1;}
+    if (end < 0) {return '';}
+    const accepted = captureTrailingTurn({ ...surface, messages: surface.messages.slice(0, end + 1) });
+    return accepted ? taskEvidenceDigest(createSource(surface, accepted)) : '';
 }

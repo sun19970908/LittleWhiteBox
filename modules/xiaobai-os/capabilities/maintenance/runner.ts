@@ -17,11 +17,7 @@ import {
 } from './job.js';
 import { createMaintenanceOutcome, type MaintenanceRunOutcome } from './outcome.js';
 import type { MaintenanceMode, MaintenanceParticipant, MaintenanceRegistry } from './registry.js';
-import {
-    ALWAYS_READY_WRITE_GATE,
-    type MaintenanceRootWriteGate,
-    waitForMaintenanceWriteReady,
-} from './root-write-gate.js';
+import { ALWAYS_READY_WRITE_GATE, type MaintenanceRootWriteGate } from './root-write-gate.js';
 
 type MaintenanceState = 'idle' | 'running' | 'error';
 
@@ -116,7 +112,6 @@ export function createMaintenanceRunner({
     let processing = false;
     let activeJob: MaintenanceQueuedJob | null = null;
     let unsubscribeMessageSent: (() => void) | null = null;
-    let unsubscribeWriteGate: (() => void) | null = null;
 
     const report = (error: unknown): void => {
         try {onError(error);} catch { /* Reporting cannot own queue progress. */ }
@@ -156,23 +151,13 @@ export function createMaintenanceRunner({
     const invalidate = (run: MaintenanceSessionRun, reason: string): void => {
         if (run.invalid) {return;}
         run.invalid = true;
+        run.invalidReason = reason;
         try {run.session.invalidate?.(reason);} catch (error) {report(error);}
-    };
-    const onWriteUnconfirmed = (reason: string): void => {
-        for (const queued of queue.drain()) {cancelJob(queued, reason);}
     };
     const enabled = (run: MaintenanceSessionRun, mode: MaintenanceMode): boolean => {
         try {return run.participant.isEnabled(mode);}
         catch (error) {report(error); return false;}
     };
-
-    function ensureWriteGateSubscription(): void {
-        if (!unsubscribeWriteGate) {
-            unsubscribeWriteGate = writeGate.subscribe(() => {
-                if (writeGate.getState() === 'ready') {scheduleDrain();}
-            });
-        }
-    }
 
     function jobGuard(job: MaintenanceQueuedJob): boolean {
         return !job.cancelledReason
@@ -204,22 +189,12 @@ export function createMaintenanceRunner({
         if (!job.committing) {settle(job, cancelledJobOutcome(job, job.cancelledReason));}
     }
 
-    function waitForReady(job: MaintenanceQueuedJob): Promise<boolean> {
-        return waitForMaintenanceWriteReady({
-            gate: writeGate,
-            signal: job.controller.signal,
-            guard: () => jobGuard(job),
-        });
-    }
-
     const executeJob = createMaintenanceJobExecutor(registry, gateway, writeGate, {
         guardJob: jobGuard,
         guardRun: runGuard,
-        waitForReady,
         invalidate,
         automaticToken: participantId => token(automaticTokens, participantId),
         updateStatus: (job, participantId, patch) => updateStatus(job.source.chatIdentity, participantId, patch),
-        onWriteUnconfirmed,
         captureBackground,
         report,
     });
@@ -230,7 +205,6 @@ export function createMaintenanceRunner({
         processing = true;
         try {
             while (queue.size) {
-                if (writeGate.getState() !== 'ready') {ensureWriteGateSubscription(); break;}
                 const job = queue.shift();
                 if (!job) {continue;}
                 activeJob = job;
@@ -261,7 +235,7 @@ export function createMaintenanceRunner({
         } finally {
             activeJob = null;
             processing = false;
-            if (queue.size && writeGate.getState() === 'ready') {scheduleDrain();}
+            if (queue.size) {scheduleDrain();}
         }
     }
 
@@ -272,15 +246,19 @@ export function createMaintenanceRunner({
     }
 
     function enqueue(job: MaintenanceQueuedJob): void {
-        ensureWriteGateSubscription();
         queue.enqueue(job);
         scheduleDrain();
     }
 
     function makeJob(mode: MaintenanceMode, source: AcceptedTurnSource, participantId: string | null): MaintenanceQueuedJob {
+        const one = participantId ? registry.selectById(participantId, mode) : undefined;
+        const participants = participantId ? one ? [one] : [] : registry.selectByMode(mode);
+        const preparedSessions = new Map(participants.map(participant => [participant.id,
+            participant.prepareSession?.(source, mode) ?? (() => participant.createSession(source, mode))]));
         return {
             mode,
             source,
+            preparedSessions,
             participantId,
             epoch,
             manualToken: participantId ? token(manualTokens, participantId) : 0,
@@ -339,7 +317,9 @@ export function createMaintenanceRunner({
         }
         let resolveCompletion!: (outcome: MaintenanceRunOutcome) => void;
         const completion = new Promise<MaintenanceRunOutcome>(resolve => {resolveCompletion = resolve;});
-        const job = makeJob(mode, capture.source, participantId);
+        let job: MaintenanceQueuedJob;
+        try {job = makeJob(mode, capture.source, participantId);}
+        catch (error) {report(error); return skippedStart(mode, participantId, 'capture-failed', capture.source.chatIdentity);}
         job.resolve = resolveCompletion;
         updateStatus(capture.source.chatIdentity, participantId, {
             state: 'running', mode, message: '', reason: '',
@@ -363,7 +343,8 @@ export function createMaintenanceRunner({
         try {source = captureAutomaticAcceptedTurn(captureSurface(), messageIndex);}
         catch (error) {report(error); return false;}
         if (!source) {return false;}
-        enqueue(makeJob('automatic', source, null));
+        try {enqueue(makeJob('automatic', source, null));}
+        catch (error) {report(error); return false;}
         return true;
     }
 
@@ -375,14 +356,11 @@ export function createMaintenanceRunner({
 
     return Object.freeze({
         startBackground(subscribeMessageSent: MessageSentSubscription) {
-            ensureWriteGateSubscription();
             if (!unsubscribeMessageSent) {unsubscribeMessageSent = subscribeMessageSent(handleMessageSent);}
         },
         stopBackground() {
             unsubscribeMessageSent?.();
             unsubscribeMessageSent = null;
-            unsubscribeWriteGate?.();
-            unsubscribeWriteGate = null;
             cancelAll('stopped');
         },
         handleMessageSent,

@@ -1,5 +1,5 @@
 import { normalizeAgentSettings } from '../../../agent-core/config.js';
-import { isSillyTavernProvider, resolveActiveProviderConfig } from '../../../agent-core/provider-resolution.js';
+import { resolveActiveProviderConfig } from '../../../agent-core/provider-resolution.js';
 import { classifyProviderFailure } from '../agent/provider-failure.js';
 import type { AcceptedTurnSource } from './accepted-turn-source.js';
 import {
@@ -21,7 +21,7 @@ import {
     type ProviderToolLoopResult,
 } from './provider-tool-loop.js';
 import type { MaintenanceDataMessage, MaintenanceParticipant, MaintenanceRegistry } from './registry.js';
-import type { MaintenanceRootWriteGate } from './root-write-gate.js';
+import { waitForMaintenanceWriteReady, type MaintenanceRootWriteGate } from './root-write-gate.js';
 import { escapePromptData } from './prompt-safety.js';
 
 type UnknownRecord = Record<string, unknown>;
@@ -34,7 +34,6 @@ export interface MaintenanceGateway {
 export interface MaintenanceJobExecutorHooks {
     guardJob: (job: MaintenanceQueuedJob) => boolean;
     guardRun: (job: MaintenanceQueuedJob, run: MaintenanceSessionRun) => boolean;
-    waitForReady: (job: MaintenanceQueuedJob) => Promise<boolean>;
     invalidate: (run: MaintenanceSessionRun, reason: string) => void;
     automaticToken: (participantId: string) => number;
     updateStatus: (
@@ -42,7 +41,6 @@ export interface MaintenanceJobExecutorHooks {
         participantId: string,
         patch: { state: 'running' | 'error'; mode: MaintenanceQueuedJob['mode']; message: string; reason?: string },
     ) => void;
-    onWriteUnconfirmed: (reason: string) => void;
     captureBackground: (
         source: AcceptedTurnSource,
         mode: MaintenanceQueuedJob['mode'],
@@ -79,26 +77,38 @@ export function createMaintenanceJobExecutor(
     const {
         guardJob,
         guardRun,
-        waitForReady,
         invalidate,
         automaticToken,
         updateStatus,
-        onWriteUnconfirmed,
         captureBackground,
         report,
     } = hooks;
+
+    async function readySessions(job: MaintenanceQueuedJob): Promise<boolean> {
+        for (const run of job.sessions) {
+            if (guardRun(job, run) && !await participantReady(job, run.participant)) {
+                invalidate(run, 'storage-unavailable');
+            }
+        }
+        return job.sessions.some(run => guardRun(job, run));
+    }
 
     async function startWhenReady<T>(
         job: MaintenanceQueuedJob,
         operation: () => T | Promise<T>,
     ): Promise<{ readonly started: true; readonly value: T } | { readonly started: false }> {
-        while (guardJob(job)) {
-            if (writeGate.getState() === 'ready') {
-                return { started: true, value: await operation() };
-            }
-            if (!await waitForReady(job)) { return { started: false }; }
-        }
-        return { started: false };
+        return await readySessions(job)
+            ? { started: true, value: await operation() }
+            : { started: false };
+    }
+
+    async function participantReady(job: MaintenanceQueuedJob, participant: MaintenanceParticipant): Promise<boolean> {
+        const gate = participant.writeGate ?? writeGate;
+        if (gate.getState() === 'ready') {return true;}
+        if (gate.getState() !== 'loading' && gate.getState() !== 'saving') {return false;}
+        return waitForMaintenanceWriteReady({ gate, signal: job.controller.signal,
+            guard: () => guardJob(job) && (gate.getState() === 'loading'
+                || gate.getState() === 'saving' || gate.getState() === 'ready') });
     }
 
     function selectParticipants(job: MaintenanceQueuedJob): readonly MaintenanceParticipant[] {
@@ -106,7 +116,8 @@ export function createMaintenanceJobExecutor(
             const selected = registry.selectById(job.participantId, job.mode);
             return selected ? [selected] : [];
         }
-        return registry.selectByMode('automatic').filter(participant => !job.excludedParticipantIds.has(participant.id));
+        return registry.selectByMode('automatic').filter(participant => job.preparedSessions.has(participant.id)
+            && !job.excludedParticipantIds.has(participant.id));
     }
 
     async function finishJob(
@@ -116,6 +127,7 @@ export function createMaintenanceJobExecutor(
         const results: MaintenanceParticipantOutcome[] = [...job.earlyResults];
         const committedIds: string[] = [];
         let saveUnconfirmed = false;
+        const unconfirmedGates = new Set<MaintenanceRootWriteGate>();
         const cancelRun = (run: MaintenanceSessionRun, reason: string): void => {
             invalidate(run, reason);
             if (!results.some(result => result.participantId === run.participant.id)) {
@@ -128,9 +140,14 @@ export function createMaintenanceJobExecutor(
             }
         };
         for (const run of job.sessions) {
-            if (saveUnconfirmed) { cancelRun(run, 'save-unconfirmed'); continue; }
+            if (unconfirmedGates.has(run.participant.writeGate ?? writeGate)) {
+                cancelRun(run, 'save-unconfirmed'); continue;
+            }
             if (!guardRun(job, run)) {
-                cancelRun(run, job.cancelledReason || (guardJob(job) ? 'participant-disabled' : 'source-invalidated'));
+                if (run.invalidReason === 'storage-unavailable' && guardJob(job)) {
+                    results.push({ participantId: run.participant.id, status: 'failed', changed: false,
+                        reason: 'storage-unavailable' });
+                } else {cancelRun(run, job.cancelledReason || (guardJob(job) ? 'participant-disabled' : 'source-invalidated'));}
                 continue;
             }
             const unresolvedToolFailure = loop.unownedFailure
@@ -141,7 +158,7 @@ export function createMaintenanceJobExecutor(
             try {
                 domainResult = run.session.getResult();
                 canCommit = (run.session.commitPolicy !== 'complete-run' || completed)
-                    && await run.session.canCommit();
+                    && await run.session.canCommit({ completed });
             } catch (error) {
                 report(error);
                 results.push({ participantId: run.participant.id, status: 'failed', changed: false, reason: 'session-result-failed' });
@@ -158,16 +175,24 @@ export function createMaintenanceJobExecutor(
                 domainResult = { ...domainResult, reason: 'tool-errors-unresolved' };
             }
             if (canCommit) {
-                const ready = await waitForReady(job);
+                const ready = await participantReady(job, run.participant);
                 if (!ready || !guardRun(job, run)) {
-                    cancelRun(run, job.cancelledReason || (guardJob(job) ? 'participant-disabled' : 'source-invalidated'));
+                    if (ready || !guardJob(job)) {cancelRun(run, job.cancelledReason || (guardJob(job) ? 'participant-disabled' : 'source-invalidated'));}
+                    else {results.push({ participantId: run.participant.id, status: 'failed', changed: false,
+                        reason: 'storage-unavailable' });}
                     continue;
                 }
                 job.committing = true;
                 try {
                     // Kernel owns the write gate; this constraint must remain valid during pending recovery.
-                    await run.session.commit(() => guardRun(job, run));
-                    committedIds.push(run.participant.id);
+                    const saved = await run.session.commit(() => guardRun(job, run), { completed });
+                    const stale = !!saved && typeof saved === 'object' && 'status' in saved && saved.status === 'stale';
+                    const changed = stale && (saved as { changed?: boolean }).changed === true;
+                    if (stale) {
+                        domainResult = { status: changed ? 'partial' : 'failed', changed,
+                            reason: 'task-version-changed' };
+                    }
+                    if (!stale || changed) {committedIds.push(run.participant.id);}
                 } catch (error) {
                     if (
                         error !== null
@@ -180,7 +205,7 @@ export function createMaintenanceJobExecutor(
                     ) {
                         domainResult = { status: 'failed' as const, changed: false, reason: 'save-unconfirmed' };
                         saveUnconfirmed = true;
-                        onWriteUnconfirmed('save-unconfirmed');
+                        unconfirmedGates.add(run.participant.writeGate ?? writeGate);
                     } else {
                         report(error);
                         domainResult = { status: 'failed' as const, changed: false, reason: 'save-failed' };
@@ -217,7 +242,6 @@ export function createMaintenanceJobExecutor(
 
     return async function executeJob(job: MaintenanceQueuedJob): Promise<MaintenanceRunOutcome> {
         if (!guardJob(job)) { return cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated'); }
-        if (!await waitForReady(job)) { return cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated'); }
         const participants = selectParticipants(job);
         if (!participants.length) {
             return createMaintenanceOutcome({
@@ -232,7 +256,13 @@ export function createMaintenanceJobExecutor(
             if (!guardJob(job)) { return cancelledJobOutcome(job, 'source-invalidated'); }
             updateStatus(job, participant.id, { state: 'running', mode: job.mode, message: '', reason: '' });
             try {
-                const session = await participant.createSession(job.source, job.mode);
+                if (!await participantReady(job, participant)) {
+                    job.earlyResults.push({ participantId: participant.id, status: 'failed', changed: false,
+                        reason: 'storage-unavailable' });
+                    continue;
+                }
+                const session = await (job.preparedSessions.get(participant.id)
+                    ?? (() => participant.createSession(job.source, job.mode)))();
                 if (session === null) {
                     job.earlyResults.push({
                         participantId: participant.id,
@@ -296,7 +326,8 @@ export function createMaintenanceJobExecutor(
                 job.source, job.mode, active.filter(run => guardRun(job, run)).map(run => run.participant.id),
             ));
             if (!capture.started || !guardJob(job)) {
-                return cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated');
+                return guardJob(job) ? failedJobOutcome(job, active.map(run => run.participant.id), 'storage-unavailable')
+                    : cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated');
             }
             job.backgroundMessages = [...capture.value];
         } catch (error) {
@@ -311,24 +342,25 @@ export function createMaintenanceJobExecutor(
             const load = await startWhenReady(job, gateway.loadConfig);
             if (!load.started) { return cancelledJobOutcome(job, 'source-invalidated'); }
             loaded = load.value;
-            if (!guardJob(job) || writeGate.getState() !== 'ready') {
-                if (!await waitForReady(job)) { return cancelledJobOutcome(job, 'source-invalidated'); }
-            }
+            if (!await readySessions(job)) {return guardJob(job)
+                ? failedJobOutcome(job, active.map(run => run.participant.id), 'storage-unavailable')
+                : cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated');}
             config = normalizeAgentSettings((loaded || {}) as UnknownRecord);
             providerConfig = resolveActiveProviderConfig(config);
         } catch (error) {
             report(error);
             return failedJobOutcome(job, active.map(run => run.participant.id), 'config-load-failed');
         }
-        if (!String(providerConfig.model || '').trim()
-            || (!isSillyTavernProvider(providerConfig.provider) && !String(providerConfig.apiKey || '').trim())) {
+        if (!String(providerConfig.model || '').trim()) {
             return failedJobOutcome(job, active.map(run => run.participant.id), 'agent-not-configured');
         }
 
         let agent: MaintenanceAgentSession;
         try {
             const opened = await startWhenReady(job, () => gateway.openSession(loaded));
-            if (!opened.started) { return cancelledJobOutcome(job, 'source-invalidated'); }
+            if (!opened.started) { return guardJob(job)
+                ? failedJobOutcome(job, active.map(run => run.participant.id), 'storage-unavailable')
+                : cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated'); }
             agent = opened.value;
         }
         catch (error) {
@@ -342,11 +374,14 @@ export function createMaintenanceJobExecutor(
             sourceMessage: sourceMessage(job.source),
             signal: job.controller.signal,
             guard: () => guardJob(job),
-            beforeRound: () => waitForReady(job),
-            isRoundReady: () => writeGate.getState() === 'ready',
+            beforeRound: () => readySessions(job),
+            isRoundReady: () => job.sessions.filter(run => guardRun(job, run))
+                .every(run => (run.participant.writeGate ?? writeGate).getState() === 'ready'),
             onError: report,
         });
-        if (loop.status === 'cancelled') { return cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated'); }
+        if (loop.status === 'cancelled') {return guardJob(job)
+            ? failedJobOutcome(job, active.map(run => run.participant.id), 'storage-unavailable')
+            : cancelledJobOutcome(job, job.cancelledReason || 'source-invalidated');}
         return await finishJob(job, loop);
     };
 }

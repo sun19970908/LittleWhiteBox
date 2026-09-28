@@ -48,7 +48,8 @@ export function parseActionCheckRequest(value: unknown): ActionCheckRequest {
 }
 
 export function resolveActionCheck(dc: number, roll: number): ActionCheckResult {
-    if (!Number.isInteger(dc) || dc < 2 || dc > 21 || !Number.isInteger(roll) || roll < 1 || roll > 20) {
+    // Saved production checks can have a DC outside today's first-roll table.
+    if (!Number.isInteger(dc) || dc < 1 || !Number.isInteger(roll) || roll < 1 || roll > 20) {
         throw new TypeError('dice_result_invalid');
     }
     const outcome = roll === 1 ? 'critical_failure' : roll === 20 ? 'critical_success'
@@ -66,6 +67,9 @@ export function rollActionCheck(difficulty: ActionCheckDifficulty, random: () =>
     if (!Object.hasOwn(ACTION_CHECK_DC_RANGES, difficulty)) { throw new TypeError('dice_request_difficulty_invalid'); }
     const { min, max } = ACTION_CHECK_DC_RANGES[difficulty];
     const dc = randomInteger(min, max, random);
-    const roll = randomInteger(1, 20, random);
-    return resolveActionCheck(dc, roll);
+    return rollAgainstDc(dc, random);
+}
+
+export function rollAgainstDc(dc: number, random: () => number = Math.random): ActionCheckResult {
+    return resolveActionCheck(dc, randomInteger(1, 20, random));
 }

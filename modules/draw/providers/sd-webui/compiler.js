@@ -71,7 +71,7 @@ export function compileSdPromptForTask(task, recipe = {}) {
     if (promptOverride) {
         return {
             positive: joinTags(recipe.positivePrefix, promptOverride),
-            negative: joinTags(recipe.negativePrefix, negativeOverride),
+            negative: task?.negativePrompt ?? joinTags(recipe.negativePrefix, negativeOverride),
             characterPrompts,
         };
     }
@@ -79,7 +79,7 @@ export function compileSdPromptForTask(task, recipe = {}) {
     const charNegative = characterPrompts.map(item => item.uc).filter(Boolean).join(', ');
     return {
         positive: joinTags(recipe.positivePrefix, task?.scene, charPositive),
-        negative: joinTags(recipe.negativePrefix, negativeOverride, charNegative),
+        negative: task?.negativePrompt ?? joinTags(recipe.negativePrefix, negativeOverride, charNegative),
         characterPrompts,
     };
 }

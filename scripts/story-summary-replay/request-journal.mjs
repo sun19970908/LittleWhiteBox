@@ -48,7 +48,20 @@ function safeHeaders(headers) {
         /^(content-type|retry-after|(?:x-)?ratelimit[\w-]*|x-request-id)$/.test(key)));
 }
 
-export async function openRequestJournal({ directory, binding, maxRequests, resume = false, retryUnknown = null, transition = null, readOnly = false }) {
+function isEmptyReasoningSummary(receipt) {
+    if (receipt?.status !== 200) return false;
+    try {
+        const payload = JSON.parse(Buffer.from(receipt.body, 'base64').toString('utf8'));
+        const choice = payload?.choices?.[0];
+        return !payload.error && choice?.finish_reason === 'stop'
+            && choice.message?.content === ''
+            && typeof choice.message.reasoning_content === 'string'
+            && choice.message.reasoning_content.length > 0;
+    } catch { return false; }
+}
+
+export async function openRequestJournal({ directory, binding, maxRequests, resume = false, retryUnknown = null,
+    retryInvalidSummary = null, transition = null, readOnly = false }) {
     directory = path.resolve(directory);
     if (!/^[a-f0-9]{64}$/.test(binding) || !Number.isSafeInteger(maxRequests) || maxRequests < 1) {
         throw stopped('invalid-binding-or-budget');
@@ -77,8 +90,8 @@ export async function openRequestJournal({ directory, binding, maxRequests, resu
         let activeScope = null;
         let effectiveBinding = binding;
         let authorizationToAppend = null;
-        if ((retryUnknown || transition || readOnly) && !resume) throw stopped('retry-requires-resume');
-        if (retryUnknown && transition) throw stopped('conflicting-approvals');
+        if ((retryUnknown || retryInvalidSummary || transition || readOnly) && !resume) throw stopped('retry-requires-resume');
+        if ([retryUnknown, retryInvalidSummary, transition].filter(Boolean).length > 1) throw stopped('conflicting-approvals');
         if (resume) {
             let raw;
             try { raw = await fs.readFile(journalPath, 'utf8'); }
@@ -107,7 +120,8 @@ export async function openRequestJournal({ directory, binding, maxRequests, resu
                     const entry = { ...row, receipt: null, consumed: false };
                     if (row.retryOf != null) {
                         const original = intents.get(row.retryOf);
-                        if (!original?.retryAuthorized || original.replacementId || original.receipt
+                        if (!original?.retryAuthorized || original.replacementId
+                            || (original.receipt && original.retryKind !== 'invalid-summary')
                             || original.scope !== row.scope || original.identity !== row.identity) throw stopped('invalid-authorized-retry');
                         original.replacementId = row.id;
                         original.consumed = true;
@@ -131,6 +145,24 @@ export async function openRequestJournal({ directory, binding, maxRequests, resu
                         || !/^[a-f0-9]{64}$/.test(row.sourceManifestSha256)
                         || row.journalSha256 !== prefixHash.copy().digest('hex')) throw stopped('invalid-retry-authorization');
                     original.retryAuthorized = true;
+                    effectiveBinding = row.toBinding;
+                } else if (row.type === 'retry-invalid-summary') {
+                    const original = intents.get(row.id);
+                    if (!original?.receipt || original.retryAuthorized || original.replacementId || !activeScope
+                        || original.scope !== activeScope.name || original.identity !== row.identity
+                        || !isEmptyReasoningSummary(original.receipt)
+                        || row.originalBodyHash !== original.receipt.bodyHash
+                        || row.fromBinding !== effectiveBinding || !/^[a-f0-9]{64}$/.test(row.toBinding)
+                        || !/^[a-f0-9]{64}$/.test(row.sourceManifestSha256)
+                        || row.journalSha256 !== prefixHash.copy().digest('hex')) throw stopped('invalid-summary-retry-authorization');
+                    let ancestor = original;
+                    let attempts = 1;
+                    while (ancestor.retryOf != null) {
+                        ancestor = intents.get(ancestor.retryOf);
+                        if (!ancestor || ++attempts > 2) throw stopped('summary-retry-exhausted');
+                    }
+                    original.retryAuthorized = true;
+                    original.retryKind = 'invalid-summary';
                     effectiveBinding = row.toBinding;
                 } else if (row.type === 'transition') {
                     if (row.fromBinding !== effectiveBinding || !/^[a-f0-9]{64}$/.test(row.toBinding)
@@ -178,6 +210,33 @@ export async function openRequestJournal({ directory, binding, maxRequests, resu
                     fromBinding: effectiveBinding, toBinding: binding,
                     journalSha256: retryUnknown.journalSha256, sourceManifestSha256: retryUnknown.sourceManifestSha256 };
                 original.retryAuthorized = true;
+                effectiveBinding = binding;
+            }
+            if (retryInvalidSummary) {
+                const original = intents.get(retryInvalidSummary.id);
+                if (hash(raw) !== retryInvalidSummary.journalSha256
+                    || effectiveBinding !== retryInvalidSummary.previousBinding
+                    || !/^[a-f0-9]{64}$/.test(retryInvalidSummary.sourceManifestSha256)) {
+                    throw stopped('summary-retry-authorization-stale');
+                }
+                if (!original?.receipt || !activeScope || original.scope !== activeScope.name
+                    || original.retryAuthorized || original.replacementId || !isEmptyReasoningSummary(original.receipt)) {
+                    throw stopped('retry-target-not-empty-summary');
+                }
+                let ancestor = original;
+                let attempts = 1;
+                while (ancestor.retryOf != null) {
+                    ancestor = intents.get(ancestor.retryOf);
+                    if (!ancestor || ++attempts > 2) throw stopped('summary-retry-exhausted');
+                }
+                if (intents.size >= maxRequests) throw stopped('request-budget');
+                authorizationToAppend = { type: 'retry-invalid-summary', id: original.id,
+                    identity: original.identity, originalBodyHash: original.receipt.bodyHash,
+                    fromBinding: effectiveBinding, toBinding: binding,
+                    journalSha256: retryInvalidSummary.journalSha256,
+                    sourceManifestSha256: retryInvalidSummary.sourceManifestSha256 };
+                original.retryAuthorized = true;
+                original.retryKind = 'invalid-summary';
                 effectiveBinding = binding;
             }
             if (effectiveBinding !== binding) throw stopped('binding-changed');
@@ -230,7 +289,8 @@ export async function openRequestJournal({ directory, binding, maxRequests, resu
             descriptor: { journalPath, binding, resumed: resume, priorRequests, maxRequests, readOnly,
                 priorResponses: [...intents.values()].filter(entry => entry.receipt).length,
                 continuation: transition || null,
-                authorizedUnknownRequests: [...intents.values()].filter(entry => entry.retryAuthorized).map(entry => entry.id) },
+                authorizedUnknownRequests: [...intents.values()].filter(entry => entry.retryAuthorized && !entry.receipt).map(entry => entry.id),
+                authorizedEmptySummaryRequests: [...intents.values()].filter(entry => entry.retryKind === 'invalid-summary').map(entry => entry.id) },
             get usedRequests() { return used; },
             get replayedResponses() { return replayedResponses; },
             get replaying() { return cursor < historyLength; },
@@ -288,15 +348,20 @@ export async function openRequestJournal({ directory, binding, maxRequests, resu
                     if (url.username || url.password || url.search) return guard('credential-bearing-url');
                     init.signal?.throwIfAborted();
                     const identity = digest([url.href, (init.method || 'GET').toUpperCase(), init.body ?? null]);
-                    const saved = scope.entries.find(entry => !entry.consumed && entry.identity === identity);
-                    if (saved?.receipt) {
+                    let saved = scope.entries.find(entry => !entry.consumed && entry.identity === identity);
+                    while (saved?.replacementId) {
+                        saved.consumed = true;
+                        saved = intents.get(saved.replacementId);
+                    }
+                    if (saved?.receipt && !saved.retryAuthorized) {
                         saved.consumed = true;
                         replayedResponses++;
                         return respond(saved.receipt, 'journal');
                     }
                     const retryOf = saved?.retryAuthorized ? saved.id : null;
                     if (scope.complete || scope.entries.some(entry => !entry.consumed && entry !== saved)) return guard('request-drift');
-                    if (scope.entries.some(entry => entry.retryOf != null && entry.identity === identity)) return guard('authorized-retry-exhausted');
+                    if (scope.entries.some(entry => entry.retryOf != null && entry.identity === identity
+                        && intents.get(entry.retryOf)?.retryKind !== 'invalid-summary')) return guard('authorized-retry-exhausted');
                     if (readOnly) return guard('replay-boundary', { scope: scope.name, replayedResponses });
                     if (used >= maxRequests) return guard('request-budget');
                     if (retryOf != null) saved.consumed = true;

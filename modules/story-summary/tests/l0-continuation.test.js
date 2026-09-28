@@ -42,14 +42,18 @@ const bundled = await build({
 });
 // eslint-disable-next-line no-unsanitized/method -- Local test bundle, not external code.
 const mod = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
-after(() => { mod.db.close(); delete globalThis.__l0ContinuationTest; });
+const originalFetch = globalThis.fetch;
+after(() => { mod.db.close(); globalThis.fetch = originalFetch; delete globalThis.__l0ContinuationTest; });
 
 const request = 'The traveler reaches for the ledge.\n<xb_action_check>{"action":"Climb the wall","stat":"Agility","difficulty":"hard"}</xb_action_check>';
 const ai = mes => ({ is_user: false, mes, send_date: 'unchanged' });
 const user = () => ({ is_user: true, mes: 'Continue the journey.' });
 beforeEach(() => {
     for (const key of Object.keys(host.metadata)) delete host.metadata[key];
-    host.context = { chatId: 'chat', chat: [user(), ai(request)], saveMetadata: async () => {} };
+    host.context = { chatId: 'chat', chat: [user(), ai(request)], characterId: 0,
+        characters: [{ name: '角色', chat: 'chat', avatar: 'fixture.png' }],
+        saveMetadata: async () => { host.persisted = structuredClone(host.metadata); } };
+    globalThis.fetch = async () => new Response(JSON.stringify([{ chat_metadata: host.persisted }]));
     host.calls = 0;
     mod.configureL0ContinuationCheck(mod.isDiceContinuationPending);
 });

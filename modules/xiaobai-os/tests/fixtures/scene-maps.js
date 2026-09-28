@@ -2,9 +2,15 @@
 const rect = (id, cat, center, size, material, icon, label) => ({ id, cat, shape: 'rect', geo: { center, size }, material, ...(icon && { icon }), ...(label && { label }) });
 const point = (id, at) => ({ id, cat: 'actor', shape: 'icon', kind: 'player', actorKey: 'player', geo: { at } });
 
+export const sceneMapLocations = [
+    { key: 'tavern', name: '旧港酒馆', scale: 'room' },
+    { key: 'valley', name: '雾杉溪谷', scale: 'outdoor' },
+    { key: 'cabin', name: '轨道站 · 观测舱', scale: 'room' },
+];
+
 export const sceneMapInputs = [
     {
-        scene: 'tavern', title: '旧港酒馆', mood: 'warm', playerHere: true, viewBox: [0, 0, 720, 580],
+        scene: 'tavern', mood: 'warm', playerHere: true, viewBox: [0, 0, 720, 580],
         elements: [
             rect('floor', 'terrain', [360, 270], [600, 420], 'wood'),
             { id: 'walls', cat: 'wall', shape: 'path', geo: { points: [[310, 480], [60, 480], [60, 60], [660, 60], [660, 480], [400, 480]] }, closed: false, material: 'stone' },
@@ -20,7 +26,7 @@ export const sceneMapInputs = [
         ],
     },
     {
-        scene: 'valley', title: '雾杉溪谷', mood: 'calm', scale: 'outdoor', playerHere: true, viewBox: [0, 0, 800, 650],
+        scene: 'valley', mood: 'calm', playerHere: true, viewBox: [0, 0, 800, 650],
         elements: [
             { id: 'ground', cat: 'terrain', shape: 'path', geo: { points: [[30, 35], [760, 35], [780, 580], [60, 620]] }, material: 'grass' },
             { id: 'forest-west', cat: 'terrain', shape: 'curve', geo: { curve: [[35, 65], [250, 55], [300, 220], [240, 310], [70, 270]] }, material: 'forest', label: '雾杉林' },
@@ -35,7 +41,7 @@ export const sceneMapInputs = [
         ],
     },
     {
-        scene: 'cabin', title: '轨道站 · 观测舱', mood: 'cold', playerHere: true, viewBox: [0, 0, 720, 580],
+        scene: 'cabin', mood: 'cold', playerHere: true, viewBox: [0, 0, 720, 580],
         elements: [
             rect('floor', 'terrain', [360, 270], [600, 420], 'metal'),
             { id: 'walls', cat: 'wall', shape: 'path', geo: { points: [[305, 480], [60, 480], [60, 60], [660, 60], [660, 480], [415, 480]] }, closed: false, material: 'metal' },

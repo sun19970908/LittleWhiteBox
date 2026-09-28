@@ -1,4 +1,4 @@
-export const BANK_SCHEMA_VERSION = 1 as const;
+export const BANK_SCHEMA_VERSION = 2 as const;
 
 export type BankDepositProductId = 'short-term' | 'mid-term' | 'long-term';
 export type BankFundProductId = 'steady-fund' | 'growth-fund' | 'venture-fund';
@@ -96,6 +96,10 @@ export interface BankActivityRecord extends BankActivity {
     createdAt: number;
 }
 
+export interface BankImportedActivity extends BankActivityRecord {
+    sourceStoryId: string;
+}
+
 export type BankAction =
     | { kind: 'deposit-open'; productId: BankDepositProductId; positionId: string; amount: number; settledPositionIds: string[] }
     | { kind: 'deposit-withdraw-early'; positionId: string; settledPositionIds: string[] }
@@ -124,6 +128,14 @@ export interface BankEvent {
 
 export interface BankDomainV1 {
     schemaVersion: typeof BANK_SCHEMA_VERSION;
+    currentTurn: number;
+    events: BankEvent[];
+    history: BankImportedActivity[];
+}
+
+/** Frozen production format; interpreted only during user-file upgrade. */
+export interface BankLegacyDomainV1 {
+    schemaVersion: 1;
     events: BankEvent[];
 }
 
@@ -185,7 +197,7 @@ export interface BankClaimableFundPositionView extends BankFundPositionViewBase 
 
 export type BankFundPositionView = BankLockedFundPositionView | BankClaimableFundPositionView;
 
-export type BankPublicActivityRecord = BankActivityRecord;
+export type BankPublicActivityRecord = BankActivityRecord & { sourceStoryId?: string };
 
 export interface BankActivityPage {
     offset: number;

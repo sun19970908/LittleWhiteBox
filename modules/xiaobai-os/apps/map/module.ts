@@ -2,7 +2,8 @@ import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-reg
 import type { PartitionStore } from '../../kernel/contracts.js';
 import type { XiaobaiOsAppRuntime } from '../../types.js';
 import { AGENT_CAPABILITY, type AgentCapability } from '../../capabilities/agent/index.js';
-import { MANAGEMENT_CAPABILITY, type ManagementRegistry } from '../../capabilities/management/index.js';
+import { PROMPT_INJECTION_CAPABILITY, type PromptInjectionCapability } from '../../capabilities/prompt-injection/index.js';
+import { MANAGEMENT_CAPABILITY } from '../../capabilities/management/index.js';
 import {
     MAINTENANCE_CAPABILITY,
     type MaintenanceCapability,
@@ -20,8 +21,8 @@ export interface MapModuleInstallContext {
     ownerId: string;
     map: MapService;
     agent: AgentCapability;
+    prompts: PromptInjectionCapability;
     maintenance: MaintenanceCapability;
-    management: ManagementRegistry;
     mapContext: MapContextCapability;
     execution: AppInstallContext['execution'];
 }
@@ -35,7 +36,7 @@ export function createMapModule(dependencies: MapModuleDependencies): XiaobaiOsA
     return {
         descriptor: MAP_APP_DESCRIPTOR,
         partition: MAP_PARTITION,
-        capabilities: [AGENT_CAPABILITY, MAINTENANCE_CAPABILITY, MANAGEMENT_CAPABILITY, MAP_CONTEXT_CAPABILITY],
+        capabilities: [AGENT_CAPABILITY, MAINTENANCE_CAPABILITY, MANAGEMENT_CAPABILITY, MAP_CONTEXT_CAPABILITY, PROMPT_INJECTION_CAPABILITY],
         install(context) {
             if (!context.partition) { throw new Error('Map partition store is unavailable'); }
             const map = createMapService(
@@ -52,8 +53,8 @@ export function createMapModule(dependencies: MapModuleDependencies): XiaobaiOsA
                 ownerId: context.ownerId,
                 map,
                 agent: context.useCapability(AGENT_CAPABILITY),
+                prompts: context.useCapability(PROMPT_INJECTION_CAPABILITY),
                 maintenance: context.useCapability(MAINTENANCE_CAPABILITY),
-                management: context.useCapability(MANAGEMENT_CAPABILITY),
                 mapContext,
                 execution: context.execution,
             });

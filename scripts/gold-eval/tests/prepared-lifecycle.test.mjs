@@ -1,6 +1,7 @@
 /* global process */
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { Buffer } from 'node:buffer';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -11,6 +12,7 @@ import { sha256Text, sha256File, loadGoldCapture } from '../lib/run-store.mjs';
 import { createHash } from 'node:crypto';
 import { createStrictTransportCassette } from '../lib/transport-cassette.mjs';
 import { assertCredentialFree, selectPreparedJob } from '../../story-summary-replay/prepared-config.mjs';
+import { preparedJournalBinding } from '../../story-summary-replay/request-journal.mjs';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const preload = new URL('./fixtures/offline-provider.mjs', import.meta.url).href;
@@ -190,6 +192,33 @@ test('actual prepared CLI: empty store through both trigger timings, L0/L1/L2, t
     }
 });
 
+test('source-only prepared CLI captures every real USER boundary without manufacturing Gold scores', async t => {
+    const item = await fixture(t, 'before_user');
+    const messages = (await fs.readFile(item.profile.samplePath, 'utf8')).split('\n').map(JSON.parse);
+    const positions = [9, 11, 13, 15, 17, 19].map(floor => ({
+        schemaVersion: 1, track: 'natural-source-only', id: `fixture-${floor}`,
+        corpusId: 'fixture', split: 'dev', query: { kind: 'verbatim-user', floor,
+            text: messages[floor].mes, sha256: sha256Text(messages[floor].mes) },
+        historyThroughFloor: floor - 1,
+    }));
+    await fs.writeFile(item.profile.goldEval.casesPath, positions.map(row => JSON.stringify(row)).join('\n'));
+    item.profile.goldEval.positionMode = 'source-only';
+    item.profile.goldEval.firstDisplayFloor = 10;
+    item.profile.prepared.casesSha256 = await sha256File(item.profile.goldEval.casesPath);
+    await fs.writeFile(item.configPath, JSON.stringify(item.profile));
+    const preflight = await item.invoke(['--preflight'], { LWB_OFFLINE_FORBID_CREDENTIALS: '1' });
+    assert.equal(preflight.code, 0, preflight.output);
+    const result = await item.invoke(['--allow-api']);
+    assert.equal(result.code, 0, result.output.slice(-9000));
+    const runs = await fs.readdir(item.profile.goldEval.runsRoot);
+    const captured = await loadGoldCapture(path.join(item.profile.goldEval.runsRoot, runs[0]));
+    assert.equal(captured.cases.length, positions.length);
+    assert.equal(captured.manifest.capture.qualityMeasured, false);
+    assert.ok(captured.cases.every(row => !('evidence' in row) && !('expectedAnswer' in row)));
+    assert.ok(captured.prompts.every(row => row.promptHash && row.promptText));
+    assert.deepEqual(captured.manifest.progress.productionExternalCalls, (await item.calls()).length);
+});
+
 // Optional local acceptance against the owner's read-only dev inputs. Models,
 // credentials and output paths are replaced BEFORE entering the real CLI.
 // This is still a transport fixture, NOT a semantic evaluation or live baseline.
@@ -303,6 +332,80 @@ test('actual CLI authorizes one unknown L0, retains accurate failure trace and r
     assert.deepEqual(calls[2], originalCalls[1], 'only the unknown original request is repeated');
     assert.equal(calls.filter(call => call.requestHash === originalCalls[0].requestHash).length, 1);
     assert.ok((await fs.readFile(journal, 'utf8')).startsWith(prefix));
+});
+
+test('reviewed HTTP 200 empty Summary retries only its saved request and preserves the original receipt', async t => {
+    const item = await fixture(t, 'before_user');
+    const failed = await item.invoke(['--allow-api'], { LWB_OFFLINE_EMPTY_SUMMARY: 'fixture-summary' });
+    assert.notEqual(failed.code, 0);
+    const journal = path.join(item.directory, 'output', 'request-journal.jsonl');
+    const prefix = await fs.readFile(journal, 'utf8');
+    const rows = prefix.trim().split('\n').map(JSON.parse);
+    const empty = rows.find(row => row.type === 'response' && row.status === 200
+        && JSON.parse(Buffer.from(row.body, 'base64')).choices?.[0]?.message?.content === '');
+    assert.ok(empty);
+    const before = await item.calls();
+    const runName = (await fs.readdir(path.join(item.directory, 'runs')))[0];
+    const source = path.join(item.directory, 'runs', runName, 'manifest.json');
+    const flags = ['--allow-api', '--resume-prepared', `--retry-empty-summary=${empty.id}`,
+        `--retry-journal-sha256=${await sha256File(journal)}`, `--retry-source-manifest=${source}`,
+        `--retry-source-sha256=${await sha256File(source)}`];
+    const wrong = await item.invoke(flags.map(flag => flag === `--retry-empty-summary=${empty.id}`
+        ? '--retry-empty-summary=1' : flag), { LWB_OFFLINE_FORBID_CREDENTIALS: '1' });
+    assert.notEqual(wrong.code, 0);
+    assert.equal(await fs.readFile(journal, 'utf8'), prefix);
+    const resumed = await item.invoke(flags);
+    assert.equal(resumed.code, 0, resumed.output.slice(-9000));
+    await validateCapture(item, true);
+    const after = await item.calls();
+    assert.deepEqual(after.slice(0, before.length), before);
+    assert.deepEqual(after[before.length], before.filter(call => call.kind === 'fixture-summary').at(-1));
+    const saved = (await fs.readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse);
+    const authorization = saved.find(row => row.type === 'retry-invalid-summary');
+    assert.equal(authorization.id, empty.id);
+    const replacement = saved.find(row => row.type === 'intent' && row.retryOf === empty.id);
+    assert.ok(replacement);
+    assert.equal(replacement.identity, rows.find(row => row.type === 'intent' && row.id === empty.id).identity);
+    assert.ok(saved.some(row => row.type === 'response' && row.id === replacement.id));
+    assert.ok((await fs.readFile(journal, 'utf8')).startsWith(prefix));
+});
+
+test('a third empty Summary preserves every receipt and forbids a fourth purchase', async t => {
+    const item = await fixture(t, 'before_user');
+    assert.notEqual((await item.invoke(['--allow-api'], { LWB_OFFLINE_EMPTY_SUMMARY: 'fixture-summary' })).code, 0);
+    const journal = path.join(item.directory, 'output', 'request-journal.jsonl');
+    const approval = async () => {
+        const rows = (await fs.readFile(journal, 'utf8')).trim().split('\n').map(JSON.parse);
+        const response = [...rows].reverse().find(row => row.type === 'response');
+        const manifestPath = path.join(item.directory, 'runs', (await fs.readdir(path.join(item.directory, 'runs'))).at(-1), 'manifest.json');
+        return ['--allow-api', '--resume-prepared', `--retry-empty-summary=${response.id}`,
+            `--retry-journal-sha256=${await sha256File(journal)}`, `--retry-source-manifest=${manifestPath}`,
+            `--retry-source-sha256=${await sha256File(manifestPath)}`];
+    };
+    for (let retry = 0; retry < 2; retry++) {
+        const failed = await item.invoke(await approval(), { LWB_OFFLINE_EMPTY_SUMMARY: 'fixture-summary' });
+        assert.notEqual(failed.code, 0);
+        assert.match(failed.output, /natural summary 失败/);
+    }
+    const before = await fs.readFile(journal, 'utf8');
+    const callCount = (await item.calls()).length;
+    const lastManifest = JSON.parse(await fs.readFile(path.join(item.directory, 'runs',
+        (await fs.readdir(path.join(item.directory, 'runs'))).at(-1), 'manifest.json'), 'utf8'));
+    assert.equal(lastManifest.capture.requestJournal.binding,
+        preparedJournalBinding(selectPreparedJob(item.profile, 'check'), lastManifest.code));
+    assert.deepEqual({ status: lastManifest.status, mode: lastManifest.mode,
+        stage: lastManifest.invalidReason?.stage, message: lastManifest.invalidReason?.message,
+        journalPath: lastManifest.capture.requestJournal.journalPath,
+        maxRequests: lastManifest.capture.requestJournal.maxRequests,
+        sampleHash: lastManifest.data?.sampleHash, casesHash: lastManifest.data?.casesHash }, {
+        status: 'invalid', mode: 'story-summary-replay-natural-capture', stage: 'summary',
+        message: 'natural summary 失败: floor=7 parse', journalPath: journal, maxRequests: 200,
+        sampleHash: item.profile.prepared.sampleSha256, casesHash: item.profile.prepared.casesSha256,
+    });
+    const denied = await item.invoke(await approval(), { LWB_OFFLINE_FORBID_CREDENTIALS: '1' });
+    assert.match(denied.output, /summary-retry-exhausted/);
+    assert.equal(await fs.readFile(journal, 'utf8'), before);
+    assert.equal((await item.calls()).length, callCount);
 });
 
 test('actual CLI retries only the failed provider call at each of the four API boundaries', async t => {

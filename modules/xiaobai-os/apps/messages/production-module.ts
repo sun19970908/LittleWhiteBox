@@ -36,7 +36,7 @@ export function createProductionMessagesModule(mainGeneration: MainGenerationRun
         const render = () => renderPrivateMessages(chat.port.messages());
         controller = createMessagesController({ service, timeline, modifications, context, media, runtime,
             getSettings,
-            async saveSettings(value) {await settings.setMessagesCapabilities(value);},
+            async saveSettings(value) {await settings.setMessagesSettings(value);},
             subscribeSettings: settings.subscribe,
             identity: chat.port.identity, isGenerating: mainGeneration.isActive,
             subscribeGeneration: mainGeneration.subscribe,

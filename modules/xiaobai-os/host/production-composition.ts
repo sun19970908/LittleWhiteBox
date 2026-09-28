@@ -1,11 +1,13 @@
 import { getRequestHeaders } from '../../../../../../../script.js';
 import { saveBase64AsFile } from '../../../../../../utils.js';
 import { createAdministratorModule } from '../apps/administrator/module.js';
+import { createAdministratorEnvironmentReader } from '../apps/administrator/host/environment.js';
 import { createAdministratorImages } from '../apps/administrator/storage/images.js';
 import { extensionFolderPath } from '../../../core/constants.js';
 import { createAgentApiModule } from '../apps/agent-api/module.js';
 import { createProductionBankModule } from '../apps/bank/production-module.js';
 import { createProductionDiceModule } from '../apps/dice/production-module.js';
+import { upgradeDiceUserFile } from '../apps/dice/upgrade/partition-v1.js';
 import { createProductionFourthWallModule } from '../apps/fourth-wall/production-module.js';
 import { createProductionGameModule } from '../apps/game/production-module.js';
 import { createProductionLearningModule } from '../apps/learning/production-module.js';
@@ -48,9 +50,11 @@ import { createXiaobaiOsBootstrap, type XiaobaiOsBootstrap } from './bootstrap.j
 import { createKernelComposition } from './kernel-composition.js';
 import { createPromptContextAdapter } from './prompt-context/adapter.js';
 import { createMaintenanceBackgroundCapture } from './prompt-context/maintenance-background.js';
+import { createPromptInjectionCapabilityRegistration } from '../capabilities/prompt-injection/index.js';
+import { PROMPT_INJECTION_POLICY } from './prompt-injection-policy.js';
+import { createSillyTavernPromptInjectionHost } from './sillytavern-prompt-injection.js';
 import type { XiaobaiOsSettingsRepository } from './settings-repository.js';
 import {
-    getSillyTavernAssistantTurnCount,
     getSillyTavernChatIdentity,
     getSillyTavernChatSurface,
     getSillyTavernShellSnapshot,
@@ -58,7 +62,6 @@ import {
 import {
     createChatBindingEventAdapter,
     createSillyTavernMainGenerationRuntime,
-    setSillyTavernPrompt,
     subscribeMaintenanceMessages,
     subscribeMapPromptEvents,
     subscribeShopPromptEvents,
@@ -66,6 +69,7 @@ import {
     subscribeWorldPromptEvents,
     subscribeXiaobaiOsChatChanged,
 } from './sillytavern-runtime-adapters.js';
+import { notifySillyTavernSuccess } from './notifications.js';
 
 const hostStylesheet = `${extensionFolderPath}/modules/xiaobai-os/host.css`;
 const frameSource = `${extensionFolderPath}/modules/xiaobai-os/shell/xiaobai-os.html`;
@@ -105,6 +109,7 @@ export function createProductionBootstrap(
     let composition: ReturnType<typeof createKernelComposition>;
 
     const capabilities = [
+        createPromptInjectionCapabilityRegistration(PROMPT_INJECTION_POLICY, createSillyTavernPromptInjectionHost),
         createAgentCapabilityRegistration(),
         createManagementCapabilityRegistration(),
         ...createEconomyCapabilityRegistrations(),
@@ -127,12 +132,25 @@ export function createProductionBootstrap(
     ];
 
     const modules = [
-        createAdministratorModule({ images: administratorImages, capture: getSillyTavernChatSurface }),
+        createAdministratorModule({ images: administratorImages, capture: getSillyTavernChatSurface,
+            readEnvironment: createAdministratorEnvironmentReader({
+                captureIdentity: () => getSillyTavernChatIdentity()?.key ?? null,
+                descriptors: () => composition.apps.descriptors(),
+                appStatus: id => composition.apps.status(id),
+                maintenance: identity => {
+                    const { registry, runner } = composition.capabilities.require(MAINTENANCE_CAPABILITY);
+                    return registry.participants.map(participant => ({ id: participant.id, automaticEnabled: participant.isEnabled('automatic'), status: runner.getStatus(participant.id, identity) }));
+                },
+                mainChatGenerating: mainGeneration.isActive,
+                chatFile: { getFileState: () => composition.transactions.getFileState(), hasPendingCommit: () => composition.transactions.hasPendingCommit() },
+                userFile: { getFileState: () => composition.userTransactions!.getFileState(), hasPendingCommit: () => composition.userTransactions!.hasPendingCommit() },
+            }),
+        }),
         createProductionDiceModule(settings, async identityKey => {
             const summary = await import('../../story-summary/story-summary.js') as { isStorySummaryEnabledForCurrentChat(): boolean };
             return { world: composition.capabilities.require(WORLD_CONTEXT_CAPABILITY).isStoryBackgroundEnabled(identityKey),
                 summary: summary.isStorySummaryEnabledForCurrentChat() };
-        }, message => !!projectionMarker(message)),
+        }, message => !!projectionMarker(message), () => upgradeDiceUserFile(composition.userTransactions!)),
         createAgentApiModule(),
         createProductionFourthWallModule(settings, upstreamFourthWall),
         createProductionMessagesModule(mainGeneration, settings),
@@ -142,42 +160,31 @@ export function createProductionBootstrap(
             getChatIdentity: getSillyTavernChatIdentity,
             captureChatSurface: getSillyTavernChatSurface,
             mainGeneration,
-            setPrompt: value => setSillyTavernPrompt('xiaobai_os_shop_effects', value),
             subscribePrompt: subscribeShopPromptEvents,
         }),
         createProductionBankModule({
-            getChatIdentity: getSillyTavernChatIdentity,
-            getCurrentAssistantTurn: getSillyTavernAssistantTurnCount,
-            mainGeneration,
+            userTransactions: () => composition.userTransactions,
+            notifyMaturity: notifySillyTavernSuccess,
         }),
-        createProductionGameModule({ getChatIdentity: getSillyTavernChatIdentity, mainGeneration }),
+        createProductionGameModule({ getChatIdentity: getSillyTavernChatIdentity, mainGeneration, settings }),
         createProductionMapModule({
             settings,
             getPlayerDisplayName: () => getSillyTavernChatSurface()?.playerName ?? '玩家',
             getChatIdentity: getSillyTavernChatIdentity,
-            setPrompt: value => setSillyTavernPrompt('xiaobai_os_map_context', value, 3),
             subscribePrompt: subscribeMapPromptEvents,
         }),
         createProductionTasksModule({
             settings,
             getChatIdentity: getSillyTavernChatIdentity,
             getPlayerDisplayName: () => getSillyTavernChatSurface()?.playerName ?? '玩家',
-            getObservedAssistantCount: () => getSillyTavernAssistantTurnCount(),
+            userTransactions: () => composition.userTransactions,
             mainGeneration,
-            setPrompt: value => setSillyTavernPrompt('xiaobai_os_tasks_context', value),
             subscribePrompt: subscribeTaskPromptEvents,
-            notifyCompletion: ({ title, message }) => {
-                // Same global toast as /echo severity=success, without parsing task text as commands/macros.
-                const toastr = window.toastr as unknown as {
-                    success?(message: string, title: string, options: { escapeHtml: boolean; timeOut: number }): void;
-                } | undefined;
-                toastr?.success?.(message, title, { escapeHtml: true, timeOut: 8_000 });
-            },
+            notifyCompletion: notifySillyTavernSuccess,
         }),
         createProductionWorldModule({
             settings,
             getChatIdentity: () => getSillyTavernChatIdentity()?.key ?? '',
-            setPrompt: value => setSillyTavernPrompt('xiaobai_os_world_context', value, 4),
             subscribePrompt: subscribeWorldPromptEvents,
         }),
     ];

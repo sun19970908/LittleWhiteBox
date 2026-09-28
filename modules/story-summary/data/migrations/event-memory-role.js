@@ -19,7 +19,7 @@ export function upgradeStoredEventMemoryRoles(store) {
         store.json.events = store.json.events.map(project);
     }
     for (const entry of store.summaryHistory || []) {
-        const undo = entry?.format === 1 ? entry.undo : null;
+        const undo = [1, 2].includes(entry?.format) ? entry.undo : null;
         if (!undo) continue;
         for (const field of ['previousEvents', 'generatedEvents']) {
             if (Array.isArray(undo[field])) undo[field] = undo[field].map(project);

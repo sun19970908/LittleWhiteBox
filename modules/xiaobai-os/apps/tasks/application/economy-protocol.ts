@@ -99,8 +99,6 @@ function sameTransaction(
         && actual.toAccountId === expected.toAccountId
         && actual.amount === expected.amount
         && actual.kind === expected.kind
-        && actual.title === expected.title
-        && actual.note === (expected.note ?? '')
         && actual.sourceDomain === 'tasks'
         && actual.sourceId === expected.sourceId
         && actual.reversalOfTransactionId === undefined;

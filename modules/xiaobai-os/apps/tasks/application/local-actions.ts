@@ -29,6 +29,7 @@ export function taskEnvironment(context: TaskApplicationContext, domain: TaskDom
     return {
         now: context.now,
         createId: () => context.ids.create('event', occupied),
+        evidenceDigest: context.getEvidenceDigest(),
     };
 }
 
@@ -71,7 +72,6 @@ export function createTaskLocalActions(context: TaskApplicationContext) {
                 boardId: input.boardId,
                 listingId: input.listingId,
                 playerDisplayName: context.getPlayerDisplayName(),
-                observedAssistantCount: context.getObservedAssistantCount(),
             }, taskEnvironment(context, domain)));
         });
     }
@@ -83,12 +83,12 @@ export function createTaskLocalActions(context: TaskApplicationContext) {
             const occupied = collectTaskIdentityIds(domain);
             occupied.add(actionId);
             const taskId = existing?.taskId ?? context.ids.create('task', occupied);
-            return commitCommand(economy, publishTask(domain, {
+            const labelled = domain.storyLabel ? domain : { ...domain, storyLabel: context.getStoryLabel() };
+            return commitCommand(economy, publishTask(labelled, {
                 actionId,
                 taskId,
                 form: input.form,
                 playerDisplayName: context.getPlayerDisplayName(),
-                observedAssistantCount: context.getObservedAssistantCount(),
             }, taskEnvironment(context, domain)));
         });
     }
@@ -131,17 +131,13 @@ export function createTaskLocalActions(context: TaskApplicationContext) {
     }
 
     function assignCandidate(input: AssignCandidateRequest, guard: CommitGuard) {
-        return context.execute(guard, (domain, economy) => commitCommand(economy, assignTaskCandidate(domain, {
-            ...input,
-            observedAssistantCount: context.getObservedAssistantCount(),
-        }, taskEnvironment(context, domain))));
+        return context.execute(guard, (domain, economy) => commitCommand(economy, assignTaskCandidate(domain,
+            input, taskEnvironment(context, domain))));
     }
 
     function cancel(input: CancelTaskRequest, guard: CommitGuard) {
-        return context.execute(guard, (domain, economy) => commitCommand(economy, cancelTask(domain, {
-            ...input,
-            observedAssistantCount: context.getObservedAssistantCount(),
-        }, taskEnvironment(context, domain))));
+        return context.execute(guard, (domain, economy) => commitCommand(economy, cancelTask(domain,
+            input, taskEnvironment(context, domain))));
     }
 
     return Object.freeze({ acceptListing, publish, replaceBoard, replaceCandidates, assignCandidate, cancel });

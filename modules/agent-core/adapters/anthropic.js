@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { resolveAgentAuth } from '../provider-auth.js';
 import { requireResponseCompletion } from '../runtime/response-completion.js';
 import {
     buildEffectiveReasoningConfig,
@@ -250,8 +251,9 @@ function resolveAnthropicRequestProtocol(config = {}, task = {}) {
 export class AnthropicAdapter {
     constructor(config) {
         this.config = config;
+        this.auth = resolveAgentAuth('anthropic', config.apiKey);
         this.client = new Anthropic({
-            apiKey: config.apiKey,
+            ...this.auth.sdkOptions,
             baseURL: normalizeAnthropicSdkBaseUrl(config.baseUrl),
             timeout: Number(config.timeoutMs) || 15 * 60 * 1000,
             maxRetries: 0,
@@ -315,7 +317,7 @@ export class AnthropicAdapter {
             url: `${baseUrl}/v1/messages`,
             headers: {
                 'Content-Type': 'application/json',
-                'x-api-key': this.config.apiKey || '',
+                ...this.auth.headers,
             },
             body,
             sdk: stream ? 'client.messages.stream' : 'client.messages.create',

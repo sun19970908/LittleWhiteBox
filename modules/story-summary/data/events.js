@@ -8,6 +8,42 @@ export const EVENT_MEMORY_ROLES = Object.freeze([
 
 const EVENT_FIELDS = ['id', 'title', 'timeLabel', 'summary', 'participants', 'causedBy', '_addedAt'];
 
+/** Canonical participants/cause lists at both write and stored-data boundaries. */
+export function normalizeEventStringArray(value) {
+    if (!Array.isArray(value)) {
+        return { value: [], changed: value != null };
+    }
+
+    const next = [];
+    let changed = false;
+    for (const item of value) {
+        let text = '';
+        if (typeof item === 'string') {
+            text = item.trim();
+        } else if (item && typeof item === 'object' && !Array.isArray(item)) {
+            // Stored summaries may contain lightweight name/id objects. Writers validate string arrays first.
+            text = String(item.name || item.text || item.id || '').trim();
+            changed = true;
+        } else if (item != null) {
+            changed = true;
+        }
+        if (!text) {
+            if (item != null) changed = true;
+            continue;
+        }
+        next.push(text);
+        if (typeof item !== 'string' || item !== text) {
+            changed = true;
+        }
+    }
+
+    if (!changed && next.length !== value.length) {
+        changed = true;
+    }
+
+    return { value: changed ? next : value, changed };
+}
+
 export function normalizeEventMemoryRole(value) {
     const role = typeof value === 'string' ? value.trim() : '';
     return EVENT_MEMORY_ROLES.includes(role) ? role : '';

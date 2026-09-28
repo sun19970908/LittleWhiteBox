@@ -108,8 +108,8 @@ export default defineConfig(({ mode }) => {
         },
         experimental: {
             renderBuiltUrl(filename, { hostType }) {
-                // Map models live beside the lazy UI chunk, not at SillyTavern's web root.
-                if (hostType === 'js' && filename.startsWith('map-assets/')) {
+                // Map models and the atlas tile worker live beside the lazy UI chunk, not at SillyTavern's web root.
+                if (hostType === 'js' && (filename.startsWith('map-assets/') || /\.worker-[\w-]+\.js$/.test(filename))) {
                     return { runtime: `new URL(${JSON.stringify(filename)}, import.meta.url).href` };
                 }
             },

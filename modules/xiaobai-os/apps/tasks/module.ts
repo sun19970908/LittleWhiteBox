@@ -4,7 +4,8 @@ import {
     type EconomyReadCapability,
 } from '../../capabilities/economy/index.js';
 import { AGENT_CAPABILITY, type AgentCapability } from '../../capabilities/agent/index.js';
-import { MANAGEMENT_CAPABILITY, type ManagementRegistry } from '../../capabilities/management/index.js';
+import { PROMPT_INJECTION_CAPABILITY, type PromptInjectionCapability } from '../../capabilities/prompt-injection/index.js';
+import { MANAGEMENT_CAPABILITY } from '../../capabilities/management/index.js';
 import {
     MAINTENANCE_CAPABILITY,
     type MaintenanceCapability,
@@ -12,6 +13,7 @@ import {
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
 import type { PartitionStore } from '../../kernel/contracts.js';
 import type { TaskDomainV1 } from '../../domains/tasks/types.js';
+import type { UserTransactions } from '../../kernel/user-transactions.js';
 import type { XiaobaiOsAppRuntime } from '../../types.js';
 import { MAP_CONTEXT_CAPABILITY, type MapContextCapability } from '../map/context-capability.js';
 import { WORLD_CONTEXT_CAPABILITY, type WorldContextCapability } from '../world/context-capability.js';
@@ -31,8 +33,8 @@ export interface TasksModuleInstallContext {
     tasks: TasksService;
     economy: EconomyReadCapability;
     agent: AgentCapability;
+    prompts: PromptInjectionCapability;
     maintenance: MaintenanceCapability;
-    management: ManagementRegistry;
     mapContext: MapContextCapability;
     worldContext: WorldContextCapability;
     execution: AppInstallContext['execution'];
@@ -40,8 +42,10 @@ export interface TasksModuleInstallContext {
 
 export interface TasksModuleDependencies {
     getPlayerDisplayName: () => string;
-    getObservedAssistantCount: () => number;
-    service?: Omit<TasksServiceDependencies, 'getPlayerDisplayName' | 'getObservedAssistantCount'>;
+    getEvidenceDigest: () => string;
+    getStoryLabel: () => string;
+    userTransactions?: () => UserTransactions | null;
+    service?: Omit<TasksServiceDependencies, 'getPlayerDisplayName' | 'getEvidenceDigest' | 'getStoryLabel' | 'userTransactions'>;
     install(context: TasksModuleInstallContext): Promise<XiaobaiOsAppRuntime>;
     dispose?(runtime: XiaobaiOsAppRuntime): Promise<void>;
 }
@@ -55,6 +59,7 @@ export function createTasksModule(dependencies: TasksModuleDependencies): Xiaoba
             ECONOMY_READ_CAPABILITY,
             ECONOMY_TRANSACTION_CAPABILITY,
             AGENT_CAPABILITY,
+            PROMPT_INJECTION_CAPABILITY,
             MAINTENANCE_CAPABILITY,
             MANAGEMENT_CAPABILITY,
             MAP_CONTEXT_CAPABILITY,
@@ -71,7 +76,9 @@ export function createTasksModule(dependencies: TasksModuleDependencies): Xiaoba
                 {
                     ...dependencies.service,
                     getPlayerDisplayName: dependencies.getPlayerDisplayName,
-                    getObservedAssistantCount: dependencies.getObservedAssistantCount,
+                    getEvidenceDigest: dependencies.getEvidenceDigest,
+                    getStoryLabel: dependencies.getStoryLabel,
+                    userTransactions: dependencies.userTransactions?.() ?? undefined,
                 },
             );
             try {
@@ -81,8 +88,8 @@ export function createTasksModule(dependencies: TasksModuleDependencies): Xiaoba
                     tasks,
                     economy,
                     agent: context.useCapability(AGENT_CAPABILITY),
+                    prompts: context.useCapability(PROMPT_INJECTION_CAPABILITY),
                     maintenance: context.useCapability(MAINTENANCE_CAPABILITY),
-                    management: context.useCapability(MANAGEMENT_CAPABILITY),
                     mapContext: context.useCapability(MAP_CONTEXT_CAPABILITY),
                     worldContext: context.useCapability(WORLD_CONTEXT_CAPABILITY),
                     execution: context.execution,

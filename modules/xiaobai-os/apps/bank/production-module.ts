@@ -1,29 +1,51 @@
-import type { XiaobaiOsChatIdentity } from '../../types.js';
-import type { MainGenerationRuntime } from '../../host/main-generation-runtime.js';
+import type { UserTransactions } from '../../kernel/user-transactions.js';
+import { createAppRuntimeGroup } from '../../kernel/runtime-group.js';
+import { createAssistantFloorObserver } from '../../host/assistant-floor-observer.js';
+import { getSillyTavernChatSurface } from '../../host/sillytavern-context.js';
+import { subscribeBankReplies } from '../../host/sillytavern-runtime-adapters.js';
 import { createBankController } from './host/controller.js';
+import { createBankMaturityRuntime, type BankMaturityNotice } from './host/maturity-runtime.js';
 import { createBankModule } from './module.js';
 
 export interface ProductionBankModuleDependencies {
-    getChatIdentity: () => XiaobaiOsChatIdentity | null;
-    getCurrentAssistantTurn: () => number;
-    mainGeneration: MainGenerationRuntime;
+    userTransactions: () => UserTransactions | null;
+    notifyMaturity(notice: BankMaturityNotice): void;
 }
 
 export function createProductionBankModule(dependencies: ProductionBankModuleDependencies) {
     return createBankModule({
         service: {
-            getCurrentAssistantTurn: dependencies.getCurrentAssistantTurn,
-            isMainGenerationActive: dependencies.mainGeneration.isActive,
+            get userTransactions() {return dependencies.userTransactions() ?? undefined;},
         },
-        async install({ bank, economy, execution }) {
-            return createBankController({
+        async install({ bank, store, economy, execution }) {
+            const controller = createBankController({
                 bank,
                 economy,
-                getChatIdentity: dependencies.getChatIdentity,
-                isMainGenerationActive: dependencies.mainGeneration.isActive,
-                subscribeGeneration: dependencies.mainGeneration.subscribe,
                 execution,
             });
+            const maturity = createBankMaturityRuntime({ store, notify: dependencies.notifyMaturity });
+            const runtime = createAppRuntimeGroup(controller, [maturity]);
+            const observer = createAssistantFloorObserver(getSillyTavernChatSurface,
+                () => {void bank.advanceTurns(1).catch(error => {
+                    console.error('[LittleWhiteBox] 银行计期保存失败', error);
+                });});
+            let unsubscribe: (() => void) | null = null;
+            return {
+                ...runtime,
+                async startBackground() {
+                    await runtime.startBackground?.();
+                    unsubscribe ||= subscribeBankReplies(observer);
+                },
+                async stopBackground() {
+                    unsubscribe?.();
+                    unsubscribe = null;
+                    await runtime.stopBackground?.();
+                },
+                handleChatChanged() {
+                    observer.reset();
+                    return runtime.handleChatChanged?.();
+                },
+            };
         },
         async dispose(runtime) { await runtime.stopBackground?.(); },
     });

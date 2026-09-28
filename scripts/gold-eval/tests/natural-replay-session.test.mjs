@@ -184,6 +184,31 @@ async function fixture(t) {
     return { tempDir, samplePath, sample, config, plan };
 }
 
+test('source-only probe selects explicit positions without pretending to cover the full source', async t => {
+    const { tempDir, sample, config } = await fixture(t);
+    const casesPath = path.join(tempDir, 'source-positions.jsonl');
+    const positions = [0, 2, 4, 6].map(floor => ({
+        schemaVersion: 1, track: 'natural-source-only', id: `turn-${floor}`,
+        query: { kind: 'verbatim-user', floor, text: sample.messages[floor].mes,
+            sha256: sha256Text(sample.messages[floor].mes) }, historyThroughFloor: floor - 1,
+    }));
+    await fs.writeFile(casesPath, `${positions.map(position => JSON.stringify(position)).join('\n')}\n`);
+    const probe = { ...config, goldEval: { ...config.goldEval,
+        casesPath, positionMode: 'source-only', firstDisplayFloor: 1,
+        probeCaseIds: ['turn-6', 'turn-2'],
+    } };
+    const plan = await prepareNaturalCapturePlan({ rootDir: tempDir, config: probe, sample });
+    assert.deepEqual(plan.cases.map(item => item.id), ['turn-2', 'turn-6']);
+    assert.equal(plan.targetPositions, 4);
+    assert.deepEqual(plan.probeCaseIds, ['turn-6', 'turn-2']);
+    await assert.rejects(prepareNaturalCapturePlan({ rootDir: tempDir,
+        config: { ...probe, goldEval: { ...probe.goldEval, probeCaseIds: ['turn-8'] } }, sample }),
+    /unknown positions/);
+    await assert.rejects(prepareNaturalCapturePlan({ rootDir: tempDir,
+        config: { ...probe, goldEval: { ...probe.goldEval, prefixPositions: 2 } }, sample }),
+    /cannot combine/);
+});
+
 async function createSourceCapture({ samplePath, sample, config, plan }) {
     let visibleMessages = [];
     let now = 0;

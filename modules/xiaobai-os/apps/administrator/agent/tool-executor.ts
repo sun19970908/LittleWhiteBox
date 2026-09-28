@@ -1,55 +1,87 @@
-import type { ManagementRegistry, ManagementResult, ManagementSession, ManagementTool } from '../../../capabilities/management/index.js';
+import { managementReadError, type ManagementParticipant, type ManagementRegistry, type ManagementResult, type ManagementSession, type ManagementTool } from '../../../capabilities/management/index.js';
 import { MANAGEMENT_READ_CHARS, textPage } from '../../../capabilities/management/read-page.js';
 import { safePromptJson } from '../../../capabilities/maintenance/prompt-safety.js';
 import type { AdministratorOperation } from '../domain/types.js';
 import type { createAdministratorChatReader } from '../host/chat-reader.js';
 import { ADMINISTRATOR_CHAT_TOOLS } from './chat-tools.js';
-import { ADMINISTRATOR_COPY } from '../ui/copy.js';
+import { administratorError, ADMINISTRATOR_COPY } from '../ui/copy.js';
 import { createAdministratorToolResults } from './tool-results.js';
 import { createAdministratorId } from '../application/identity.js';
+import type { AdministratorEnvironmentReader } from '../domain/environment.js';
+import { ADMINISTRATOR_OS_INSPECT, OS_INSPECT } from './os-tools.js';
+import { ADMINISTRATOR_RESULT_READ, TOOL_RESULT_READ } from './result-tools.js';
+import { createAdministratorToolLoader, TOOLS_LOAD, TOOL_NOT_LOADED } from './tool-loader.js';
+import { ADMINISTRATOR_REFERENCE_TEXT } from './reference-data.js';
+import { requireToolArgumentsObject, ToolArgumentsError } from '../../../capabilities/agent/tool-arguments.js';
 
 type Reader = ReturnType<typeof createAdministratorChatReader>;
+const STORY_EVIDENCE_CHANGED = 'The story floors listed in floors changed after you read them. This write was not executed; earlier successful writes are unaffected.';
+const STORY_EVIDENCE_RECOVERY = {
+    changed: 'Read those floors again with ChatRead from the start of each floor, then decide from the new text whether the change is still wanted before retrying.',
+    missing: 'Floors listed in missingFloors no longer exist, so their earlier evidence cannot be refreshed in this run. Tell the user to send a new request based on the current story.',
+};
 export interface AdministratorConfirmation { messageIndex: number; result: ManagementResult & { receipt: AdministratorOperation } }
 export async function createAdministratorToolExecutor(options: {
     registry: ManagementRegistry; reader: Reader; operations: AdministratorOperation[];
+    readEnvironment: AdministratorEnvironmentReader;
     guard(): boolean; onChange(): void; saveReceipts(confirmation?: AdministratorConfirmation): Promise<void>;
 }) {
     const runId = createAdministratorId();
-    const routes = new Map<string, { appId: string; tool: ManagementTool; session: ManagementSession | null }>();
-    const domains: { id: string; prompt: string; data: unknown }[] = [];
-    const unavailable: { id: string; error: string }[] = [];
+    const routes = new Map<string, { appId: string; tool: ManagementTool; participant: ManagementParticipant | null }>();
+    const sessions = new Map<string, ManagementSession>();
+    const domains: { id: string; label: string; prompt: string; data: unknown; tools: readonly ManagementTool[] }[] = [];
+    const readErrors: { id: string; code: string; message: string }[] = [];
     const evidence = createAdministratorToolResults();
     let pending: { id: string; operation: AdministratorOperation; session: ManagementSession; messageIndex: number; confirmation?: AdministratorConfirmation } | null = null;
-    for (const participant of options.registry.list()) {
-        let session: ManagementSession;
-        try { session = await participant.open(); }
-        catch (error) { unavailable.push({ id: participant.id, error: String(error instanceof Error ? error.message : error) }); continue; }
-        const initial = safePromptJson(session.initial);
-        domains.push({ id: participant.id, prompt: session.prompt, data: initial.length <= MANAGEMENT_READ_CHARS ? session.initial : { ...textPage(initial), detail: 'Initial data is paged. Use this APP’s read tools for the complete records.' } });
-        for (const tool of session.tools) {
-            if (routes.has(tool.definition.function.name)) { throw new Error('administrator_duplicate_tool'); }
-            routes.set(tool.definition.function.name, { appId: participant.id, tool, session });
-        }
+    function register(tool: ManagementTool, appId: string, participant: ManagementParticipant | null) {
+        const name = tool.definition.function.name;
+        if (routes.has(name)) { throw new Error('administrator_duplicate_tool'); }
+        routes.set(name, { appId, tool, participant });
     }
-    for (const tool of ADMINISTRATOR_CHAT_TOOLS) { routes.set(tool.definition.function.name, { appId: 'story', tool, session: null }); }
-    const resultRead: ManagementTool = { effect: 'read', label: ADMINISTRATOR_COPY.evidence, target: args => String(args.reference ?? ''), definition: { type: 'function', function: {
-        name: 'ToolResultRead', description: `Continue a large tool result from this run. data contains reference, text, offset, nextOffset and totalChars, at most ${MANAGEMENT_READ_CHARS} text characters. Keep the same reference and follow nextOffset until null to finish this result; any continuation inside the recovered result belongs to its original tool. For expired or oversized results, read the original source again in smaller pages.`,
-        parameters: { type: 'object', properties: { reference: { type: 'string', description: 'data.reference from the original result page.' }, offset: { type: 'integer', minimum: 0, description: 'data.nextOffset from the previous page; default 0.' } }, required: ['reference'], additionalProperties: false },
-    } } };
-    routes.set('ToolResultRead', { appId: 'administrator', tool: resultRead, session: null });
-    function complete(operation: AdministratorOperation, result: ManagementResult, continuation = false) {
+    for (const participant of options.registry.list()) {
+        let data: unknown;
+        try {
+            const session = await participant.open();
+            sessions.set(participant.id, session);
+            data = session.initial;
+        } catch (error) {
+            options.reader.assertCurrent();
+            const failure = { id: participant.id, ...managementReadError(error) };
+            readErrors.push(failure);
+            data = { error: failure };
+        }
+        const initial = safePromptJson(data);
+        domains.push({ id: participant.id, label: participant.label, tools: participant.tools, prompt: participant.prompt,
+            data: initial.length <= MANAGEMENT_READ_CHARS ? data : { ...textPage(initial), detail: ADMINISTRATOR_REFERENCE_TEXT.initialPage } });
+        for (const tool of participant.tools) { register(tool, participant.id, participant); }
+    }
+    const common = [...ADMINISTRATOR_CHAT_TOOLS, ADMINISTRATOR_OS_INSPECT, ADMINISTRATOR_RESULT_READ];
+    for (const tool of common) { register(tool, ADMINISTRATOR_CHAT_TOOLS.includes(tool) ? 'story' : 'administrator', null); }
+    const loader = createAdministratorToolLoader(domains, common);
+    register(loader.tool, 'administrator', null);
+    function inspectEnvironment() {
+        options.reader.assertCurrent();
+        try {
+            const data = options.readEnvironment(options.reader.identity);
+            return { ok: true, status: 'read' as const, data };
+        } catch (error) {
+            if ((error as Error)?.message === 'administrator_context_changed' || (error as Error)?.name === 'AbortError') { throw error; }
+            return { ok: false, status: 'failed' as const, code: 'administrator_environment_unavailable' };
+        } finally { options.reader.assertCurrent(); }
+    }
+    function complete(operation: AdministratorOperation, result: ManagementResult, continuation = false, summary?: string) {
         operation.status = result.status;
         const report = result.data && typeof result.data === 'object' ? result.data as { applied?: unknown[]; skipped?: unknown[] } : null;
-        operation.summary = report?.applied || report?.skipped
-            ? ADMINISTRATOR_COPY.itemReport(report.applied?.length ?? 0, report.skipped?.length ?? 0) : ADMINISTRATOR_COPY.operations[result.status];
+        operation.summary = summary ?? (report?.applied || report?.skipped
+            ? ADMINISTRATOR_COPY.itemReport(report.applied?.length ?? 0, report.skipped?.length ?? 0) : ADMINISTRATOR_COPY.operations[result.status]);
         const output = { ...(continuation ? result : evidence.project(operation.id, result)), receipt: { ...operation } };
         options.onChange();
         return output;
     }
     return {
-        tools: [...routes.values()].map(route => route.tool.definition),
+        getTools: loader.getTools,
         prompt: domains.map(domain => domain.prompt).join('\n\n'),
-        data: { story: options.reader.info, apps: domains.map(({ id, data }) => ({ id, data })), unavailable },
+        data: { environment: inspectEnvironment(), story: options.reader.info, apps: domains.map(({ id, data }) => ({ id, data })), readErrors },
         evidence: evidence.read,
         async confirmSaved() {
             if (!pending) { return; }
@@ -64,10 +96,20 @@ export async function createAdministratorToolExecutor(options: {
             const id = `${runId}:${callId}`;
             const route = routes.get(name);
             if (!route) { return { ok: false, status: 'failed', code: 'tool_unavailable' }; }
-            if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { return { ok: false, status: 'failed', code: 'arguments_must_be_object' }; }
-            const args = raw as Record<string, unknown>;
-            if (route.tool.effect === 'write' && !options.reader.isCurrent()) {
-                return { ok: false, status: 'failed', code: 'story_evidence_changed', floors: options.reader.staleFloors() };
+            if (!loader.getTools().some(tool => tool.function.name === name)) { return TOOL_NOT_LOADED; }
+            let args: Record<string, unknown>;
+            try { args = requireToolArgumentsObject(raw); }
+            catch (error) {
+                if (!(error instanceof ToolArgumentsError)) { throw error; }
+                return error.result();
+            }
+            if (name === OS_INSPECT && Object.keys(args).length) { return { ok: false, status: 'failed', code: 'arguments_must_be_empty' }; }
+            if (route.tool.effect === 'write') {
+                const stale = options.reader.staleEvidence();
+                if (stale.floors.length) {
+                    const recovery = stale.missingFloors.length ? STORY_EVIDENCE_RECOVERY.missing : STORY_EVIDENCE_RECOVERY.changed;
+                    return { ok: false, status: 'failed', code: 'story_evidence_changed', data: { ...stale, message: `${STORY_EVIDENCE_CHANGED} ${recovery}` } };
+                }
             }
             const operation: AdministratorOperation = {
                 id, appId: route.appId, name: route.tool.label, target: route.tool.target(args).slice(0, 160),
@@ -79,23 +121,34 @@ export async function createAdministratorToolExecutor(options: {
                 // Record the attempted write before dispatch, so reload cannot present it as a confirmed success.
                 if (route.tool.effect === 'write') { await options.saveReceipts(); }
                 let result: ManagementResult;
-                if (route.session) {
-                    try { result = await route.session.execute(name, args, options.guard); }
-                    catch (error) { if (route.tool.effect === 'write') { pending = { id, operation, session: route.session, messageIndex }; } throw error; }
+                if (route.participant) {
+                    options.reader.assertCurrent();
+                    let session = sessions.get(route.appId);
+                    if (!session) { session = await route.participant.open(); sessions.set(route.appId, session); }
+                    options.reader.assertCurrent();
+                    try { result = await session.execute(name, args, options.guard); }
+                    catch (error) { if (route.tool.effect === 'write') { pending = { id, operation, session, messageIndex }; } throw error; }
+                    if (route.tool.effect === 'read') { options.reader.assertCurrent(); }
+                } else if (name === TOOLS_LOAD) {
+                    options.reader.assertCurrent();
+                    result = loader.load(args);
+                } else if (name === OS_INSPECT) {
+                    result = inspectEnvironment();
                 } else {
                     const data = name === 'ChatRead' ? await options.reader.read(args) : name === 'ChatSearch' ? await options.reader.search(args) : evidence.page(id, String(args.reference), args.offset);
                     result = { ok: true, status: 'read', data };
                 }
                 operation.elapsedMs += Math.round(performance.now() - started);
                 // The loop saves this result and its receipt together before any further dispatch.
-                return complete(operation, result, name === 'ToolResultRead');
+                return complete(operation, result, name === TOOL_RESULT_READ, name === TOOLS_LOAD && result.ok ? ADMINISTRATOR_COPY.toolsLoaded
+                    : name === OS_INSPECT && !result.ok ? administratorError(new Error('administrator_environment_unavailable')) : undefined);
             } catch (error) {
                 operation.status = pending?.id === id && (error as { uncertain?: boolean })?.uncertain ? 'unconfirmed' : 'failed';
                 operation.elapsedMs += Math.round(performance.now() - started);
                 operation.summary = String(error instanceof Error ? error.message : error).slice(0, 350);
                 options.onChange();
                 if (route.tool.effect === 'read' && (error as Error).name !== 'AbortError' && (error as Error).message !== 'administrator_context_changed') {
-                    return { ok: false, status: 'failed', code: (error as Error).message, receipt: { ...operation } };
+                    return { ok: false, status: 'failed', code: (error as { code?: string })?.code ?? (error as Error).message, receipt: { ...operation } };
                 }
                 throw error;
             }

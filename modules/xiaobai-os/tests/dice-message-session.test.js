@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync } from 'node:fs';
-import { applyDiceCandidate, captureDiceTarget, clearNewDiceSwipe, clearDiceMessageData, readDiceRecords, isDiceTargetCurrent } from '../apps/dice/host/message-records.ts';
+import { applyDiceCandidate, captureDiceTarget, clearNewDiceSwipe, clearDiceMessageData, collectDiceCheckIds, readDiceRecords, isDiceTargetCurrent } from '../apps/dice/host/message-records.ts';
 import { createActionCheckSession } from '../apps/dice/application/action-check-session.ts';
 import { prepareActionCheck } from '../apps/dice/application/prepare-action-check.ts';
 import { DICE_RECORDS_SCHEMA_VERSION } from '../apps/dice/domain/check-records.ts';
@@ -18,9 +18,28 @@ function fixture() {
 function createSession(source, overrides) {
     return createActionCheckSession({ enabled: () => true,
         current: target => isDiceTargetCurrent(source, target), same: (a, b) => a.message === b.message && a.swipe === b.swipe,
-        ready: async () => {}, reveal: async () => {}, changed() {}, id: () => 'id',
+        ready: async () => {}, saveRecovered: async () => {}, reveal: async () => {}, changed() {}, id: () => 'id',
         apply: (target, candidate) => applyDiceCandidate(source, target, candidate), ...overrides });
 }
+
+test('free-roll persistence does not hold the choice or request the model; continuation uses the same result', async () => {
+    const { source, target } = fixture();
+    let saves = 0, samples = 0, continuations = 0;
+    const busy = [];
+    const session = createSession(source, {
+        random: () => { samples++; return .3; }, busy: value => busy.push(value),
+        saveRecovered: () => { saves++; },
+        continue: async () => { continuations++; return null; },
+    });
+    session.accept(target); await session.drain();
+    assert.equal(session.view().phase.kind, 'awaiting-choice');
+    assert.deepEqual(busy, []);
+    assert.equal(continuations, 0);
+    await session.continueCheck(session.view().target);
+    assert.equal(samples, 2);
+    assert.equal(saves, 0);
+    assert.equal(continuations, 1);
+});
 
 test('applying a check after editing upstream prose upgrades only the active swipe and retains all prior results', () => {
     const message = JSON.parse(readFileSync(new URL('./fixtures/dice-message-a32c28d0.json', import.meta.url), 'utf8'));
@@ -109,6 +128,9 @@ test('cleanup preserves literal marker examples and matches ownership separately
         swipe_info: [{ extra: { xiaobaiOsDice: other.records, display_text: '旧译文 [dice:two] 示例 [dice:one]' } },
             { extra: { xiaobaiOsDice: candidate.records, display_text: '译文 [dice:one]' } }] };
     const unchanged = structuredClone([user, sample]);
+    const before = structuredClone([user, sample, message]);
+    assert.deepEqual(collectDiceCheckIds([user, sample, message]), new Set(['one', 'two']));
+    assert.deepEqual([user, sample, message], before);
     const changed = clearDiceMessageData([user, sample, message]);
     assert.deepEqual([user, sample], unchanged);
     assert.deepEqual([...changed], [message]);
@@ -137,13 +159,16 @@ test('session applies once before continuing; request failure and explicit retry
         } });
     session.accept(target);
     await Promise.all([session.drain(), session.drain()]);
+    assert.equal(session.view().phase.kind, 'awaiting-choice');
+    assert.equal(continuations, 0);
+    await session.continueCheck(captureDiceTarget(source, 0, 0));
     assert.equal(session.view().phase.kind, 'continue-error');
     const retained = structuredClone(session.view().phase.candidate.records);
     assert.equal(retained.checks[0].dc, 12);
     assert.equal(retained.checks[0].roll, 7);
     assert.equal(randomCalls, 2); assert.equal(continuations, 1);
     rejected = false;
-    await session.retry(captureDiceTarget(source, 0, 0));
+    await session.continueCheck(captureDiceTarget(source, 0, 0));
     assert.equal(randomCalls, 2); assert.equal(continuations, 2);
     assert.equal(applications, 1);
     assert.deepEqual(readDiceRecords(source.chat[0]), retained);
@@ -168,7 +193,7 @@ test('a recreated session continues a message result without sampling, applying 
             source.chat[0].mes += '\n\nAfter reload.';
             return captureDiceTarget(source, 0, saved.body.length);
         } });
-    await session.retry(restored);
+    await session.continueCheck(restored);
     assert.equal(continuations, 1);
     assert.equal(session.view(), null);
     assert.deepEqual(readDiceRecords(source.chat[0]), candidate.records);
@@ -206,8 +231,11 @@ test('fresh result waits for reveal; stop, target edits, and recovery cannot rer
             assert.equal(source.chat[0].mes, 'Edited action. [dice:revealed]');
         }
         if (ending !== 'finish') assert.deepEqual(steps, ['sample', 'sample', 'apply', 'reveal']);
-        else assert.deepEqual(steps, ['sample', 'sample', 'apply', 'reveal', 'continue']);
-        await session.retry(captureDiceTarget(source, 0, 0));
+        else {
+            assert.equal(session.view().phase.kind, 'awaiting-choice');
+            assert.deepEqual(steps, ['sample', 'sample', 'apply', 'reveal']);
+        }
+        await session.continueCheck(captureDiceTarget(source, 0, 0));
         assert.equal(steps.filter(step => step === 'sample').length, 2);
         assert.equal(steps.filter(step => step === 'reveal').length, 1);
         assert.equal(steps.at(-1), 'continue');
@@ -231,17 +259,18 @@ test('a retry readiness failure retains the same candidate until recovery succee
         } });
     session.accept(target);
     await session.drain();
+    await session.continueCheck(captureDiceTarget(source, 0, 0));
     const candidate = structuredClone(session.view().phase.candidate);
     assert.equal(session.view().phase.kind, 'continue-error');
     failReadiness = true;
     const before = continuations;
-    await session.retry(captureDiceTarget(source, 0, 0));
+    await session.continueCheck(captureDiceTarget(source, 0, 0));
     assert.equal(session.view().phase.kind, 'continue-error');
     assert.deepEqual(session.view().phase.candidate, candidate);
     assert.equal(randomCalls, 2);
     assert.equal(continuations, before);
     failReadiness = false; failOperation = false;
-    await session.retry(captureDiceTarget(source, 0, 0));
+    await session.continueCheck(captureDiceTarget(source, 0, 0));
     assert.equal(session.view(), null);
     assert.equal(randomCalls, 2);
     assert.deepEqual(readDiceRecords(source.chat[0]), candidate.records);
@@ -260,8 +289,9 @@ test('target changes and cancellation during retry readiness prevent continuatio
             continue: async () => { continuations++; return null; } });
         session.accept(target);
         await session.drain();
+        await session.continueCheck(captureDiceTarget(source, 0, 0));
         retrying = true;
-        const retry = session.retry(captureDiceTarget(source, 0, 0));
+        const retry = session.continueCheck(captureDiceTarget(source, 0, 0));
         if (reason === 'changed') source.chat[0].mes = 'User edit';
         else session.cancel();
         rejectWait(new Error(reason));

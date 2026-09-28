@@ -783,7 +783,6 @@ NovelAI、SD WebUI、ComfyUI 原有 Scene Planner LLM 页面删除：
 | `AGENT_SETTINGS_LOAD_FAILED` | 无法读取共享 Agent 设置。 |
 | `AGENT_PRESET_INVALID` | 当前主预设不存在或结构无效。 |
 | `MODEL_MISSING` | 当前 Provider 没有模型。 |
-| `API_KEY_MISSING` | 直连 Provider 缺少 API Key。 |
 | `AGENT_CORE_LOAD_FAILED` | 浏览器 bundle 缺失或加载失败。 |
 | `PROMPT_EXPANSION_FAILED` | Prompt 宏加载或展开抛错。 |
 | `PROVIDER_REQUEST_FAILED` | Provider 返回 HTTP/SDK 错误。 |

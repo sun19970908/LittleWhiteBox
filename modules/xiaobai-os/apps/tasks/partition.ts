@@ -7,7 +7,7 @@ export const TASKS_PARTITION: PartitionRegistration<TaskDomainV1> = Object.freez
     key: 'tasks',
     storage: 'user-story',
     ownerId: TASKS_APP_DESCRIPTOR.id,
-    schemaVersion: 1,
+    schemaVersion: 2,
     parse(value: unknown) {
         try { return { ok: true as const, value: parseTaskDomain(value) }; }
         catch (error) {

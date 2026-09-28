@@ -9,7 +9,6 @@ export interface FourthWallMessageData {
 export interface FourthWallChatSettings {
     maxChatLayers: number;
     stream: boolean;
-    disableAssistantPrefill: boolean;
 }
 
 export interface FourthWallSession {
@@ -28,7 +27,7 @@ export interface FourthWallChatState {
 }
 
 export interface FourthWallPartition {
-    schemaVersion: 2;
+    schemaVersion: 3;
     state: FourthWallChatState;
 }
 
@@ -63,6 +62,7 @@ export interface FourthWallChatSnapshot {
 }
 
 export interface FourthWallBuiltPrompt {
+    protocol: string;
     msg1: string;
     msg2: string;
     msg3: string;

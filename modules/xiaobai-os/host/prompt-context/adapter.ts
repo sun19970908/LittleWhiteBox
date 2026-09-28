@@ -2,22 +2,26 @@ import { getContext } from '../../../../../../../extensions.js';
 import { getWorldInfoSettings } from '../../../../../../../world-info.js';
 import { createHostPromptContextAdapter, type PromptHostContext } from './capture.js';
 import type { PromptContextAdapter } from './types.js';
+import type { PromptContextLimitOverrides } from './normalize.js';
 
 interface PromptContextAdapterDependencies {
     readonly readContext?: () => PromptHostContext;
     readonly readStoryEvents?: (throughMessageIndex: number) => string | Promise<string>;
     readonly cleanMessageText?: (text: string) => string;
     readonly report?: (error: unknown) => void;
+    readonly normalizationLimits?: PromptContextLimitOverrides;
+    readonly includeActiveStoryDetails?: boolean;
+    readonly strictBackgroundRead?: boolean;
 }
 
 async function defaultStoryEvents(throughMessageIndex: number): Promise<string> {
     const module = await import('../../../story-summary/story-summary.js') as {
-        getStorySummaryL2EventText?: (options: {
+        getStorySummaryL2EventText: (options: {
             throughMessageIndex: number;
             maxCharacters: number;
         }) => string;
     };
-    return module.getStorySummaryL2EventText?.({ throughMessageIndex, maxCharacters: 20_000 }) || '';
+    return module.getStorySummaryL2EventText({ throughMessageIndex, maxCharacters: 20_000 });
 }
 
 export function createPromptContextAdapter({
@@ -27,7 +31,11 @@ export function createPromptContextAdapter({
     }),
     readStoryEvents = defaultStoryEvents,
     cleanMessageText,
+    normalizationLimits,
+    includeActiveStoryDetails,
+    strictBackgroundRead,
     report = error => console.warn('[LittleWhiteBox] Prompt 背景读取失败', error),
 }: PromptContextAdapterDependencies = {}): PromptContextAdapter {
-    return createHostPromptContextAdapter({ readContext, readStoryEvents, cleanMessageText, report });
+    return createHostPromptContextAdapter({ readContext, readStoryEvents, cleanMessageText, normalizationLimits,
+        includeActiveStoryDetails, strictBackgroundRead, report });
 }

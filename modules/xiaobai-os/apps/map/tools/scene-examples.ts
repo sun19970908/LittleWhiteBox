@@ -3,8 +3,9 @@ export const SCENE_EXAMPLES = [
     {
         background: 'A timber-floored inn taproom has stone walls, a south entrance, a counter against the north wall and a table in the western half. The player has just entered. No exact dimensions or chairs were described.',
         layout: 'Approximate the rectangle around these anchors. Break the south wall at the entrance; keep the route from entrance to counter east of the table clear. One ordinary chair is inferred, faces its table, and is marked accordingly.',
+        atlas: { locations: [{ key: 'town', name: 'Riverside Town', scale: 'region' }, { key: 'taproom', name: 'Taproom', scale: 'room', parent: 'town' }] },
         create: {
-            scene: 'taproom', title: 'Taproom', playerHere: true, viewBox: [0, 0, 480, 380], mood: 'warm',
+            scene: 'taproom', playerHere: true, viewBox: [0, 0, 480, 380], mood: 'warm',
             elements: [
                 { id: 'floor', cat: 'terrain', shape: 'rect', geo: { center: [240, 170], size: [400, 260] }, material: 'wood' },
                 { id: 'wall', cat: 'wall', shape: 'path', geo: { points: [[200, 300], [40, 300], [40, 40], [440, 40], [440, 300], [270, 300]] }, closed: false, material: 'stone' },
@@ -23,8 +24,9 @@ export const SCENE_EXAMPLES = [
     {
         background: 'In a grassy valley, woodland is northwest, a stream with visible banks bends south through the middle, and a wooden bridge connects west and east trails. The player stands on the west trail.',
         layout: 'Use one forest area without a tree icon. Trace one stream bank downstream and the other back upstream to form its area. Bridge travel is east-west, so rotate its default north-south deck by 90 degrees. Trail vertices are real turns, not decorative handles.',
+        atlas: { locations: [{ key: 'highlands', name: 'Highlands', scale: 'region' }, { key: 'valley', name: 'Stream Valley', scale: 'outdoor', parent: 'highlands' }] },
         create: {
-            scene: 'valley', title: 'Stream Valley', scale: 'outdoor', playerHere: true, viewBox: [0, 0, 700, 520],
+            scene: 'valley', playerHere: true, viewBox: [0, 0, 700, 520],
             elements: [
                 { id: 'ground', cat: 'terrain', shape: 'rect', geo: { center: [340, 250], size: [640, 460] }, material: 'grass' },
                 { id: 'woods', cat: 'terrain', shape: 'path', geo: { points: [[30, 30], [260, 30], [240, 200], [30, 170]] }, closed: true, material: 'forest', label: 'Woodland' },
@@ -41,10 +43,15 @@ export const SCENE_EXAMPLES = [
         },
     },
     {
-        background: 'A metal-floored orbital cabin has a south hatch, a metal desk to the west, a chair south of it, and an angular metal instrument to the east. The player is just inside the hatch.',
+        background: 'In the Helios System, a station’s metal-floored orbital cabin has a south hatch, a metal desk to the west, a chair south of it, and an angular metal instrument to the east. The player is just inside the hatch.',
         layout: 'Reuse ordinary table/chair tokens with metal, not wood. Preserve the unfamiliar instrument as its own outline and label without guessing a furniture icon. The central aisle remains clear.',
+        atlas: { locations: [
+            { key: 'cabin', name: 'Orbital Cabin', scale: 'room', parent: 'station' },
+            { key: 'station', name: 'Orbital Station', scale: 'region', parent: 'helios' },
+            { key: 'helios', name: 'Helios System', scale: 'world' },
+        ] },
         create: {
-            scene: 'cabin', title: 'Orbital Cabin', playerHere: true, viewBox: [0, 0, 600, 440], mood: 'cold',
+            scene: 'cabin', playerHere: true, viewBox: [0, 0, 600, 440], mood: 'cold',
             elements: [
                 { id: 'floor', cat: 'terrain', shape: 'rect', geo: { center: [300, 200], size: [500, 320] }, material: 'metal' },
                 { id: 'wall', cat: 'wall', shape: 'path', geo: { points: [[260, 360], [50, 360], [50, 40], [550, 40], [550, 360], [340, 360]] }, closed: false, material: 'metal' },
@@ -69,6 +76,7 @@ export function sceneExamplesPrompt(): string {
         ...SCENE_EXAMPLES.flatMap(example => [
             `Evidence: ${example.background}`,
             `Spatial organization: ${example.layout}`,
+            `MapAtlasEdit: ${JSON.stringify(example.atlas)}`,
             `MapSceneEdit: ${JSON.stringify(example.create)}`,
             `Next accepted evidence: ${example.update.evidence}`,
             `MapSceneEdit: ${JSON.stringify(example.update.edit)}`,

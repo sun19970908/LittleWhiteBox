@@ -2,9 +2,22 @@
 
 这里用真实 MapApp、MapScene/MapScene3D、AppNavigationScope 和固定工具输入建立隔离浏览器环境。Bridge 只在内存中模拟，不连接聊天存储或模型服务。
 
+## 2026-09-27 回退验收
+
+地图恢复到 `5143cccf` 的地区浏览与分层搜索版本，额外保留 NPC 显示名继承及工具说明修复；不包含世界／地区地貌及其格式兼容。其他业务源码不回退。
+
+- 地图／场景测试 130 项通过；全量 OS 测试 1535 项通过。类型检查、lint、导入检查、生产构建、独立二维构建及 `git diff --check` 通过。
+- `check-regions.cjs` 的 9 组报告全部通过，包含桌面／390／320px 深浅主题、同名地点隔离、地区与地点定位、返回和切聊。
+- `check-objects.cjs` 的 7 个场景及两组 128 元素负载通过；世界页没有 WebGL 画布或模型下载。静止场景停止绘制，切换二维及最终卸载后追踪的 GPU 缓冲、纹理、程序、VAO 均为零。浏览不修改地图事实。
+- 已检查酒馆、溪谷、观测舱及地区／世界截图。上述结果来自桌面浏览器的生产组件隔离环境，不代表实体手机、真实模型补图、长期运行或浏览器总内存验收；未连接或改写实际存档。
+
+## 运行方法
+
 在仓库根目录运行 `node --import tsx output/map-production-check/build.mjs`，再用本地静态服务器打开 `output/map-production-check/dist/index.html`。构建支持动态导入；应通过 HTTP 访问。
 
 可切换酒馆、溪谷、观测舱、旅舍起居室、厨卫间、工坊、庭院、无当前场景和空地图；`?loading=1` 模拟异步首读。新增四场景来自真实工具输入，合计覆盖 37 类；页顶的测试控件不属于正式 APP。
+
+`?scene=regions` 使用 `tests/fixtures/map-browse.js` 的地区浏览样例。Playwright CLI `run-code --filename output/map-production-check/check-regions.cjs` 验证世界／地区／场景切换、横幅与列表范围一致、同名地点隔离、空地区、异地空场景返回、当前位置变化、地区级与具体地点级定位、切聊与零 Host 请求；覆盖地区 key 与世界层级同名、嵌套地区不扰动外层坐标，并检查桌面/390/320px 深浅主题。结果为 `window.mapRegionReport`，截图位于 `output/playwright/map-regions-*.png`。
 
 生成 bundle 和检查日志不提交；正式运行产物仍在 `modules/xiaobai-os/dist/`。
 

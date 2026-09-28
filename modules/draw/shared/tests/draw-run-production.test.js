@@ -16,8 +16,7 @@ import {
     subscribeDrawRunActivity,
 } from '../draw-run-activity.js';
 import {
-    formatDrawRunProgress,
-    getDrawRunProgressIcon,
+    getDrawRunProgressPhase,
     resolveDrawRunActivityDetail,
     resolveDrawRunUiState,
 } from '../draw-run-ui-state.js';
@@ -48,30 +47,30 @@ function baseOptions(overrides = {}) {
     };
 }
 
-test('Draw Run progress labels use real backend stages and item positions', () => {
-    assert.equal(formatDrawRunProgress({ run: { progress: { stage: 'queued' } } }), '排队');
-    assert.equal(formatDrawRunProgress({ stage: 'planning' }), '分析');
-    assert.equal(formatDrawRunProgress({ stage: 'queued', current: 1, total: 2 }), '排队');
-    assert.equal(formatDrawRunProgress({ stage: 'progress', current: 1, total: 2 }), '1/2');
-    assert.equal(formatDrawRunProgress({ stage: 'dispatched' }), '接回中');
-    assert.equal(formatDrawRunProgress({ stage: 'delivering' }), '接回中');
-    assert.equal(formatDrawRunProgress({ stage: 'reconnecting' }), '重连');
-    assert.equal(formatDrawRunProgress({}), '生成中');
+test('Draw Run progress reflects the backend phase rather than stale item counts', () => {
+    assert.equal(getDrawRunProgressPhase({ run: { progress: { stage: 'queued' } } }), 'queued');
+    assert.equal(getDrawRunProgressPhase({ stage: 'planning' }), 'analysis');
+    assert.equal(getDrawRunProgressPhase({ stage: 'queued', current: 1, total: 2 }), 'queued');
+    assert.equal(getDrawRunProgressPhase({ stage: 'progress', current: 1, total: 2 }), 'generating');
+    assert.equal(getDrawRunProgressPhase({ stage: 'dispatched' }), 'reattaching');
+    assert.equal(getDrawRunProgressPhase({ stage: 'delivering' }), 'reattaching');
+    assert.equal(getDrawRunProgressPhase({ stage: 'reconnecting' }), 'reconnecting');
+    assert.equal(getDrawRunProgressPhase({ stage: 'compiling' }), 'preparing');
+    assert.equal(getDrawRunProgressPhase({ stage: 'cooldown' }), 'cooldown');
+    assert.equal(getDrawRunProgressPhase({}), 'generating');
 });
 
-test('Draw Run analysis uses the hourglass while other stages keep the drawing icon', () => {
+test('Draw Run normalizes every planning stage and gives explicit progress precedence', () => {
     for (const stage of ['planning', 'prompt', 'config', 'request', 'correction', 'parse']) {
         for (const detail of [{ stage }, { run: { progress: { stage } } }, { run: { state: stage } }]) {
-            assert.equal(getDrawRunProgressIcon(detail), '⏳');
-            assert.equal(formatDrawRunProgress(detail), '分析');
+            assert.equal(getDrawRunProgressPhase(detail), 'analysis');
         }
     }
     for (const stage of ['queued', 'compiling', 'progress', 'cooldown', 'dispatched', 'delivering', 'reconnecting', '']) {
-        assert.equal(getDrawRunProgressIcon({ stage }), '🎨');
+        assert.notEqual(getDrawRunProgressPhase({ stage }), 'analysis');
     }
     const generation = { stage: 'progress', current: 1, total: 2, run: { state: 'planning' } };
-    assert.equal(getDrawRunProgressIcon(generation), '🎨');
-    assert.equal(formatDrawRunProgress(generation), '1/2');
+    assert.equal(getDrawRunProgressPhase(generation), 'generating');
 });
 
 test('production entry refuses an old backend without running Planner or silently falling back', async () => {

@@ -24,6 +24,12 @@ export interface TaskHistoryPage {
     hasMore: boolean;
 }
 
+export interface OwnedCommission {
+    scopeId: string;
+    sourceLabel: string;
+    task: TaskRecord;
+}
+
 export interface TasksPresentation {
     chatIdentity: string;
     status: TasksClientStatus;
@@ -31,6 +37,8 @@ export interface TasksPresentation {
     writeState: XiaobaiOsFileState;
     settings: TasksSettings;
     playerBalance: number;
+    currentScopeId: string | null;
+    commissions: OwnedCommission[];
     generationActive: boolean;
     generation: TasksGenerationState;
     board: TaskBoardPresentation | null;
@@ -54,6 +62,8 @@ export interface TaskTimelineItem {
 export interface TaskDetailPresentation {
     task: TaskRecord;
     timeline: TaskTimelineItem[];
+    originScopeId?: string;
+    sourceLabel?: string;
 }
 
 export type { TaskEvent, TaskPublishedForm, TaskRecord };

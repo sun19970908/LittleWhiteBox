@@ -7,7 +7,7 @@ import type { FourthWallBuiltPrompt, FourthWallContextStats, FourthWallPromptInp
 export function estimateFourthWallContext(
     prompt: FourthWallBuiltPrompt, input: FourthWallPromptInput, session: FourthWallSession,
 ): FourthWallContextStats {
-    const request = buildFourthWallAgentRequest(prompt, input.settings.disableAssistantPrefill);
+    const request = buildFourthWallAgentRequest(prompt);
     const usedTokens = estimateConversationTokens({ messages: counterMessages(request) });
     const mainTokens = estimateTokenCount(formatMainChat(input.chatSnapshot, input.settings.maxChatLayers));
     const memoryTokens = estimateTokenCount(input.memory || '');

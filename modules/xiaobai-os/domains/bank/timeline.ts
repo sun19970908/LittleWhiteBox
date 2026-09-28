@@ -3,7 +3,7 @@ import {
     BANK_SCHEMA_VERSION,
     throwBankError,
     type BankAction,
-    type BankActivityRecord,
+    type BankPublicActivityRecord,
     type BankAppendEventInput,
     type BankCasToken,
     type BankChange,
@@ -16,7 +16,7 @@ import {
 const MAX_DATE_MS = 8_640_000_000_000_000;
 
 export function createEmptyBankDomain(): BankDomainV1 {
-    return { schemaVersion: BANK_SCHEMA_VERSION, events: [] };
+    return { schemaVersion: BANK_SCHEMA_VERSION, currentTurn: 0, events: [], history: [] };
 }
 
 export function createEmptyBankState(): BankState {
@@ -34,29 +34,34 @@ function applyChange(state: BankState, change: BankChange): void {
     }
 }
 
-/** Rebuilds current private state without retaining references to persisted events. */
-export function replayBankEvents(domain: BankDomainV1): BankState {
-    validateBankDomain(domain);
+/** Replays validated events without imposing a storage version's clock rules. */
+export function replayBankEventChanges(events: readonly BankEvent[]): BankState {
     const state = createEmptyBankState();
-    for (const event of domain.events) {
+    for (const event of events) {
         for (const change of event.result.changes) {applyChange(state, change);}
     }
     return state;
 }
 
+/** Rebuilds current private state without retaining references to persisted events. */
+export function replayBankEvents(domain: BankDomainV1): BankState {
+    validateBankDomain(domain);
+    return replayBankEventChanges(domain.events);
+}
+
 export const replayBankState = replayBankEvents;
 
 /** Flattens embedded facts in chronological order and inherits their event boundary. */
-export function flattenBankActivities(domain: BankDomainV1): BankActivityRecord[] {
+export function flattenBankActivities(domain: BankDomainV1): BankPublicActivityRecord[] {
     validateBankDomain(domain);
-    return domain.events.flatMap((event) => event.result.activities.map((activity) => ({
+    return [...domain.history, ...domain.events.flatMap((event) => event.result.activities.map((activity) => ({
         ...structuredClone(activity),
         revision: event.revision,
         eventId: event.eventId,
         actionId: event.actionId,
         assistantTurn: event.assistantTurn,
         createdAt: event.createdAt,
-    })));
+    })))];
 }
 
 export function getBankCasToken(domain: BankDomainV1): BankCasToken {
@@ -141,7 +146,9 @@ export function appendBankEvent(domain: BankDomainV1, input: BankAppendEventInpu
     };
     const next: BankDomainV1 = {
         schemaVersion: BANK_SCHEMA_VERSION,
+        currentTurn: domain.currentTurn,
         events: [...structuredClone(domain.events), event],
+        history: structuredClone(domain.history),
     };
     validateBankDomain(next);
     return {

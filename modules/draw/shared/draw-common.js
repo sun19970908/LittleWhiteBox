@@ -1,4 +1,5 @@
 import { getContext } from "../../../../../../extensions.js";
+import { DRAW_CAPSULE_COPY } from './draw-capsule-copy.js';
 import {
     getDisplayPreviewForSlot,
     getPreviewsBySlot,
@@ -14,6 +15,8 @@ import { ScenePlacementError } from './scene-placement.js';
 import { getRenderedSceneSlotIds, replaceSceneSlotElements } from './scene-slot-dom.js';
 import { getPendingImageJobSlots, PendingJobState } from './pending-image-jobs.js';
 import { createDrawImageSlotRegex } from './image-marker-syntax.js';
+import { hasPreviewImage, PreviewStatus, DRAW_SLOT_COPY, DRAW_SLOT_ERRORS } from './image-record.js';
+import { getSlotActivity } from './slot-activity.js';
 import { classifyScenePlannerErrorForUi } from "./scene-planner-error-ui.js";
 import { isCharacterEnabled } from './character-selection.js';
 import { joinTags } from './character-prompts.js';
@@ -87,7 +90,7 @@ export function toScenePlannerProgress(diagnostic = {}) {
 }
 
 export function formatScenePlannerProgress(progress = {}) {
-    return toScenePlannerProgress({ progress }).phase === 'correction' ? '纠错' : '分析';
+    return DRAW_CAPSULE_COPY[toScenePlannerProgress({ progress }).phase];
 }
 
 export function createPlaceholder(slotId) {
@@ -235,7 +238,7 @@ export function ensureDrawImageStyles() {
     const style = document.createElement('style');
     style.id = 'xiaobaix-draw-image-styles';
     style.textContent = `
-.xb-nd-img{margin:0.8em 0;text-align:center;position:relative;display:block;width:100%;border-radius:14px;padding:4px}
+.xb-nd-img{margin:0.8em 0;text-align:center;position:relative;display:block;width:100%;border-radius:14px;padding:4px;box-sizing:border-box}
 .xb-nd-img[data-state="preview"]{border:1px dashed rgba(255,152,0,0.35)}
 .xb-nd-img[data-state="failed"]{border:1px dashed rgba(248,113,113,0.5);background:rgba(248,113,113,0.05);padding:20px}
 .xb-nd-img[data-state="pending"]{border:1px dashed rgba(212,165,116,0.4);background:rgba(212,165,116,0.06);padding:18px;color:inherit}
@@ -260,9 +263,12 @@ export function ensureDrawImageStyles() {
 .xb-nd-menu-wrap{position:absolute;top:8px;right:8px;z-index:10}
 .xb-nd-menu-wrap.busy{pointer-events:none;opacity:0.3}
 .xb-nd-menu-trigger{width:32px;height:32px;border-radius:50%;border:none;background:rgba(0,0,0,0.75);color:rgba(255,255,255,0.85);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;opacity:0.85}
+.xb-nd-menu-trigger:hover,.xb-nd-menu-wrap.open .xb-nd-menu-trigger{background:rgba(0,0,0,.9);opacity:1}
 .xb-nd-menu-wrap.open .xb-nd-dropdown{display:flex;opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto}
 .xb-nd-dropdown{position:absolute;top:calc(100% + 4px);right:0;background:rgba(20,20,24,0.98);border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:4px;display:none;flex-direction:column;gap:2px;opacity:0;visibility:hidden;transform:translateY(-4px) scale(0.96);transform-origin:top right;transition:all 0.15s ease;box-shadow:0 8px 24px rgba(0,0,0,0.4);pointer-events:none}
 .xb-nd-dropdown button{width:32px;height:32px;border:none;background:transparent;color:rgba(255,255,255,0.85);cursor:pointer;font-size:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:background 0.15s;padding:0;margin:0}
+.xb-nd-dropdown button:hover{background:rgba(255,255,255,.15)}
+.xb-nd-dropdown [data-action="delete-image"]{color:rgba(248,113,113,.9)}
 .xb-nd-indicator{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);padding:8px 16px;border-radius:8px;color:#fff;font-size:12px;z-index:10}
 .xb-nd-edit{animation:nd-slide-up 0.2s ease-out}
 .xb-nd-edit-scroll{max-height:250px;overflow-y:auto;margin-bottom:8px}
@@ -270,16 +276,23 @@ export function ensureDrawImageStyles() {
 .xb-nd-edit-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:2px}
 .xb-nd-edit-group{margin-bottom:8px}
 .xb-nd-edit-group:last-child{margin-bottom:0}
-.xb-nd-edit-group-label{font-size:10px;color:rgba(255,255,255,0.58);margin-bottom:4px}
-.xb-nd-edit-input{width:100%;min-height:60px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;font-size:12px;padding:8px;resize:vertical;font-family:monospace}
+.xb-nd-edit-group-label{font-size:11px;color:inherit;opacity:.8;margin-bottom:4px}
+.xb-nd-edit-input{box-sizing:border-box;width:100%;min-height:60px;background:rgba(127,127,127,0.1);border:1px solid rgba(127,127,127,0.4);border-radius:6px;color:inherit;font-size:12px;padding:8px;resize:vertical;font-family:monospace}
+.xb-nd-edit-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.xb-nd-edit-actions button{min-height:36px;padding:6px 12px;border:1px solid rgba(127,127,127,.4);background:rgba(127,127,127,.1);border-radius:6px;color:inherit;cursor:pointer;white-space:nowrap}
+.xb-nd-edit-actions [data-action="save-tags"]{flex:1;background:rgba(212,165,116,.2)}
+.xb-nd-img button:focus-visible,.xb-nd-edit-input:focus-visible{outline:2px solid currentColor;outline-offset:2px}
 .xb-nd-failed-icon{color:rgba(248,113,113,0.9);font-size:24px;margin-bottom:8px}
-.xb-nd-failed-title{color:rgba(255,255,255,0.7);font-size:13px;margin-bottom:4px}
-.xb-nd-failed-desc{color:rgba(255,255,255,0.4);font-size:11px;margin-bottom:12px}
+.xb-nd-failed-title{color:inherit;font-size:13px;margin-bottom:4px}
+.xb-nd-failed-desc{color:inherit;opacity:.75;font-size:12px;margin-bottom:12px;overflow-wrap:anywhere}
 .xb-nd-failed-btns{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
 .xb-nd-failed-btns button{padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer;transition:all 0.15s}
-.xb-nd-retry-btn{border:1px solid rgba(212,165,116,0.5);background:rgba(212,165,116,0.2);color:#fff}
-.xb-nd-edit-btn{border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.1);color:#fff}
+.xb-nd-tag-actions{display:inline-flex;margin-inline-start:12px;vertical-align:middle}
+.xb-nd-tag-actions button{min-height:44px;min-width:64px}
+.xb-nd-retry-btn{border:1px solid rgba(212,165,116,0.5);background:rgba(212,165,116,0.2);color:inherit}
+.xb-nd-edit-btn{border:1px solid rgba(127,127,127,0.4);background:rgba(127,127,127,0.1);color:inherit}
 .xb-nd-remove-btn{border:1px solid rgba(248,113,113,0.3);background:transparent;color:rgba(248,113,113,0.8)}
+@media(prefers-reduced-motion:reduce){.xb-nd-img img,.xb-nd-edit{animation:none;transition:none}}
 @keyframes nd-slide-up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
 @keyframes fadeInOut{0%{opacity:0;transform:translateX(-50%) translateY(-10px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}85%{opacity:1;transform:translateX(-50%) translateY(0)}100%{opacity:0;transform:translateX(-50%) translateY(-10px)}}
 `;
@@ -321,14 +334,19 @@ ${indicator}
     ${navPill}
 </div>
 ${menuHtml}
-<div class="xb-nd-edit" style="display:none;position:absolute;bottom:8px;left:8px;right:8px;background:rgba(0,0,0,0.9);border-radius:10px;padding:10px;text-align:left;z-index:15;">
-    <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:6px;">编辑 TAG（场景描述）</div>
-    <textarea class="xb-nd-edit-input">${escapedTags}</textarea>
-    <div style="display:flex;gap:6px;margin-top:8px;">
-        <button data-action="save-tags" style="flex:1;padding:6px 12px;background:rgba(212,165,116,0.3);border:1px solid rgba(212,165,116,0.5);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">保存 TAG</button>
-        <button data-action="cancel-edit" style="padding:6px 12px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">取消</button>
+${buildTagEditor(tags, false)}
+</div>`;
+}
+
+function buildTagEditor(tags, failed) {
+    return `<div class="xb-nd-edit" style="display:none;${failed ? 'margin-top:12px;' : 'position:absolute;bottom:8px;left:8px;right:8px;background:rgba(0,0,0,.94);color:#fff;z-index:15;'}border-radius:10px;padding:10px;text-align:left;">
+    <label data-draw-edit-label style="display:block;font-size:11px;margin-bottom:6px;">${DRAW_SLOT_COPY.editTags}</label>
+    <textarea class="xb-nd-edit-input" aria-label="${DRAW_SLOT_COPY.editTags}">${escapeHtml(tags)}</textarea>
+    <div class="xb-nd-edit-actions">
+        <button data-action="save-tags">${DRAW_SLOT_COPY.saveTags}</button>
+        ${failed ? `<button data-action="save-tags-retry">${DRAW_SLOT_COPY.saveAndRetry}</button>` : ''}
+        <button data-action="cancel-edit">${DRAW_SLOT_COPY.cancelEdit}</button>
     </div>
-</div>
 </div>`;
 }
 
@@ -514,10 +532,14 @@ export function insertPreviewIntoRenderedMessage({ messageId, slotId, html }) {
 }
 
 async function resolveRenderPreviewForSlot(message, messageId, slotId) {
+    const display = await getDisplayPreviewForSlot(slotId);
     const savedEntry = getDrawSavedEntry(message, slotId);
-    if (savedEntry?.savedUrl) {
+    // The gallery selection is the explicit choice, also after a detached
+    // delivery or recovery. A chat's saved URL is only a portable fallback; it
+    // must not overrule a newer choice (including a selected failed attempt).
+    if (savedEntry?.savedUrl && (!display.selectedImgId || display.selectedImgId === savedEntry.imgId)) {
         const previews = await getPreviewsBySlot(slotId).catch(() => []);
-        const successPreviews = previews.filter(p => p.status !== 'failed' && (p.base64 || p.savedUrl));
+        const successPreviews = previews.filter(hasPreviewImage);
         const selectedIndex = successPreviews.findIndex(p => p.imgId === savedEntry.imgId);
         const matchedPreview = selectedIndex >= 0 ? successPreviews[selectedIndex] : null;
 
@@ -558,29 +580,23 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
         };
     }
 
-    return getDisplayPreviewForSlot(slotId);
+    return display;
 }
 
-function buildFailedPlaceholderHtml({ slotId, messageId, tags, positive, errorType, errorMessage }) {
+export function buildFailedPlaceholderHtml({ slotId, imgId = '', messageId, tags, positive, errorType, errorMessage, historyCount = 0 }) {
     const escapedTags = escapeHtml(tags);
     const escapedPositive = escapeHtml(positive);
-    return `<div class="xb-nd-img" data-slot-id="${slotId}" data-tags="${escapedTags}" data-positive="${escapedPositive}" data-mesid="${messageId}" data-state="failed" style="margin:0.8em 0;text-align:center;position:relative;display:block;width:100%;border:1px dashed rgba(248,113,113,0.5);border-radius:14px;padding:20px;background:rgba(248,113,113,0.05);">
+    return `<div class="xb-nd-img" data-slot-id="${slotId}" data-img-id="${escapeHtml(imgId)}" data-tags="${escapedTags}" data-positive="${escapedPositive}" data-mesid="${messageId}" data-state="failed" style="margin:0.8em 0;text-align:center;position:relative;display:block;width:100%;border:1px dashed rgba(248,113,113,0.5);border-radius:14px;padding:20px;background:rgba(248,113,113,0.05);">
 <div class="xb-nd-failed-icon">⚠️</div>
 <div class="xb-nd-failed-title">${escapeHtml(errorType || '生成失败')}</div>
 <div class="xb-nd-failed-desc">${escapeHtml(errorMessage || '点击重试')}</div>
 <div class="xb-nd-failed-btns">
     <button class="xb-nd-retry-btn" data-action="retry-image">⟳ 重新生成</button>
     <button class="xb-nd-edit-btn" data-action="edit-tags">✐ 编辑TAG</button>
+    ${historyCount > 0 ? `<button class="xb-nd-edit-btn" data-action="restore-image">${DRAW_SLOT_COPY.restoreImage}</button>` : ''}
     <button class="xb-nd-remove-btn" data-action="remove-placeholder">✕ 移除</button>
 </div>
-<div class="xb-nd-edit" style="display:none;margin-top:12px;text-align:left;">
-    <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:6px;">编辑 TAG（场景描述）</div>
-    <textarea class="xb-nd-edit-input">${escapedTags}</textarea>
-    <div style="display:flex;gap:6px;margin-top:8px;">
-        <button data-action="save-tags-retry" style="flex:1;padding:6px 12px;background:rgba(212,165,116,0.3);border:1px solid rgba(212,165,116,0.5);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">保存并重试</button>
-        <button data-action="cancel-edit" style="padding:6px 12px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">取消</button>
-    </div>
-</div>
+${buildTagEditor(tags, true)}
 </div>`;
 }
 
@@ -675,7 +691,7 @@ async function renderPreviewsForMessageNow(messageId, {
     // 待接回的后台任务槽位：只在真的需要判定时读一次，避免每条消息都白跑一次 IndexedDB。
     let pendingSlotsPromise = null;
     const resolvePendingSlot = async (slotId) => {
-        pendingSlotsPromise ??= getPendingImageJobSlots().catch(() => new Map());
+        pendingSlotsPromise ??= getPendingImageJobSlots();
         return (await pendingSlotsPromise).get(slotId) || null;
     };
     for (const slotId of slotIds) {
@@ -683,26 +699,34 @@ async function renderPreviewsForMessageNow(messageId, {
         let replacementHtml;
         try {
             const displayData = await resolveRenderPreviewForSlot(message, messageId, slotId);
-            const hasImage = displayData.hasData && !displayData.isFailed && displayData.preview;
-            // 后台任务仍在等待接回时，占位卡必须压过陈旧的失败卡和「缓存丢失」；
-            // 只有真的已经有图，才不必再问恢复记录。
-            const pendingSlot = hasImage ? null : await resolvePendingSlot(slotId);
-            if (pendingSlot) {
+            const activity = getSlotActivity(slotId);
+            const pendingJob = await resolvePendingSlot(slotId);
+            // An older image is not this attempt's result. Conversely, one
+            // delivered item must remain visible while its batch is finishing.
+            const attemptFinished = pendingJob && displayData.preview?.imgId === pendingJob.imgId
+                && !displayData.isPending;
+            const pendingSlot = attemptFinished ? null : pendingJob;
+            if (activity || pendingSlot) {
                 replacementHtml = buildPendingImageHtml({
                     slotId,
                     messageId,
-                    index: pendingSlot.index + 1,
-                    total: pendingSlot.total,
-                    label: pendingSlot.state === PendingJobState.CANCELLING ? '正在取消' : '生成中',
+                    index: (activity || pendingSlot).index + 1,
+                    total: (activity || pendingSlot).total,
+                    label: activity?.label || (pendingSlot.state === PendingJobState.CANCELLING ? '正在取消' : DRAW_SLOT_COPY.generating),
                 });
             } else if (displayData.isFailed) {
+                const interrupted = displayData.isPending
+                    ? (displayData.preview?.status === PreviewStatus.UNKNOWN
+                        ? DRAW_SLOT_ERRORS.unknown : DRAW_SLOT_ERRORS.interrupted) : null;
                 replacementHtml = buildFailedPlaceholderHtml({
                     slotId,
+                    imgId: displayData.preview?.imgId,
+                    historyCount: displayData.historyCount,
                     messageId,
                     tags: displayData.failedInfo?.tags || '',
                     positive: displayData.failedInfo?.positive || '',
-                    errorType: displayData.failedInfo?.errorType || ErrorType.CACHE_LOST.label,
-                    errorMessage: displayData.failedInfo?.errorMessage || ErrorType.CACHE_LOST.desc,
+                    errorType: interrupted?.label || displayData.failedInfo?.errorType || ErrorType.CACHE_LOST.label,
+                    errorMessage: interrupted?.desc || displayData.failedInfo?.errorMessage || ErrorType.CACHE_LOST.desc,
                 });
             } else if (displayData.hasData && displayData.preview) {
                 const url = getPreviewDisplayUrl(displayData.preview);

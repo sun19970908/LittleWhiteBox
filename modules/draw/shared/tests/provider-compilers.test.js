@@ -30,6 +30,18 @@ const SCENE_PLAN = [{
     placement: { insertAfter: 1 },
 }];
 
+test('all providers preserve explicitly empty character groups and edited negative input', () => {
+    for (const compile of [compileNovelPromptForTask, compileSdPromptForTask, compileComfyPromptForTask]) {
+        const prompt = compile({ scene: 'edited', characterPrompts: [], negativePrompt: '' }, {
+            positivePrefix: 'quality', negativePrefix: 'default negative',
+            knownCharacters: [{ name: 'Alice', prompt: 'must not appear' }],
+        });
+        assert.deepEqual(prompt.characterPrompts, []);
+        assert.equal(prompt.negativePrompt ?? prompt.negative, '');
+        assert.equal(prompt.scene ?? prompt.positive, 'quality, edited');
+    }
+});
+
 const KNOWN_CHARACTERS = [{
     enabled: true,
     name: '阿璃',

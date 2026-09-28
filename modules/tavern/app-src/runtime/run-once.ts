@@ -1490,9 +1490,7 @@ async function inspectTavernRequest(input: {
         tools: Array.isArray(input.tools) ? input.tools : [],
         toolChoice: input.toolChoice || (Array.isArray(input.tools) && input.tools.length ? 'auto' : 'none'),
     });
-    const adapter = input.adapter || createAgentAdapter(providerConfig as unknown as Record<string, unknown>, {
-        missingApiKeyMessage: '请先在 API 配置里选择模型/填写 Key。',
-    }) as TavernChatAdapter;
+    const adapter = input.adapter || createAgentAdapter(providerConfig as unknown as Record<string, unknown>) as TavernChatAdapter;
     const task = runtime.buildChatTask({
         messages: providerMessages,
         signal: input.signal,
@@ -1615,9 +1613,7 @@ export async function runTavernOnce(options: TavernRunOnceOptions): Promise<Tave
     const providerConfig = assertXbTavernProviderReady(options.agentConfig, {
         role: options.providerRole,
     });
-    const adapter = createAgentAdapter(providerConfig as unknown as Record<string, unknown>, {
-        missingApiKeyMessage: '请先在 API 配置里选择模型/填写 Key。',
-    }) as TavernChatAdapter;
+    const adapter = createAgentAdapter(providerConfig as unknown as Record<string, unknown>) as TavernChatAdapter;
     return runTavernOnceWithAdapter(adapter, providerConfig, options);
 }
 
@@ -2924,9 +2920,7 @@ export async function runXbTavernTurn(input: XbTavernRunTurnInput): Promise<XbTa
 
 function createDefaultTavernRunOnceExecutor(agentConfig: Record<string, unknown>): TavernRunOnceExecutor {
     const providerConfig = assertXbTavernProviderReady(agentConfig);
-    const adapter = createAgentAdapter(providerConfig as unknown as Record<string, unknown>, {
-        missingApiKeyMessage: '请先在 API 配置里选择模型/填写 Key。',
-    }) as TavernChatAdapter;
+    const adapter = createAgentAdapter(providerConfig as unknown as Record<string, unknown>) as TavernChatAdapter;
     const execute = ((options: TavernRunOnceOptions) => runTavernOnceWithAdapter(adapter, providerConfig, options)) as TavernRunOnceExecutor;
     execute.supportsSessionToolLoop = adapter.supportsSessionToolLoop === true;
     return execute;

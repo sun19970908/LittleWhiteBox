@@ -5,6 +5,7 @@ import { getContext, __setReplayContext } from './shims/extensions.js';
 import { chat_metadata, __setChatMetadata } from './shims/script.js';
 import { parseSummaryJson } from '../../modules/story-summary/generate/llm.js';
 import { applySummaryUndo } from '../../modules/story-summary/data/summary-undo.js';
+import { registerMemoryMaintenance } from '../../modules/story-summary/maintenance/notification.js';
 
 // Exercise the commit boundary: JSON errors and malformed event results must
 // not consume source floors, save partial data, or invoke completion callbacks.
@@ -55,6 +56,7 @@ export async function runSummaryResponseCheck() {
         ...invalidStructure.map(value => ({ raw: JSON.stringify(value), valid: false, error: 'structure' })),
         { raw: '```json\n{"error":{"message":"quota exceeded"}}\n```', valid: false, error: 'structure' },
         { raw: nextSummary, valid: true },
+        { raw: nextSummary, valid: true, completionFailure: true },
         ...['两人一起吃牛肉面。（＃２）', '（#2）两人一起吃牛肉面。', '两人一起吃牛肉面（#2）。'].map(value => ({
             raw: JSON.stringify({ events: [{ ...summary(2).events[0], summary: value }] }),
             valid: true,
@@ -83,6 +85,8 @@ export async function runSummaryResponseCheck() {
         })),
     ];
     const scenarios = [false, true].flatMap(useStream => cases.map(scenario => ({ ...scenario, useStream })));
+    const commits = [];
+    const unregister = registerMemoryMaintenance(batch => commits.push(batch));
 
     try {
         for (const [index, scenario] of scenarios.entries()) {
@@ -112,6 +116,7 @@ export async function runSummaryResponseCheck() {
             const seed = await runSummaryGeneration(0, config);
             assert.equal(seed.success, true);
             assert.equal(saved, 1);
+            assert.deepEqual(commits.splice(0), [{ chatId, start: 0, cutoff: 0 }]);
             const before = structuredClone(getSummaryStore());
             saved = 0;
             requests = 0;
@@ -125,15 +130,21 @@ export async function runSummaryResponseCheck() {
             const errors = [];
             const result = await runSummaryGeneration(targetFloor, config, {
                 onError: message => errors.push(message),
-                onComplete: ({ newEventIds }) => { completed = true; callbackIds = newEventIds; },
+                onComplete: ({ newEventIds }) => {
+                    completed = true;
+                    callbackIds = newEventIds;
+                    // A failed post-save cleanup must not suppress or duplicate maintenance.
+                    if (scenario.completionFailure) throw new Error('simulated cleanup failure');
+                },
             });
 
             assert.equal(result.success, scenario.valid, scenario.raw);
             assert.equal(requests, 1, 'response handling must not buy another generation');
             assert.equal(completed, scenario.valid, scenario.raw);
             assert.equal(saved, scenario.valid ? 1 : 0, scenario.raw);
+            assert.deepEqual(commits.splice(0), scenario.valid ? [{ chatId, start: 1, cutoff: targetFloor }] : []);
             if (scenario.valid) {
-                assert.equal(errors.length, 0);
+                assert.equal(errors.length, scenario.completionFailure ? 1 : 0);
                 assert.equal(getSummaryStore().lastSummarizedMesId, targetFloor);
                 assert.deepEqual(getSummaryStore().json.events.map(event => event.id), scenario.eventIds || ['evt-1', 'evt-2']);
                 const generated = getSummaryStore().json.events.slice(1);
@@ -158,7 +169,7 @@ export async function runSummaryResponseCheck() {
                     assert.equal(getSummaryStore().json.facts.find(fact => fact.s === '小红' && fact.p === '位置')?.o, scenario.factValue);
                 }
             } else {
-                if (scenario.saveFailure) assert.match(result.error.message, /simulated save failure/);
+                if (scenario.saveFailure) assert.equal(result.error.code, 'metadata_not_saved');
                 else assert.equal(result.error, scenario.error || 'parse');
                 assert.equal(errors.length, 1);
                 if (scenario.error === 'structure') assert.match(result.message, /events|arcUpdates|factUpdates|keywords/);
@@ -171,10 +182,17 @@ export async function runSummaryResponseCheck() {
                 assert.deepEqual(retry.newEventIds, ['evt-2']);
                 assert.equal(getSummaryStore().lastSummarizedMesId, targetFloor);
                 assert.equal(saved, 1);
+                assert.deepEqual(commits.splice(0), [{ chatId, start: 1, cutoff: targetFloor }]);
             }
+            // Repeating an already committed boundary neither generates nor schedules work.
+            const beforeRequests = requests;
+            await runSummaryGeneration(targetFloor, config);
+            assert.equal(requests, beforeRequests);
+            assert.deepEqual(commits, []);
         }
         return { passed: scenarios.length };
     } finally {
+        unregister();
         __setReplayContext(previousContext);
         __setChatMetadata(previousMetadata);
         globalThis.window.xiaobaixStreamingGeneration = previousStreamingModule;

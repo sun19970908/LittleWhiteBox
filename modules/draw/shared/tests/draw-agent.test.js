@@ -833,15 +833,17 @@ test('draw diagnostics use adapter-effective reasoning and isolate notices by re
     assert.deepEqual(getLastDrawAgentDiagnostic().notices, []);
 });
 
-test('draw agent validates missing direct credentials while allowing hosted providers without keys', async () => {
+test('draw agent allows both direct and hosted providers without keys', async () => {
     const loadAgentCore = async () => createFakeCore({ providerConfigs: [], tasks: [] });
-    await assert.rejects(() => resolveDrawAgentContext({
+    const direct = await resolveDrawAgentContext({
         dependencies: {
             getAgentSettings: async () => buildSettings('model', ''),
             requestHeadersProvider: () => ({}),
         },
         loadAgentCore,
-    }), (error) => error.code === 'API_KEY_MISSING');
+    });
+    assert.equal(direct.providerConfig.apiKey, '');
+    assert.equal(direct.providerConfig.model, 'model');
 
     const hostedSettings = buildSettings('hosted-model', '');
     hostedSettings.presets['主预设'].provider = 'sillytavern-google';

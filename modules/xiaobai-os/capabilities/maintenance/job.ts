@@ -12,11 +12,13 @@ export interface MaintenanceSessionRun {
     readonly session: MaintenanceSession;
     readonly automaticToken: number;
     invalid: boolean;
+    invalidReason?: string;
 }
 
 export interface MaintenanceQueuedJob {
     readonly mode: MaintenanceMode;
     readonly source: AcceptedTurnSource;
+    readonly preparedSessions: ReadonlyMap<string, () => MaintenanceSession | null | Promise<MaintenanceSession | null>>;
     readonly participantId: string | null;
     readonly epoch: number;
     readonly manualToken: number;

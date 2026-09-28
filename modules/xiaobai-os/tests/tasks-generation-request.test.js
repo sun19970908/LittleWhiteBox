@@ -142,7 +142,9 @@ function createHarness({
 test('generation reports failures without leaking provider details, writing data or retrying automatically', async () => {
     const secret = 'sensitive-key-and-response-body';
     for (const scenario of [
-        { loadConfig: () => ({}), errorCode: 'tasks_agent_not_configured' },
+        { loadConfig: () => ({ currentPresetName: 'tasks', presets: { tasks: { provider: 'openai-compatible',
+            modelConfigs: { 'openai-compatible': { model: '' } },
+        } } }), errorCode: 'tasks_agent_not_configured' },
         { loadConfig: () => { throw new Error(secret); }, errorCode: 'tasks_config_load_failed' },
         ...[401, 403, 400, 404, 413, 429, 503, 504, undefined].map(status => ({ status })),
     ]) {
@@ -238,6 +240,19 @@ test('board generation uses one tool-free provider round and commits only after 
     assert.deepEqual(state.requests[0].messages.map(message => message.role), ['system', 'system', 'user', 'user']);
     assert.equal(state.captureCount, 4);
     assert.deepEqual(state.reports, []);
+});
+
+test('task generation admits a direct model with no key but rejects a missing model', async () => {
+    for (const model of ['test-model', '']) {
+        const config = { currentPresetName: 'tasks', presets: { tasks: { provider: 'openai-compatible',
+            modelConfigs: { 'openai-compatible': { model, apiKey: '' } },
+        } } };
+        const { requests, state } = createHarness({ loadConfig: () => config });
+        if (model) assert.equal((await requests.refreshBoard()).changed, true);
+        else await assert.rejects(requests.refreshBoard());
+        assert.equal(state.openSessionCount, model ? 1 : 0);
+        assert.equal(state.writes, model ? 1 : 0);
+    }
 });
 
 test('a legacy disabled flag cannot block a configured Agent request', async () => {

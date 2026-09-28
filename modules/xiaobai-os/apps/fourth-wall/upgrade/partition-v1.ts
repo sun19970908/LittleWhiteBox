@@ -112,11 +112,10 @@ export function parseFourthWallChatStateV1(value: unknown): FourthWallChatStateV
 
 export function upgradeFourthWallV1(partition: FourthWallPartitionV1): FourthWallPartition {
     const old = parseFourthWallChatStateV1(partition.state);
-    return { schemaVersion: 2, state: parseFourthWallChatState({
+    return { schemaVersion: 3, state: parseFourthWallChatState({
         settings: {
             maxChatLayers: old.settings.maxChatLayers === 9999 ? 20 : old.settings.maxChatLayers,
             stream: old.settings.stream,
-            disableAssistantPrefill: old.settings.disableAssistantPrefill,
         },
         activeSessionId: old.activeSessionId,
         sessions: old.sessions.map(session => ({ ...session, memory: '', archivedCount: 0 })),

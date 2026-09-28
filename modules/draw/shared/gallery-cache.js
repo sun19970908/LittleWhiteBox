@@ -3,6 +3,7 @@
 
 import { getContext } from "../../../../../../extensions.js";
 import { saveBase64AsFile } from "../../../../../../utils.js";
+import { hasPreviewImage, DRAW_SLOT_COPY, PreviewStatus } from './image-record.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
@@ -32,6 +33,8 @@ const previewObjectUrlCache = new Map();
 const previewPreloadCache = new Map();
 const cacheChangeListeners = new Set();
 let cacheSyncChannel = null;
+
+function storageWriteError(tx) { return tx.error || new Error(DRAW_SLOT_COPY.storageWriteFailed); }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 图片显示 URL
@@ -218,7 +221,7 @@ export async function preloadPreviewDisplayUrl(preview = {}) {
 
 export async function warmSlotPreviewNeighbors(slotId, currentIndex = 0, range = 1) {
     const previews = await getPreviewsBySlot(slotId).catch(() => []);
-    const successPreviews = previews.filter(p => p.status !== 'failed' && (p.base64 || p.savedUrl));
+    const successPreviews = previews.filter(hasPreviewImage);
     if (successPreviews.length <= 1) return;
 
     const start = Math.max(0, currentIndex - range);
@@ -370,24 +373,24 @@ function isDbValid() {
 
 export async function openDB() {
     if (dbOpening) return dbOpening;
-    
+
     if (isDbValid() && db.objectStoreNames.contains(DB_SELECTIONS_STORE)) {
         return db;
     }
-    
+
     if (db) {
         try { db.close(); } catch {}
         db = null;
     }
-    
+
     dbOpening = new Promise((resolve, reject) => {
         const request = indexedDB.open(DB_NAME, DB_VERSION);
-        
+
         request.onerror = () => {
             dbOpening = null;
             reject(request.error);
         };
-        
+
         request.onsuccess = () => {
             db = request.result;
             db.onclose = () => { db = null; };
@@ -395,7 +398,7 @@ export async function openDB() {
             dbOpening = null;
             resolve(db);
         };
-        
+
         request.onupgradeneeded = (e) => {
             const database = e.target.result;
             if (!database.objectStoreNames.contains(DB_STORE)) {
@@ -414,7 +417,7 @@ export async function openDB() {
             }
         };
     });
-    
+
     return dbOpening;
 }
 
@@ -433,7 +436,7 @@ export async function setSlotSelection(slotId, imgId) {
                 publishCacheChange([slotId]);
                 resolve();
             };
-            tx.onerror = () => reject(tx.error);
+            tx.onerror = tx.onabort = () => reject(storageWriteError(tx));
         } catch (e) {
             reject(e);
         }
@@ -589,7 +592,7 @@ export async function storePreview(opts) {
         tags,
         positive,
         savedUrl = null,
-        status = 'success',
+        status = PreviewStatus.SUCCESS,
         errorType = null,
         errorMessage = null,
         characterPrompts = null,
@@ -607,7 +610,7 @@ export async function storePreview(opts) {
     const resolvedChatId = String(chatId || ctx.chatId || (ctx.characterId || 'unknown'));
     const resolvedCharacterName = String(characterName || getChatCharacterName());
     const resolvedSlotId = slotId || imgId;
-    
+
     return new Promise((resolve, reject) => {
         try {
             const tx = database.transaction(DB_STORE, 'readwrite');
@@ -638,7 +641,7 @@ export async function storePreview(opts) {
                 publishCacheChange([resolvedSlotId]);
                 resolve();
             };
-            tx.onerror = () => reject(tx.error);
+            tx.onerror = tx.onabort = () => reject(storageWriteError(tx));
         } catch (e) {
             reject(e);
         }
@@ -663,8 +666,8 @@ export async function storeFailedPlaceholder(opts) {
         status: 'failed',
         errorType: opts.errorType,
         errorMessage: opts.errorMessage,
-        characterPrompts: opts.characterPrompts || null,
-        negativePrompt: opts.negativePrompt || null,
+        characterPrompts: opts.characterPrompts ?? null,
+        negativePrompt: opts.negativePrompt ?? null,
     });
 }
 
@@ -685,19 +688,19 @@ export async function getPreview(imgId) {
 export async function getPreviewsBySlot(slotId) {
     const cached = getCachedPreviews(slotId);
     if (cached) return cached;
-    
+
     const database = await openDB();
     return new Promise((resolve, reject) => {
         try {
             const tx = database.transaction(DB_STORE, 'readonly');
             const store = tx.objectStore(DB_STORE);
-            
+
             const processResults = (results) => {
                 results.sort((a, b) => b.timestamp - a.timestamp);
                 setCachedPreviews(slotId, results);
                 resolve(results);
             };
-            
+
             if (store.indexNames.contains('slotId')) {
                 const request = store.index('slotId').getAll(slotId);
                 request.onsuccess = () => {
@@ -740,15 +743,18 @@ export async function getPreviewsBySlot(slotId) {
 
 export async function getDisplayPreviewForSlot(slotId) {
     const previews = await getPreviewsBySlot(slotId);
-    if (!previews.length) return { preview: null, historyCount: 0, hasData: false, isFailed: false };
-    
-    const successPreviews = previews.filter(p => p.status !== 'failed' && (p.base64 || p.savedUrl));
-    const failedPreviews = previews.filter(p => p.status === 'failed' || (!p.base64 && !p.savedUrl));
+    const selectedImgId = await getSlotSelection(slotId);
+    if (!previews.length) return { preview: null, selectedImgId, historyCount: 0, hasData: false, isFailed: false };
+
+    const successPreviews = previews.filter(hasPreviewImage);
+    const failedPreviews = previews.filter(p => !hasPreviewImage(p));
     const asFailure = (preview) => ({
         preview,
+        selectedImgId,
         historyCount: successPreviews.length,
         hasData: false,
         isFailed: true,
+        isPending: preview?.status === PreviewStatus.PENDING || preview?.status === PreviewStatus.UNKNOWN,
         failedInfo: {
             tags: preview?.tags || '',
             positive: preview?.positive || '',
@@ -756,22 +762,56 @@ export async function getDisplayPreviewForSlot(slotId) {
             errorMessage: preview?.errorMessage,
         },
     });
-    
+
     if (successPreviews.length === 0) {
         return asFailure(failedPreviews[0]);
     }
-    
-    const selectedImgId = await getSlotSelection(slotId);
+
     if (selectedImgId) {
         const selectedFailure = failedPreviews.find(p => p.imgId === selectedImgId);
         if (selectedFailure) return asFailure(selectedFailure);
         const currentIndex = successPreviews.findIndex(p => p.imgId === selectedImgId);
         if (currentIndex >= 0) {
-            return { preview: successPreviews[currentIndex], currentIndex, historyCount: successPreviews.length, hasData: true, isFailed: false };
+            return { preview: successPreviews[currentIndex], selectedImgId, currentIndex, historyCount: successPreviews.length, hasData: true, isFailed: false };
         }
     }
-    
-    return { preview: successPreviews[0], currentIndex: 0, historyCount: successPreviews.length, hasData: true, isFailed: false };
+
+    return { preview: successPreviews[0], selectedImgId, currentIndex: 0, historyCount: successPreviews.length, hasData: true, isFailed: false };
+}
+
+// All card editors update the selected record, including interrupted attempts.
+// This transaction preserves fields unrelated to the edit and never reports a
+// successful save after an aborted transaction.
+export async function updatePreviewRecord(imgId, changes) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction(DB_STORE, 'readwrite');
+        const store = tx.objectStore(DB_STORE);
+        let updated;
+        let failure;
+        const request = store.get(imgId);
+        request.onsuccess = () => {
+            if (!request.result) {
+                failure = new Error(DRAW_SLOT_COPY.missingRecord);
+                tx.abort();
+                return;
+            }
+            updated = { ...request.result, ...changes, imgId: request.result.imgId, slotId: request.result.slotId };
+            store.put(updated);
+        };
+        tx.oncomplete = () => {
+            invalidateCache(updated.slotId);
+            publishCacheChange([updated.slotId]);
+            resolve(updated);
+        };
+        tx.onerror = tx.onabort = () => reject(failure || storageWriteError(tx));
+    });
+}
+
+export async function getCardPreview({ imgId, slotId }) {
+    const record = imgId ? await getPreview(imgId) : null;
+    if (record?.slotId === slotId) return record;
+    return (await getDisplayPreviewForSlot(slotId)).preview;
 }
 
 export async function getLatestPreviewForSlot(slotId) {
@@ -783,18 +823,25 @@ export async function deletePreview(imgId) {
     const database = await openDB();
     const preview = await getPreview(imgId);
     const slotId = preview?.slotId;
-    
+
     return new Promise((resolve, reject) => {
         try {
-            const tx = database.transaction(DB_STORE, 'readwrite');
+            const tx = database.transaction([DB_STORE, DB_SELECTIONS_STORE], 'readwrite');
             tx.objectStore(DB_STORE).delete(imgId);
+            if (slotId) {
+                const selections = tx.objectStore(DB_SELECTIONS_STORE);
+                const selected = selections.get(slotId);
+                selected.onsuccess = () => {
+                    if (selected.result?.selectedImgId === imgId) selections.delete(slotId);
+                };
+            }
             tx.oncomplete = () => {
                 revokePreviewObjectUrl(imgId);
                 if (slotId) invalidateCache(slotId);
                 publishCacheChange(slotId ? [slotId] : []);
                 resolve();
             };
-            tx.onerror = () => reject(tx.error);
+            tx.onerror = tx.onabort = () => reject(storageWriteError(tx));
         } catch (e) {
             reject(e);
         }
@@ -813,10 +860,10 @@ export async function updatePreviewSavedUrl(imgId, savedUrl) {
     const database = await openDB();
     const preview = await getPreview(imgId);
     if (!preview) return;
-    
+
     preview.savedUrl = savedUrl;
     preview.base64 = null;
-    
+
     return new Promise((resolve, reject) => {
         try {
             const tx = database.transaction(DB_STORE, 'readwrite');
@@ -854,7 +901,7 @@ export async function getCacheStats() {
             const store = tx.objectStore(DB_STORE);
             const countReq = store.count();
             let totalSize = 0, successCount = 0, failedCount = 0;
-            
+
             store.openCursor().onsuccess = (e) => {
                 const cursor = e.target.result;
                 if (cursor) { 
@@ -884,7 +931,7 @@ export async function clearExpiredCache(cacheDays = 3) {
     const cutoff = Date.now() - cacheDays * 24 * 60 * 60 * 1000;
     const database = await openDB();
     let cleaned = 0;
-    
+
     return new Promise((resolve) => {
         try {
             const tx = database.transaction(DB_STORE, 'readwrite');
@@ -1066,14 +1113,14 @@ function createGalleryOverlay() {
     if (galleryOverlayCreated) return;
     galleryOverlayCreated = true;
     ensureGalleryStyles();
-    
+
     const overlay = document.createElement('div');
     overlay.id = 'nd-gallery-overlay';
     // Template-only UI markup.
     // eslint-disable-next-line no-unsanitized/property
     overlay.innerHTML = `<button class="nd-gallery-close" id="nd-gallery-close">✕</button><div class="nd-gallery-main"><button class="nd-gallery-nav" id="nd-gallery-prev">‹</button><div class="nd-gallery-img-wrap"><img class="nd-gallery-img" id="nd-gallery-img" src="" alt=""><div class="nd-gallery-saved-badge" id="nd-gallery-saved-badge" style="display:none">已保存</div></div><button class="nd-gallery-nav" id="nd-gallery-next">›</button></div><div class="nd-gallery-thumbs" id="nd-gallery-thumbs"></div><div class="nd-gallery-actions" id="nd-gallery-actions"><button class="nd-gallery-btn primary" id="nd-gallery-use">使用此图</button><button class="nd-gallery-btn" id="nd-gallery-save">💾 保存到服务器</button><button class="nd-gallery-btn danger" id="nd-gallery-delete">🗑️ 删除</button></div><div class="nd-gallery-info" id="nd-gallery-info"></div>`;
     document.body.appendChild(overlay);
-    
+
     document.getElementById('nd-gallery-close').addEventListener('click', closeGallery);
     document.getElementById('nd-gallery-prev').addEventListener('click', () => navigateGallery(-1));
     document.getElementById('nd-gallery-next').addEventListener('click', () => navigateGallery(1));
@@ -1085,22 +1132,22 @@ function createGalleryOverlay() {
 
 export async function openGallery(slotId, messageId, callbacks = {}) {
     createGalleryOverlay();
-    
+
     const previews = await getPreviewsBySlot(slotId);
-    const validPreviews = previews.filter(p => p.status !== 'failed' && (p.base64 || p.savedUrl));
-    
+    const validPreviews = previews.filter(hasPreviewImage);
+
     if (!validPreviews.length) {
         showToast('没有找到图片历史', 'error');
         return;
     }
-    
+
     const selectedImgId = await getSlotSelection(slotId);
     let startIndex = 0;
     if (selectedImgId) {
         const idx = validPreviews.findIndex(p => p.imgId === selectedImgId);
         if (idx >= 0) startIndex = idx;
     }
-    
+
     currentGalleryData = { slotId, messageId, previews: validPreviews, currentIndex: startIndex, callbacks };
     renderGalleryThumbs();
     renderGallery();
@@ -1163,7 +1210,7 @@ function renderGallery() {
 
     document.getElementById('nd-gallery-prev').disabled = currentIndex >= previews.length - 1;
     document.getElementById('nd-gallery-next').disabled = currentIndex <= 0;
-    
+
     const saveBtn = document.getElementById('nd-gallery-save');
     if (current.savedUrl) {
         saveBtn.textContent = '✓ 已保存';
@@ -1172,7 +1219,7 @@ function renderGallery() {
         saveBtn.textContent = '💾 保存到服务器';
         saveBtn.disabled = false;
     }
-    
+
     const displayVersion = previews.length - currentIndex;
     const date = new Date(current.timestamp).toLocaleString();
     document.getElementById('nd-gallery-info').textContent = `版本 ${displayVersion} / ${previews.length} · ${date}`;
@@ -1189,11 +1236,11 @@ function navigateGallery(delta) {
 
 async function useCurrentGalleryImage() {
     if (!currentGalleryData) return;
-    
+
     const { slotId, messageId, previews, currentIndex, callbacks } = currentGalleryData;
     const selected = previews[currentIndex];
     if (!selected) return;
-    
+
     await setSlotSelection(slotId, selected.imgId);
     if (callbacks.onUse) callbacks.onUse(slotId, messageId, selected, previews.length);
     closeGallery();
@@ -1202,11 +1249,11 @@ async function useCurrentGalleryImage() {
 
 async function saveCurrentGalleryImage() {
     if (!currentGalleryData) return;
-    
+
     const { slotId, previews, currentIndex, callbacks } = currentGalleryData;
     const current = previews[currentIndex];
     if (!current || current.savedUrl) return;
-    
+
     try {
         const charName = current.characterName || getChatCharacterName();
         const image = getBase64ImagePayload(current.base64);
@@ -1226,24 +1273,24 @@ async function saveCurrentGalleryImage() {
 
 async function deleteCurrentGalleryImage() {
     if (!currentGalleryData) return;
-    
+
     const { slotId, messageId, previews, currentIndex, callbacks } = currentGalleryData;
     const current = previews[currentIndex];
     if (!current) return;
-    
+
     const msg = current.savedUrl ? '确定删除这条记录吗？服务器上的图片文件不会被删除。' : '确定删除这张图片吗？';
     if (!confirm(msg)) return;
-    
+
     try {
         await deletePreview(current.imgId);
-        
+
         const selectedId = await getSlotSelection(slotId);
         if (selectedId === current.imgId) {
             await clearSlotSelection(slotId);
         }
-        
+
         previews.splice(currentIndex, 1);
-        
+
         if (previews.length === 0) {
             closeGallery();
             if (callbacks.onBecameEmpty) {
@@ -1273,11 +1320,11 @@ export function destroyGalleryCache() {
     closeGallery();
     invalidateCache();
     clearPreviewObjectUrls();
-    
+
     document.getElementById('nd-gallery-overlay')?.remove();
     document.getElementById('nd-gallery-styles')?.remove();
     galleryOverlayCreated = false;
-    
+
     if (db) {
         try { db.close(); } catch {}
         db = null;

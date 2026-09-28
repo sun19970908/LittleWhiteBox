@@ -53,9 +53,6 @@ function normalizeChatSettings(
     if (Object.hasOwn(patch, 'stream')) {
         next.stream = patch.stream === true;
     }
-    if (Object.hasOwn(patch, 'disableAssistantPrefill')) {
-        next.disableAssistantPrefill = patch.disableAssistantPrefill === true;
-    }
     if (!Number.isInteger(next.maxChatLayers) || next.maxChatLayers < 1 || next.maxChatLayers > 9999) {
         throw new FourthWallStateError('INVALID_SETTINGS', '普通聊天层数必须是 1 到 9999 的整数');
     }
@@ -257,12 +254,12 @@ export function validateFourthWallChatState(
     const settings = requirePersistedRecord(state.settings, `${path}.settings`);
     requireExactKeys(
         settings,
-        ['maxChatLayers', 'stream', 'disableAssistantPrefill'],
+        ['maxChatLayers', 'stream'],
         `${path}.settings`,
     );
     requirePersistedInteger(settings.maxChatLayers, `${path}.settings.maxChatLayers`, 1, 9999);
-    if (typeof settings.stream !== 'boolean' || typeof settings.disableAssistantPrefill !== 'boolean') {
-        throw new FourthWallStateError('INVALID_CURRENT_DATA', `${path}.settings flags must be boolean`);
+    if (typeof settings.stream !== 'boolean') {
+        throw new FourthWallStateError('INVALID_CURRENT_DATA', `${path}.settings.stream must be boolean`);
     }
     if (!Array.isArray(state.sessions) || state.sessions.length === 0) {
         throw new FourthWallStateError('INVALID_CURRENT_DATA', `${path}.sessions must not be empty`);

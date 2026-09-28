@@ -19,6 +19,8 @@ export function taskFailureMessage(reason: string): string {
         case 'save-unconfirmed': return '还不确定是否保存成功，请先检查保存，不要重新生成。';
         case 'save-conflict': return '服务器上的存档与当前内容不同，请先使用已保存版本，不要重新生成。';
         case 'save-failed': return '这次没能保存，原来的任务还在。请检查连接后重试。';
+        case 'task-version-changed': return '任务在检查期间已变化，请根据最新进展重新检查。';
+        case 'storage-unavailable': return '任务数据暂时无法读取，请检查保存后重新检查。';
         default: return '操作没能完成，请重试；如果一直失败，可查看控制台报错。';
     }
 }

@@ -12,6 +12,8 @@ import { extension_settings } from '../../../../../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../../../../../script.js';
 import { getTextFilterRules } from '../../data/config.js';
 import { stripMarkupTags } from './markup-text.js';
+import { applyTextFilterRules } from '../../data/text-filter-rules.js';
+export { applyTextFilterRules } from '../../data/text-filter-rules.js';
 
 const EXT_ID = "LittleWhiteBox";
 const FILTER_BUILTIN_PLACEHOLDERS_KEY = "filterBuiltinPlaceholders";
@@ -24,13 +26,6 @@ const DEFAULT_BUILTIN_TEXT_FILTERS = [
     '\\[tts:[^\\]]*\\]',
     '<state>[\\s\\S]*?</state>',
 ];
-
-/**
- * 转义正则特殊字符（用户规则用）
- */
-function escapeRegex(str) {
-    return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
 
 /**
  * 把字符串数组编译为 RegExp 数组，flags 固定 'gi'。
@@ -60,49 +55,6 @@ function applyBuiltinPlaceholderFilters(text) {
     let result = String(text);
     for (const re of regexes) result = result.replace(re, '');
     return result;
-}
-
-/**
- * 应用过滤规则
- * - start + end：删除 start...end（含边界）
- * - start 空 + end：从开头删到 end（含）
- * - start + end 空：从 start 删到结尾
- * - 两者都空：跳过
- */
-export function applyTextFilterRules(text, rules) {
-    if (!text || !rules?.length) return text;
-
-    let result = text;
-
-    for (const rule of rules) {
-        const start = rule.start ?? '';
-        const end = rule.end ?? '';
-
-        if (!start && !end) continue;
-
-        if (start && end) {
-            // 标准区间：删除 start...end（含边界），非贪婪
-            const regex = new RegExp(
-                escapeRegex(start) + '[\\s\\S]*?' + escapeRegex(end),
-                'gi'
-            );
-            result = result.replace(regex, '');
-        } else if (start && !end) {
-            // 从 start 到结尾
-            const idx = result.toLowerCase().indexOf(start.toLowerCase());
-            if (idx !== -1) {
-                result = result.slice(0, idx);
-            }
-        } else if (!start && end) {
-            // 从开头到 end（含）
-            const idx = result.toLowerCase().indexOf(end.toLowerCase());
-            if (idx !== -1) {
-                result = result.slice(idx + end.length);
-            }
-        }
-    }
-
-    return result.trim();
 }
 
 /**

@@ -10,7 +10,7 @@ import {
 
 const user = (mes, extra = {}) => ({ is_user: true, is_system: false, mes, ...extra });
 const assistant = (mes, swipe_id = null) => ({ is_user: false, is_system: false, mes, swipe_id });
-const system = mes => ({ is_user: false, is_system: true, mes });
+const system = mes => ({ is_user: false, is_system: true, mes, extra: { type: 'generic' } });
 const surface = messages => ({
     identityKey: 'character:1:chat',
     messages,
@@ -23,6 +23,7 @@ const snapshot = (index, role, text, swipeId = null) => ({
     text,
     swipeId,
     speakerName: role === 'user' ? 'Alice' : 'Narrator',
+    sendDate: null,
 });
 
 test('automatic capture uses U2 only as the accepted U1/A1 boundary', () => {
@@ -90,6 +91,17 @@ test('assistantCount includes empty non-system Assistant messages outside the ac
     const source = captureAutomaticAcceptedTurn(chat, 3);
     assert.deepEqual(source?.messages, [snapshot(1, 'user', 'U1'), snapshot(2, 'assistant', 'A1')]);
     assert.equal(source?.assistantCount, 2);
+});
+
+test('hiding accepted story messages does not change their identity or invalidate the evidence', () => {
+    const messages = [user('U1'), assistant('A1'), user('U2')];
+    const chat = surface(messages);
+    const captured = captureAutomaticAcceptedTurn(chat, 2);
+    assert.ok(captured);
+    messages[0].is_system = true;
+    messages[1].is_system = true;
+    assert.equal(matchesAcceptedTurnSource(chat, captured), true);
+    assert.equal(captureAutomaticAcceptedTurn(chat, 2)?.assistantCount, 1);
 });
 
 test('adapter aliases are normalized without trimming or coercing captured text', () => {
@@ -166,10 +178,7 @@ test('manual capture returns the latest complete tail turn and guards active gen
         ok: false,
         reason: 'no-complete-assistant',
     });
-    assert.deepEqual(captureManualAcceptedTurn(surface([assistant('greeting')]), { generationActive: false }), {
-        ok: false,
-        reason: 'no-complete-assistant',
-    });
+    assert.equal(captureManualAcceptedTurn(surface([assistant('greeting')]), { generationActive: false }).ok, true);
 });
 
 test('rebuild captures only the latest 80 usable non-system messages by default', () => {

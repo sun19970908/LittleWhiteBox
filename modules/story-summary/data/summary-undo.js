@@ -1,8 +1,6 @@
-const UNDO_VERSION = 1;
+import { restoreMaintenance, sameMemory as sameJson } from '../maintenance/domain.js';
 
-export function isLegacySummaryHistoryEntry(entry) {
-    return entry?.format == null && entry?.undo == null && entry?.previousEndMesId == null;
-}
+const UNDO_VERSION = 1;
 
 function isPlainObject(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
@@ -10,10 +8,6 @@ function isPlainObject(value) {
 
 function clone(value) {
     return structuredClone(value);
-}
-
-function sameJson(left, right) {
-    return JSON.stringify(left) === JSON.stringify(right);
 }
 
 function normalizedName(value) {
@@ -141,6 +135,20 @@ const CHANGE_FIELDS = [
     ['arcChanges', arcKey],
     ['factChanges', factKey],
 ];
+
+/** Read-only projection of the generation delta; maintenance must not infer changes from creation dates. */
+export function summaryBatchChanges(undo) {
+    if (!undo) return [];
+    const collections = ['keywords', 'events', 'characters', 'arcs', 'facts'];
+    return SNAPSHOT_PAIRS.flatMap(([before, after], index) => {
+        const [field] = CHANGE_FIELDS[index - 1] || [];
+        const changes = field && undo[field];
+        return changes ? changes.map(change => ({ collection: collections[index], key: change.key,
+            before: change.previous, after: change.generated }))
+            : Object.hasOwn(undo, before) ? [{ collection: collections[index],
+                before: undo[before], after: undo[after] }] : [];
+    });
+}
 
 function normalizeChanges(value, getKey) {
     if (!Array.isArray(value)) return null;
@@ -306,13 +314,12 @@ export function applySummaryUndo(json = {}, rawUndo) {
 function failedResult(json, currentEndMesId) {
     return {
         json: clone(json || {}),
-        crossedLegacyHistory: false,
         historyDiscontinuous: true,
         restoredEndMesId: currentEndMesId,
     };
 }
 
-export function applyExactSummaryHistoryUndo(json, history, targetEndMesId, currentEndMesId) {
+export function applyExactSummaryHistoryUndo(json, history, targetEndMesId, currentEndMesId, atoms = []) {
     const entriesByEnd = new Map();
     for (const entry of Array.isArray(history) ? history : []) {
         const endMesId = Number(entry?.endMesId);
@@ -325,16 +332,11 @@ export function applyExactSummaryHistoryUndo(json, history, targetEndMesId, curr
     }
 
     const rollbackEntries = [];
-    let crossedLegacyHistory = false;
     while (expectedEndMesId > targetEndMesId) {
         const entry = entriesByEnd.get(expectedEndMesId);
         if (!entry) return failedResult(json, currentEndMesId);
-        if (isLegacySummaryHistoryEntry(entry)) {
-            crossedLegacyHistory = true;
-            break;
-        }
-
-        const undo = entry.format === 1 ? normalizeSummaryUndo(entry.undo) : null;
+        if (entry.kind === 'baseline') return { ...failedResult(json, currentEndMesId), baselineCrossed: true };
+        const undo = entry.format === 2 && entry.kind === 'batch' ? normalizeSummaryUndo(entry.undo) : null;
         const previousEndMesId = Number(entry.previousEndMesId);
         if (
             !undo
@@ -342,19 +344,27 @@ export function applyExactSummaryHistoryUndo(json, history, targetEndMesId, curr
             || previousEndMesId >= expectedEndMesId
             || previousEndMesId < targetEndMesId
         ) return failedResult(json, currentEndMesId);
-        rollbackEntries.push({ undo, previousEndMesId });
+        rollbackEntries.push({ undo, previousEndMesId, maintenance: entry.maintenance || [] });
         expectedEndMesId = previousEndMesId;
     }
 
     let restored = clone(json || {});
+    let restoredAtoms = clone(atoms);
     for (const entry of rollbackEntries) {
-        const next = applySummaryUndo(restored, entry.undo);
+        try {
+            const memory = restoreMaintenance({ json: restored, atoms: restoredAtoms }, entry.maintenance);
+            restored = memory.json;
+            restoredAtoms = memory.atoms;
+        } catch {
+            return failedResult(json, currentEndMesId);
+        }
+        const next = entry.undo ? applySummaryUndo(restored, entry.undo) : restored;
         if (!next) return failedResult(json, currentEndMesId);
         restored = next;
     }
     return {
         json: restored,
-        crossedLegacyHistory,
+        atoms: restoredAtoms,
         historyDiscontinuous: false,
         restoredEndMesId: expectedEndMesId,
     };

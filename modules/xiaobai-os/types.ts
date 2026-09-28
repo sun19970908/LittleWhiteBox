@@ -18,6 +18,7 @@ export type XiaobaiOsChatIdentityInput = XiaobaiOsChatIdentity | string;
 export interface XiaobaiOsAppDescriptor {
     id: string;
     name: string;
+    description: string;
     accent: string;
 }
 

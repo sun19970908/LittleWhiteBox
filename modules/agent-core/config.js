@@ -4,6 +4,7 @@ import {
     normalizeTavilyBaseUrl,
 } from './tavily-search.js';
 import { normalizeReasoningConfig } from './reasoning-config.js';
+import { normalizeAgentApiKey } from './provider-auth.js';
 
 export const DEFAULT_PROVIDER = 'openai-compatible';
 export const DEFAULT_PRESET_NAME = '默认';
@@ -135,7 +136,7 @@ export function normalizeModelConfigs(modelConfigs = {}) {
         next[provider] = {
             baseUrl: String(source.baseUrl ?? defaults.baseUrl ?? ''),
             model: String(source.model ?? defaults.model ?? ''),
-            apiKey: String(source.apiKey ?? defaults.apiKey ?? ''),
+            apiKey: normalizeAgentApiKey(source.apiKey ?? defaults.apiKey),
             temperature: source.temperature ?? defaults.temperature,
             maxTokens: normalizeMaxTokens(source.maxTokens, defaults.maxTokens),
             sendTemperature: typeof source.sendTemperature === 'boolean'

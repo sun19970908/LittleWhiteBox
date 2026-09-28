@@ -17,11 +17,19 @@ export interface PromptContextMessage {
 export interface PromptContextSnapshot {
     readonly player: { readonly displayName: string; readonly persona: string };
     readonly characters: readonly PromptContextCharacter[];
+    readonly exampleDialogue?: string;
+    readonly characterNote?: string;
     readonly recentMessages: readonly PromptContextMessage[];
     readonly worldInfo: {
         readonly before: string;
         readonly after: string;
         readonly depth: readonly string[];
+        readonly extras?: {
+            readonly exampleBefore: readonly string[];
+            readonly exampleAfter: readonly string[];
+            readonly authorNoteBefore: readonly string[];
+            readonly authorNoteAfter: readonly string[];
+        };
     };
     readonly storyEvents: string;
 }
@@ -29,6 +37,8 @@ export interface PromptContextSnapshot {
 export interface PromptContextInput {
     readonly player?: unknown;
     readonly characters?: unknown;
+    readonly exampleDialogue?: unknown;
+    readonly characterNote?: unknown;
     readonly recentMessages?: unknown;
     readonly worldInfo?: unknown;
     readonly storyEvents?: unknown;

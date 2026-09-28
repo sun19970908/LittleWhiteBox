@@ -1,6 +1,11 @@
 import { ACTION_CHECK_REQUEST_FIELDS } from './action-check.js';
 
-export const COC7_DIFFICULTIES = { regular: 1, hard: 2, extreme: 5 } as const;
+export const COC7_DIFFICULTIES = {
+    easy: { kind: 'bonus', amount: 20, cap: 95 },
+    regular: { kind: 'divisor', divisor: 1 },
+    hard: { kind: 'divisor', divisor: 2 },
+    extreme: { kind: 'divisor', divisor: 5 },
+} as const;
 export type Coc7Difficulty = keyof typeof COC7_DIFFICULTIES;
 export interface Coc7Request { action: string; stat: string; difficulty: Coc7Difficulty }
 
@@ -8,7 +13,7 @@ export interface Coc7Request { action: string; stat: string; difficulty: Coc7Dif
 export const COC7_REQUEST_FIELDS = {
     action: { type: 'string', maxLength: ACTION_CHECK_REQUEST_FIELDS.action.maxLength, description: 'The attempt and objective.' },
     stat: { type: 'string', maxLength: ACTION_CHECK_REQUEST_FIELDS.stat.maxLength, description: 'Capability ID from the list below.' },
-    difficulty: { type: 'enum', values: Object.keys(COC7_DIFFICULTIES), description: 'Required success degree.' },
+    difficulty: { type: 'enum', values: Object.keys(COC7_DIFFICULTIES), description: 'Difficulty of this specific objective.' },
 } as const;
 
 export function parseCoc7Request(value: unknown): Coc7Request {

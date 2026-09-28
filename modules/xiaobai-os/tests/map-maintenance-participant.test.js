@@ -12,6 +12,7 @@ import {
 } from '../domains/map/invariants.js';
 import { buildMapPromptBlock } from '../domains/map/projection.js';
 import { createMapKernelHarness } from './map-kernel-harness.js';
+import { mapAtlasFixture } from './fixtures/map-atlas.js';
 
 function acceptedSource() {
     return {
@@ -52,7 +53,6 @@ const indoorFixture = {
 const outdoorFixture = {
     scene: 'Forest Road',
     playerHere: true,
-    scale: 'outdoor',
     viewBox: [0, 0, 800, 600],
     elements: [
         { id: 'ground', cat: 'terrain', shape: 'circle', geo: { at: [400, 300], radius: 150 }, material: 'grass' },
@@ -80,6 +80,9 @@ test('Map injects the current atlas as data and keeps captured player data out o
     assert.match(empty.dataMessages[0].content, /"locations":\s*\[\]/u);
     assert.doesNotMatch(empty.prompt, /Alice/);
 
+    await empty.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
+        locations: mapAtlasFixture([{ key: 'Inn Room' }]).atlas.locations,
+    });
     await empty.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture);
     await empty.commit(() => true);
 
@@ -100,7 +103,7 @@ test('Map falls back to an atlas summary when the full document exceeds the inje
     const seed = await harness.participant.createSession(acceptedSource(), 'manual');
     const brief = 'LONG_BRIEF_MARKER '.repeat(24);
     const result = await seed.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
-        locations: Array.from({ length: 60 }, (_, index) => ({ key: `place-${index}`, name: `Place ${index}`, brief })),
+        locations: Array.from({ length: 60 }, (_, index) => ({ key: `place-${index}`, name: `Place ${index}`, scale: 'region', brief })),
         actors: [{ actorKey: 'player', locationKey: 'place-0' }],
     });
     assert.equal(result.status, 'updated');
@@ -117,6 +120,9 @@ test('Map falls back to an atlas summary when the full document exceeds the inje
 test('indoor and outdoor first-map fixtures create observable scenes and use the captured player identity', async () => {
     const harness = createHarness();
     const rebuild = await harness.participant.createSession(acceptedSource(), 'rebuild');
+    await rebuild.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
+        locations: mapAtlasFixture([{ key: 'Inn Room' }]).atlas.locations,
+    });
     const indoor = await rebuild.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture);
     assert.equal(indoor.status, 'updated');
     assert.equal(indoor.skipped.length, 0);
@@ -132,6 +138,9 @@ test('indoor and outdoor first-map fixtures create observable scenes and use the
     });
 
     const incremental = await harness.participant.createSession(acceptedSource(), 'manual');
+    await incremental.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
+        locations: [{ key: 'Forest Road', name: 'Forest Road', parent: 'fixture-region', scale: 'outdoor' }],
+    });
     const outdoor = await incremental.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, outdoorFixture);
     assert.equal(outdoor.status, 'updated');
     await incremental.commit(() => true);
@@ -142,17 +151,17 @@ test('indoor and outdoor first-map fixtures create observable scenes and use the
     assert.equal(second.scenes['Forest Road'].elements.some(element => element.actorKey === 'player'), true);
 });
 
-test('scene intent tolerates inference and pollution, saves valid siblings, and clears a skipped id after repair', async () => {
-    const harness = createHarness();
+test('scene intent infers omitted shapes, saves valid siblings, and clears a skipped id after repair', async () => {
+    const harness = createHarness(mapAtlasFixture([{ key: 'Courtyard' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     const mixed = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Courtyard',
         playerHere: true,
         elements: [
-            { id: 'yard', cat: 'ground', geo: { center: [100, 80], size: [160, 100], points: [], curve: [], radius: 0 } },
-            { id: 'brook', cat: 'water', shape: 'curve', geo: { curve: [[0, 50], [200, 60]], points: [] } },
+            { id: 'yard', cat: 'ground', geo: { center: [100, 80], size: [160, 100] } },
+            { id: 'brook', cat: 'water', shape: 'curve', geo: { curve: [[0, 50], [200, 60]] } },
             { id: 'guide', cat: 'actor', shape: 'icon', geo: { at: [80, 70], icon: 'actor' }, label: 'Guide' },
-            { id: 'bench', cat: 'furniture', actorKey: 'not-an-actor', shape: 'rect', geo: { center: [120, 90], size: [30, 8] }, icon: 'chair' },
+            { id: 'bench', cat: 'furniture', shape: 'rect', geo: { center: [120, 90], size: [30, 8] }, icon: 'chair' },
             { id: 'trail', cat: 'road', geo: { center: [100, 80], size: [160, 20], points: [[0, 80], [200, 80]] } },
             { id: 'watcher', cat: 'actor', geo: { at: [140, 70], radius: 8 }, label: 'Watcher' },
             { id: 'caption', cat: 'label', geo: { at: [100, 40] }, label: 'Courtyard' },
@@ -162,7 +171,6 @@ test('scene intent tolerates inference and pollution, saves valid siblings, and 
 
     assert.equal(mixed.status, 'partial');
     assert.deepEqual(mixed.skipped.map(item => item.id), ['broken']);
-    assert.match(mixed.warnings.join('\n'), /Inferred shape|terrain category alias|non-actor/);
     assert.equal(session.getResult().status, 'partial');
 
     const repaired = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
@@ -187,11 +195,10 @@ test('scene intent tolerates inference and pollution, saves valid siblings, and 
 });
 
 test('removing a skipped element resolves that entity failure across scene aliases', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'failure-room', name: 'Failure Room' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     const mixed = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'failure-room',
-        title: 'Failure Room',
         elements: [
             { id: 'valid', cat: 'marker', shape: 'icon', geo: { at: [20, 20] } },
             { id: 'bad-a', cat: 'wall', shape: 'rect', geo: { size: [20, 10] } },
@@ -217,7 +224,7 @@ test('scene failure identity falls back to a stable location key before scene cr
     const harness = createHarness();
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
-        locations: [{ key: 'stable-room', name: 'Display Room' }],
+        locations: mapAtlasFixture([{ key: 'stable-room', name: 'Display Room' }]).atlas.locations,
     });
     const failed = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Display Room',
@@ -233,7 +240,7 @@ test('scene failure identity falls back to a stable location key before scene cr
 });
 
 test('valid retries clear unidentified Scene and Atlas item failures as call failures', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Scene Retry' }]));
     const sceneSession = await harness.participant.createSession(acceptedSource(), 'manual');
     const sceneMixed = await sceneSession.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Scene Retry',
@@ -253,14 +260,14 @@ test('valid retries clear unidentified Scene and Atlas item failures as call fai
     const atlasSession = await harness.participant.createSession(acceptedSource(), 'manual');
     const atlasMixed = await atlasSession.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
         locations: [
-            { key: 'valid-place', name: 'Valid Place' },
+            { key: 'valid-place', name: 'Valid Place', scale: 'region' },
             { name: 'Missing Key' },
         ],
     });
     assert.equal(atlasMixed.status, 'partial');
     assert.equal(atlasSession.getResult().status, 'partial');
     await atlasSession.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
-        locations: [{ key: 'fixed-place', name: 'Fixed Place' }],
+        locations: [{ key: 'fixed-place', name: 'Fixed Place', scale: 'region' }],
     });
     assert.equal(atlasSession.getResult().status, 'updated');
 });
@@ -269,10 +276,10 @@ test('exact location keys take precedence over colliding scene display names', a
     const harness = createHarness();
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
-        locations: [
+        locations: mapAtlasFixture([
             { key: 'source', name: 'target' },
             { key: 'target', name: 'Destination' },
-        ],
+        ]).atlas.locations,
     });
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'target',
@@ -340,7 +347,7 @@ test('tool collection limits are declared and oversized calls fail before stagin
     });
     assert.equal(tooLarge.status, 'failed');
     const corrected = await retry.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
-        locations: [{ key: 'retry-place', name: 'Retry Place' }],
+        locations: [{ key: 'retry-place', name: 'Retry Place', scale: 'region' }],
     });
     assert.equal(corrected.status, 'updated');
     assert.equal(retry.getResult().status, 'updated');
@@ -353,6 +360,7 @@ test('Atlas reads default to a compact summary and page explicit collections', a
         locations: Array.from({ length: 35 }, (_, index) => ({
             key: `place-${index}`,
             name: `Place ${index}`,
+            scale: 'region',
             status: index % 2 ? 'mentioned' : 'visited',
         })),
         links: [{ from: 'place-0', to: 'place-1', kind: 'road', label: 'Main Road' }],
@@ -363,7 +371,7 @@ test('Atlas reads default to a compact summary and page explicit collections', a
     });
 
     const summary = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_READ, {});
-    assert.deepEqual(summary.data.counts, { locations: 35, links: 1, actors: 2 });
+    assert.deepEqual(summary.data.counts, { locations: 35, links: 1, actors: 2, needsRegion: 0 });
     assert.equal(summary.data.player.displayName, 'Alice');
     assert.equal(Object.hasOwn(summary.data, 'atlas'), false);
     assert.equal(Object.hasOwn(summary.data, 'locations'), false);
@@ -398,7 +406,7 @@ test('Atlas reads default to a compact summary and page explicit collections', a
 });
 
 test('Atlas reads expose whether a location has a scene but never the internal Scene linkage', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Inn Room' }, { key: 'yard' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture);
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, { locations: [{ key: 'yard', name: 'Yard' }] });
@@ -423,14 +431,14 @@ test('Atlas edit rejects fields owned by the internal Scene linkage', async () =
     assert.equal(await session.canCommit(), false);
 });
 
-test('declarative Atlas edits create and clear hierarchy with idempotent bidirectional routes', async () => {
+test('declarative Atlas edits preserve region ownership with idempotent bidirectional routes', async () => {
     const harness = createHarness();
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     const result = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
-        locations: [
+        locations: mapAtlasFixture([
             { key: 'inn', name: 'Inn', scale: 'building', status: 'visited' },
             { key: 'cellar', name: 'Cellar', parent: 'inn', scale: 'room', status: 'mentioned' },
-        ],
+        ]).atlas.locations,
         links: [{ from: 'inn', to: 'cellar', kind: 'stairs' }],
         actors: [{ actorKey: 'player', displayName: 'Wrong name', locationKey: 'inn' }],
     });
@@ -451,9 +459,10 @@ test('declarative Atlas edits create and clear hierarchy with idempotent bidirec
     const unparentResult = await unparent.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
         locations: [{ key: 'cellar', name: 'Cellar', parent: null }],
     });
-    assert.equal(unparentResult.status, 'updated');
-    await unparent.commit(() => true);
-    assert.equal(Object.hasOwn(harness.map.readCurrent().map.atlas.locations.find(location => location.key === 'cellar'), 'parent'), false);
+    assert.equal(unparentResult.status, 'failed');
+    assert.equal(unparentResult.skipped[0].reason, 'location_region_required');
+    assert.equal(await unparent.canCommit(), false);
+    assert.deepEqual(harness.map.readCurrent().map, map);
 });
 
 test('auto route IDs distinguish colon-bearing keys, long keys, and direction, and remain stable on retries', async () => {
@@ -467,7 +476,7 @@ test('auto route IDs distinguish colon-bearing keys, long keys, and direction, a
         { from: `${long}:a`, to: 'b', kind: 'path' }, { from: long, to: 'a:b', kind: 'path' },
     ];
     const keys = [...new Set(routes.flatMap(route => [route.from, route.to]))];
-    const first = await session.executeTool('MapAtlasEdit', { locations: keys.map(key => ({ key, name: key })), links: routes });
+    const first = await session.executeTool('MapAtlasEdit', { locations: keys.map(key => ({ key, name: key, scale: 'region' })), links: routes });
     assert.equal(first.ok, true);
     await session.commit(() => true);
     const before = harness.map.readCurrent().map.atlas.links;
@@ -483,12 +492,12 @@ test('a valid 128-child region is deleted atomically with its links, scenes and 
     const harness = createHarness();
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     const result = await session.executeTool('MapAtlasEdit', {
-        locations: [{ key: 'region', name: 'Region', scale: 'region' }, { key: 'outside', name: 'Outside' },
+        locations: [{ key: 'region', name: 'Region', scale: 'region' }, { key: 'outside', name: 'Outside', scale: 'region' },
             ...Array.from({ length: 128 }, (_, index) => ({ key: `child-${index}`, name: `Child ${index}`, parent: 'region' }))],
         links: Array.from({ length: 128 }, (_, index) => ({ from: `child-${index}`, to: 'outside', kind: 'road' })),
         actors: [{ actorKey: 'player', locationKey: 'child-0' }, { actorKey: 'keeper', displayName: 'Keeper', locationKey: 'outside' }],
     });
-    assert.equal(result.ok, true);
+    assert.equal(result.status, 'updated');
     assert.equal((await session.executeTool('MapSceneEdit', { ...indoorFixture, scene: 'child-0' })).ok, true);
     await session.commit(() => true);
     const removal = await harness.participant.createSession(acceptedSource(), 'manual');
@@ -506,12 +515,12 @@ test('a valid 128-child region is deleted atomically with its links, scenes and 
 test('a rebuild cannot directly commit unresolved edits, but may commit after repair', async () => {
     const harness = createHarness();
     const session = await harness.participant.createSession(acceptedSource(), 'rebuild');
-    await session.executeTool('MapAtlasEdit', { locations: [{ key: 'good', name: 'Good' }, { key: 'bad', name: '' }] });
+    await session.executeTool('MapAtlasEdit', { locations: [{ key: 'good', name: 'Good', scale: 'region' }, { key: 'bad', name: '' }] });
     assert.equal(await session.canCommit(), false);
     assert.deepEqual(session.getResult(), { status: 'failed', changed: false });
     await assert.rejects(session.commit(() => true), /map_rebuild_edits_unresolved/);
     assert.equal(harness.writes.length, 0);
-    await session.executeTool('MapAtlasEdit', { locations: [{ key: 'bad', name: 'Fixed' }] });
+    await session.executeTool('MapAtlasEdit', { locations: [{ key: 'bad', name: 'Fixed', scale: 'region' }] });
     assert.equal(await session.canCommit(), true);
     await session.commit(() => true);
     assert.equal(harness.map.readCurrent().map.atlas.locations.length, 2);
@@ -522,7 +531,7 @@ test('Atlas retry tracking does not conflate identical location and actor keys',
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     const mixed = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
         locations: [
-            { key: 'inn', name: 'Inn' },
+            { key: 'inn', name: 'Inn', scale: 'region' },
             { key: 'player', name: '' },
         ],
         actors: [{ actorKey: 'player', locationKey: 'inn' }],
@@ -536,13 +545,13 @@ test('Atlas retry tracking does not conflate identical location and actor keys',
     assert.equal(session.getResult().status, 'partial');
 
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
-        locations: [{ key: 'player', name: 'Player Quarters' }],
+        locations: [{ key: 'player', name: 'Player Quarters', scale: 'region' }],
     });
     assert.equal(session.getResult().status, 'updated');
 });
 
 test('same-scene player updates and same-location Atlas edits preserve the actor icon', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Inn Room' }]));
     const first = await harness.participant.createSession(acceptedSource(), 'manual');
     await first.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture);
     await first.commit(() => true);
@@ -561,7 +570,7 @@ test('same-scene player updates and same-location Atlas edits preserve the actor
 });
 
 test('Scene element patches preserve omitted fields, clear optional fields with null, and support deletion', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Workshop' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Workshop',
@@ -621,7 +630,7 @@ test('Scene element patches preserve omitted fields, clear optional fields with 
 });
 
 test('actor movement uses the merged canonical element and preserves an existing NPC name', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Inn' }, { key: 'Cellar' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Inn',
@@ -648,6 +657,7 @@ test('actor movement uses the merged canonical element and preserves an existing
         elements: [{ id: 'keeper-cellar', cat: 'actor', actorKey: 'keeper', shape: 'icon', geo: { at: [70, 90] } }],
     });
     assert.equal(movedByScene.status, 'updated');
+    assert.deepEqual(movedByScene.warnings, []);
     atlas = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_READ, { mode: 'actors', actorKey: 'keeper' });
     assert.deepEqual(atlas.data.actors, [{ actorKey: 'keeper', displayName: 'Mara', locationKey: 'Cellar' }]);
     const inn = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_READ, { scene: 'Inn' });
@@ -664,6 +674,7 @@ test('actor movement uses the merged canonical element and preserves an existing
     const keeper = cellar.data.scene.elements.find(element => element.id === 'keeper-cellar');
     assert.equal(keeper.cat, 'actor');
     assert.equal(keeper.actorKey, 'keeper');
+    assert.equal(keeper.label, 'Mara');
     assert.deepEqual(keeper.geo, { at: [90, 110] });
 
     const movedByAtlas = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
@@ -676,8 +687,31 @@ test('actor movement uses the merged canonical element and preserves an existing
     assert.equal(cellar.data.scene.elements.some(element => element.actorKey === 'keeper'), false);
 });
 
+test('unnamed actors request a name while explicit label clearing remains available', async () => {
+    const harness = createHarness(mapAtlasFixture([{ key: 'Inn' }]));
+    const session = await harness.participant.createSession(acceptedSource(), 'manual');
+    const placed = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
+        scene: 'Inn',
+        elements: [
+            { id: 'stranger', cat: 'actor', actorKey: 'stranger', shape: 'icon', geo: { at: [60, 60] } },
+            { id: 'player', cat: 'actor', kind: 'player', actorKey: 'player', shape: 'icon', geo: { at: [90, 90] } },
+        ],
+    });
+    assert.equal(placed.status, 'updated');
+    assert.equal(placed.warnings.length, 1);
+    const named = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, { scene: 'Inn', elements: [{ id: 'stranger', label: 'Ivo' }] });
+    assert.deepEqual(named.warnings, []);
+    const atlas = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_READ, { mode: 'actors', actorKey: 'stranger' });
+    assert.equal(atlas.data.actors[0].displayName, 'Ivo');
+    const cleared = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, { scene: 'Inn', elements: [{ id: 'stranger', label: null }] });
+    assert.equal(cleared.status, 'updated');
+    const read = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_READ, { scene: 'Inn' });
+    assert.equal(Object.hasOwn(read.data.scene.elements.find(element => element.id === 'stranger'), 'label'), false);
+    assert.equal(read.data.scene.elements.find(element => element.actorKey === 'player').label, 'Alice');
+});
+
 test('existing element category and actor identity cannot be rewritten by a patch', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Inn Room' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture);
 
@@ -689,11 +723,9 @@ test('existing element category and actor identity cannot be rewritten by a patc
             { id: 'keeper-room', cat: 'actor', kind: 'player', actorKey: 'keeper', shape: 'icon', geo: { at: [160, 120] }, label: 'Mara' },
         ],
     });
-    assert.equal(patched.status, 'updated');
-    assert.match(patched.warnings.join('\n'), /unsupported category.*stable/);
-    assert.match(patched.warnings.join('\n'), /actorKey change.*stable/);
-    assert.match(patched.warnings.join('\n'), /category change.*stable/);
-    assert.match(patched.warnings.join('\n'), /Ignored player kind/);
+    assert.equal(patched.status, 'failed');
+    assert.deepEqual(patched.skipped.map(item => item.id), ['player-room', 'room-terrain', 'keeper-room']);
+    assert.ok(patched.skipped.every(item => item.inputIssues.length));
 
     const scene = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_READ, { scene: 'Inn Room' });
     const player = scene.data.scene.elements.find(element => element.id === 'player-room');
@@ -702,23 +734,21 @@ test('existing element category and actor identity cannot be rewritten by a patc
     assert.equal(player.actorKey, 'player');
     assert.equal(player.kind, 'player');
     assert.equal(player.label, 'Alice');
-    assert.deepEqual(player.geo, { at: [240, 190] });
+    assert.deepEqual(player.geo, { at: [200, 180] });
     assert.equal(terrain.cat, 'terrain');
-    assert.equal(scene.data.scene.elements.find(element => element.id === 'keeper-room').actorKey, 'keeper');
+    assert.equal(scene.data.scene.elements.some(element => element.id === 'keeper-room'), false);
 
     const actors = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_READ, { mode: 'actors' });
     assert.deepEqual(actors.data.actors, [
         { actorKey: 'player', displayName: 'Alice', locationKey: 'Inn Room' },
-        { actorKey: 'keeper', displayName: 'Mara', locationKey: 'Inn Room' },
     ]);
 });
 
 test('a canonical player element marks its location visited without playerHere', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Quiet Room', status: 'mentioned' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     const result = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Quiet Room',
-        status: 'mentioned',
         elements: [
             { id: 'floor', cat: 'terrain', shape: 'rect', geo: { center: [100, 80], size: [180, 120] } },
             { id: 'player-quiet-room', cat: 'actor', kind: 'player', actorKey: 'player', shape: 'icon', geo: { at: [100, 90] } },
@@ -733,7 +763,7 @@ test('a canonical player element marks its location visited without playerHere',
 });
 
 test('Scene tools report unsupported fields precisely while retaining the geo.icon tolerance', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Gallery' }]));
     const rootSession = await harness.participant.createSession(acceptedSource(), 'manual');
     const rootFailure = await rootSession.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Gallery', elements: [], operation: 'draw',
@@ -754,8 +784,9 @@ test('Scene tools report unsupported fields precisely while retaining the geo.ic
     assert.equal(mixed.status, 'partial');
     assert.deepEqual(mixed.skipped.map(item => item.reason), [
         'element_has_unsupported_fields:position',
-        'geo_has_unsupported_fields:position',
+        'invalid_arguments',
     ]);
+    assert.equal(mixed.skipped[1].inputIssues[0].path, 'elements[2].geo.position');
     const read = await itemSession.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_READ, { scene: 'Gallery' });
     assert.deepEqual(read.data.scene.elements.map(element => element.id), ['valid']);
     assert.equal(read.data.scene.elements[0].icon, 'marker');
@@ -765,14 +796,16 @@ test('Scene tools report unsupported fields precisely while retaining the geo.ic
     );
 });
 
-test('all-invalid and zero-write rebuilds do not create or replace Map data', async () => {
-    const harness = createHarness();
-    const invalid = await harness.participant.createSession(acceptedSource(), 'rebuild');
+test('all-invalid scene edits and zero-write rebuilds do not replace Map data', async () => {
+    const initial = mapAtlasFixture([{ key: 'Void' }]);
+    const harness = createHarness(initial);
+    const invalid = await harness.participant.createSession(acceptedSource(), 'manual');
     const result = await invalid.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Void',
-        elements: [{ id: 'bad', shape: 'rect', geo: { size: [0, 0] } }],
+        elements: [{ id: 'bad', cat: 'terrain', shape: 'rect', geo: { size: [0, 0] } }],
     });
     assert.equal(result.status, 'failed');
+    assert.equal(result.skipped[0].collection, 'elements');
     assert.equal(await invalid.canCommit(), false);
     assert.equal(invalid.getResult().status, 'failed');
     assert.equal(harness.writes.length, 0);
@@ -780,11 +813,11 @@ test('all-invalid and zero-write rebuilds do not create or replace Map data', as
     const untouched = await harness.participant.createSession(acceptedSource(), 'rebuild');
     assert.equal(untouched.getResult().status, 'unchanged');
     assert.equal(await untouched.canCommit(), false);
-    assert.equal(harness.map.readCurrent().map, null);
+    assert.deepEqual(harness.map.readCurrent().map, initial);
 });
 
 test('correcting a failed first-scene call clears its call-level failure', async () => {
-    const harness = createHarness();
+    const harness = createHarness(mapAtlasFixture([{ key: 'Observatory' }]));
     const session = await harness.participant.createSession(acceptedSource(), 'manual');
     const empty = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, {
         scene: 'Observatory',
@@ -800,8 +833,28 @@ test('correcting a failed first-scene call clears its call-level failure', async
     assert.equal(session.getResult().status, 'updated');
 });
 
-test('session invalidation and commit guards prevent stale writes', async () => {
+test('a missing scene owner is repaired within the same maintenance run before commit', async () => {
     const harness = createHarness();
+    const session = await harness.participant.createSession(acceptedSource(), 'rebuild');
+    const rejected = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture);
+    assert.equal(rejected.status, 'failed');
+    assert.equal(rejected.skipped[0].reason, 'scene_location_required');
+    assert.equal(await session.canCommit(), false);
+    assert.equal(harness.writes.length, 0);
+    const atlas = await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.ATLAS_EDIT, {
+        locations: mapAtlasFixture([{ key: 'Inn Room' }]).atlas.locations,
+    });
+    assert.equal(atlas.status, 'updated');
+    assert.equal((await session.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture)).status, 'updated');
+    assert.equal(session.getResult().status, 'updated');
+    assert.equal(await session.canCommit(), true);
+    await session.commit(() => true);
+    assert.equal(harness.writes.length, 1);
+    assert.equal(harness.map.readCurrent().map.atlas.locations.find(item => item.key === 'Inn Room').parent, 'fixture-region');
+});
+
+test('session invalidation and commit guards prevent stale writes', async () => {
+    const harness = createHarness(mapAtlasFixture([{ key: 'Inn Room' }]));
     const invalidated = await harness.participant.createSession(acceptedSource(), 'manual');
     await invalidated.executeTool(MAP_MAINTENANCE_TOOL_NAMES.SCENE_EDIT, indoorFixture);
     invalidated.invalidate('chat-changed');

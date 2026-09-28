@@ -20,6 +20,7 @@ export { BANK_PARTITION } from './partition.js';
 export interface BankModuleInstallContext {
     ownerId: string;
     bank: BankService;
+    store: PartitionStore<BankDomainV1>;
     economy: EconomyReadCapability;
     execution: AppInstallContext['execution'];
 }
@@ -38,8 +39,9 @@ export function createBankModule(dependencies: BankModuleDependencies): XiaobaiO
         install(context) {
             if (!context.partition) { throw new Error('Bank partition store is unavailable'); }
             const economy = context.useCapability(ECONOMY_READ_CAPABILITY);
+            const store = context.partition as PartitionStore<BankDomainV1>;
             const bank = createBankService(
-                context.partition as PartitionStore<BankDomainV1>,
+                store,
                 context.files,
                 economy,
                 dependencies.service,
@@ -48,6 +50,7 @@ export function createBankModule(dependencies: BankModuleDependencies): XiaobaiO
             return dependencies.install({
                 ownerId: context.ownerId,
                 bank,
+                store,
                 economy,
                 execution: context.execution,
             });

@@ -69,6 +69,21 @@ function createEnvelope(runId, overrides = {}) {
     return Object.assign(envelope, overrides);
 }
 
+test('Draw Run permits absent or empty Agent keys without relaxing key type or model validation', () => {
+    const validate = createEnvelopeValidator(drawRuntime);
+    for (const apiKey of [undefined, '', '   ']) {
+        const envelope = createEnvelope('run-no-agent-key');
+        if (apiKey === undefined) delete envelope.agent.providerConfig.apiKey;
+        else envelope.agent.providerConfig.apiKey = apiKey;
+        assert.doesNotThrow(() => validate(envelope));
+    }
+    for (const patch of [{ apiKey: 42 }, { model: '' }]) {
+        const envelope = createEnvelope('run-invalid-agent');
+        Object.assign(envelope.agent.providerConfig, patch);
+        assert.throws(() => validate(envelope), error => error.status === 400);
+    }
+});
+
 function createImageJobService() {
     const jobs = new Map();
     const cancellations = [];

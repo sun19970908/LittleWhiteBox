@@ -9,7 +9,7 @@ export function createFourthWallAgentResponse(
     return async (options: FourthWallGenerateOptions): Promise<FourthWallGenerationResult> => {
         const result = await gateway.run({
             config: options.config,
-            ...buildFourthWallAgentRequest(options.builtPrompt, options.disableAssistantPrefill),
+            ...buildFourthWallAgentRequest(options.builtPrompt),
             signal: options.signal,
             onStreamProgress: options.stream
                 ? (snapshot) => options.onStreamProgress?.(snapshot as FourthWallGenerationResult)

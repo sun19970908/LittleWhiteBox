@@ -1,27 +1,14 @@
 import type { MapAtlas, MapLink, MapLocation } from '../../../domains/map/types.js';
+import { locationTrail } from '../../../domains/map/hierarchy.js';
+import type { MapBrowseScope } from './map-browse.js';
 
 export interface WorldMapNode { location: MapLocation; x: number; y: number; placed: boolean }
 export interface WorldMapRoute { link: MapLink; from: WorldMapNode; to: WorldMapNode; path: string; x: number; y: number }
 
-export function locationTrail(atlas: MapAtlas, key: string): MapLocation[] {
-    const byKey = new Map(atlas.locations.map(location => [location.key, location]));
-    const trail: MapLocation[] = [];
-    let location = byKey.get(key);
-    while (location) {
-        trail.unshift(location);
-        location = location.parent ? byKey.get(location.parent) : undefined;
-    }
-    return trail;
-}
-
-export function initialWorldRegion(atlas: MapAtlas): string {
-    const roots = atlas.locations.filter(location => !location.parent);
-    return roots.length === 1 && atlas.locations.some(location => location.parent === roots[0].key) ? roots[0].key : '';
-}
-
-/** A location's representative on this region's map, without changing its real location. */
-export function locationInRegion(atlas: MapAtlas, key: string, region: string): string {
-    return locationTrail(atlas, key).find(location => (location.parent || '') === region)?.key || '';
+/** The closest visible ancestor represents off-scope actors and route endpoints. */
+export function locationInScope(atlas: MapAtlas, key: string, locations: readonly MapLocation[]): string {
+    const visible = new Set(locations.map(location => location.key));
+    return locationTrail(atlas, key).reverse().find(location => visible.has(location.key))?.key || '';
 }
 
 export function connectedPlaces(atlas: MapAtlas, key: string) {
@@ -33,13 +20,13 @@ export function connectedPlaces(atlas: MapAtlas, key: string) {
 }
 
 /** Authored positions are immutable during layout; missing positions get a clearly schematic arrangement. */
-export function layoutWorldMap(atlas: MapAtlas, region: string) {
-    const locations = atlas.locations.filter(location => (location.parent || '') === region)
-        .sort((a, b) => a.key.localeCompare(b.key, 'en'));
-    const nodes: WorldMapNode[] = locations.filter(location => location.position)
+export function layoutWorldMap(atlas: MapAtlas, scope: Pick<MapBrowseScope, 'locations' | 'positionParent'>) {
+    const locations = [...scope.locations].sort((a, b) => a.key.localeCompare(b.key, 'en'));
+    const positioned = (location: MapLocation) => location.position && (location.parent || '') === scope.positionParent;
+    const nodes: WorldMapNode[] = locations.filter(positioned)
         .map(location => ({ location, x: location.position![0], y: location.position![1], placed: true }));
     let candidate = 0;
-    for (const location of locations.filter(item => !item.position)) {
+    for (const location of locations.filter(item => !positioned(item))) {
         let x: number;
         let y: number;
         do {
@@ -53,8 +40,8 @@ export function layoutWorldMap(atlas: MapAtlas, region: string) {
     nodes.sort((a, b) => a.location.key.localeCompare(b.location.key, 'en'));
     const byKey = new Map(nodes.map(node => [node.location.key, node]));
     const routes: WorldMapRoute[] = atlas.links.flatMap(link => {
-        const from = byKey.get(locationInRegion(atlas, link.from, region));
-        const to = byKey.get(locationInRegion(atlas, link.to, region));
+        const from = byKey.get(locationInScope(atlas, link.from, locations));
+        const to = byKey.get(locationInScope(atlas, link.to, locations));
         if (!from || !to || from === to) {return [];}
         const x = (from.x + to.x) / 2;
         const y = (from.y + to.y) / 2;

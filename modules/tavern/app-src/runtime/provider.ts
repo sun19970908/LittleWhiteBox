@@ -48,12 +48,6 @@ const PROVIDER_LABELS: Record<string, string> = {
     google: 'Google AI',
 };
 
-function isSillyTavernProvider(provider = ''): boolean {
-    return provider === 'sillytavern-openai-compatible'
-        || provider === 'sillytavern-claude'
-        || provider === 'sillytavern-google';
-}
-
 export function getXbTavernProviderLabel(provider = ''): string {
     return PROVIDER_LABELS[provider] || provider || '未配置';
 }
@@ -98,11 +92,10 @@ export function resolveXbTavernProviderConfig(
     const apiKey = String(providerConfig.apiKey || '').trim();
     const missing: string[] = [];
     if (!model) {missing.push('模型');}
-    if (!isSillyTavernProvider(provider) && !apiKey) {missing.push('API Key');}
     const message = missing.length
         ? role === 'delegate'
             ? `请先在 API 配置里配置分身模型：缺少 ${missing.join('、')}`
-            : `请先在 API 配置里选择模型/填写 Key：缺少 ${missing.join('、')}`
+            : `请先在 API 配置里选择模型：缺少 ${missing.join('、')}`
         : 'API 配置可用';
     return {
         currentPresetName: String(providerConfig.currentPresetName || ''),

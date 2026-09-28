@@ -8,6 +8,12 @@ import { createSettingsRepository } from '../host/settings-repository.ts';
 import { createEconomyCapabilityRegistrations, ECONOMY_PARTITION } from '../capabilities/economy/index.ts';
 import { DICE_PARTITION } from '../apps/dice/partition.ts';
 import { userEconomyHarness } from './user-economy-harness.js';
+import { upgradeDiceUserFile } from '../apps/dice/upgrade/partition-v1.ts';
+import { prepareActionCheck } from '../apps/dice/application/prepare-action-check.ts';
+import { createResultOverride } from '../apps/dice/domain/result-override.ts';
+import { rerollCheck } from '../apps/dice/domain/reroll.ts';
+import { headlessPromptInjection } from './helpers/prompt-injection.js';
+import { PROMPT_INJECTION_CAPABILITY } from '../capabilities/prompt-injection/index.ts';
 
 // Keep the production module, controller and message cleanup. Replace native I/O and inactive UI workers.
 const compiled = await build({
@@ -16,8 +22,10 @@ const compiled = await build({
     bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
     footer: { js: '//# sourceURL=dice-lifecycle-fixture.js' },
     plugins: [{ name: 'dice-cleanup-host', setup(builder) {
+        builder.onResolve({ filter: /\/prompt-registration\.js$/ }, () => ({ path: new URL('../apps/dice/prompt-registration.ts', import.meta.url).href, external: true }));
+        builder.onResolve({ filter: /(?:^|\/)partition\.js$/ }, args => args.importer.replaceAll('\\', '/').includes('/dice/') ? ({ path: new URL('../apps/dice/partition.ts', import.meta.url).href, external: true }) : undefined);
         builder.onResolve({ filter: /^js-sha256$/ }, () => ({ path: import.meta.resolve('js-sha256'), external: true }));
-        builder.onResolve({ filter: /(?:^dice-cleanup-host$|\/(?:script|group-chats|sillytavern-port|sillytavern-chat-save|generation-adapter|message-display|encounter-runtime|encounter-display)\.js$)/ },
+        builder.onResolve({ filter: /(?:^dice-cleanup-host$|\/(?:script|extensions|group-chats|sillytavern-port|sillytavern-chat-save|generation-adapter|message-display|encounter-runtime|encounter-display)\.js$)/ },
             () => ({ path: 'host', namespace: 'fixture' }));
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `
             export let is_send_press = false;
@@ -27,10 +35,13 @@ const compiled = await build({
                 get saving() { return isChatSaving; }, set saving(value) { isChatSaving = value; }, cancelled: false };
             export let isChatSaving = false;
             export const captureDiceChat = () => host.source;
+            export const getContext = () => host.source;
+            export const getRequestHeaders = () => ({});
             export const ensureDiceDisplayRule = async () => {};
             export const isDiceMessageBeingEdited = index => host.editing === index;
             export const updateMessageBlock = () => {};
             export const saveSillyTavernChat = guard => host.save(guard);
+            export const saveChatConditional = async () => {};
             export const createDiceGenerationAdapter = (_enabled, frequency) => {
                 host.frequency = frequency;
                 return { start() { host.actionStarted = true; }, stop() { host.actionStarted = false; }, isBusy: () => host.busy, cancel() { host.cancelled = true; } };
@@ -61,7 +72,8 @@ for (const startsWithChat of [false, true]) {
         await settings.setDiceFeature('encountersEnabled', true);
         let userDocument = null;
         const kernel = createKernelComposition({
-            modules: [createProductionDiceModule(settings, async () => ({world:false,summary:false}), () => false)], capabilities: createEconomyCapabilityRegistrations(),
+            modules: [createProductionDiceModule(settings, async () => ({world:false,summary:false}), () => false,
+                () => upgradeDiceUserFile(kernel.userTransactions))], capabilities: [...createEconomyCapabilityRegistrations(), headlessPromptInjection()],
             user: { storage: { read: async () => userDocument, replace: async (_name, value) => { userDocument = value; } },
                 initialPartitions: async () => ({ economy: ECONOMY_PARTITION.createInitial(), dice: DICE_PARTITION.createInitial() }), resolveStory: async () => capture },
             storage: {
@@ -137,9 +149,12 @@ test('chat cleanup disables Dice and saves its message cleanup without deleting 
         };
         const saving = Promise.withResolvers();
         const confirmation = Promise.withResolvers();
-        const module = createProductionDiceModule(settings, async () => ({world:false,summary:false}), () => false);
         const wallet = await userEconomyHarness();
-        await module.install({ execution: { addCleanup() {} }, partition: wallet.store(DICE_PARTITION), files: wallet.transactions });
+        const module = createProductionDiceModule(settings, async () => ({world:false,summary:false}), () => false,
+            () => upgradeDiceUserFile(wallet.transactions));
+        const prompts = headlessPromptInjection().install();
+        await module.install({ execution: { addCleanup() {} }, partition: wallet.store(DICE_PARTITION), files: wallet.transactions,
+            useCapability: token => token.id === PROMPT_INJECTION_CAPABILITY.id ? prompts : wallet.economy });
         host.save = async guard => {
             saving.resolve();
             writes++;
@@ -182,3 +197,84 @@ test('chat cleanup disables Dice and saves its message cleanup without deleting 
         } else { assert.ok(message.swipe_info.every(info => !Object.hasOwn(info.extra, 'xiaobaiOsDice'))); }
     }
 });
+
+async function cleanupFixture(t) {
+    const wallet = await userEconomyHarness(); await wallet.economy.refresh();
+    const check = prepareActionCheck({
+        body: '<xb_action_check>{"action":"Climb","stat":"Agility","difficulty":"hard"}</xb_action_check>',
+        generatedFrom: 0, id: 'cleanup-check', random: () => .3,
+    });
+    const override = createResultOverride(rerollCheck(check.records.checks[0], () => .8), 'rerolled');
+    const data = { sheet: { opaque: 'paid sheet' }, resultOverrides: { 'cleanup-check': override, unrelated: override } };
+    await wallet.store(DICE_PARTITION).transact(tx => tx.replace(data));
+    const message = { mes: check.body, extra: { xiaobaiOsDice: check.records, other: 'retained' } };
+    host.source = { key: 'cleanup', chat: [message] };
+    host.busy = false; host.saving = false; host.editing = -1;
+    const root = {};
+    const settings = createSettingsRepository({ getExtensionSettings: () => root, saveSettings() {} });
+    await settings.prepare();
+    const module = createProductionDiceModule(settings, async () => ({ world: false, summary: false }), () => false,
+        () => upgradeDiceUserFile(wallet.transactions));
+    const prompts = headlessPromptInjection().install();
+    await module.install({ execution: { addCleanup(cleanup) { t.after(cleanup); } }, partition: wallet.store(DICE_PARTITION),
+        files: wallet.transactions, useCapability: token => token.id === PROMPT_INJECTION_CAPABILITY.id ? prompts : wallet.economy });
+    const savedChats = [];
+    host.save = async guard => {
+        assert.equal(guard(), true);
+        assert.equal(wallet.document().partitions.dice.resultOverrides['cleanup-check'], undefined);
+        savedChats.push(structuredClone(host.source.chat));
+        return { status: 'confirmed' };
+    };
+    return { wallet, module, message, savedChats, data };
+}
+
+for (const mode of ['rejected', 'unknown', 'stored-ack-lost']) {
+    test(`${mode}: cleanup failure retains chat identifiers and ordinary retry removes only their overrides`, async t => {
+        const { wallet, module, message, savedChats, data } = await cleanupFixture(t);
+        const before = structuredClone(message);
+        const economy = structuredClone(wallet.document().partitions.economy);
+        const read = wallet.storage.read, replace = wallet.storage.replace;
+        wallet.state.mode = mode;
+        wallet.storage.replace = async (...args) => {
+            if (mode !== 'rejected') { wallet.storage.read = async () => { throw new TypeError('offline'); }; }
+            return replace(...args);
+        };
+        await assert.rejects(module.clearData(), { code: 'dice_result_save_failed' });
+        assert.deepEqual(message, before);
+        assert.equal(savedChats.length, 0);
+        assert.equal(wallet.transactions.hasPendingCommit(), false);
+        wallet.storage.read = read; wallet.storage.replace = replace; wallet.state.mode = 'confirmed';
+        await module.clearData();
+        assert.equal(savedChats.length, 1);
+        assert.equal(message.extra.xiaobaiOsDice, undefined);
+        assert.equal(message.extra.other, before.extra.other);
+        assert.deepEqual(wallet.document().partitions.dice, { sheet: data.sheet, resultOverrides: { unrelated: data.resultOverrides.unrelated } });
+        assert.deepEqual(wallet.document().partitions.economy, economy);
+    });
+}
+
+for (const change of ['chat', 'generation', 'editor', 'checks']) {
+    test(`cleanup revalidates ${change} after awaiting the independent result deletion`, async t => {
+        const { wallet, module, message, savedChats } = await cleanupFixture(t);
+        const before = structuredClone(message);
+        const started = Promise.withResolvers(), finish = Promise.withResolvers();
+        const replace = wallet.storage.replace;
+        wallet.storage.replace = async (...args) => { started.resolve(); await finish.promise; return replace(...args); };
+        const operation = module.clearData();
+        await started.promise;
+        if (change === 'chat') { host.source = { key: 'other', chat: [{ mes: 'Other chat' }] }; }
+        if (change === 'generation') { host.busy = true; }
+        if (change === 'editor') { host.editing = 0; }
+        if (change === 'checks') {
+            const next = structuredClone(message);
+            next.extra.xiaobaiOsDice.checks[0].id = 'new-check';
+            host.source.chat.push(next);
+        }
+        finish.resolve();
+        await assert.rejects(operation);
+        assert.deepEqual(message, before);
+        assert.equal(savedChats.length, 0);
+        assert.equal(wallet.transactions.hasPendingCommit(), false);
+        host.busy = false; host.editing = -1;
+    });
+}

@@ -36,7 +36,7 @@ const stubs = {
         const host = globalThis.__drawRecoveryTest;
         export const getPreview = async id => host.previews.get(id);
         export const storePreview = async value => host.previews.set(value.imgId, value);
-        export const storeFailedPlaceholder = storePreview;
+        export const storeFailedPlaceholder = async value => storePreview({ ...value, status: 'failed' });
         export const deletePreview = async id => host.previews.delete(id);
         export const setSlotSelection = async (slot, id) => host.selections.set(slot, id);
         export const clearSlotSelection = async slot => host.selections.delete(slot);
@@ -121,6 +121,7 @@ for (const mode of ['complete', 'fail', 'discard']) {
             await api.renewPendingImageJobLease(jobId, leaseId, { now: 0 });
 
             // 成功结果已落画廊，另一张可能尚未完成；页面此时退出，下一页面负责结算。
+            for (const item of items) host.previews.set(item.imgId, { ...item, status: 'pending', tags: 'kept input' });
             if (mode !== 'fail') host.previews.set(items[0].imgId, { ...items[0], base64: 'new-1' });
             if (mode === 'complete') host.previews.set(items[1].imgId, { ...items[1], base64: 'new-2' });
             if (userDeletedSlot) {
@@ -150,8 +151,9 @@ for (const mode of ['complete', 'fail', 'discard']) {
                 assert.equal(host.selections.get(old.slotId), old.imgId);
             }
             if (mode === 'fail') {
-                assert.equal(host.previews.has(`failed-${items[0].imgId}`), true);
-                assert.equal(host.previews.has(`failed-${items[1].imgId}`), !userDeletedSlot);
+                assert.equal(host.previews.get(items[0].imgId)?.status, 'failed');
+                assert.equal(host.previews.get(items[1].imgId)?.status === 'failed', !userDeletedSlot);
+                if (userDeletedSlot) assert.equal(host.previews.has(items[1].imgId), false);
             }
             assert.equal(await api.getPendingImageJob(jobId), null);
             assert.equal(acknowledged, 1);

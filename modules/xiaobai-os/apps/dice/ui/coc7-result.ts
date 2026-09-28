@@ -41,9 +41,12 @@ export function createCoc7Result(record: Coc7CheckRecord) {
         comparison.append(diceSpan('xb-dice-operator', result.roll <= result.threshold ? '≤' : '>'), limit);
     }
     verdict.append(diceSpan('xb-dice-outcome', outcome), comparison);
-    const basisText = copy.basis(request.difficulty, result.value, COC7_DIFFICULTIES[request.difficulty], result.threshold);
+    const basisText = copy.basis(request.difficulty, result.value, result.threshold);
     const basis = diceSpan('xb-dice-coc7-basis', basisText);
-    basis.dataset.value = String(result.value); basis.dataset.divisor = String(COC7_DIFFICULTIES[request.difficulty]); basis.dataset.threshold = String(result.threshold);
+    const rule = COC7_DIFFICULTIES[request.difficulty];
+    basis.dataset.value = String(result.value); basis.dataset.threshold = String(result.threshold);
+    if (rule.kind === 'bonus') { basis.dataset.bonus = String(rule.amount); basis.dataset.cap = String(rule.cap); }
+    else { basis.dataset.divisor = String(rule.divisor); }
     let explanation = '';
     if (result.level === 'critical') { explanation = copy.critical(COC7_CRITICAL_ROLL); }
     else if (result.level === 'fumble') { explanation = copy.fumble(coc7FumbleMinimum(result.threshold)); }

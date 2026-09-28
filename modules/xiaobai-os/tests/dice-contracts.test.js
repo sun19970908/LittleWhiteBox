@@ -6,7 +6,8 @@ import { parseDiceRecords, referencedActionChecks, isCheckContinuationPoint, DIC
 import { prepareActionCheck } from '../apps/dice/application/prepare-action-check.ts';
 import { parseActionCheck, ACTION_CHECK_EXAMPLE, ACTION_CHECK_FIELDS } from '../apps/dice/protocol/request.ts';
 import { ACTION_CHECK_OPEN, ACTION_CHECK_DISPLAY_PATTERN } from '../apps/dice/protocol/markup.ts';
-import { buildActionCheckPrompt, projectActionCheckResults, serializeActionCheckResults } from '../apps/dice/protocol/prompt.ts';
+import { buildActionCheckContinuation, buildActionCheckRules, projectActionCheckResults, serializeActionCheckResults } from '../apps/dice/protocol/prompt.ts';
+import { readDicePromptResults } from './helpers/dice-prompt.js';
 import { repairDiceDisplayRules, DICE_DISPLAY_RULE } from '../apps/dice/host/display-rule.ts';
 import { generateCoc7Sheet } from '../apps/dice/domain/coc7-creation.ts';
 
@@ -45,7 +46,7 @@ test('each band maps equal random intervals to integer targets independently of 
 });
 
 test('invalid targets, rolls and random samples cannot produce check results', () => {
-    for (const dc of [1, 22, 2.5, NaN, Infinity]) assert.throws(() => resolveActionCheck(dc, 10));
+    for (const dc of [0, -1, 2.5, NaN, Infinity]) assert.throws(() => resolveActionCheck(dc, 10));
     for (const roll of [0, 21, 1.5, NaN, Infinity]) assert.throws(() => resolveActionCheck(10, roll));
     assert.throws(() => rollActionCheck('unknown', () => assert.fail('invalid difficulty must not draw')));
     for (const bad of [-0.01, 1, NaN, Infinity]) {
@@ -58,8 +59,8 @@ test('invalid targets, rolls and random samples cannot produce check results', (
 test('the real prompt example and JSON string tags are parsed as a single request', () => {
     assert.equal(parseActionCheck(ACTION_CHECK_EXAMPLE).kind, 'request');
     for (const frequency of ['standard', 'active']) {
-        const prompt = buildActionCheckPrompt('', [], frequency);
-        const prepared = prepareActionCheck({ body: prompt, generatedFrom: 0, id: 'example', random: () => 0.3 });
+        assert.ok(buildActionCheckRules(frequency, 'd20', true).length > 0);
+        const prepared = prepareActionCheck({ body: ACTION_CHECK_EXAMPLE, generatedFrom: 0, id: 'example', random: () => 0.3 });
         assert.equal(prepared.kind, 'candidate');
         assert.deepEqual(prepared.records.checks[0].request, parseActionCheck(ACTION_CHECK_EXAMPLE).request);
     }
@@ -260,13 +261,19 @@ test('new attempts after editing or deleting references preserve all prior resul
     }
 });
 
-test('result data round-trips macro-like action text without emitting executable host macros', () => {
-    const candidate = prepareActionCheck({ body: block({ ...request, action: '{{setvar::diceProbe::unexpected}}' }),
+test('result data and continuation instructions preserve quoted action data without executable host macros', () => {
+    const candidate = prepareActionCheck({ body: block({ ...request, action: 'Say "{{setvar::diceProbe::unexpected}}"\n```json\n[]\n```' }),
         generatedFrom: 0, id: 'safe-text', random: () => 0.3 });
     const encoded = serializeActionCheckResults(candidate.records.checks);
     assert.deepEqual(JSON.parse(encoded), projectActionCheckResults(candidate.records.checks));
     // This is an external host protocol safety boundary, not a source-code existence check.
     assert.equal(encoded.includes('{{'), false);
+    for (const body of [candidate.body, candidate.body + '\nThe action is resolved.']) {
+        const prompt = buildActionCheckContinuation(body, candidate.records.checks, true);
+        assert.equal(prompt.includes('{{'), false);
+        assert.deepEqual(readDicePromptResults(prompt), projectActionCheckResults(candidate.records.checks));
+        assert.equal(parseActionCheck(prompt).kind, 'none');
+    }
 });
 
 test('managed rule checks are no-ops when valid, repair only their own ID and preserve other rule objects', () => {

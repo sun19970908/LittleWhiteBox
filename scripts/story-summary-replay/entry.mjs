@@ -400,8 +400,7 @@ function toPlainVectorItems(items = []) {
 async function resetReplayStores(modules, chatId) {
     await modules.clearChatData(chatId);
     await modules.clearStateVectors(chatId);
-    modules.clearStateAtoms();
-    modules.clearL0Index();
+    await modules.invalidateSummaryAnchors(chatId, 0, 'anchors_cleared');
     await modules.clearEventVectors(chatId);
     modules.initStateIntegration?.();
 }
@@ -1006,6 +1005,12 @@ export async function runStorySummaryResponseCheck() {
     ensureNodeReplayGlobals();
     const { runSummaryResponseCheck } = await import('./summary-response-check.mjs');
     return runSummaryResponseCheck();
+}
+
+export async function runStorySummaryMemoryMaintenanceStorageCheck() {
+    ensureNodeReplayGlobals();
+    const { runMemoryMaintenanceStorageCheck } = await import('./memory-maintenance-storage-check.mjs');
+    return runMemoryMaintenanceStorageCheck();
 }
 
 export async function runStorySummaryCancellationCheck() {

@@ -7,6 +7,50 @@ import { worldContent } from '../domains/world/projection.js';
 import { buildWorldStoryPrompt } from '../apps/world/host/story-projection.js';
 import { article, deferred, tick, worldHarness } from './world-harness.js';
 import { createSettingsRepository } from '../host/settings-repository.js';
+import { createProductionWorldModule } from '../apps/world/production-module.js';
+import { WORLD_PARTITION } from '../apps/world/partition.js';
+import { createWorldContextCapabilityRegistration, WORLD_CONTEXT_CAPABILITY } from '../apps/world/context-capability.js';
+import { AGENT_CAPABILITY } from '../capabilities/agent/index.js';
+import { MAINTENANCE_CAPABILITY, createMaintenanceRegistry } from '../capabilities/maintenance/index.js';
+import { MANAGEMENT_CAPABILITY, createManagementRegistry } from '../capabilities/management/index.js';
+import { PROMPT_INJECTION_CAPABILITY } from '../capabilities/prompt-injection/index.ts';
+import { headlessPromptInjection } from './helpers/prompt-injection.js';
+
+test('production World subscription accepts keyless direct models but still rejects a missing model', async t => {
+    const h = await worldHarness();
+    h.state.messages = [];
+    let model = '';
+    const capabilities = new Map([
+        [PROMPT_INJECTION_CAPABILITY, headlessPromptInjection().install()],
+        [AGENT_CAPABILITY, { async loadConfig() { return { currentPresetName: 'test', presets: { test: {
+            provider: 'openai-compatible', modelConfigs: { 'openai-compatible': { model, apiKey: '' } },
+        } } }; } }],
+        [MAINTENANCE_CAPABILITY, { runner: h.runner, registerParticipant: createMaintenanceRegistry().register }],
+        [MANAGEMENT_CAPABILITY, createManagementRegistry()],
+        [WORLD_CONTEXT_CAPABILITY, createWorldContextCapabilityRegistration().install()],
+    ]);
+    const cleanups = [];
+    const module = createProductionWorldModule({ settings: h.settings, getChatIdentity: h.getChatIdentity,
+        subscribePrompt: () => () => {} });
+    const runtime = await module.install({
+        partition: h.coordinator.createScopedStore(WORLD_PARTITION), files: h.coordinator,
+        execution: { addCleanup: cleanup => cleanups.push(cleanup) },
+        useCapability: token => capabilities.get(token),
+    });
+    t.after(async () => {
+        await module.dispose(runtime);
+        for (const cleanup of cleanups.reverse()) await cleanup();
+        h.dispose();
+    });
+    runtime.activate({ activationToken: 'world', isCurrent: () => true, post: () => true });
+    const subscribe = () => runtime.handleMessage({ type: 'world/subscribe', payload: { chatIdentity: h.getChatIdentity(), enabled: true } });
+    await assert.rejects(subscribe());
+    assert.equal(h.state.settingsWrites, 0);
+    model = 'local-model';
+    assert.equal((await subscribe()).state.settings.subscribed, true);
+    assert.equal(h.state.settingsWrites, 1);
+    assert.equal(h.state.requests.length, 0);
+});
 
 function controller(h, checkAgent = async () => true) {
     const pushes = [];

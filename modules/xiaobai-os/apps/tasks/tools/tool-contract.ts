@@ -16,7 +16,7 @@ const IDENTITY_PROPERTIES = Object.freeze({
         type: 'string',
         minLength: 1,
         maxLength: TASK_MAX_ID_LENGTH,
-        description: 'Exact active taskId from the untrusted active-task data.',
+        description: 'Exact taskId of an active task in the supplied records.',
     },
     revision: {
         type: 'integer',
@@ -41,6 +41,7 @@ function tool(
             description: [
                 description,
                 saveDescription,
+                'Task reports in applied and skipped identify the record by collection, index and id. They include changed when applied, or reason, hint and issues:[{code,path,message,expected?}] when skipped; warnings lists additional notices. Correct the independent issues together. A rejected call leaves earlier successful changes untouched.',
             ].join('\n'),
             parameters: {
                 type: 'object',
@@ -50,7 +51,7 @@ function tool(
                         type: 'string',
                         minLength: 1,
                         maxLength: maximum,
-                        description: summaryDescription,
+                        description: `${summaryDescription} Maximum ${maximum} Unicode code points.`,
                     },
                 },
                 required: ['taskId', 'revision', summaryName],
@@ -65,7 +66,7 @@ export function taskTools(saveDescription: string): readonly MaintenanceFunction
         TASK_MAINTENANCE_TOOL_NAMES.PROGRESS,
         'Record changed facts for a task that remains active.',
         'progressSummary',
-        'Replaces the previous summary with cumulative confirmed facts relevant to objective. Record what happened, without inferred conditions, remaining-work analysis or advice.',
+        'Full replacement for the previous progressSummary.',
         MAX_TASK_PROGRESS_SUMMARY_LENGTH,
         saveDescription,
     ),
@@ -73,7 +74,7 @@ export function taskTools(saveDescription: string): readonly MaintenanceFunction
         TASK_MAINTENANCE_TOOL_NAMES.COMPLETE,
         'Complete an active task. The app settles its existing reward when the change is saved.',
         'resultSummary',
-        'The result that satisfied objective, or the explicit management instruction for this correction.',
+        'Result summary explaining why the task is being completed.',
         MAX_TASK_RESULT_SUMMARY_LENGTH,
         saveDescription,
     ),
@@ -81,9 +82,13 @@ export function taskTools(saveDescription: string): readonly MaintenanceFunction
         TASK_MAINTENANCE_TOOL_NAMES.FAIL,
         'Fail an active task. The app refunds its existing escrow when the change is saved.',
         'resultSummary',
-        'The result establishing irreversible failure or expiry of objective, or the explicit management instruction for this correction.',
+        'Result summary explaining why the task is being marked failed.',
         MAX_TASK_RESULT_SUMMARY_LENGTH,
         saveDescription,
     ),
 ]); }
-export const TASK_MAINTENANCE_TOOLS = taskTools('Changes remain pending until the app saves them after this run. Returns ok, status (updated/unchanged/failed), changed, applied/skipped task reports, warnings and an optional recovery hint.');
+export const TASK_MAINTENANCE_TOOLS = taskTools([
+    'Changes remain pending until the app saves them after this run.',
+    'A later successful call for the same task replaces its pending decision. Repeating the same decision is unchanged; submitting its original progress cancels the pending change. Only the final decision is saved and settled once.',
+    'Returns {ok,status,changed,applied,skipped,warnings,hint?}; status is updated, unchanged (already matches; success) or failed.',
+].join('\n'));

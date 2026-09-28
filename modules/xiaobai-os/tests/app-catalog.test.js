@@ -11,7 +11,7 @@ import {
 test('Host and Shell expose the same ordered APP catalog', () => {
     assert.deepEqual(XIAOBAI_OS_HOST_APP_IDS, XIAOBAI_OS_SHELL_APP_IDS);
     const modules = [...xiaobaiOsApps].reverse().map(app => ({
-        descriptor: { id: app.id, name: app.name, accent: app.accent },
+        descriptor: { id: app.id, name: app.name, description: app.description, accent: app.accent },
         capabilities: [],
         async install() { return {}; },
     }));

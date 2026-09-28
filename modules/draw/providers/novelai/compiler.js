@@ -163,7 +163,7 @@ export function compileNovelPromptForTask(task, recipe = {}) {
             .map(({ prompt, uc, center }) => ({ prompt, uc, center }));
     return {
         scene: joinTags(recipe.positivePrefix, task?.scene),
-        negativePrompt: String(recipe.negativePrefix || ''),
+        negativePrompt: String(task?.negativePrompt ?? recipe.negativePrefix ?? ''),
         characterPrompts,
     };
 }

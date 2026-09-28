@@ -12,13 +12,16 @@ import type { XiaobaiOsHostFrameMessage } from '../../../host/frame-bridge.js';
 import type {
     XiaobaiOsAppActivationContext,
     XiaobaiOsAppRuntime,
-    XiaobaiOsChatIdentity,
 } from '../../../types.js';
 import type { BankActivityPageView, BankClientState } from '../types.js';
 import { presentBankActivityPage, presentBankState } from './presentation.js';
 
 type UnknownRecord = Record<string, unknown>;
 const BANK_ACTIVITY_PAGE_SIZE = 50;
+const BANK_PREPARATION_ERRORS = Object.freeze({
+    invalid: '银行记录校验失败，原数据及钱包未改动。请检查数据后重试。',
+    unavailable: '银行数据暂时无法读取，请稍后重试。',
+});
 
 interface BankActivation {
     chatIdentity: string;
@@ -28,18 +31,11 @@ interface BankActivation {
 interface BankControllerDependencies {
     bank: BankService;
     economy: EconomyReadCapability;
-    getChatIdentity: () => XiaobaiOsChatIdentity | { key?: unknown } | string | null;
-    isMainGenerationActive: () => boolean;
-    subscribeGeneration: (listener: () => void) => () => void;
     execution?: XiaobaiOsExecutionScope;
 }
 
 function isRecord(value: unknown): value is UnknownRecord {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
-}
-
-function identityKey(identity: ReturnType<BankControllerDependencies['getChatIdentity']>): string {
-    return typeof identity === 'string' ? identity : String(identity?.key || '');
 }
 
 function isUnconfirmedSave(error: unknown): boolean {
@@ -74,9 +70,6 @@ function requireCas(payload: UnknownRecord): { expectedRevision: number; expecte
 export function createBankController({
     bank,
     economy,
-    getChatIdentity,
-    isMainGenerationActive,
-    subscribeGeneration,
     execution,
 }: BankControllerDependencies): XiaobaiOsAppRuntime & {
     activate: NonNullable<XiaobaiOsAppRuntime['activate']>;
@@ -85,37 +78,27 @@ export function createBankController({
     let activation: BankActivation | null = null;
     let preparation: { activation: BankActivation; error: string } | null = null;
     let busy = false;
-    let unsubscribeGeneration: (() => void) | null = null;
     let unsubscribeEconomy: (() => void) | null = null;
 
-    function currentChatIdentity(): string {
-        return identityKey(getChatIdentity());
-    }
+    const currentChatIdentity = () => 'user';
 
     function assertActivation(payload: UnknownRecord = {}): BankActivation {
         if (!activation) {throw new Error('银行 APP 未激活');}
-        const current = currentChatIdentity();
-        if (!current || current !== activation.chatIdentity || String(payload.chatIdentity || '') !== current) {
-            throw new Error('聊天已切换，请重新打开银行');
-        }
+        if (String(payload.chatIdentity || '') !== activation.chatIdentity) {throw new Error('银行页面已切换');}
         return activation;
-    }
-
-    function assertSameActivation(expected: BankActivation, payload: UnknownRecord = {}): void {
-        if (assertActivation(payload) !== expected) {throw new Error('银行页面已切换，请重试');}
     }
 
     function present(chatIdentity: string, serviceView: BankServiceView): BankClientState {
         const next = presentBankState({
             chatIdentity,
             serviceView,
-            generationActive: isMainGenerationActive(),
+            generationActive: false,
         });
         if (!preparation || preparation.activation !== activation) {return next;}
+        if (next.status === 'unconfirmed' || next.status === 'conflict') {return next;}
         if (preparation.error) {
             return { ...next, status: 'blocked', statusLabel: '暂时不可用', message: preparation.error };
         }
-        if (next.status === 'unconfirmed' || next.status === 'conflict') {return next;}
         return { ...next, status: 'loading', statusLabel: '正在载入', message: '' };
     }
 
@@ -124,7 +107,7 @@ export function createBankController({
     }
 
     function postState(current: BankActivation, state: BankClientState): BankClientState {
-        current.post('bank/state', { state });
+        if (activation === current) {current.post('bank/state', { state });}
         return state;
     }
 
@@ -134,12 +117,14 @@ export function createBankController({
     }
 
     async function prepare(): Promise<void> {
-        if (economy.isOpen()) {return;}
-        try {
-            await economy.ensureOpen();
-        } catch (error) {
-            if (!isUnconfirmedSave(error)) {throw error;}
+        if (!economy.isOpen()) {
+            try {
+                await economy.ensureOpen();
+            } catch (error) {
+                if (!isUnconfirmedSave(error)) {throw error;}
+            }
         }
+        await bank.ensureReady();
     }
 
     function schedulePreparation(current: BankActivation): void {
@@ -154,7 +139,10 @@ export function createBankController({
             }).catch((error) => {
                 if (preparation !== pending || activation !== current || currentChatIdentity() !== current.chatIdentity) {return;}
                 console.error('[LittleWhiteBox] 银行数据准备失败', error);
-                preparation = { activation: current, error: '银行数据暂时无法读取，请稍后重试。' };
+                const code = isRecord(error) && typeof error.code === 'string' ? error.code : '';
+                const invalid = ['bank_invalid_domain', 'bank_economy_inconsistent', 'bank_unsupported_version'].includes(code);
+                preparation = { activation: current,
+                    error: invalid ? BANK_PREPARATION_ERRORS.invalid : BANK_PREPARATION_ERRORS.unavailable };
                 emitState(current);
             });
         };
@@ -165,10 +153,9 @@ export function createBankController({
     function activate(context: XiaobaiOsAppActivationContext): BankClientState {
         cancelForeground();
         const chatIdentity = currentChatIdentity();
-        if (!chatIdentity) {throw new Error('请先打开一个聊天');}
         const current = { chatIdentity, post: context.post };
         activation = current;
-        if (!economy.isOpen()) {schedulePreparation(current);}
+        schedulePreparation(current);
         return buildState(chatIdentity);
     }
 
@@ -188,7 +175,6 @@ export function createBankController({
         busy = true;
         try {
             const result = await command();
-            assertSameActivation(current, payload);
             return completed(result);
         } catch (error) {
             if (activation === current && currentChatIdentity() === current.chatIdentity && isUnconfirmedSave(error)) {
@@ -218,7 +204,6 @@ export function createBankController({
             preparation = null;
             if (typeof bank.refreshCurrent === 'function') { await bank.refreshCurrent(); }
             await prepare();
-            assertSameActivation(current, payload);
             return emitState(current);
         }
         if (message.type === 'bank/records/load-more') {
@@ -231,7 +216,6 @@ export function createBankController({
                 activityOffset: offset,
                 activityLimit: BANK_ACTIVITY_PAGE_SIZE,
             }));
-            assertSameActivation(current, payload);
             return page;
         }
         if (message.type === 'bank/confirm-save') {
@@ -240,6 +224,9 @@ export function createBankController({
                 confirmation: confirmation.status,
                 state: emitState(current),
             }));
+        }
+        if (message.type === 'bank/retry-turns') {
+            return serializeWrite(current, payload, () => bank.confirmPending(), () => emitState(current));
         }
         const base = {
             ...requireCas(payload),
@@ -277,10 +264,7 @@ export function createBankController({
 
     function handleExternalState(): void {
         const current = activation;
-        if (
-            !current
-            || currentChatIdentity() !== current.chatIdentity
-        ) {return;}
+        if (!current) {return;}
         try {
             emitState(current);
         } catch (error) {
@@ -296,12 +280,9 @@ export function createBankController({
         handleChatChanged: cancelForeground,
         handleMessage,
         startBackground() {
-            if (!unsubscribeGeneration) {unsubscribeGeneration = subscribeGeneration(() => handleExternalState());}
             if (!unsubscribeEconomy) {unsubscribeEconomy = bank.subscribe(handleExternalState);}
         },
         stopBackground() {
-            unsubscribeGeneration?.();
-            unsubscribeGeneration = null;
             unsubscribeEconomy?.();
             unsubscribeEconomy = null;
             cancelForeground();

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { administratorHarness, settled, tick } from './administrator-harness.js';
+import { administratorHarness, settled, tick, withLoadedTools } from './administrator-harness.js';
+import { TOOLS_LOAD } from '../apps/administrator/agent/tool-loader.js';
 import { createAdministratorData } from '../apps/administrator/domain/data.js';
 import { administratorPage } from '../apps/administrator/application/projection.js';
 import { ADMINISTRATOR_POLICY } from '../apps/administrator/domain/policy.js';
@@ -51,7 +52,7 @@ test('regeneration excludes the target reply, its receipts, later turns and summ
         { role: 'user', content: 'target request' },
     ]);
     const reference = JSON.parse(messages[0].content.slice(messages[0].content.indexOf('\n') + 1));
-    assert.deepEqual(Object.keys(reference).sort(), ['apps', 'story', 'unavailable']);
+    assert.deepEqual(Object.keys(reference).sort(), ['apps', 'environment', 'readErrors', 'story']);
     assert.deepEqual(h.conversation.read().turns[1].operations, []);
     assert.deepEqual(h.conversation.read().turns[1].toolMessages, []);
     assert.equal(h.conversation.read().turns[1].assistantPayload, undefined);
@@ -82,16 +83,16 @@ test('regeneration runs normal read and write tools with fresh receipts', async 
     const turn = userTurn('one'); turn.operations = [{ id: 'old', appId: 'world', name: '修改', target: '', status: 'saved', elapsedMs: 3, summary: 'saved' }];
     const h = await administratorHarness({ administrator: { ...createAdministratorData(), turns: [turn] } });
     let step = 0;
-    h.state.generate = async request => {
+    h.state.generate = withLoadedTools(['world'], async request => {
         assert.equal(request.tools.some(tool => tool.function.name === 'WorldEdit'), true);
         if (step++ === 0) { return call('ChatRead', { from: 55 }, 'read'); }
         if (step === 2) { return call('WorldEdit', { overview: '更正后的概况' }, 'edit'); }
         return { text: '核实了第55楼。' };
-    };
+    });
     await h.request('regenerate', { turnId: 'one' }); await settled(h.runtime);
     assert.equal(h.world.readCurrent().world.overview, '更正后的概况');
     assert.equal(h.repository.read().turns[0].assistant, '核实了第55楼。');
-    assert.deepEqual(h.repository.read().turns[0].operations.map(op => op.status), ['read', 'saved']);
+    assert.deepEqual(h.repository.read().turns[0].operations.map(op => op.status), ['read', 'read', 'saved']);
     assert.equal(h.repository.read().turns[0].operations.some(op => op.id === 'old'), false);
 });
 test('regeneration saves truncation before requesting the model and confirmation resumes it once', async () => {
@@ -110,7 +111,7 @@ test('regeneration saves truncation before requesting the model and confirmation
 });
 test('successful business write survives a model failure; regeneration does not repeat it', async () => {
     const h = await administratorHarness(); let step = 0;
-    h.state.generate = async () => { if (step++ === 0) { return call('WorldEdit', { overview: '记录已更正' }); } throw new Error('provider offline'); };
+    h.state.generate = withLoadedTools(['world'], async () => { if (step++ === 0) { return call('WorldEdit', { overview: '记录已更正' }); } throw new Error('provider offline'); });
     const sent = await h.request('send', { text: '把世界概况改为记录已更正' }); await settled(h.runtime);
     assert.equal(h.world.readCurrent().world.overview, '记录已更正');
     const before = h.state.persisted.partitions.world;
@@ -137,7 +138,7 @@ test('a saved USER tail generates normally without appending another USER', asyn
     const turn = userTurn('old', null);
     const h = await administratorHarness({ administrator: { ...createAdministratorData(), turns: [turn] } });
     h.state.generate = async request => {
-        assert.ok(request.tools.some(tool => tool.function.name === 'WorldEdit'));
+        assert.deepEqual(request.tools.map(tool => tool.function.name), [TOOLS_LOAD]);
         assert.deepEqual(request.messages.filter(message => message.role === 'user'), [{ role: 'user', content: turn.user.text }]);
         return { text: '已重新核查。' };
     };
@@ -167,24 +168,24 @@ test('a failed reroll leaves the truncated conversation and partial reply, not t
 
 test('an unavailable floor is a failed read result, so the model can correct its range within the same exchange', async () => {
     const h = await administratorHarness(); let step = 0;
-    h.state.generate = async request => {
+    h.state.generate = withLoadedTools([], async request => {
         if (step++ === 0) { return call('ChatRead', { from: 999 }, 'missing'); }
         if (step === 2) { assert.equal(JSON.parse(request.messages.at(-1).content).status, 'failed'); return call('ChatRead', { from: 55 }, 'corrected'); }
         return { text: '已核对当前第55楼。' };
-    };
+    });
     await h.request('send', { text: '查看第55楼' }); await settled(h.runtime);
     assert.equal(h.repository.read().turns[0].status, 'finished');
-    assert.deepEqual(h.repository.read().turns[0].operations.map(op => op.status), ['failed', 'read']);
+    assert.deepEqual(h.repository.read().turns[0].operations.map(op => op.status), ['read', 'failed', 'read']);
 });
 
 test('full story text stays in tool context and never enters frame progress or persisted receipts', async () => {
     const h = await administratorHarness(); h.state.messages[55].mes = '原文资料'.repeat(2000); let step = 0;
-    h.state.generate = async () => step++ === 0 ? call('ChatRead', { from: 55 }) : { text: '已查阅。' };
+    h.state.generate = withLoadedTools([], async () => step++ === 0 ? call('ChatRead', { from: 55 }) : { text: '已查阅。' });
     await h.request('send', { text: '查看第55楼' }); await settled(h.runtime);
-    const tool = JSON.parse(h.state.requests.at(-1).messages.find(m => m.role === 'tool').content);
+    const tool = JSON.parse(h.state.requests.at(-1).messages.find(m => m.role === 'tool' && m.toolName === 'ChatRead').content);
     assert.equal(tool.data.items[0].text, h.state.messages[55].mes);
     assert.ok(h.pushed.every(message => JSON.stringify(message).length < 5000));
-    assert.deepEqual(JSON.parse(h.repository.read().turns[0].toolMessages[1].content), tool);
+    assert.deepEqual(JSON.parse(h.repository.read().turns[0].toolMessages.find(m => m.role === 'tool' && m.toolName === 'ChatRead').content), tool);
     assert.ok(JSON.stringify(h.repository.read().turns[0].operations).length < 2000);
 });
 
@@ -233,5 +234,5 @@ test('history deletion is local, drops affected summary, and frame pages stay bo
     const page = administratorPage(actual);
     assert.equal(page.rows.length, ADMINISTRATOR_POLICY.pageSize);
     assert.ok(page.rows.every(row => row.text.length <= ADMINISTRATOR_POLICY.textBlock));
-    assert.ok(page.rows.every(row => row.operations.length <= ADMINISTRATOR_POLICY.visibleOperations));
+    assert.ok(page.rows.every(row => row.processCount === 0));
 });

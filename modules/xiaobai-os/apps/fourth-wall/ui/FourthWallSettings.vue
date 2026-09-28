@@ -56,7 +56,6 @@ function saveCapabilities(): void {
                 <h3>上下文</h3>
                 <label>带入的主聊天楼层数<input v-model.number="chatDraft.maxChatLayers" type="number" min="1" max="9999"></label>
                 <label class="is-toggle"><span>流式生成</span><input v-model="chatDraft.stream" type="checkbox"></label>
-                <label class="is-toggle"><span>禁用助手预填充</span><input v-model="chatDraft.disableAssistantPrefill" type="checkbox"></label>
                 <button type="button" class="is-primary" :disabled="busy" @click="saveChat">保存上下文设置</button>
             </section>
             <section class="fourth-wall-settings-section">

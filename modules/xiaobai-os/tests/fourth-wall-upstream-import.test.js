@@ -108,11 +108,10 @@ test('converts the upstream sessions fixture into the frozen Fourth Wall partiti
         1720000000000,
     );
 
-    assert.equal(partition.schemaVersion, 2);
+    assert.equal(partition.schemaVersion, 3);
     assert.deepEqual(partition.state.settings, {
         maxChatLayers: 42,
         stream: false,
-        disableAssistantPrefill: true,
     });
     assert.equal(partition.state.activeSessionId, 'sess_1710000003000');
     assert.deepEqual(partition.state.sessions[0].history[1], {
@@ -140,7 +139,7 @@ test('converts the earlier root history fixture only at the import boundary', as
     assert.equal(partition.state.sessions[0].id, 'default');
     assert.equal(partition.state.sessions[0].createdAt, 1720000000000);
     assert.equal(partition.state.sessions[0].history[1].thinking, 'legacy thought');
-    assert.equal(partition.state.settings.disableAssistantPrefill, false);
+    assert.equal(Object.hasOwn(partition.state.settings, 'disableAssistantPrefill'), false);
     assert.equal(Object.hasOwn(partition.state, 'history'), false);
 });
 

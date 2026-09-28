@@ -1,8 +1,12 @@
 import { resolveResultToolCalls } from '../../../../agent-core/runtime/protocol.js';
 import type { AgentMessage } from '../../../../agent-core/runtime/conversation.js';
 import type { XiaobaiOsAgentGateway } from '../../../capabilities/agent/gateway.js';
+import { parseToolArguments, ToolArgumentsError } from '../../../capabilities/agent/tool-arguments.js';
+import type { ManagementTool } from '../../../capabilities/management/index.js';
 import { safePromptJson } from '../../../capabilities/maintenance/prompt-safety.js';
 import { ADMINISTRATOR_POLICY as POLICY } from '../domain/policy.js';
+import { TOOL_NOT_LOADED } from './tool-loader.js';
+import { administratorToolCallKey } from '../application/identity.js';
 import type { AdministratorContextUsage } from '../domain/types.js';
 import { administratorContext, administratorTurnMessages, contextUsage, retainedAdministratorTurns, summarizeAdministrator,
     type AdministratorHistory, type AgentRecord } from './history.js';
@@ -18,7 +22,7 @@ export function isAdministratorContextOverflow(error: unknown): boolean {
 export async function runAdministratorLoop(options: {
     gateway: XiaobaiOsAgentGateway; config: unknown; system: string; prefix: AgentRecord[];
     request: AgentRecord; requestForCounting: AgentRecord; imageCount: number;
-    tools: AgentRecord[]; state: AdministratorHistory; signal: AbortSignal;
+    getTools(): ManagementTool['definition'][]; state: AdministratorHistory; signal: AbortSignal;
     execute(name: string, args: unknown, callId: string, messageIndex: number): Promise<unknown>;
     save(): Promise<void>;
     onText(text: string): void; onPhase(phase: 'replying' | 'summarizing'): void;
@@ -31,9 +35,10 @@ export async function runAdministratorLoop(options: {
     let responses: AgentRecord[] | undefined;
     let overflowRetried = false;
     let rounds = 0;
-    const usage = () => {
+    let previousTools: ManagementTool['definition'][] | undefined;
+    const usage = (tools = options.getTools()) => {
         const projected = administratorContext(state, options.requestForCounting);
-        return contextUsage(options.system, options.tools, options.prefix, projected, options.imageCount, agent.providerConfig);
+        return contextUsage(options.system, tools, options.prefix, projected, options.imageCount, agent.providerConfig);
     };
     async function save() {
         await options.save();
@@ -55,7 +60,8 @@ export async function runAdministratorLoop(options: {
         await save();
         return true;
     }
-    async function executeTools(result: AgentRecord, calls: NonNullable<AgentMessage['toolCalls']>) {
+    async function executeTools(result: AgentRecord, calls: NonNullable<AgentMessage['toolCalls']>, tools: ManagementTool['definition'][]) {
+        const advertised = new Set(tools.map(tool => tool.function.name));
         const assistant: AgentMessage = { role: 'assistant', content: String(result.text ?? ''), toolCalls: calls,
             ...(result.providerPayload && typeof result.providerPayload === 'object' ? { providerPayload: result.providerPayload as AgentRecord } : {}) };
         const results: AgentMessage[] = calls.map(call => ({ role: 'tool', toolName: call.name, toolCallId: call.id,
@@ -67,11 +73,17 @@ export async function runAdministratorLoop(options: {
         const responses: AgentRecord[] = [];
         for (const [index, call] of calls.entries()) {
             signal.throwIfAborted();
-            let args: unknown;
-            try { args = JSON.parse(call.arguments); } catch { args = null; }
+            let args: Record<string, unknown> | undefined;
+            let argumentFailure: ReturnType<ToolArgumentsError['result']> | undefined;
+            try { args = parseToolArguments(call.arguments); }
+            catch (error) {
+                if (!(error instanceof ToolArgumentsError)) { throw error; }
+                argumentFailure = error.result();
+            }
             // Until the executor returns, no outcome is confirmed, including across write-receipt saves.
             results[index].content = safePromptJson({ ok: false, status: 'unconfirmed', code: 'tool_result_unconfirmed' });
-            const value = await options.execute(call.name, args, `${rounds}:${call.id}`, turn.toolMessages.indexOf(results[index]));
+            const value = advertised.has(call.name)
+                ? argumentFailure ?? await options.execute(call.name, args, administratorToolCallKey(rounds, call.id), turn.toolMessages.indexOf(results[index])) : TOOL_NOT_LOADED;
             results[index].content = safePromptJson(value);
             responses.push({ id: call.id, name: call.name, response: value, ...(Object.hasOwn(call, 'providerId') ? { providerId: call.providerId } : {}) });
             await save();
@@ -81,17 +93,20 @@ export async function runAdministratorLoop(options: {
     try {
         while (rounds < POLICY.maxToolRounds) {
             signal.throwIfAborted();
+            const tools = options.getTools();
             const compacted = usage().used >= POLICY.summaryTrigger && await compact();
-            if (compacted && responses) { agent = await options.gateway.openSession(options.config); responses = undefined; }
-            const currentUsage = usage(); options.onContext(currentUsage);
+            const toolsChanged = previousTools && (previousTools.length !== tools.length || previousTools.some((tool, index) => tool !== tools[index]));
+            if (responses && (compacted || agent.supportsSessionToolLoop && toolsChanged)) { agent = await options.gateway.openSession(options.config); responses = undefined; }
+            const currentUsage = usage(tools); options.onContext(currentUsage);
             if (currentUsage.used > POLICY.inputBudget) { throw new Error('administrator_context_full'); }
             options.onPhase('replying'); options.onText('');
             let result: AgentRecord;
             let streaming = true;
             try {
                 const native = agent.supportsSessionToolLoop && responses !== undefined;
+                previousTools = tools;
                 result = await agent.run({ systemPrompt: options.system, messages: native ? [] : [...options.prefix, ...administratorContext(state, options.request).messages],
-                    tools: options.tools, signal, ...(native ? { toolResponses: responses } : {}), onStreamProgress: snapshot => {
+                    tools, signal, ...(native ? { toolResponses: responses } : {}), onStreamProgress: snapshot => {
                         if (!streaming || signal.aborted) { return; }
                         options.onText(String(snapshot.text ?? ''));
                         options.onToolPreview?.(Array.isArray(snapshot.toolCalls) ? snapshot.toolCalls.map(call => String(call.name ?? '')).filter(Boolean) : []);
@@ -118,7 +133,7 @@ export async function runAdministratorLoop(options: {
                 return text;
             }
             if (calls.length > 24) { throw new Error('administrator_tool_batch_too_large'); }
-            responses = await executeTools(result, calls);
+            responses = await executeTools(result, calls, tools);
         }
         throw new Error('administrator_tool_round_limit');
     } finally {

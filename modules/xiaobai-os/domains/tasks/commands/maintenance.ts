@@ -1,6 +1,5 @@
 import {
     assertFreshTaskIdentities,
-    normalizeObservedAssistantCount,
     normalizeTaskActionId,
     normalizeTaskCas,
     normalizeTaskIdentity,
@@ -31,19 +30,18 @@ function maintainTask(
     validateTaskDomain(domain);
     const summaryKey = kind === 'progressed' ? 'progressSummary' : 'resultSummary';
     const command = requireTaskCommandKeys(input, ['actionId', 'taskId', 'expectedTaskRevision', 'expectedEventId',
-        summaryKey, 'observedAssistantCount']);
+        summaryKey]);
     const actionId = normalizeTaskActionId(command.actionId);
     const taskId = normalizeTaskIdentity(command.taskId);
     const cas = normalizeTaskCas(command.expectedTaskRevision, command.expectedEventId);
     const summary = kind === 'progressed'
         ? normalizeTaskProgressSummary(command[summaryKey])
         : normalizeTaskResultSummary(command[summaryKey]);
-    const observedAssistantCount = normalizeObservedAssistantCount(command.observedAssistantCount);
     const existing = domain.events.find(event => event.actionId === actionId);
     if (existing) {
         const predecessor = taskEventPredecessor(domain, existing);
         if (existing.kind !== kind || existing.taskId !== taskId || summaryOf(existing) !== summary
-            || existing.observedAssistantCount !== observedAssistantCount || !predecessor
+            || !predecessor
             || predecessor.taskRevision !== cas.expectedTaskRevision || predecessor.eventId !== cas.expectedEventId) {
             throw new TaskError('task_action_conflict');
         }
@@ -62,10 +60,10 @@ function maintainTask(
     }
     assertFreshTaskIdentities(domain, [actionId]);
     if (kind === 'progressed') {
-        return appendTaskEvent(domain, { kind, actionId, taskId, observedAssistantCount,
+        return appendTaskEvent(domain, { kind, actionId, taskId,
             progressSummary: summary }, environment);
     }
-    return appendTaskEvent(domain, { kind, actionId, taskId, observedAssistantCount,
+    return appendTaskEvent(domain, { kind, actionId, taskId,
         resultSummary: summary }, environment);
 }
 

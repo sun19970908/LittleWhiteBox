@@ -9,6 +9,7 @@ import { projectCommunicationChronology } from '../application/communication-chr
 import { privateMessageScan } from '../prompt/world-info-scan.js';
 import { applyTextFilterRules } from '../../../../story-summary/vector/utils/text-filter.js';
 import { getTextFilterRules } from '../../../../story-summary/data/config.js';
+import { MESSAGE_CONTEXT_LIMITS } from './context-limits.js';
 
 export function createMessagesContext(chat: MessagesChatPort, readSegments: () => readonly MessageSegment[]) {
     function people(name = '', throughMessageIndex = chat.messages().length - 1): KnownPerson[] {
@@ -22,7 +23,12 @@ export function createMessagesContext(chat: MessagesChatPort, readSegments: () =
     async function capture(contact: MessageContact, history: PrivateMessage[], incoming: PrivateMessage) {
         // One live configuration snapshot for this capture, not a config clone per floor.
         const rules = getTextFilterRules();
-        const adapter = createPromptContextAdapter({ cleanMessageText: text => applyTextFilterRules(text, rules) });
+        const adapter = createPromptContextAdapter({
+            cleanMessageText: text => applyTextFilterRules(text, rules),
+            includeActiveStoryDetails: true,
+            strictBackgroundRead: true,
+            normalizationLimits: MESSAGE_CONTEXT_LIMITS,
+        });
         const messages = chat.messages();
         const throughMessageIndex = messages.length - 1;
         const chronology = projectCommunicationChronology(readSegments(), messages, history, incoming);

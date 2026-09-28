@@ -9,22 +9,15 @@ import { inputDigest } from '../utils/vector-input-digest.js';
 import { getContext } from '../../../../../../../extensions.js';
 import { xbLog } from '../../../../core/debug-core.js';
 import {
-    saveStateAtoms,
     saveStateVectors,
     getStateAtoms,
     getStateVectorDescriptors,
-    deleteStateAtomsFromFloor,
-    deleteStateVectorsFromFloor,
-    clearStateAtoms,
-    clearStateVectors,
     getL0FloorStatus,
-    setL0FloorStatus,
-    clearL0Index,
-    deleteL0IndexFromFloor,
-    beginL0MetadataBatch,
-    endL0MetadataBatch,
-    flushL0MetadataSave,
 } from '../storage/state-store.js';
+import { createAnchorExtractionDraft } from '../../data/anchor-extraction.js';
+import { assertMemoryWritable } from '../../data/memory-commit.js';
+import { sameMemory } from '../../maintenance/domain.js';
+import { invalidateSummaryAnchors, getSummaryStore } from '../../data/store.js';
 import { embed } from '../llm/siliconflow.js';
 import { extractAtomsForRound } from '../llm/atom-extraction.js';
 import { getL0FailureDetails } from '../llm/l0-retry-policy.js';
@@ -133,15 +126,15 @@ function buildL0InputText(userMessage, aiMessage) {
 
 
 export async function incrementalExtractAtoms(chatId, chat, onProgress, options = {}) {
-    beginL0MetadataBatch('incrementalExtractAtoms');
-    try {
-        return await incrementalExtractAtomsInner(chatId, chat, onProgress, options);
-    } finally {
-        endL0MetadataBatch('incrementalExtractAtoms');
-    }
+    getSummaryStore();
+    const draft = createAnchorExtractionDraft(chatId, chat || []);
+    const result = await incrementalExtractAtomsInner(chatId, chat, onProgress, options, draft);
+    if (!result.cancelled) await draft.commit();
+    return result;
 }
 
-async function incrementalExtractAtomsInner(chatId, chat, onProgress, options = {}) {
+async function incrementalExtractAtomsInner(chatId, chat, onProgress, options, draft) {
+    const { getStatus: getL0FloorStatus, setStatus: setL0FloorStatus, addAtoms: saveStateAtoms } = draft;
     const {
         maxFloors = Infinity,
         // 用户显式触发时忽略楼层失败上限：后台会放弃的终态楼层，手动操作必须能重试，
@@ -379,7 +372,7 @@ async function collectL0VectorBuildState(chatId, options = {}) {
     }
 
     const fingerprint = getEngineFingerprint(vectorConfig);
-    const atoms = [...getStateAtoms()];
+    const atoms = structuredClone(getStateAtoms());
     const [stateVectors, meta] = await Promise.all([
         getStateVectorDescriptors(chatId),
         getMeta(chatId),
@@ -421,6 +414,7 @@ export async function getL0VectorBuildStatus(chatId, options = {}) {
  * 楼层提取状态。所有 Embedding 批次成功后才整批写库，失败时下轮仍可从事实数据重建。
  */
 export async function vectorizeMissingStateAtoms(chatId, onProgress, options = {}) {
+    assertMemoryWritable(chatId);
     const {
         vectorConfig = getVectorConfig(),
         signal = null,
@@ -544,6 +538,9 @@ export async function vectorizeMissingStateAtoms(chatId, onProgress, options = {
 
     try {
         if (isCancelled()) return cancelledResult();
+        assertMemoryWritable(chatId);
+        const currentAtoms = new Map(getStateAtoms().map(atom => [atom.atomId, atom]));
+        if (atoms.some(atom => !sameMemory(atom, currentAtoms.get(atom.atomId)))) return cancelledResult();
         await saveStateVectors(chatId, allItems, fingerprint);
     } catch (error) {
         if (isCancelled()) return cancelledResult();
@@ -574,40 +571,10 @@ export async function vectorizeMissingStateAtoms(chatId, onProgress, options = {
 // ============================================================================
 
 export async function clearAllAtomsAndVectors(chatId) {
-    beginL0MetadataBatch('clearAllAtomsAndVectors');
-    try {
-        clearStateAtoms();
-        clearL0Index();
-        if (chatId) {
-            await clearStateVectors(chatId);
-        }
-    } finally {
-        endL0MetadataBatch('clearAllAtomsAndVectors');
-    }
-
-    flushL0MetadataSave('clearAllAtomsAndVectors');
-
+    await invalidateSummaryAnchors(chatId, 0, 'anchors_cleared');
     xbLog.info(MODULE_ID, '已清空所有记忆锚点');
 }
 
-// ============================================================================
-// 回滚钩子
-// ============================================================================
-
 async function handleStateRollback(floor) {
-    xbLog.info(MODULE_ID, `收到回滚请求: floor >= ${floor}`);
-
-    const { chatId } = getContext();
-
-    beginL0MetadataBatch('stateRollback');
-    try {
-        deleteStateAtomsFromFloor(floor);
-        deleteL0IndexFromFloor(floor);
-
-        if (chatId) {
-            await deleteStateVectorsFromFloor(chatId, floor);
-        }
-    } finally {
-        endL0MetadataBatch('stateRollback');
-    }
+    await invalidateSummaryAnchors(getContext().chatId, floor);
 }

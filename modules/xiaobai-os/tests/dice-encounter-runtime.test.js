@@ -12,7 +12,7 @@ const compiled = await build({
     bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
     plugins: [{ name: 'native-host', setup(builder) {
         builder.onResolve({ filter: /^js-sha256$/ }, () => ({ path: import.meta.resolve('js-sha256'), external: true }));
-        builder.onResolve({ filter: /(?:^encounter-runtime-host$|\/(?:script|extensions|group-chats|event-manager|generate-interceptor|sillytavern-runtime-adapters)\.js$|\/regex\/engine\.js$)/ },
+        builder.onResolve({ filter: /(?:^encounter-runtime-host$|\/(?:script|extensions|group-chats|event-manager|generate-interceptor)\.js$|\/regex\/engine\.js$)/ },
             () => ({ path: 'host', namespace: 'fixture' }));
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `
             const listeners = new Map();
@@ -40,7 +40,6 @@ const compiled = await build({
             export const registerGenerateInterceptor = (_, fn) => { host.interceptor = fn; };
             export const unregisterGenerateInterceptor = () => { host.interceptor = null; };
             export const GENERATE_INTERCEPTOR_ORDER = {};
-            export const setSillyTavernPrompt = (_, value) => { host.prompt = value; };
         ` }));
     } }],
 });
@@ -56,6 +55,7 @@ function fixture(t, { references = () => ({ world: false, summary: false }), ran
     const fresh = [], io = [];
     t.mock.method(globalThis, 'fetch', async (...args) => { io.push(args); return Response.json({ error: 'unexpected encounter I/O' }, { status: 400 }); });
     const runtime = createEncounterRuntime({ enabled: () => enabled, references, isAuxiliaryMessage: () => false,
+        setPrompt: content => { host.prompt = content; },
         changed: message => { if (message) fresh.push(message); }, random: () => { draws++; return random(); },
     });
     runtime.start();

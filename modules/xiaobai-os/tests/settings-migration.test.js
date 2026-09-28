@@ -39,9 +39,10 @@ function createCurrentSettings(enabled = true) {
             fourthWall: createFourthWallSettings(),
             map: { autoMaintenance: false },
             tasks: { autoMaintenance: false },
-            messages: { imagePrompt: false, voicePrompt: false },
+            messages: { imagePrompt: false, voicePrompt: false, syncNoticeEnabled: true },
             dice: { actionChecksEnabled: false, actionCheckFrequency: 'standard', actionCheckRule: 'd20', encountersEnabled: false },
             world: { subscribed: false, injectToStory: true },
+            game: { movingSoundEnabled: true },
         },
     };
 }
@@ -57,9 +58,10 @@ test('enables a new OS entry without enabling automatic app features', async () 
         assert.equal(current.apps.fourthWall.commentary.enabled, false);
         assert.equal(current.apps.fourthWall.image.enablePrompt, false);
         assert.equal(current.apps.fourthWall.voice.enabled, false);
-        assert.deepEqual(current.apps.messages, { imagePrompt: false, voicePrompt: false });
+        assert.deepEqual(current.apps.messages, { imagePrompt: false, voicePrompt: false, syncNoticeEnabled: true });
         assert.deepEqual(current.apps.dice, { actionChecksEnabled: false, actionCheckFrequency: 'standard', actionCheckRule: 'd20', encountersEnabled: false });
         assert.deepEqual(current.apps.world, { subscribed: false, injectToStory: true });
+        assert.deepEqual(current.apps.game, { movingSoundEnabled: true });
         assert.deepEqual(repository.read(), current);
     }
 });
@@ -266,11 +268,12 @@ test('rejects invalid mutation arguments without changing preferences', async ()
     assert.throws(() => repository.setEnabled('yes'), /enabled must be a boolean/);
     assert.throws(() => repository.setMapAutoMaintenance(null), /must be a boolean/);
     assert.throws(() => repository.setTasksAutoMaintenance(1), /must be a boolean/);
-    assert.throws(() => repository.setMessagesCapabilities({ imagePrompt: 'yes', voicePrompt: false }), /must be boolean/);
+    assert.throws(() => repository.setMessagesSettings({ imagePrompt: 'yes', voicePrompt: false, syncNoticeEnabled: true }), /must be boolean/);
     assert.throws(() => repository.setDiceFeature('unknown', true), /invalid Dice feature/);
     assert.throws(() => repository.setDiceFeature('actionChecksEnabled', 'yes'), /must be a boolean/);
     assert.throws(() => repository.setWorldPreference('unknown', true), /invalid World preference/);
     assert.throws(() => repository.setWorldPreference('subscribed', 'yes'), /must be a boolean/);
+    assert.throws(() => repository.setGameMovingSound('yes'), /must be a boolean/);
     assert.deepEqual(settings.xiaobaiOs, before);
 });
 
@@ -287,17 +290,17 @@ test('Messages capability preferences persist independently of Fourth Wall and r
     repository.subscribe(() => {events.push('publish');});
     repository.subscribeMutationInstalled(() => {events.push('fence');});
     const fourthWall = repository.read().apps.fourthWall;
-    await repository.setMessagesCapabilities({ imagePrompt: true, voicePrompt: true });
+    await repository.setMessagesSettings({ imagePrompt: true, voicePrompt: true, syncNoticeEnabled: true });
     const reopened = createSettingsRepository(createAdapter(structuredClone(saved)));
-    assert.deepEqual((await reopened.prepare()).apps.messages, { imagePrompt: true, voicePrompt: true });
+    assert.deepEqual((await reopened.prepare()).apps.messages, { imagePrompt: true, voicePrompt: true, syncNoticeEnabled: true });
     assert.deepEqual(reopened.read().apps.fourthWall, fourthWall);
     fail = true;
-    await assert.rejects(() => repository.setMessagesCapabilities({ imagePrompt: false, voicePrompt: false }), /offline/);
-    assert.deepEqual(saved.xiaobaiOs.apps.messages, { imagePrompt: true, voicePrompt: true });
-    assert.deepEqual(repository.read().apps.messages, { imagePrompt: true, voicePrompt: true });
+    await assert.rejects(() => repository.setMessagesSettings({ imagePrompt: false, voicePrompt: false, syncNoticeEnabled: true }), /offline/);
+    assert.deepEqual(saved.xiaobaiOs.apps.messages, { imagePrompt: true, voicePrompt: true, syncNoticeEnabled: true });
+    assert.deepEqual(repository.read().apps.messages, { imagePrompt: true, voicePrompt: true, syncNoticeEnabled: true });
     assert.deepEqual(events, ['fence', 'publish']);
     fail = false;
-    await repository.setMessagesCapabilities({ imagePrompt: false, voicePrompt: false });
-    assert.deepEqual(saved.xiaobaiOs.apps.messages, { imagePrompt: false, voicePrompt: false });
+    await repository.setMessagesSettings({ imagePrompt: false, voicePrompt: false, syncNoticeEnabled: true });
+    assert.deepEqual(saved.xiaobaiOs.apps.messages, { imagePrompt: false, voicePrompt: false, syncNoticeEnabled: true });
     assert.deepEqual(saved.xiaobaiOs.apps.fourthWall, fourthWall);
 });

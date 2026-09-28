@@ -7,28 +7,30 @@ import type {
     MapLocationStatus,
 } from '../../../domains/map/types.js';
 import { enumToken, intentId, isRecord } from './intent-common.js';
+import { unassignedMapLocations, visitedMapLocationKeys } from '../../../domains/map/hierarchy.js';
 import { mapToolResult, type MapToolResult } from './result.js';
 
 const ATLAS_READ_MODES = ['summary', 'document', 'locations', 'links', 'actors'] as const;
 const LOCATION_STATUSES: readonly MapLocationStatus[] = ['mentioned', 'visited'];
 const LINK_KINDS: readonly MapLinkKind[] = ['door', 'stairs', 'elevator', 'path', 'road', 'portal', 'passage'];
 const ALLOWED_ARGUMENTS = new Set([
-    'mode', 'query', 'parent', 'status', 'from', 'to', 'kind', 'actorKey', 'limit', 'offset',
+    'mode', 'query', 'parent', 'status', 'from', 'to', 'kind', 'actorKey', 'limit', 'offset', 'needsRegion',
 ]);
 export const DEFAULT_ATLAS_READ_LIMIT = 30;
 export const MAX_ATLAS_READ_LIMIT = 300;
 export const MAX_ATLAS_QUERY_LENGTH = 120;
 
 /** Scene links are compiler-owned: the model learns whether a scene exists, never its key. */
-type AgentMapLocation = Omit<MapLocation, 'sceneKey'> & { hasScene: boolean };
+type AgentMapLocation = Omit<MapLocation, 'sceneKey'> & { hasScene: boolean; needsRegion: boolean };
 
-function projectLocation(location: MapLocation): AgentMapLocation {
+function projectLocation(location: MapLocation, unassigned: ReadonlySet<string>, visited: ReadonlySet<string>): AgentMapLocation {
     return {
         key: location.key,
         name: location.name,
         scale: location.scale,
-        status: location.status,
+        status: visited.has(location.key) ? 'visited' : location.status,
         hasScene: !!location.sceneKey,
+        needsRegion: unassigned.has(location.key),
         ...(location.parent ? { parent: location.parent } : {}),
         ...(location.brief ? { brief: location.brief } : {}),
         ...(location.position ? { position: [...location.position] as [number, number] } : {}),
@@ -93,6 +95,8 @@ export function readAtlas(domain: MapDomainV1, value: unknown): MapToolResult {
     const mode = value.mode === undefined ? 'summary' : enumToken(value.mode, ATLAS_READ_MODES);
     if (!mode) {throw new TypeError('MapAtlasRead.mode is invalid.');}
     const revision = domain.revision;
+    const unassigned = new Set(unassignedMapLocations(domain.atlas).map(location => location.key));
+    const visited = visitedMapLocationKeys(domain.atlas);
     if (mode === 'summary') {
         return mapToolResult({
             data: {
@@ -102,6 +106,7 @@ export function readAtlas(domain: MapDomainV1, value: unknown): MapToolResult {
                     locations: domain.atlas.locations.length,
                     links: domain.atlas.links.length,
                     actors: domain.atlas.actors.length,
+                    needsRegion: unassigned.size,
                 },
                 player: structuredClone(domain.atlas.actors.find(actor => actor.actorKey === 'player') || null),
             },
@@ -113,7 +118,7 @@ export function readAtlas(domain: MapDomainV1, value: unknown): MapToolResult {
                 mode,
                 revision,
                 atlas: {
-                    locations: domain.atlas.locations.map(projectLocation),
+                    locations: domain.atlas.locations.map(location => projectLocation(location, unassigned, visited)),
                     links: structuredClone(domain.atlas.links),
                     actors: structuredClone(domain.atlas.actors),
                 },
@@ -125,15 +130,17 @@ export function readAtlas(domain: MapDomainV1, value: unknown): MapToolResult {
     const offset = integerArgument(value.offset, 'offset', 0, 0, Number.MAX_SAFE_INTEGER);
     const limit = integerArgument(value.limit, 'limit', DEFAULT_ATLAS_READ_LIMIT, 1, MAX_ATLAS_READ_LIMIT);
     if (mode === 'locations') {
+        if (value.needsRegion !== undefined && typeof value.needsRegion !== 'boolean') {throw new TypeError('MapAtlasRead.needsRegion must be a boolean.');}
         const parent = optionalId(value.parent, 'parent');
         const status = value.status === undefined ? null : enumToken(value.status, LOCATION_STATUSES);
         if (value.status !== undefined && !status) {throw new TypeError('MapAtlasRead.status is invalid.');}
         const matches = domain.atlas.locations.filter((location: MapLocation) => (
             (!parent || location.parent === parent)
-            && (!status || location.status === status)
+            && (!status || visited.has(location.key) === (status === 'visited'))
+            && (value.needsRegion === undefined || unassigned.has(location.key) === value.needsRegion)
             && includesQuery([location.key, location.name, location.brief], query)
         ));
-        const result = page(matches.map(projectLocation), offset, limit);
+        const result = page(matches.map(location => projectLocation(location, unassigned, visited)), offset, limit);
         return mapToolResult({
             data: {
                 mode, revision, count: result.count, returned: result.returned,

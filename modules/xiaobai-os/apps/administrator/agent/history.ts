@@ -5,15 +5,16 @@ import { safePromptJson } from '../../../capabilities/maintenance/prompt-safety.
 import { ADMINISTRATOR_POLICY as POLICY } from '../domain/policy.js';
 import type { AdministratorContextUsage, AdministratorData, AdministratorTurn } from '../domain/types.js';
 import { ADMINISTRATOR_SUMMARY_PROMPT } from './prompt.js';
+import { ADMINISTRATOR_REFERENCE_TEXT } from './reference-data.js';
 
 export type AgentRecord = Record<string, unknown>;
 export type AdministratorHistory = Pick<AdministratorData, 'turns' | 'summary'>;
 export function administratorTurnMessages(turn: AdministratorTurn, toolOffset = 0, request?: AgentRecord): AgentRecord[] {
     return [
-        ...(request ? [request] : turn.user ? [{ role: 'user', content: turn.user.text + (turn.user.image ? `\n[Attached image: ${turn.user.image.name}; image bytes omitted from this history excerpt]` : '') }] : []),
+        ...(request ? [request] : turn.user ? [{ role: 'user', content: turn.user.text + (turn.user.image ? `\n${ADMINISTRATOR_REFERENCE_TEXT.image(turn.user.image.name)}` : '') }] : []),
         ...buildProviderMessagesFromHistory(turn.toolMessages.slice(toolOffset)),
         ...(turn.assistant ? [{ role: 'assistant', content: turn.assistant, ...(turn.assistantPayload ? { providerPayload: turn.assistantPayload } : {}) }] : []),
-        ...(!request && (turn.operations.length || turn.status !== 'finished') ? [{ role: 'system', content: `Administrator operation receipts (reference data): ${safePromptJson({ status: turn.status, operations: turn.operations })}` }] : []),
+        ...(!request && (turn.operations.length || turn.status !== 'finished') ? [{ role: 'system', content: `${ADMINISTRATOR_REFERENCE_TEXT.operations}: ${safePromptJson({ status: turn.status, operations: turn.operations })}` }] : []),
     ];
 }
 export function retainedAdministratorTurns(data: AdministratorHistory) {
@@ -45,7 +46,7 @@ export function historyBefore(data: AdministratorData, turnId: string) {
     return { summary: useSummary ? data.summary : null, turns: data.turns.slice(0, end) };
 }
 export function referenceSummary(text: string): AgentRecord[] {
-    return text ? [{ role: 'system', content: `Earlier administrator exchanges, summarised as reference data:\n${safePromptJson({ summary: text })}` }] : [];
+    return text ? [{ role: 'system', content: `${ADMINISTRATOR_REFERENCE_TEXT.summary}:\n${safePromptJson({ summary: text })}` }] : [];
 }
 export function contextUsage(system: string, tools: readonly AgentRecord[], prefix: readonly AgentRecord[], context: ReturnType<typeof administratorContext>, imageCount: number, providerConfig: AgentRecord): AdministratorContextUsage {
     const runtime = new Set(context.runtime);

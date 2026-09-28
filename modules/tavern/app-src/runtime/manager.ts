@@ -677,9 +677,7 @@ export async function runSharedManagerToolLoop(input: {
     }
     const defaultAdapter = input.executeManagerOnce
         ? null
-        : createAgentAdapter(providerConfig as unknown as Record<string, unknown>, {
-            missingApiKeyMessage: '请先在 API 配置里填写记忆管理员 API。',
-        }) as { chat: (task: Record<string, unknown>) => Promise<Record<string, unknown>>; supportsSessionToolLoop?: boolean };
+        : createAgentAdapter(providerConfig as unknown as Record<string, unknown>) as { chat: (task: Record<string, unknown>) => Promise<Record<string, unknown>>; supportsSessionToolLoop?: boolean };
     const executeManagerOnce = input.executeManagerOnce
         || ((options: XbTavernManagerOnceOptions) => runManagerOnceWithAdapter(
             defaultAdapter!,

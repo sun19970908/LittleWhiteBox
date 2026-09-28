@@ -11,7 +11,6 @@ import {
     validateTaskDomain,
 } from '../domains/tasks/invariants.js';
 import {
-    calculateElapsedAssistantReplies,
     projectTaskRecord,
     projectTaskRecords,
 } from '../domains/tasks/projection.js';
@@ -101,7 +100,6 @@ test('persisted board rewards remain frozen facts while new boards use the curre
         boardId: 'board-frozen-reward',
         listingId: 'listing-frozen-reward',
         playerDisplayName: '主人',
-        observedAssistantCount: 1,
     }, environment(['event-frozen-reward']).value).domain;
     const historical = structuredClone(domain);
     historical.board.listings[0].reward = 1_000;
@@ -124,7 +122,7 @@ test('accept and publish create exact frozen facts with globally unique IDs and 
     const env = environment(['board-1', 'event-accepted']);
     const accepted = acceptTaskListing(domain, {
         actionId: 'action-accept', taskId: 'task-received', boardId: 'board-1', listingId: 'listing-1',
-        playerDisplayName: ' 主人 ', observedAssistantCount: 3,
+        playerDisplayName: ' 主人 ',
     }, env.value);
     assert.equal(env.calls(), 2);
     assert.equal(accepted.domain.revision, 2);
@@ -138,7 +136,7 @@ test('accept and publish create exact frozen facts with globally unique IDs and 
 
     const published = publishTask(accepted.domain, {
         actionId: 'action-publish', taskId: 'task-published', form: form({ title: '  Ａ任务 ' }),
-        playerDisplayName: '主人', observedAssistantCount: 4,
+        playerDisplayName: '主人',
     }, environment(['event-published']).value);
     assert.equal(published.record.title, 'A任务');
     assert.equal(published.record.grade, 'CUSTOM');
@@ -152,7 +150,7 @@ test('action replay is semantic and precedes stale guards while different intent
         expectedBoardId: null, boardId: 'board-1', listings: [listing()], generatedAt: 10,
     }).domain;
     const input = { actionId: 'action-accept', taskId: 'task-1', boardId: 'board-1', listingId: 'listing-1',
-        playerDisplayName: '主人', observedAssistantCount: 1 };
+        playerDisplayName: '主人' };
     const first = acceptTaskListing(domain, input, environment(['event-1']).value);
     domain = replaceTaskBoard(first.domain, {
         expectedBoardId: 'board-1', boardId: 'board-2', listings: [listing('listing-2')], generatedAt: 20,
@@ -172,16 +170,14 @@ test('recruitment replaces snapshots, assigns only a current candidate and fixes
     const env = environment(['event-publish', 'event-candidates', 'event-assign']);
     let result = publishTask(createEmptyTaskDomain(), {
         actionId: 'action-publish', taskId: 'task-1', form: form(), playerDisplayName: '主人',
-        observedAssistantCount: 0,
     }, env.value);
     result = replaceTaskCandidates(result.domain, {
         actionId: 'action-candidates', taskId: 'task-1', ...cas(result.record),
-        candidates: [candidate()], observedAssistantCount: 1,
+        candidates: [candidate()],
     }, env.value);
     const candidateSnapshot = structuredClone(result.record.candidates[0]);
     result = assignTaskCandidate(result.domain, {
         actionId: 'action-assign', taskId: 'task-1', ...cas(result.record), candidateId: 'candidate-1',
-        observedAssistantCount: 2,
     }, env.value);
     assert.equal(result.record.status, 'active');
     assert.deepEqual(result.record.candidates, []);
@@ -192,45 +188,44 @@ test('recruitment replaces snapshots, assigns only a current candidate and fixes
 
     const cancelEnv = environment(['event-publish-2', 'event-cancel']);
     let cancelled = publishTask(createEmptyTaskDomain(), {
-        actionId: 'publish-2', taskId: 'task-2', form: form(), playerDisplayName: '主人', observedAssistantCount: 0,
+        actionId: 'publish-2', taskId: 'task-2', form: form(), playerDisplayName: '主人',
     }, cancelEnv.value);
     cancelled = cancelTask(cancelled.domain, { actionId: 'cancel-2', taskId: 'task-2', ...cas(cancelled.record),
-        observedAssistantCount: 1 }, cancelEnv.value);
+        }, cancelEnv.value);
     assert.equal(cancelled.event.resultSummary, TASK_CANCELLED_SUMMARY);
     assert.throws(() => replaceTaskCandidates(result.domain, {
-        actionId: 'bad-recruit', taskId: 'task-1', ...cas(result.record), candidates: [], observedAssistantCount: 3,
+        actionId: 'bad-recruit', taskId: 'task-1', ...cas(result.record), candidates: [],
     }, env.value), error => error.code === 'task_task_not_recruiting');
 });
 
 test('maintenance CAS, no-op ID use, replacement progress and terminal guards are exact', () => {
     const env = environment(['event-publish', 'event-candidates', 'event-assign', 'event-progress', 'event-complete']);
     let result = publishTask(createEmptyTaskDomain(), {
-        actionId: 'publish', taskId: 'task-1', form: form(), playerDisplayName: '主人', observedAssistantCount: 5,
+        actionId: 'publish', taskId: 'task-1', form: form(), playerDisplayName: '主人',
     }, env.value);
     result = replaceTaskCandidates(result.domain, { actionId: 'candidates', taskId: 'task-1', ...cas(result.record),
-        candidates: [candidate()], observedAssistantCount: 6 }, env.value);
+        candidates: [candidate()] }, env.value);
     result = assignTaskCandidate(result.domain, { actionId: 'assign', taskId: 'task-1', ...cas(result.record),
-        candidateId: 'candidate-1', observedAssistantCount: 7 }, env.value);
+        candidateId: 'candidate-1' }, env.value);
     const beforeNoopCalls = env.calls();
     const noOp = progressTask(result.domain, { actionId: 'reusable-noop', taskId: 'task-1', ...cas(result.record),
-        progressSummary: '艾拉已接取任务', observedAssistantCount: 4 }, env.value);
+        progressSummary: '艾拉已接取任务' }, env.value);
     assert.equal(noOp.changed, false);
     assert.equal(noOp.event, null);
     assert.equal(env.calls(), beforeNoopCalls);
-    assert.equal(calculateElapsedAssistantReplies(result.record, 4), 0);
 
     result = progressTask(noOp.domain, { actionId: 'reusable-noop', taskId: 'task-1', ...cas(noOp.record),
-        progressSummary: '已经取得药箱，尚未抵达诊所', observedAssistantCount: 4 }, env.value);
+        progressSummary: '已经取得药箱，尚未抵达诊所' }, env.value);
     assert.equal(result.record.progressSummary, '已经取得药箱,尚未抵达诊所');
     const stale = { ...cas(noOp.record), expectedEventId: 'wrong' };
     assert.throws(() => completeTask(result.domain, { actionId: 'stale', taskId: 'task-1', ...stale,
-        resultSummary: '完成', observedAssistantCount: 5 }, env.value), error => error.code === 'task_revision_conflict');
+        resultSummary: '完成' }, env.value), error => error.code === 'task_revision_conflict');
     const completionInput = { actionId: 'complete', taskId: 'task-1', ...cas(result.record),
-        resultSummary: '药箱已经交给诊所', observedAssistantCount: 5 };
+        resultSummary: '药箱已经交给诊所' };
     const completed = completeTask(result.domain, completionInput, env.value);
     assert.equal(completed.record.status, 'completed');
     assert.throws(() => progressTask(completed.domain, { actionId: 'after-terminal', taskId: 'task-1',
-        ...cas(completed.record), progressSummary: '重开', observedAssistantCount: 6 }, env.value),
+        ...cas(completed.record), progressSummary: '重开' }, env.value),
     error => error.code === 'task_terminal');
     assert.equal(completeTask(completed.domain, completionInput, environment().value).changed, false);
 });
@@ -238,11 +233,11 @@ test('maintenance CAS, no-op ID use, replacement progress and terminal guards ar
 test('strict invariant replay rejects exact-key, revision, identity and transition corruption', () => {
     const env = environment(['event-publish', 'event-candidates', 'event-assign']);
     let result = publishTask(createEmptyTaskDomain(), { actionId: 'publish', taskId: 'task-1', form: form(),
-        playerDisplayName: '主人', observedAssistantCount: 0 }, env.value);
+        playerDisplayName: '主人' }, env.value);
     result = replaceTaskCandidates(result.domain, { actionId: 'candidates', taskId: 'task-1', ...cas(result.record),
-        candidates: [candidate()], observedAssistantCount: 1 }, env.value);
+        candidates: [candidate()] }, env.value);
     result = assignTaskCandidate(result.domain, { actionId: 'assign', taskId: 'task-1', ...cas(result.record),
-        candidateId: 'candidate-1', observedAssistantCount: 2 }, env.value);
+        candidateId: 'candidate-1' }, env.value);
     for (const corrupt of [
         (domain) => { domain.extra = true; },
         (domain) => { domain.events[1].taskRevision = 3; },

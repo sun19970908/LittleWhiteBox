@@ -30,7 +30,6 @@ function record(taskId, status, updatedAt, overrides = {}) {
         resultSummary: status === 'completed' ? 'Done' : '',
         createdAt: 1,
         updatedAt,
-        lastObservedAssistantCount: 0,
         ...overrides,
     };
 }
@@ -47,6 +46,8 @@ test('state projection marks accepted board entries and sorts visible task group
             events: [],
         },
         records: [record('older', 'active', 2), accepted, record('recruiting', 'recruiting', 3)],
+        commissions: [],
+        currentScopeId: 'story-a',
         playerBalance: 90,
         writeState: 'ready',
     };

@@ -137,7 +137,10 @@ export async function executeNaturalBoundaryCase({
         answerText: null,
         efficiency,
     });
-    const scored = scoreCase({ case: goldCase, observation });
+    const scored = goldCase.track === 'natural-source-only'
+        ? null : scoreCase({ case: goldCase, observation });
+    const stageTrace = scored?.stageTraceRow || { id: goldCase.id, qualityMeasured: false,
+        stages: observation.stages, diagnostics: observation.diagnostics };
     const promptRow = {
         schemaVersion: GOLD_CAPTURE_SCHEMA_VERSION,
         caseId: goldCase.id,
@@ -187,8 +190,8 @@ export async function executeNaturalBoundaryCase({
             prompt: promptRow,
             promptInput: promptInputRow,
             transport: transportRow,
-            stageTrace: scored.stageTraceRow,
-            failure: scored.failureRow,
+            stageTrace,
+            failure: scored?.failureRow || null,
             replayCase,
         },
     };

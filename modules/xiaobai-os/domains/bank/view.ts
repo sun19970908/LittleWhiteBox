@@ -24,7 +24,6 @@ export const BANK_MAX_ACTIVITY_PAGE_SIZE = 100 as const;
 
 export interface CreateBankViewInput {
     domain?: BankDomainV1 | null;
-    currentTurn: number;
     activityOffset?: number;
     activityLimit?: number;
 }
@@ -50,12 +49,12 @@ function publicActivity(record: ReturnType<typeof flattenBankActivities>[number]
         actionId: record.actionId,
         assistantTurn: record.assistantTurn,
         createdAt: record.createdAt,
+        ...('sourceStoryId' in record ? { sourceStoryId: record.sourceStoryId } : {}),
     };
 }
 
 /** Constructs a fresh Controller-safe snapshot and never settles claimable positions. */
 export function createBankView(input: CreateBankViewInput): BankClientView {
-    const currentTurn = pageInteger(input.currentTurn, 0, 0, Number.MAX_SAFE_INTEGER, 'currentTurn');
     const offset = pageInteger(input.activityOffset, 0, 0, Number.MAX_SAFE_INTEGER, 'activityOffset');
     const limit = pageInteger(
         input.activityLimit,
@@ -66,6 +65,7 @@ export function createBankView(input: CreateBankViewInput): BankClientView {
     );
     const domain = input.domain ?? createEmptyBankDomain();
     validateBankDomain(domain);
+    const currentTurn = domain.currentTurn;
     const state = replayBankEvents(domain);
     const records = flattenBankActivities(domain).reverse();
     const activities = records.slice(offset, offset + limit).map(publicActivity);

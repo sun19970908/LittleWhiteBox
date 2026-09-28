@@ -4,6 +4,7 @@ import {
     type EconomyReadCapability,
 } from '../../capabilities/economy/index.js';
 import type { AppInstallContext, XiaobaiOsAppModule } from '../../kernel/app-registry.js';
+import { PROMPT_INJECTION_CAPABILITY, type PromptInjectionCapability } from '../../capabilities/prompt-injection/index.js';
 import type { PartitionStore } from '../../kernel/contracts.js';
 import type { XiaobaiOsAppRuntime, XiaobaiOsChatIdentity } from '../../types.js';
 import type { ShopDomainV2 } from '../../domains/shop/types.js';
@@ -22,6 +23,7 @@ export interface ShopModuleInstallContext {
     ownerId: string;
     shop: ShopService;
     economy: EconomyReadCapability;
+    prompts: PromptInjectionCapability;
     execution: AppInstallContext['execution'];
 }
 
@@ -41,7 +43,7 @@ export function createShopModule(dependencies: ShopModuleDependencies): XiaobaiO
     return {
         descriptor: SHOP_APP_DESCRIPTOR,
         partition: SHOP_PARTITION,
-        capabilities: [ECONOMY_READ_CAPABILITY, ECONOMY_TRANSACTION_CAPABILITY],
+        capabilities: [ECONOMY_READ_CAPABILITY, ECONOMY_TRANSACTION_CAPABILITY, PROMPT_INJECTION_CAPABILITY],
         async install(context) {
             if (!context.partition) {throw new Error('Shop partition store is unavailable');}
             const economy = context.useCapability(ECONOMY_READ_CAPABILITY);
@@ -61,6 +63,7 @@ export function createShopModule(dependencies: ShopModuleDependencies): XiaobaiO
                 shop,
                 economy,
                 execution: context.execution,
+                prompts: context.useCapability(PROMPT_INJECTION_CAPABILITY),
             }) ?? createShopController({
                 shop,
                 economy,

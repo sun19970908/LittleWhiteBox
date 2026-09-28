@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "state": {
+    "settings": { "maxChatLayers": 42, "stream": true, "disableAssistantPrefill": false },
+    "sessions": [
+      {
+        "id": "default", "name": "Default", "createdAt": 1720000000000,
+        "history": [
+          { "role": "user", "content": "旧存档用户消息", "ts": 1720000001000 },
+          { "role": "ai", "content": "旧存档角色消息", "thinking": "角色内省", "ts": 1720000002000 }
+        ],
+        "memory": "皮下相处的长期记忆", "archivedCount": 1
+      },
+      {
+        "id": "sess_1720000003000", "name": "另一段皮下聊天", "createdAt": 1720000003000,
+        "history": [
+          { "role": "ai", "content": "刚才的吐槽", "ts": 1720000004000, "type": "commentary" }
+        ],
+        "memory": "另一段独立记忆", "archivedCount": 0
+      }
+    ],
+    "activeSessionId": "sess_1720000003000"
+  }
+}

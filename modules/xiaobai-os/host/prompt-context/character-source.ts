@@ -40,19 +40,19 @@ function characterField(character: HostCharacter, field: 'description' | 'person
     return character[field] ?? data[field] ?? '';
 }
 
-function promptCharacter(character: HostCharacter, fallbackName?: unknown) {
+function promptCharacter(character: HostCharacter, fallbackName?: unknown, activeFields?: UnknownRecord) {
     const key = typeof character.avatar === 'string' ? character.avatar.trim() : '';
     if (!key) {return null;}
     return {
         characterKey: key,
         displayName: character.name ?? fallbackName,
-        description: characterField(character, 'description'),
-        personality: characterField(character, 'personality'),
-        scenario: characterField(character, 'scenario'),
+        description: activeFields ? activeFields.description : characterField(character, 'description'),
+        personality: activeFields ? activeFields.personality : characterField(character, 'personality'),
+        scenario: activeFields ? activeFields.scenario : characterField(character, 'scenario'),
     };
 }
 
-export function selectPromptCharacters(context: PromptCharacterHostContext): PromptContextInput['characters'] {
+export function selectPromptCharacters(context: PromptCharacterHostContext, activeFields?: UnknownRecord): PromptContextInput['characters'] {
     const characters = asCharacters(context.characters);
     const groupId = context.groupId === null || context.groupId === undefined ? '' : String(context.groupId);
     if (groupId) {
@@ -77,7 +77,6 @@ export function selectPromptCharacters(context: PromptCharacterHostContext): Pro
             ? context.characters[Number(rawCharacterId)]
             : isRecord(context.characters) ? context.characters[String(rawCharacterId)] : undefined);
     if (!isRecord(selected)) {return [];}
-    const character = promptCharacter(selected as HostCharacter, context.name2);
+    const character = promptCharacter(selected as HostCharacter, context.name2, activeFields);
     return character ? [character] : [];
 }
-

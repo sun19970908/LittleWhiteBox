@@ -3,7 +3,7 @@ import type { XiaobaiOsFileState } from '../../kernel/contracts.js';
 import type { OutgoingMessage } from './application/image-upload.js';
 import type { MessagePermission } from './application/modifications.js';
 
-export interface MessagesSettings { imagePrompt: boolean; voicePrompt: boolean }
+export interface MessagesSettings { imagePrompt: boolean; voicePrompt: boolean; syncNoticeEnabled: boolean }
 
 /** In-flight input only; never serialized into the messages partition. */
 export interface PendingOutgoingMessage {
@@ -32,6 +32,8 @@ export interface MessagesClientState {
     knownPeople: { name: string; aliases: string[] }[];
     fileState: XiaobaiOsFileState;
     pendingSave: boolean;
+    recoveryBlocked: boolean;
+    operationPending: boolean;
     pendingModification: boolean;
     revision: string;
     boundary: number;
@@ -39,7 +41,7 @@ export interface MessagesClientState {
     outgoing: PendingOutgoingMessage | null;
     sendFailure: MessageSendFailure | null;
     generationActive: boolean;
-    unsynced: number;
+    syncNotice: { messageIds: string[]; error: string };
     error: string;
     media: { image: boolean; voice: boolean };
 }

@@ -6,7 +6,7 @@ import {
 } from '../apps/map/ui/map-presentation.js';
 import { sceneElementPath } from '../apps/map/ui/scene-geometry.js';
 
-import { layoutWorldMap, locationInRegion, connectedPlaces } from '../apps/map/ui/world-map.js';
+import { layoutWorldMap, locationInScope, connectedPlaces } from '../apps/map/ui/world-map.js';
 
 function atlas(locations, links) {
     return {
@@ -27,8 +27,9 @@ test('world layout preserves authored geography and gives unpositioned destinati
     const links = [{ id: 'trail', from: 'room', to: 'forest', kind: 'path', bidirectional: false }];
     const world = atlas(locations, links);
     const original = structuredClone(world);
-    const layout = layoutWorldMap(world, 'town');
-    assert.deepEqual(layoutWorldMap(atlas([...locations].reverse(), links), 'town'), layout);
+    const scope = { locations: locations.filter(place => place.parent === 'town'), positionParent: 'town' };
+    const layout = layoutWorldMap(world, scope);
+    assert.deepEqual(layoutWorldMap(atlas([...locations].reverse(), links), { ...scope, locations: [...scope.locations].reverse() }), layout);
     assert.deepEqual(world, original);
     assert.deepEqual(layout.nodes.map(node => node.location.key), ['forest', 'home', 'lake']);
     assert.equal(layout.nodes.find(node => node.location.key === 'forest').y, 100);
@@ -36,7 +37,7 @@ test('world layout preserves authored geography and gives unpositioned destinati
     for (const node of layout.nodes.filter(item => !item.placed)) {
         assert.ok(layout.nodes.every(other => other === node || Math.hypot(other.x - node.x, other.y - node.y) >= 160));
     }
-    assert.equal(locationInRegion(world, 'room', 'town'), 'home');
+    assert.equal(locationInScope(world, 'room', scope.locations), 'home');
     assert.equal(layout.routes[0].from.location.key, 'home');
     assert.equal(layout.routes[0].to.location.key, 'forest');
     assert.equal(layout.routes[0].link.bidirectional, false);

@@ -69,6 +69,8 @@ function clientStatus(view: TasksServiceView, economyReady: boolean): { status: 
     if (view.writeState === 'saving') {return { status: 'saving', message: '正在保存任务和账目…' };}
     if (view.writeState === 'loading') {return { status: 'loading', message: '正在加载任务…' };}
     if (view.writeState === 'failed') {return { status: 'blocked', message: '任务暂时加载不了，请检查连接后重试。' };}
+    if (view.initialization === 'failed') {return { status: 'blocked', message: '任务数据暂时无法读取，请稍后重试。' };}
+    if (view.initialization === 'loading') {return { status: 'loading', message: '正在加载任务…' };}
     if (!economyReady) {return { status: 'blocked', message: '钱包还没开通，请重新加载后再试。' };}
     return { status: 'ready', message: '' };
 }
@@ -101,6 +103,9 @@ export function presentTasksState({
         writeState: serviceView.writeState,
         settings: structuredClone(settings),
         playerBalance: serviceView.playerBalance,
+        currentScopeId: serviceView.currentScopeId,
+        commissions: structuredClone(serviceView.commissions)
+            .sort((a, b) => b.task.updatedAt - a.task.updatedAt || b.task.taskId.localeCompare(a.task.taskId)),
         generationActive,
         generation: { ...generation },
         board: board ? {

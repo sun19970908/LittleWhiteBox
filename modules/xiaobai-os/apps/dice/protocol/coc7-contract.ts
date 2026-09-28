@@ -11,7 +11,8 @@ export function coc7CapabilityProjection() {
 }
 export function coc7RequestContract(): string {
     const difficulties = Object.entries(COC7_DIFFICULTIES)
-        .map(([id, divisor]) => `${id} (${divisor === 1 ? 'full value' : `1/${divisor} value`})`).join('; ');
+        .map(([id, rule]) => `${id} (${rule.kind === 'bonus' ? `value + ${rule.amount}, max ${rule.cap}`
+            : rule.divisor === 1 ? 'full value' : `1/${rule.divisor} value`})`).join('; ');
     const fields = Object.entries(COC7_REQUEST_FIELDS)
         .map(([name, spec]) => `${name}${spec.type === 'string' ? ` (max ${spec.maxLength} chars)` : ''}: ${spec.description}`
             + (name === 'difficulty' ? ` ${difficulties}.` : '')).join('\n');

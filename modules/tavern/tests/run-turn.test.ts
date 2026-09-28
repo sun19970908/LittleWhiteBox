@@ -4166,7 +4166,7 @@ test('xb tavern provider resolver reports shared API readiness and request audit
         },
     });
     assert.equal(missing.readiness.ok, false);
-    assert.deepEqual(missing.readiness.missing, ['模型', 'API Key']);
+    assert.deepEqual(missing.readiness.missing, ['模型']);
 
     const ready = resolveXbTavernProviderConfig({
         currentPresetName: '酒馆 Claude',
@@ -4275,7 +4275,7 @@ test('xb tavern provider resolver reports shared API readiness and request audit
         },
     }, { role: 'delegate' });
     assert.equal(incompleteDelegate.readiness.ok, false);
-    assert.deepEqual(incompleteDelegate.readiness.missing, ['模型', 'API Key']);
+    assert.deepEqual(incompleteDelegate.readiness.missing, ['模型']);
     assert.match(incompleteDelegate.readiness.message, /配置分身模型/);
     assert.notEqual(incompleteDelegate.model, 'ready-main-model');
 
@@ -5270,7 +5270,8 @@ test('xb tavern assistant automatic run exposes and executes the same web_search
     }
 });
 
-test('xb tavern direct runtime fails before provider call when shared API config is incomplete', async () => {
+test('xb tavern direct runtime fails before provider call when shared API config is incomplete', async t => {
+    const fetch = t.mock.method(globalThis, 'fetch', async () => { throw new Error('unexpected provider request'); });
     await assert.rejects(
         () => runTavernOnce({
             agentConfig: {
@@ -5289,8 +5290,8 @@ test('xb tavern direct runtime fails before provider call when shared API config
             },
             messages: [{ role: 'user', content: 'Hello.' }],
         }),
-        /请先在 API 配置里选择模型\/填写 Key/,
     );
+    assert.equal(fetch.mock.callCount(), 0);
 });
 
 test('xb tavern delegate runtime refuses to inherit a configured main provider', async () => {

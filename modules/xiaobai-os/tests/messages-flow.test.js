@@ -24,7 +24,7 @@ test('saved capabilities select the advertised reply formats for sending and ret
     };
     h.response = respond;
     for (const [imagePrompt, voicePrompt] of [[false, false], [true, false], [false, true], [true, true], [false, false]]) {
-        const settings = { imagePrompt, voicePrompt };
+        const settings = { imagePrompt, voicePrompt, syncNoticeEnabled: true };
         const before = clone(h.service.current()); const writes = h.writes;
         const saved = await c.command('settings', { settings });
         assert.deepEqual(saved.settings, settings);
@@ -39,10 +39,10 @@ test('saved capabilities select the advertised reply formats for sending and ret
         assert.ok(request.messages.some(m => Array.isArray(m.content) && m.content.some(part => part.type === 'image_url')));
     }
     await assert.rejects(c.command('settings', { settings: { imagePrompt: true, voicePrompt: 'yes' } }));
-    assert.deepEqual(c.activate().settings, { imagePrompt: false, voicePrompt: false });
+    assert.deepEqual(c.activate().settings, { imagePrompt: false, voicePrompt: false, syncNoticeEnabled: true });
     h.response = async () => {throw new Error('offline');};
     await c.command('send', { contactId: '乙', actionId: 'retry-settings', payload: { type: 'text', text: '在吗？' } }); await c.idle();
-    await c.command('settings', { settings: { imagePrompt: false, voicePrompt: true } });
+    await c.command('settings', { settings: { imagePrompt: false, voicePrompt: true, syncNoticeEnabled: true } });
     h.response = respond;
     await c.command('retry', { contactId: '乙', messageId: 'input:retry-settings' }); await c.idle();
     assert.deepEqual(examples(h.requests.at(-1)).map(item => item.type), ['text', 'voice']);
@@ -70,8 +70,11 @@ test('unconfirmed input remains visible across APP reentry; confirmation and ret
     assert.equal(reopened.sendFailure.messageId, 'input:instant');
     await assert.rejects(c.command('discard-send', { messageId: 'input:instant' }));
     h.replace = null;
-    assert.equal((await c.command('confirm')).outgoing, null);
+    const recovered = await c.command('confirm');
+    assert.equal(recovered.outgoing, null);
+    assert.equal(recovered.operationPending, false);
     await c.command('retry', { contactId: '甲', messageId: 'input:instant' }); await c.idle();
+    await c.waitFor(() => unsyncedIds(h.service.current()).length === 0);
     assert.equal(h.apiCalls, 1);
     assert.equal(h.service.current().messages.filter(m => m.id === 'input:instant').length, 1);
     assert.deepEqual(unsyncedIds(h.service.current()), []);
@@ -114,12 +117,39 @@ test('a provider failure remains attached to its input even if mirroring fails a
     const h = await harness(); const c = await controllerHarness(h);
     h.failProjection = true; h.response = async () => {throw new Error('provider offline');};
     await c.command('send', { contactId: '甲', actionId: 'failed', payload: { type: 'text', text: '还在吗' } }); await c.idle();
+    await c.waitFor(() => c.activate().sendFailure !== null);
     const state = c.activate();
     assert.equal(state.outgoing, null); assert.equal(state.sendFailure.messageId, 'input:failed');
-    assert.match(state.sendFailure.message, /没有收到回复/); assert.equal(state.unsynced, 1);
+    assert.ok(state.sendFailure.message); assert.deepEqual(state.syncNotice.messageIds, ['input:failed']);
     h.failProjection = false; h.response = null;
     await c.command('retry', { contactId: '甲', messageId: 'input:failed' }); await c.idle();
+    await c.waitFor(() => unsyncedIds(h.service.current()).length === 0);
     assert.equal(h.service.current().messages.length, 3); assert.equal(h.apiCalls, 2);
+    await c.runtime.stop(); c.controller.deactivate();
+});
+
+test('background read failure keeps one outgoing message for retry without making a model request', async () => {
+    const h = await harness(); const c = await controllerHarness(h);
+    const capture = h.deps.context.capture;
+    let unavailable = true;
+    h.deps.context.capture = async (...args) => {
+        if (unavailable) {throw new Error('prompt_context_world_info_failed', { cause: new Error('offline') });}
+        return capture(...args);
+    };
+    await c.command('send', { contactId: '甲', actionId: 'background', payload: { type: 'text', text: '到了吗？' } });
+    await c.idle();
+    await c.waitFor(() => c.activate().sendFailure !== null);
+    assert.equal(h.apiCalls, 0);
+    assert.equal(h.service.current().messages.filter(message => message.id === 'input:background').length, 1);
+    assert.equal(c.activate().sendFailure.messageId, 'input:background');
+    assert.equal(c.activate().operationPending, false);
+    c.controller.deactivate(); c.activate();
+    unavailable = false;
+    await c.command('retry', { contactId: '甲', messageId: 'input:background' }); await c.idle();
+    assert.equal(h.apiCalls, 1);
+    assert.equal(h.service.current().messages.filter(message => message.id === 'input:background').length, 1);
+    assert.equal(h.service.current().messages.filter(message => message.replyTo === 'input:background').length, 2);
+    assert.equal(c.activate().sendFailure, null);
     await c.runtime.stop(); c.controller.deactivate();
 });
 
@@ -140,7 +170,8 @@ test('a real sidecar conflict can be explicitly adopted through Messages, then e
     };
     await assert.rejects(command('contact/note', { contactId: '甲', note: '未保存的备注' }));
     for (let i = 0; i < 3; i++) {
-        const state = await command('confirm');
+        await assert.rejects(command('confirm'));
+        const state = controller.activate({ isCurrent: () => true, post() {} });
         assert.equal(state.fileState, 'conflict'); assert.equal(state.pendingSave, true);
     }
     assert.deepEqual(h.service.current(), original);

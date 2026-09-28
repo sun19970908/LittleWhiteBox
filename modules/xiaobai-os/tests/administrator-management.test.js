@@ -1,9 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { administratorHarness, settled } from './administrator-harness.js';
+import { administratorHarness, settled, withLoadedTools } from './administrator-harness.js';
 import { createTasksManagement } from '../apps/tasks/management/participant.js';
 import { createMapManagement } from '../apps/map/management/participant.js';
 import { createWorldManagement } from '../apps/world/management/participant.js';
+import { mapAtlasFixture } from './fixtures/map-atlas.js';
 
 async function receivedTask(h) {
     await h.tasks.refreshCurrent();
@@ -26,11 +27,11 @@ test('task management completes an active objective through its existing atomic 
 });
 test('source changes block a new write and an unconfirmed retry that would have to dispatch again', async () => {
     const h = await administratorHarness(); let step = 0;
-    h.state.generate = async () => {
+    h.state.generate = withLoadedTools(['world'], async () => {
         if (step++ === 0) { return { toolCalls: [{ id: 'read', name: 'ChatRead', arguments: '{"from":55}' }] }; }
         if (step === 2) { h.state.messages[55].swipe_id++; return { toolCalls: [{ id: 'write', name: 'WorldEdit', arguments: '{"overview":"旧证据"}' }] }; }
         return { text: '原文版本改变，需要重新查阅。' };
-    };
+    });
     await h.request('send', { text: '根据55楼更正概况' }); await settled(h.runtime);
     assert.equal(h.world.readCurrent().world.overview, '');
     const session = await createWorldManagement(h.world).open();
@@ -49,19 +50,46 @@ test('World and Map reject competing changes to the same object and preserve ind
     assert.equal(h.world.readCurrent().world.overview, '新的概况');
     const mapOne = await createMapManagement(h.map, () => ({ actorKey: 'player', displayName: '玩家' })).open();
     const mapTwo = await createMapManagement(h.map, () => ({ actorKey: 'player', displayName: '玩家' })).open();
-    await mapTwo.execute('MapAtlasEdit', { locations: [{ key: 'new-port', name: '新港', scale: 'city' }] }, () => true);
+    await mapTwo.execute('MapAtlasEdit', { locations: [{ key: 'new-port', name: '新港', scale: 'region' }] }, () => true);
     const before = h.map.readCurrent().map;
-    await assert.rejects(mapOne.execute('MapAtlasEdit', { locations: [{ key: 'new-port', name: '旧港', scale: 'city' }] }, () => true));
+    await assert.rejects(mapOne.execute('MapAtlasEdit', { locations: [{ key: 'new-port', name: '旧港', scale: 'region' }] }, () => true));
     assert.deepEqual(h.map.readCurrent().map, before);
-    await mapOne.execute('MapAtlasEdit', { locations: [{ key: 'other-port', name: '另一个港', scale: 'city' }] }, () => true);
+    await mapOne.execute('MapAtlasEdit', { locations: [{ key: 'other-port', name: '另一个港', scale: 'region' }] }, () => true);
     assert.deepEqual(h.map.readCurrent().map.atlas.locations.map(l => l.key), ['new-port', 'other-port']);
 });
 test('map administrator reports partial success with real saved and skipped item reports', async () => {
     const h = await administratorHarness();
     const session = await createMapManagement(h.map, () => ({ actorKey: 'player', displayName: '玩家' })).open();
-    const result = await session.execute('MapAtlasEdit', { locations: [{ key: 'new-port', name: '新港', scale: 'city' }, { key: 'invalid', name: '', scale: 'invalid' }] }, () => true);
+    const result = await session.execute('MapAtlasEdit', { locations: [{ key: 'new-port', name: '新港', scale: 'region' }, { key: 'invalid', name: '', scale: 'invalid' }] }, () => true);
     assert.equal(result.status, 'partial'); assert.equal(result.data.applied.length, 1); assert.equal(result.data.skipped.length, 1);
     assert.equal(h.map.readCurrent().map.atlas.locations.length, 1);
+});
+
+test('administrator scene pages round-trip through the published edit schema and preserve atlas metadata', async () => {
+    const h = await administratorHarness();
+    const session = await createMapManagement(h.map, () => ({ actorKey: 'player', displayName: 'Player' })).open();
+    await session.execute('MapAtlasEdit', { locations: mapAtlasFixture([{ key: 'room', name: 'Room', scale: 'building' }]).atlas.locations }, () => true);
+    await session.execute('MapSceneEdit', { scene: 'room', elements: [
+        { id: 'floor', cat: 'terrain', shape: 'rect', geo: { center: [50, 50], size: [100, 100] } },
+    ] }, () => true);
+    const before = structuredClone(h.map.readCurrent().map);
+    const read = await session.execute('MapSceneRead', { scene: 'room' }, () => true);
+    assert.equal(read.status, 'read');
+    assert.equal(read.data.nextOffset, null);
+    const layout = JSON.parse(read.data.text);
+    const schema = session.tools.find(tool => tool.definition.function.name === 'MapSceneEdit').definition.function.parameters;
+    assert.equal(schema.additionalProperties, false);
+    assert.ok(Object.keys(layout).every(key => Object.hasOwn(schema.properties, key)));
+    assert.deepEqual(layout, { scene: 'room', viewBox: [0, 0, 400, 300], elements: [
+        { id: 'floor', cat: 'terrain', shape: 'rect', geo: { center: [50, 50], size: [100, 100] } },
+    ] });
+    layout.elements[0].geo.center = [60, 70];
+    const edit = await session.execute('MapSceneEdit', layout, () => true);
+    assert.equal(edit.status, 'saved');
+    assert.deepEqual(edit.data.skipped, []);
+    const after = h.map.readCurrent().map;
+    assert.deepEqual(after.atlas, before.atlas);
+    assert.deepEqual(after.scenes.room.elements[0].geometry, { x: 10, y: 20, width: 100, height: 100 });
 });
 
 test('reading article B does not advance article A evidence, while a fresh read of A permits its correction', async () => {
@@ -83,7 +111,7 @@ test('reading article B does not advance article A evidence, while a fresh read 
 test('map page B cannot authorize old changes to A or its parent, and independent edits retain other updates', async () => {
     const h = await administratorHarness(), player = () => ({ actorKey: 'player', displayName: '玩家' });
     const seed = await createMapManagement(h.map, player).open();
-    await seed.execute('MapAtlasEdit', { locations: [{ key: 'a', name: 'A', scale: 'city' }, { key: 'b', name: 'B', scale: 'city' }] }, () => true);
+    await seed.execute('MapAtlasEdit', { locations: [{ key: 'a', name: 'A', scale: 'region' }, { key: 'b', name: 'B', scale: 'region' }] }, () => true);
     const session = await createMapManagement(h.map, player).open(), other = await createMapManagement(h.map, player).open();
     await session.execute('MapAtlasRead', { mode: 'locations', query: 'A' }, () => true);
     await other.execute('MapAtlasEdit', { locations: [{ key: 'a', name: 'A', brief: 'concurrent A' }] }, () => true);
@@ -100,8 +128,9 @@ test('map page B cannot authorize old changes to A or its parent, and independen
 test('scene B reads and long scene continuation do not replace changed scene A evidence', async () => {
     const h = await administratorHarness(), player = () => ({ actorKey: 'player', displayName: '玩家' });
     const seed = await createMapManagement(h.map, player).open();
+    await seed.execute('MapAtlasEdit', { locations: mapAtlasFixture([{ key: 'a' }, { key: 'b' }]).atlas.locations }, () => true);
     for (const scene of ['a', 'b']) {
-        await seed.execute('MapSceneEdit', { scene, title: scene, elements: [{ id: 'floor', cat: 'terrain', shape: 'rect', geo: { center: [50, 50], size: [100, 100] } }] }, () => true);
+        await seed.execute('MapSceneEdit', { scene, elements: [{ id: 'floor', cat: 'terrain', shape: 'rect', geo: { center: [50, 50], size: [100, 100] } }] }, () => true);
     }
     const session = await createMapManagement(h.map, player).open(), other = await createMapManagement(h.map, player).open();
     await session.execute('MapSceneRead', { scene: 'a' }, () => true);

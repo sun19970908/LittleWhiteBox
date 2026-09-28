@@ -1190,9 +1190,7 @@ const {
 } = chatUi;
 
 function createAdapter(providerConfig = getActiveProviderConfig()) {
-    return createAgentAdapter(providerConfig, {
-        missingApiKeyMessage: '请先在小白助手里填写当前提供商的 API Key。',
-    });
+    return createAgentAdapter(providerConfig);
 }
 
 function getInjectedSystemPrompt() {

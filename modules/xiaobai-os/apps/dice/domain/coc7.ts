@@ -1,6 +1,6 @@
 import { COC7_DIFFICULTIES, type Coc7Difficulty } from './coc7-request.js';
 
-export const COC7_LEVELS = ['fumble', 'failure', 'regular', 'hard', 'extreme', 'critical'] as const;
+export const COC7_LEVELS = ['fumble', 'failure', 'easy', 'regular', 'hard', 'extreme', 'critical'] as const;
 export type Coc7Level = typeof COC7_LEVELS[number];
 export type Coc7Verdict = 'achieved' | 'not_achieved';
 export const COC7_CRITICAL_ROLL = 1;
@@ -18,9 +18,10 @@ export function coc7Percentile(units: number, tens: number): number { return ten
 export function coc7Level(value: number, threshold: number, roll: number): Coc7Level {
     if (roll === COC7_CRITICAL_ROLL) { return 'critical'; }
     if (roll >= coc7FumbleMinimum(threshold)) { return 'fumble'; }
-    if (roll <= Math.floor(value / COC7_DIFFICULTIES.extreme)) { return 'extreme'; }
-    if (roll <= Math.floor(value / COC7_DIFFICULTIES.hard)) { return 'hard'; }
-    return roll <= value ? 'regular' : 'failure';
+    if (roll <= Math.floor(value / COC7_DIFFICULTIES.extreme.divisor)) { return 'extreme'; }
+    if (roll <= Math.floor(value / COC7_DIFFICULTIES.hard.divisor)) { return 'hard'; }
+    if (roll <= value) { return 'regular'; }
+    return roll <= threshold ? 'easy' : 'failure';
 }
 function digit(random: () => number): number {
     const sample = random();
@@ -30,7 +31,15 @@ function digit(random: () => number): number {
 /** Value is resolved by the app, never accepted as a model-supplied number. */
 export function rollCoc7(value: number, difficulty: Coc7Difficulty, random: () => number = Math.random): Coc7Result {
     if (!Number.isSafeInteger(value) || value < 1 || !Object.hasOwn(COC7_DIFFICULTIES, difficulty)) { throw new TypeError('dice_coc7_basis_invalid'); }
-    const threshold = Math.floor(value / COC7_DIFFICULTIES[difficulty]);
+    const rule = COC7_DIFFICULTIES[difficulty];
+    const threshold = rule.kind === 'bonus' ? Math.min(value + rule.amount, rule.cap) : Math.floor(value / rule.divisor);
+    return rollCoc7AgainstThreshold(value, threshold, random);
+}
+
+export function rollCoc7AgainstThreshold(value: number, threshold: number, random: () => number = Math.random): Coc7Result {
+    if (!Number.isSafeInteger(value) || value < 1 || !Number.isSafeInteger(threshold) || threshold < 0) {
+        throw new TypeError('dice_coc7_basis_invalid');
+    }
     const units = digit(random);
     const tens = digit(random);
     const roll = coc7Percentile(units, tens);

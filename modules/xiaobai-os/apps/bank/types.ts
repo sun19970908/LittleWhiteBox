@@ -75,6 +75,7 @@ export type BankFundPositionView = BankLockedFundPositionView | BankClaimableFun
 
 export interface BankActivityView {
     id: string;
+    sourceStoryId?: string;
     kind: 'deposit' | 'fund';
     kindLabel: string;
     productName: string;
@@ -104,6 +105,8 @@ export interface BankClientState extends BankActivityPageView {
     balance: number;
     lockedAmount: number;
     currentTurn: number;
+    unsavedTurns: number;
+    turnConfirmationAbandoned: boolean;
     revision: number;
     eventId: string;
     status: BankClientStatus;

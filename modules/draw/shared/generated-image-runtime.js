@@ -1,4 +1,5 @@
 import { hashStableValue, stableSerialize } from './generation-fingerprint.js';
+import { DRAW_SLOT_COPY } from './image-record.js';
 
 const DB_NAME = 'xb_draw_generated_images';
 const DB_STORE = 'images';
@@ -81,24 +82,28 @@ function openDatabase() {
     return databasePromise;
 }
 
-async function readCache(descriptor) {
+async function readCache(descriptor, strict = false) {
     if (!descriptor.cacheEnabled || typeof indexedDB === 'undefined') return null;
     try {
         const database = await openDatabase();
-        return await new Promise((resolve) => {
+        return await new Promise((resolve, reject) => {
             const transaction = database.transaction(DB_STORE, 'readonly');
             const request = transaction.objectStore(DB_STORE).get(descriptor.cacheKey);
+            let cached = null;
             request.onsuccess = () => {
                 const record = request.result;
                 const valid = record
                     && record.provider === descriptor.provider
                     && record.prompt === descriptor.prompt
                     && Date.now() - Number(record.timestamp || 0) < CACHE_TTL;
-                resolve(valid ? record.base64 : null);
+                cached = valid ? record.base64 : null;
             };
-            request.onerror = () => resolve(null);
+            transaction.oncomplete = () => resolve(cached);
+            request.onerror = () => strict ? reject(request.error) : resolve(null);
+            transaction.onabort = () => strict ? reject(transaction.error || new Error(DRAW_SLOT_COPY.cacheReadFailed)) : resolve(null);
         });
-    } catch {
+    } catch (error) {
+        if (strict) throw error;
         return null;
     }
 }
@@ -235,6 +240,15 @@ export function generateSharedImage(input = {}) {
 
 export async function checkGeneratedImageCache(input = {}) {
     return await readCache(buildDescriptor(input));
+}
+
+// Upgrade-only reader. It must never conflate a failed read with a cache miss,
+// and must never call the generation branch of this runtime.
+export async function readGeneratedImageForAdoption(input) {
+    const descriptor = buildDescriptor(input);
+    if (typeof indexedDB === 'undefined') throw new Error(DRAW_SLOT_COPY.cacheReadFailed);
+    const base64 = await readCache(descriptor, true);
+    return { base64, promptData: descriptor.generationPlan?.fingerprint?.promptData || {} };
 }
 
 export function clearSharedImageRequests() {

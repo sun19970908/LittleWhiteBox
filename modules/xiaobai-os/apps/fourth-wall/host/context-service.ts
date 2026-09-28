@@ -12,7 +12,6 @@ export interface FourthWallContextService {
     prepare(options: {
         session: FourthWallSession;
         buildPrompt: (session: FourthWallSession) => FourthWallBuiltPrompt;
-        disableAssistantPrefill: boolean;
         config: unknown;
         signal: AbortSignal;
         manual?: boolean;
@@ -54,7 +53,7 @@ export function createFourthWallContextService(deps: {
         async prepare(options) {
             const { session, config, signal, buildPrompt, onPhase, manual = false } = options;
             const countPrompt = (prompt: FourthWallBuiltPrompt) => deps.count(
-                buildFourthWallAgentRequest(prompt, options.disableAssistantPrefill), config, signal,
+                buildFourthWallAgentRequest(prompt), config, signal,
             );
             onPhase?.('counting');
             const initialPrompt = buildPrompt(session);

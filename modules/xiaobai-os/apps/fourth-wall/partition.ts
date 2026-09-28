@@ -3,10 +3,11 @@ import { createDefaultFourthWallChatState } from './domain/defaults.js';
 import { parseFourthWallChatState } from './domain/state.js';
 import type { FourthWallPartition } from './types.js';
 import { parseFourthWallChatStateV1, type FourthWallPartitionV1 } from './upgrade/partition-v1.js';
+import { parseFourthWallChatStateV2, type FourthWallPartitionV2 } from './upgrade/partition-v2.js';
 import { FOURTH_WALL_APP_DESCRIPTOR } from './descriptor.js';
 
 // Historical shapes stay inside the storage boundary, never in domain/controller state.
-export type FourthWallStoredPartition = FourthWallPartition | FourthWallPartitionV1;
+export type FourthWallStoredPartition = FourthWallPartition | FourthWallPartitionV1 | FourthWallPartitionV2;
 
 function parsePartition(value: unknown): FourthWallStoredPartition {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -21,7 +22,10 @@ function parsePartition(value: unknown): FourthWallStoredPartition {
         return { schemaVersion: 1, state: parseFourthWallChatStateV1(record.state) };
     }
     if (record.schemaVersion === 2) {
-        return { schemaVersion: 2, state: parseFourthWallChatState(record.state) };
+        return { schemaVersion: 2, state: parseFourthWallChatStateV2(record.state) };
+    }
+    if (record.schemaVersion === 3) {
+        return { schemaVersion: 3, state: parseFourthWallChatState(record.state) };
     }
     throw new TypeError('partitions.fourthWall has an unsupported schemaVersion');
 }
@@ -29,7 +33,7 @@ function parsePartition(value: unknown): FourthWallStoredPartition {
 export const FOURTH_WALL_PARTITION: PartitionRegistration<FourthWallStoredPartition> = Object.freeze({
     key: 'fourthWall',
     ownerId: FOURTH_WALL_APP_DESCRIPTOR.id,
-    schemaVersion: 2,
+    schemaVersion: 3,
     parse(value: unknown) {
         try { return { ok: true as const, value: parsePartition(value) }; }
         catch (error) {
@@ -43,5 +47,5 @@ export const FOURTH_WALL_PARTITION: PartitionRegistration<FourthWallStoredPartit
         }
     },
     serialize: parsePartition,
-    createInitial: () => ({ schemaVersion: 2 as const, state: createDefaultFourthWallChatState(Date.now()) }),
+    createInitial: () => ({ schemaVersion: 3 as const, state: createDefaultFourthWallChatState(Date.now()) }),
 });

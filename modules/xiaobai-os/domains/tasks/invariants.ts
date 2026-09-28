@@ -114,11 +114,6 @@ export function normalizeTaskTimestamp(value: unknown): number {
     return Number(value);
 }
 
-export function normalizeObservedAssistantCount(value: unknown): number {
-    if (!Number.isSafeInteger(value) || Number(value) < 0) {badInput('observedAssistantCount');}
-    return Number(value);
-}
-
 function normalizeReward(value: unknown): number {
     if (!Number.isSafeInteger(value) || Number(value) <= 0) {badInput('reward');}
     return Number(value);
@@ -337,7 +332,7 @@ function validateParty(value: unknown, detail: string): TaskParty {
 function validateEvent(value: unknown, index: number): TaskEvent {
     const detail = `events.${index}`;
     const event = requireRecord(value, detail, true);
-    const base = ['kind', 'eventId', 'actionId', 'taskId', 'taskRevision', 'observedAssistantCount', 'createdAt'];
+    const base = ['kind', 'eventId', 'actionId', 'taskId', 'taskRevision', 'createdAt'];
     const variants: Readonly<Record<string, readonly string[]>> = {
         accepted: ['boardId', 'listingId', 'issuer', 'assignee', 'listing'],
         published: ['issuer', 'title', 'objective', 'location', 'risk', 'reward'],
@@ -353,7 +348,6 @@ function validateEvent(value: unknown, index: number): TaskEvent {
         actionId: canonicalId(event.actionId, `${detail}.actionId`, TASK_MAX_ACTION_ID_LENGTH),
         taskId: canonicalId(event.taskId, `${detail}.taskId`),
         taskRevision: canonicalInteger(event.taskRevision, 1, `${detail}.taskRevision`),
-        observedAssistantCount: canonicalInteger(event.observedAssistantCount, 0, `${detail}.observedAssistantCount`),
         createdAt: canonicalInteger(event.createdAt, 0, `${detail}.createdAt`),
     };
     if (common.createdAt > MAX_DATE_MS) {return invalid(`${detail}.createdAt`);}
@@ -454,19 +448,31 @@ function validateIdentities(board: TaskBoard | null, events: readonly TaskEvent[
     }
 }
 
-/** Validates exact V1 shape, identity ownership and every legal transition by replay. */
+/** Validates the current shape, identity ownership and every legal transition by replay. */
 export function validateTaskDomain(value: unknown): asserts value is TaskDomainV1 {
     const domain = requireRecord(value, 'domain', true);
     if (domain.schemaVersion !== TASK_DOMAIN_SCHEMA_VERSION) {
         throw new TaskError('task_unsupported_version');
     }
-    requireKeys(domain, ['schemaVersion', 'revision', 'board', 'events'], [], 'domain', true);
+    requireKeys(domain, ['schemaVersion', 'revision', 'board', 'events', 'checks', 'storyLabel'], [], 'domain', true);
+    if (typeof domain.storyLabel !== 'string' || Array.from(domain.storyLabel).length > 120) {invalid('domain.storyLabel');}
     const revision = canonicalInteger(domain.revision, 0, 'domain.revision');
     const board = validateBoard(domain.board);
     if (!Array.isArray(domain.events)) {invalid('domain.events');}
     const events = domain.events.map(validateEvent);
     validateIdentities(board, events);
     replayTaskEvents(events);
+    const checks = requireRecord(domain.checks, 'domain.checks', true);
+    const records = new Map(replayTaskEvents(events).map(record => [record.taskId, record]));
+    for (const [taskId, value] of Object.entries(checks)) {
+        const receipt = requireRecord(value, `domain.checks.${taskId}`, true);
+        requireKeys(receipt, ['taskRevision', 'digest', 'phase'], [], `domain.checks.${taskId}`, true);
+        const active = records.get(taskId);
+        if (!active || active.status !== 'active' || !Number.isSafeInteger(receipt.taskRevision)
+            || Number(receipt.taskRevision) !== active.taskRevision || typeof receipt.digest !== 'string'
+            || receipt.digest.length > 128 || !['pending', 'baseline', 'checked'].includes(String(receipt.phase))
+            || receipt.phase === 'pending' && receipt.digest !== '') {invalid(`domain.checks.${taskId}`);}
+    }
     if (events.some(event => event.kind === 'accepted') && !board) {invalid('domain.board');}
 
     // A maintenance mutation can retain one event for each task without a persisted batch id.
@@ -495,7 +501,7 @@ export function parseTaskDomain(value: unknown): TaskDomainV1 {
 }
 
 export function createEmptyTaskDomain(): TaskDomainV1 {
-    return { schemaVersion: TASK_DOMAIN_SCHEMA_VERSION, revision: 0, board: null, events: [] };
+    return { schemaVersion: TASK_DOMAIN_SCHEMA_VERSION, revision: 0, board: null, storyLabel: '', events: [], checks: {} };
 }
 
 export const createEmptyTaskState = createEmptyTaskDomain;

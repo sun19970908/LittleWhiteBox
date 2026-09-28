@@ -5,6 +5,7 @@ import type { MessagesSettings } from '../apps/messages/types.js';
 import type { ActionCheckFrequency, ActionCheckRule, DiceFeature, DiceSettings } from '../apps/dice/types.js';
 import { isActionCheckFrequency, isActionCheckRule } from '../apps/dice/settings.js';
 import type { WorldSettings } from '../apps/world/types.js';
+import type { GameSettings } from '../apps/game/settings.js';
 import type { XiaobaiOsSettings as XiaobaiOsSettingsRoot } from '../types.js';
 import { jsonValuesEqual } from './json-values-equal.js';
 import { normalizeAppOrder } from '../shell/app-order.js';
@@ -23,6 +24,7 @@ type XiaobaiOsSettings = XiaobaiOsSettingsRoot<{
     messages: MessagesSettings;
     dice: DiceSettings;
     world: WorldSettings;
+    game: GameSettings;
 }>;
 
 type UnknownRecord = Record<string, unknown>;
@@ -53,13 +55,14 @@ export interface XiaobaiOsSettingsRepository {
     setAppOrder: (order: readonly string[]) => Promise<XiaobaiOsSettings>;
     setMapAutoMaintenance: (enabled: boolean) => Promise<XiaobaiOsSettings>;
     setTasksAutoMaintenance: (enabled: boolean) => Promise<XiaobaiOsSettings>;
-    setMessagesCapabilities: (settings: MessagesSettings) => Promise<XiaobaiOsSettings>;
+    setMessagesSettings: (settings: MessagesSettings) => Promise<XiaobaiOsSettings>;
     setDiceFeature: (feature: DiceFeature, enabled: boolean) => Promise<XiaobaiOsSettings>;
     setDiceActionCheckFrequency: (frequency: ActionCheckFrequency) => Promise<XiaobaiOsSettings>;
     setDiceActionCheckRule: (rule: ActionCheckRule) => Promise<XiaobaiOsSettings>;
     readLegacyDiceSheet: () => unknown;
     finishDiceSheetMigration: () => Promise<XiaobaiOsSettings>;
     setWorldPreference: (key: keyof WorldSettings, enabled: boolean) => Promise<XiaobaiOsSettings>;
+    setGameMovingSound: (enabled: boolean) => Promise<XiaobaiOsSettings>;
     mutateFourthWall: (
         action: (current: FourthWallGlobalSettings) => FourthWallGlobalSettings,
     ) => Promise<XiaobaiOsSettings>;
@@ -270,11 +273,13 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         });
     }
 
-    function setMessagesCapabilities(settings: MessagesSettings): Promise<XiaobaiOsSettings> {
-        if (typeof settings?.imagePrompt !== 'boolean' || typeof settings?.voicePrompt !== 'boolean') {
-            throw new TypeError('messages capabilities must be boolean');
+    function setMessagesSettings(settings: MessagesSettings): Promise<XiaobaiOsSettings> {
+        if (typeof settings?.imagePrompt !== 'boolean' || typeof settings?.voicePrompt !== 'boolean'
+            || typeof settings?.syncNoticeEnabled !== 'boolean') {
+            throw new TypeError('messages settings must be boolean');
         }
-        const nextSettings = { imagePrompt: settings.imagePrompt, voicePrompt: settings.voicePrompt };
+        const nextSettings = { imagePrompt: settings.imagePrompt, voicePrompt: settings.voicePrompt,
+            syncNoticeEnabled: settings.syncNoticeEnabled };
         return mutate(next => ({ ...next, apps: { ...next.apps, messages: nextSettings } }));
     }
 
@@ -343,6 +348,14 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         });
     }
 
+    function setGameMovingSound(enabled: boolean): Promise<XiaobaiOsSettings> {
+        if (typeof enabled !== 'boolean') { throw new TypeError('Game moving sound must be a boolean'); }
+        return mutate(next => {
+            next.apps.game.movingSoundEnabled = enabled;
+            return next;
+        });
+    }
+
     function subscribe(listener: (settings: XiaobaiOsSettings) => void): () => void {
         if (typeof listener !== 'function') {
             throw new TypeError('settings listener must be a function');
@@ -366,13 +379,14 @@ export function createSettingsRepository(adapter: XiaobaiOsSettingsAdapter): Xia
         setAppOrder,
         setMapAutoMaintenance,
         setTasksAutoMaintenance,
-        setMessagesCapabilities,
+        setMessagesSettings,
         setDiceFeature,
         setDiceActionCheckFrequency,
         setDiceActionCheckRule,
         readLegacyDiceSheet,
         finishDiceSheetMigration,
         setWorldPreference,
+        setGameMovingSound,
         mutateFourthWall,
         subscribe,
         subscribeMutationInstalled,

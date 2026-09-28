@@ -1,4 +1,5 @@
 import appIds from './app-catalog.json';
+import type { XiaobaiOsAppDescriptor } from '../types.js';
 import { AGENT_API_APP_DESCRIPTOR } from '../apps/agent-api/descriptor.js';
 import { BANK_APP_DESCRIPTOR } from '../apps/bank/descriptor.js';
 import { FOURTH_WALL_APP_DESCRIPTOR } from '../apps/fourth-wall/descriptor.js';
@@ -13,10 +14,7 @@ import { LEARNING_APP_DESCRIPTOR } from '../apps/learning/descriptor.js';
 import { DICE_APP_DESCRIPTOR } from '../apps/dice/descriptor.js';
 import { ADMINISTRATOR_APP_DESCRIPTOR } from '../apps/administrator/descriptor.js';
 
-export interface XiaobaiOsAppLauncher {
-    id: string;
-    name: string;
-    accent: string;
+export interface XiaobaiOsAppLauncher extends XiaobaiOsAppDescriptor {
     icon: string;
 }
 

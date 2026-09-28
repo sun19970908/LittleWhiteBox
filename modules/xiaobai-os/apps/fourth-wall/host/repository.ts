@@ -1,10 +1,11 @@
-import type { PartitionStore } from '../../../kernel/contracts.js';
+import type { PartitionStore, XiaobaiOsFileControls } from '../../../kernel/contracts.js';
 import { jsonValuesEqual } from '../../../host/json-values-equal.js';
 import { createDefaultFourthWallChatState } from '../domain/defaults.js';
 import { parseFourthWallChatState } from '../domain/state.js';
 import type { FourthWallChatState, FourthWallPartition } from '../types.js';
 import type { FourthWallStoredPartition } from '../partition.js';
 import { upgradeFourthWallV1 } from '../upgrade/partition-v1.js';
+import { upgradeFourthWallV2 } from '../upgrade/partition-v2.js';
 
 export interface FourthWallMutationOptions {
     beforeCommit?: () => void | Promise<void>;
@@ -38,6 +39,7 @@ function transactionError(result: {
 
 export function createFourthWallRepository(
     store: PartitionStore<FourthWallStoredPartition>,
+    files: Pick<XiaobaiOsFileControls, 'hasPendingCommit' | 'retryPending'>,
     {
         now = Date.now,
         upgradeSource,
@@ -51,8 +53,12 @@ export function createFourthWallRepository(
     }
 
     async function prepareCurrentChatFourthWall(): Promise<FourthWallChatState> {
+        if (files.hasPendingCommit('fourthWall')) {
+            const recovery = await files.retryPending();
+            if (recovery.status !== 'confirmed') { throw transactionError(recovery); }
+        }
         const snapshot = store.peekCurrent() ?? await store.read();
-        if (snapshot.value?.schemaVersion === 1) {
+        if (snapshot.value && snapshot.value.schemaVersion !== 3) {
             return await mutateCurrentChatFourthWall(current => current);
         }
         return structuredClone(
@@ -70,12 +76,13 @@ export function createFourthWallRepository(
         const result = await store.transact(transaction => {
             const identityKey = store.peekCurrent()?.identityKey;
             const persisted = transaction.current;
-            const current = (persisted?.schemaVersion === 1 ? upgradeFourthWallV1(persisted).state : persisted?.state)
+            const current = (persisted?.schemaVersion === 1 ? upgradeFourthWallV1(persisted).state
+                : persisted?.schemaVersion === 2 ? upgradeFourthWallV2(persisted).state : persisted?.state)
                 ?? readUpgradeState(identityKey)
                 ?? createDefaultFourthWallChatState(now());
             const next = parseFourthWallChatState(action(structuredClone(current)));
-            if (persisted?.schemaVersion === 1 || !jsonValuesEqual(current, next)) {
-                transaction.replace({ schemaVersion: 2, state: next });
+            if ((persisted && persisted.schemaVersion !== 3) || !jsonValuesEqual(current, next)) {
+                transaction.replace({ schemaVersion: 3, state: next });
             }
             return next;
         }, {
@@ -87,7 +94,7 @@ export function createFourthWallRepository(
             throw transactionError(result);
         }
         const current = result.status === 'confirmed'
-            ? result.snapshot.value?.schemaVersion === 2 ? result.snapshot.value.state : null
+            ? result.snapshot.value?.schemaVersion === 3 ? result.snapshot.value.state : null
             : result.result;
         if (!current) { throw new Error('fourth_wall_state_missing_after_commit'); }
         return structuredClone(current);
@@ -97,9 +104,9 @@ export function createFourthWallRepository(
         prepareCurrentChatFourthWall,
         readCurrentChatFourthWall: () => {
             const snapshot = store.peekCurrent();
-            if (snapshot?.value?.schemaVersion === 1) { return null; }
-            const current = snapshot?.value?.state
-                ?? (snapshot ? readUpgradeState(snapshot.identityKey) : null);
+            if (snapshot?.value && snapshot.value.schemaVersion !== 3) { return null; }
+            const current = snapshot?.value?.schemaVersion === 3 ? snapshot.value.state
+                : snapshot ? readUpgradeState(snapshot.identityKey) : null;
             return current ? structuredClone(current) : null;
         },
         mutateCurrentChatFourthWall,

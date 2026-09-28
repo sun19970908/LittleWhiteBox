@@ -90,3 +90,31 @@ export async function prepareUnknownRetry(config, code, approval) {
     }
     return { id: requestId, journalSha256, previousBinding, sourceManifestSha256 };
 }
+
+export async function prepareEmptySummaryRetry(config, code, approval) {
+    const { requestId, journalSha256, sourceManifestPath, sourceManifestSha256 } = approval;
+    if (!Number.isSafeInteger(requestId) || requestId < 1
+        || !/^[a-f0-9]{64}$/.test(journalSha256 || '')
+        || !/^[a-f0-9]{64}$/.test(sourceManifestSha256 || '') || !sourceManifestPath) {
+        throw new Error('Empty Summary retry requires exact request id, journal hash and source manifest/hash');
+    }
+    const bytes = await fs.readFile(sourceManifestPath);
+    if (createHash('sha256').update(bytes).digest('hex') !== sourceManifestSha256) {
+        throw new Error('Empty Summary retry source manifest hash changed');
+    }
+    const source = JSON.parse(bytes);
+    for (const key of ['productionSourceHash', 'packageLockHash', 'nodeVersion', 'platform', 'arch']) {
+        if (!source.code?.[key] || source.code[key] !== code[key]) throw new Error(`Empty Summary retry changed ${key}`);
+    }
+    const sourceJournal = source.capture?.requestJournal;
+    if (source.status !== 'invalid' || source.mode !== 'story-summary-replay-natural-capture'
+        || source.invalidReason?.stage !== 'summary' || !/\bparse\b/.test(source.invalidReason?.message || '')
+        || sourceJournal?.binding !== preparedJournalBinding(config, source.code)
+        || path.resolve(sourceJournal.journalPath) !== path.resolve(config.outputPath, 'request-journal.jsonl')
+        || sourceJournal.maxRequests !== config.prepared.maxRequests
+        || source.data?.sampleHash !== config.prepared.sampleSha256
+        || source.data?.casesHash !== config.prepared.casesSha256) {
+        throw new Error('Empty Summary retry source/config/input binding changed');
+    }
+    return { id: requestId, journalSha256, previousBinding: sourceJournal.binding, sourceManifestSha256 };
+}

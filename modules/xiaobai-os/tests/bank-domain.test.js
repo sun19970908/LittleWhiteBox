@@ -57,7 +57,9 @@ function eventInput(domain, sequence, command, result, options = {}) {
 }
 
 function append(domain, sequence, command, result, options) {
-    return appendBankEvent(domain, eventInput(domain, sequence, command, result, options));
+    const assistantTurn = options?.assistantTurn ?? domain.currentTurn;
+    return appendBankEvent({ ...domain, currentTurn: Math.max(domain.currentTurn, assistantTurn) },
+        eventInput(domain, sequence, command, result, { assistantTurn, ...options }));
 }
 
 function openDeposit(domain, sequence, position, options) {
@@ -137,7 +139,7 @@ function settleDue(domain, sequence, positions, assistantTurn, options = {}) {
     }, { ...options, assistantTurn });
 }
 
-test('schema v1 events replay finance changes and flatten activities at their event boundary', () => {
+test('bank events replay finance changes and flatten activities at their event boundary', () => {
     const position = depositPosition('deposit-1');
     const opened = openDeposit(createEmptyBankDomain(), 1, position);
     const closed = earlyWithdraw(opened.domain, 2, position);
@@ -286,22 +288,21 @@ test('CAS append is immutable and idempotent action replay precedes stale-token 
     }), error => error.code === 'bank_revision_conflict');
 });
 
-test('assistant turn counts may move backward without deleting committed positions', () => {
+test('global turn clock rejects event regressions without deleting committed positions', () => {
     const later = depositPosition('opened-later', 'short-term', 100, 8);
     let domain = openDeposit(createEmptyBankDomain(), 1, later, { assistantTurn: 8 }).domain;
     const afterDeletion = fundPosition('opened-after-deletion', 'steady-fund', 200, 3);
-    domain = openFund(domain, 2, afterDeletion, { assistantTurn: 3 }).domain;
-
-    assert.equal(calculateBankLockedAmount(replayBankEvents(domain)), 300);
+    assert.throws(() => openFund(domain, 2, afterDeletion, { assistantTurn: 3 }),
+        error => error.code === 'bank_invalid_domain');
     assert.deepEqual(replayBankEvents(domain).openDeposits, [later]);
-    assert.deepEqual(replayBankEvents(domain).openInvestments, [afterDeletion]);
+    assert.deepEqual(replayBankEvents(domain).openInvestments, []);
 });
 
 test('public view exposes products and claimability without leaking locked fund outcomes', () => {
     const fund = fundPosition('private-fund');
     const domain = openFund(createEmptyBankDomain(), 1, fund).domain;
 
-    const locked = createBankView({ domain, currentTurn: 19 });
+    const locked = createBankView({ domain: { ...domain, currentTurn: 19 } });
     assert.equal(locked.products.deposits.length, 3);
     assert.equal(locked.products.funds.length, 3);
     assert.equal(locked.lockedAmount, 200);
@@ -310,7 +311,7 @@ test('public view exposes products and claimability without leaking locked fund 
     assert.equal(Object.hasOwn(locked.investments[0], 'settlementAmount'), false);
     assert.equal(JSON.stringify(locked).includes('resolvedReturnBps'), false);
 
-    const claimable = createBankView({ domain, currentTurn: 20 });
+    const claimable = createBankView({ domain: { ...domain, currentTurn: 20 } });
     assert.deepEqual({
         claimable: claimable.investments[0].claimable,
         resolvedReturnBps: claimable.investments[0].resolvedReturnBps,

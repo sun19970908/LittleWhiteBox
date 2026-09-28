@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { administratorHarness, settled, tick } from './administrator-harness.js';
+import { administratorHarness, settled, tick, withLoadedTools } from './administrator-harness.js';
 import { createAdministratorImages } from '../apps/administrator/storage/images.js';
 
 const image = { name: 'screen.png', dataUrl: 'data:image/png;base64,YQ==' };
@@ -78,9 +78,9 @@ test('LAN HTTP can open administrator and save text, tool receipts and an image'
         async read(path) { return new Response(files.get(path), { status: files.has(path) ? 200 : 404 }); },
     }));
     let calls = 0;
-    h.state.generate = async () => calls++ % 2 === 0
+    h.state.generate = withLoadedTools([], async () => calls++ % 2 === 0
         ? { toolCalls: [{ id: 'same-provider-id', name: 'ChatRead', arguments: JSON.stringify({ from: 55 }) }] }
-        : { text: 'done' };
+        : { text: 'done' });
     for (const input of [{ text: 'read' }, { text: 'read image', image }]) {
         await h.request('send', input); await settled(h.runtime);
     }
@@ -88,7 +88,7 @@ test('LAN HTTP can open administrator and save text, tool receipts and an image'
     assert.equal(turns.length, 2);
     assert.ok(turns.every(turn => turn.status === 'finished'));
     assert.notEqual(turns[0].id, turns[1].id);
-    assert.deepEqual(turns.map(turn => turn.operations.map(operation => operation.status)), [['read'], ['read']]);
+    assert.deepEqual(turns.map(turn => turn.operations.map(operation => operation.status)), [['read', 'read'], ['read', 'read']]);
     assert.notEqual(turns[0].operations[0].id, turns[1].operations[0].id);
     assert.equal(files.size, 1);
     assert.equal(await h.images.load(h.repository.osId(), turns[1].user.image), image.dataUrl);

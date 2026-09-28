@@ -5,6 +5,7 @@ import type { XiaobaiOsAppProps } from '../../../shell/app-contract.js';
 import type {
     TaskDetailPresentation,
     TaskHistoryPage,
+    OwnedCommission,
     TaskPublishedForm,
     TaskRecord,
     TasksPresentation,
@@ -27,9 +28,10 @@ import './tasks.css';
 type MainPage = 'board' | 'active' | 'published' | 'history';
 type TasksPage = MainPage | 'settings' | 'publish' | 'detail' | 'listing' | 'recruit';
 type Confirmation = { kind: 'publish'; form: TaskPublishedForm }
-    | { kind: 'cancel'; task: TaskRecord }
+    | { kind: 'cancel'; task: TaskRecord; scopeId: string | null }
     | { kind: 'assign'; task: TaskRecord; candidateId: string };
 const REQUEST_TIMEOUT_MS = 35_000;
+const SAVE_CONFIRMATION_FAILED = '检查保存失败，尚不能确认账目是否写入。请检查连接后再试。';
 const props = defineProps<XiaobaiOsAppProps>();
 
 function fallbackState(): TasksPresentation {
@@ -40,6 +42,8 @@ function fallbackState(): TasksPresentation {
         writeState: 'ready',
         settings: { autoMaintenance: false },
         playerBalance: 0,
+        currentScopeId: null,
+        commissions: [],
         generationActive: false,
         generation: { state: 'idle', kind: null, taskId: null, message: '' },
         board: null,
@@ -72,12 +76,14 @@ const confirmation = ref<Confirmation | null>(null);
 const cancellingReceived = computed(() => confirmation.value?.kind === 'cancel' && confirmation.value.task.source === 'received');
 const selectedListing = ref<{ boardId: string; listingId: string } | null>(null);
 const selectedTaskId = ref('');
+const selectedDetailScopeId = ref<string | null>(null);
 const historySource = ref<'all' | 'received' | 'published'>('all');
 const content = ref<HTMLElement | null>(null);
 const pagePositions: Partial<Record<TasksPage, { scrollTop: number; focusKey: string }>> = {};
 const lanes = computed(() => taskLanes(state.value));
 const receivedActive = computed(() => lanes.value.received);
 const publishedRecords = computed(() => lanes.value.published);
+const publishedCommissions = computed(() => state.value.commissions);
 const recruitmentTask = computed(() => [...publishedRecords.value, ...state.value.history.items].find(task => task.taskId === selectedTaskId.value) ?? null);
 const listing = computed(() => state.value.board?.boardId === selectedListing.value?.boardId
     ? state.value.board?.listings.find(item => item.listingId === selectedListing.value?.listingId) ?? null : null);
@@ -112,19 +118,32 @@ const writeDisabledReason = computed(() => {
     if (state.value.generationActive) {return '正在生成内容，请稍后';}
     return '';
 });
+const commissionDisabledReason = computed(() => {
+    if (writeBusy.value) {return '正在处理上一项任务操作';}
+    if (state.value.status !== 'ready') {return state.value.message || '暂时不能取消委托';}
+    return '';
+});
 const generationDisabledReason = computed(() => (
     writeDisabledReason.value || (state.value.maintenance.state === 'running' ? '正在更新任务' : '')
 ));
 const maintenanceMessage = computed(() => state.value.maintenance.message);
+const dataUnavailable = computed(() => state.value.status !== 'ready' && !state.value.board
+    && !state.value.active.length && !state.value.recruiting.length
+    && !state.value.history.items.length && !state.value.commissions.length);
 function applyState(next: TasksPresentation): void {
     if (!next || typeof next.chatIdentity !== 'string') {return;}
     state.value = structuredClone(next);
     errorMessage.value = '';
     const displayedTask = detail.value?.task;
     if (page.value === 'detail' && displayedTask) {
-        const latest = [...next.active, ...next.recruiting, ...next.history.items]
-            .find(task => task.taskId === displayedTask.taskId);
-        if (latest && latest.eventId !== displayedTask.eventId) {void openDetail(latest.taskId, true);}
+        const latest = selectedDetailScopeId.value && selectedDetailScopeId.value !== next.currentScopeId
+            ? next.commissions.find(item => item.scopeId === selectedDetailScopeId.value
+                && item.task.taskId === displayedTask.taskId)?.task
+            : [...next.active, ...next.recruiting, ...next.history.items]
+                .find(task => task.taskId === displayedTask.taskId);
+        if (latest && latest.eventId !== displayedTask.eventId) {
+            void openDetail(latest.taskId, true, selectedDetailScopeId.value);
+        }
     }
 }
 
@@ -223,11 +242,16 @@ async function assignTask(task: TaskRecord, candidateId: string): Promise<void> 
 }
 
 async function cancelTask(task: TaskRecord): Promise<void> {
-    if (writeDisabledReason.value) {return;}
+    const selectedScope = confirmation.value?.kind === 'cancel' ? confirmation.value.scopeId : null;
+    if (selectedScope !== state.value.currentScopeId
+        ? commissionDisabledReason.value : writeDisabledReason.value) {return;}
     writeBusy.value = true;
     const version = stateVersion;
     try {
-        const body = await request('tasks/cancel', {
+        const scopeId = selectedScope;
+        const remote = scopeId && scopeId !== state.value.currentScopeId;
+        const body = await request(remote ? 'tasks/commission/cancel' : 'tasks/cancel', {
+            ...(remote ? { scopeId } : {}),
             taskId: task.taskId,
             expectedTaskRevision: task.taskRevision,
             expectedEventId: task.eventId,
@@ -280,15 +304,17 @@ async function maintainOnce(): Promise<void> {
     } catch (error) {errorMessage.value = readableError(error);}
 }
 
-async function openDetail(taskId: string, refresh = false): Promise<void> {
+async function openDetail(taskId: string, refresh = false, scopeId: string | null = null): Promise<void> {
     if (!refresh) {
         go('detail');
+        selectedDetailScopeId.value = scopeId;
         detail.value = null;
         detailBusy.value = true;
     }
     const requestId = ++detailRequest;
     try {
-        const body = await request('tasks/detail/read', { taskId });
+        const body = await request('tasks/detail/read', { taskId,
+            ...(scopeId && scopeId !== state.value.currentScopeId ? { scopeId } : {}) });
         if (!mounted || requestId !== detailRequest) {return;}
         if (isRecord(body) && isRecord(body.task) && Array.isArray(body.timeline)) {
             detail.value = structuredClone(body as unknown as TaskDetailPresentation);
@@ -322,7 +348,8 @@ async function confirmSave(): Promise<void> {
         const body = await request('tasks/save/confirm');
         applyResponseState(body, version);
         if (isRecord(body) && body.confirmation === 'confirmed') { announce('已确认保存成功。'); }
-    } catch (error) {errorMessage.value = readableError(error);}
+    } catch (error) {errorMessage.value = error instanceof Error && error.message === 'host_request_timeout'
+        ? readableError(error) : SAVE_CONFIRMATION_FAILED;}
     finally {saveBusy.value = false;}
 }
 
@@ -382,11 +409,12 @@ function openListing(boardId: string, listingId: string): void {
     go('listing');
 }
 
-function openPublished(task: TaskRecord): void {
-    if (task.status === 'recruiting') {
+function openPublished(commission: OwnedCommission): void {
+    const { task, scopeId } = commission;
+    if (task.status === 'recruiting' && scopeId === state.value.currentScopeId) {
         selectedTaskId.value = task.taskId;
         go('recruit');
-    } else {void openDetail(task.taskId);}
+    } else {void openDetail(task.taskId, false, scopeId);}
 }
 
 function showPublishedHistory(): void {
@@ -397,7 +425,8 @@ function showPublishedHistory(): void {
 
 function askCancel(task: TaskRecord): void {
     errorMessage.value = '';
-    confirmation.value = { kind: 'cancel', task };
+    confirmation.value = { kind: 'cancel', task,
+        scopeId: page.value === 'detail' ? selectedDetailScopeId.value : state.value.currentScopeId };
 }
 
 function askAssign(task: TaskRecord, candidateId: string): void {
@@ -446,29 +475,30 @@ onBeforeUnmount(() => {
         </header>
         <div class="tasks-notices" aria-live="polite">
             <aside v-if="state.message || (errorMessage && !confirmation) || actionMessage" class="tasks-notice" :class="{ 'is-error': Boolean(errorMessage) || state.status === 'conflict' || state.status === 'blocked', 'is-warning': requiresConfirmation }" role="status">
-                <div><p>{{ state.message || (confirmation ? '' : errorMessage) || actionMessage }}</p><button v-if="requiresConfirmation" type="button" :disabled="saveBusy" @click="confirmSave">{{ saveBusy ? '正在检查…' : '检查保存' }}</button><button v-else-if="state.status === 'conflict'" type="button" :disabled="saveBusy" @click="adoptServer">{{ saveBusy ? '正在加载…' : '使用已保存版本' }}</button><button v-else-if="state.status === 'blocked'" type="button" :disabled="saveBusy" @click="retryRead">{{ saveBusy ? '正在读取…' : '重新加载' }}</button></div>
+                <div><p>{{ (confirmation ? '' : errorMessage) || state.message || actionMessage }}</p><button v-if="requiresConfirmation" type="button" :disabled="saveBusy" @click="confirmSave">{{ saveBusy ? '正在检查…' : '检查保存' }}</button><button v-else-if="state.status === 'conflict'" type="button" :disabled="saveBusy" @click="adoptServer">{{ saveBusy ? '正在加载…' : '使用已保存版本' }}</button><button v-else-if="state.status === 'blocked'" type="button" :disabled="saveBusy" @click="retryRead">{{ saveBusy ? '正在读取…' : '重新加载' }}</button></div>
                 <button v-if="!state.message" type="button" class="tasks-icon-button" aria-label="关闭提示" @click="errorMessage = ''; actionMessage = ''"><TaskIcon name="close" /></button>
             </aside>
             <aside v-if="state.generation.message && !state.message" class="tasks-notice" role="status"><p>{{ state.generation.message }}</p></aside>
         </div>
         <div ref="content" class="tasks-content" tabindex="-1">
-            <TasksBoard v-if="page === 'board'" :board="state.board" :busy="boardBusy" :disabled-reason="generationDisabledReason" @refresh="refreshBoard" @detail="openListing" />
+            <div v-if="dataUnavailable" class="tasks-empty" role="status"><TaskIcon name="compass" /><h3>{{ state.status === 'loading' ? '正在读取委托…' : '任务暂时不能读取' }}</h3></div>
+            <TasksBoard v-else-if="page === 'board'" :board="state.board" :busy="boardBusy" :disabled-reason="generationDisabledReason" @refresh="refreshBoard" @detail="openListing" />
             <TasksActive v-else-if="page === 'active'" :records="receivedActive" @detail="openDetail" @discover="go('board')" />
-            <TasksPublished v-else-if="page === 'published'" :records="publishedRecords" :disabled-reason="writeDisabledReason" @open="openPublished" @publish="go('publish')" @history="showPublishedHistory" />
+            <TasksPublished v-else-if="page === 'published'" :records="publishedCommissions" :disabled-reason="writeDisabledReason" @open="openPublished" @publish="go('publish')" @history="showPublishedHistory" />
             <TasksHistory v-else-if="page === 'history'" :history="state.history" :loading="historyBusy" :source="historySource" @filter="historySource = $event" @detail="openDetail" @load-more="loadMoreHistory" />
             <TasksSettings v-else-if="page === 'settings'" :auto-maintenance="state.settings.autoMaintenance" :settings-busy="settingsBusy" :maintenance-busy="state.maintenance.state === 'running'" :maintenance-message="maintenanceMessage" :disabled-reason="generationDisabledReason" @update="setAutoMaintenance" @maintain="maintainOnce" />
             <TaskPublishForm v-else-if="page === 'publish'" :balance="state.playerBalance" :busy="writeBusy" :disabled-reason="writeDisabledReason" @submit="requestPublish" />
             <TaskListingDetail v-else-if="page === 'listing'" :listing="listing" :busy="writeBusy" :disabled-reason="writeDisabledReason" @accept="selectedListing && acceptListing(selectedListing.boardId, selectedListing.listingId)" />
             <TaskRecruitment v-else-if="page === 'recruit'" :task="recruitmentTask" :busy="writeBusy" :recruiting="Boolean(candidateBusyTaskId)" :disabled-reason="writeDisabledReason" :generation-disabled-reason="generationDisabledReason" @recruit="recruit" @assign="askAssign" @cancel="askCancel" @detail="openDetail" />
-            <TaskDetail v-else :detail="detail" :loading="detailBusy" :busy="writeBusy" :disabled-reason="writeDisabledReason" @cancel="askCancel" />
+            <TaskDetail v-else :detail="detail" :loading="detailBusy" :busy="writeBusy" :disabled-reason="detail?.originScopeId && detail.originScopeId !== state.currentScopeId ? commissionDisabledReason : writeDisabledReason" @cancel="askCancel" />
         </div>
         <nav v-if="isMainPage" class="tasks-nav" aria-label="任务主导航">
             <button type="button" aria-label="发现委托" :aria-current="page === 'board' ? 'page' : undefined" @click="go('board')"><span><TaskIcon name="compass" /></span>发现</button>
             <button type="button" aria-label="我接的" :aria-current="page === 'active' ? 'page' : undefined" @click="go('active')"><span><TaskIcon name="ticket" /></span>我接的</button>
-            <button type="button" aria-label="我发布" :aria-current="page === 'published' ? 'page' : undefined" @click="go('published')"><span><TaskIcon name="send" /><i v-if="state.recruiting.length" /></span>我发布</button>
+            <button type="button" aria-label="我发布" :aria-current="page === 'published' ? 'page' : undefined" @click="go('published')"><span><TaskIcon name="send" /><i v-if="state.commissions.some(item => item.task.status === 'recruiting' && item.scopeId === state.currentScopeId)" /></span>我发布</button>
             <button type="button" aria-label="记录" :aria-current="page === 'history' ? 'page' : undefined" @click="go('history')"><span><TaskIcon name="archive" /></span>记录</button>
         </nav>
-        <TaskConfirmDialog v-if="confirmation" :title="confirmation.kind === 'publish' ? '确认发布' : confirmation.kind === 'cancel' ? (cancellingReceived ? '放弃任务？' : '取消委托？') : '确认执行者'" :confirm-label="confirmation.kind === 'publish' ? '托管并发布' : confirmation.kind === 'cancel' ? (cancellingReceived ? '确认放弃' : '取消并退款') : '确认委托'" :busy="writeBusy" :disabled-reason="writeDisabledReason" :error="errorMessage" @close="confirmation = null; errorMessage = ''" @confirm="confirmAction">
+        <TaskConfirmDialog v-if="confirmation" :title="confirmation.kind === 'publish' ? '确认发布' : confirmation.kind === 'cancel' ? (cancellingReceived ? '放弃任务？' : '取消委托？') : '确认执行者'" :confirm-label="confirmation.kind === 'publish' ? '托管并发布' : confirmation.kind === 'cancel' ? (cancellingReceived ? '确认放弃' : '取消并退款') : '确认委托'" :busy="writeBusy" :disabled-reason="confirmation.kind === 'cancel' && confirmation.scopeId !== state.currentScopeId ? commissionDisabledReason : writeDisabledReason" :error="errorMessage" @close="confirmation = null; errorMessage = ''" @confirm="confirmAction">
             <template v-if="confirmation.kind === 'publish'"><p class="tasks-confirm-name">{{ confirmation.form.title }}</p><strong class="tasks-confirm-amount">¤ {{ taskMoney(confirmation.form.reward) }}</strong><p>报酬将从钱包托管。发布后可招募执行者；任务结束前，你可以取消并全额退回报酬。</p></template>
             <template v-else-if="confirmation.kind === 'cancel'">
                 <p class="tasks-confirm-name">{{ confirmation.task.title }}</p>

@@ -13,6 +13,7 @@ function dateTime(value: number): string {
         <div v-if="loading" class="tasks-empty" role="status"><TaskIcon name="refresh" class="is-spinning" /><h3>正在读取委托…</h3></div>
         <template v-else-if="detail">
             <header class="tasks-contract-heading"><span class="tasks-status" :data-status="detail.task.status"><i />{{ taskStatusLabel[detail.task.status] }}</span><h2>{{ detail.task.title }}</h2></header>
+            <p v-if="detail.sourceLabel" class="tasks-hint">来自 {{ detail.sourceLabel }}</p>
             <section class="tasks-progress-summary"><span class="tasks-eyebrow">{{ detail.task.resultSummary ? '最终结果' : '当前进展' }}</span><p>{{ detail.task.resultSummary || detail.task.progressSummary || '暂无新进展' }}</p></section>
             <dl class="tasks-facts"><div><dt>完成目标</dt><dd>{{ detail.task.objective }}</dd></div></dl>
             <details class="tasks-contract-more">

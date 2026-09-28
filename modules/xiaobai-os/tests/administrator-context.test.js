@@ -10,8 +10,9 @@ import { administratorContext, contextUsage, summarizeAdministrator } from '../a
 const turn = (id, text) => ({ id, createdAt: 1, user: { text }, assistant: text, toolMessages: [], operations: [], status: 'finished', error: '' });
 const createState = history => ({ turns: [...history, { ...turn('current', 'current request'), assistant: null, status: 'interrupted' }], summary: null });
 function options(state, gateway, execute = async () => ({ status: 'read', data: 'evidence' })) {
+    const tools = [{ type: 'function', function: { name: 'Read', parameters: {} } }];
     return { state, gateway, config: {}, system: 'administrator fixture', prefix: [], request: { role: 'user', content: 'current request' }, requestForCounting: { role: 'user', content: 'current request' }, imageCount: 0,
-        tools: [{ type: 'function', function: { name: 'Read', parameters: {} } }], signal: new AbortController().signal, execute, async save() {}, onText() {}, onPhase() {}, onContext() {} };
+        getTools: () => tools, signal: new AbortController().signal, execute, async save() {}, onText() {}, onPhase() {}, onContext() {} };
 }
 test('explicit context overflow compacts full exchanges, reopens native session, and retries the model once without replaying business tools', async () => {
     const state = createState([turn('old', 'Earlier user request. '.repeat(200)), turn('recent', 'Recent facts. '.repeat(100))]);
@@ -111,7 +112,7 @@ test('fifteen 10000-character replies with native payloads summarize once withou
         return { text: 'done' };
     } }; } };
     const settings = options(state, gateway);
-    const normalTokens = contextUsage(settings.system, settings.tools, settings.prefix,
+    const normalTokens = contextUsage(settings.system, settings.getTools(), settings.prefix,
         administratorContext(state, settings.requestForCounting), 0, {}).used;
     assert.ok(normalTokens >= ADMINISTRATOR_POLICY.summaryTrigger);
     await runAdministratorLoop(settings);
@@ -227,7 +228,7 @@ test('context categories equal the complete request estimate under provider reas
     ];
     state.turns[0].toolMessages = structuredClone(toolGroup);
     state.turns.at(-1).toolMessages = structuredClone(toolGroup);
-    const tools = options(state, {}).tools, projection = administratorContext(state);
+    const tools = options(state, {}).getTools(), projection = administratorContext(state);
     for (const config of [
         { provider: 'openai-compatible', model: 'deepseek-chat', toolMode: 'native', reasoning: { mode: 'on' } },
         { provider: 'openai-compatible', model: 'deepseek-chat', toolMode: 'native', reasoning: { mode: 'off' } },

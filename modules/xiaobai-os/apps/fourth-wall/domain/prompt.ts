@@ -132,6 +132,7 @@ export function buildFourthWallPrompt({
     }
 
     return {
+        protocol: protocol.trim(),
         msg1: replaceNames(templates.topuser || DEFAULT_TOPUSER, userName, characterName),
         msg2: String(templates.confirm || DEFAULT_CONFIRM),
         msg3: `首先查看你们的历史过往:
@@ -141,8 +142,7 @@ ${formatMainChat(chatSnapshot, maximumLayers)}
 Developer:以下是你们的皮下过往：
 ${memory.trim() ? `<meta_memory>\n${memory.trim()}\n</meta_memory>\n` : ''}<meta_history>
 ${formatMetaHistory(history)}
-</meta_history>
-${protocol}`
+</meta_history>`
             .replace(/\|/g, '｜')
             .trim(),
         msg4: String(templates.bottom || DEFAULT_BOTTOM).replace(/{{USER_INPUT}}/g, String(userInput || '')),
@@ -152,10 +152,11 @@ ${protocol}`
 export function buildFourthWallCommentaryPrompt(input: FourthWallCommentaryPromptInput): FourthWallBuiltPrompt | null {
     const built = buildFourthWallPrompt({ ...input, userInput: '', commentary: true });
     const targetText = String(input.targetText || '');
+    // This becomes the final USER turn: 我 is the player, 你 is the Fourth Wall partner.
     const prompts: Record<FourthWallCommentaryPromptInput['type'], string> = {
-        ai_message: '剧本还在继续中，我刚说完最后一轮RP，忍不住想皮下吐槽一句自己的RP。直接输出<msg>内容</msg>：',
-        edit_own: `我发现你悄悄编辑了自己的台词：「${targetText}」。必须皮下吐槽一句，直接输出<msg>内容</msg>：`,
-        edit_ai: `我发现你居然偷偷改了我的台词：「${targetText}」。必须皮下吐槽一句，直接输出<msg>内容</msg>：`,
+        ai_message: '你刚在主剧情里说完最后一轮RP。请以皮下身份吐槽一句自己的RP，直接输出<msg>内容</msg>：',
+        edit_own: `我刚修改了自己在主剧情里的台词：「${targetText}」。请以皮下身份吐槽一句，直接输出<msg>内容</msg>：`,
+        edit_ai: `我刚修改了你在主剧情里的台词：「${targetText}」。请以皮下身份吐槽一句，直接输出<msg>内容</msg>：`,
     };
     const msg4 = prompts[input.type];
     return msg4 ? { ...built, msg4 } : null;

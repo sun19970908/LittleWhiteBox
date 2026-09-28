@@ -1,7 +1,5 @@
 import {
-    extension_prompt_roles,
-    extension_prompt_types,
-    setExtensionPrompt,
+    isStreamingEnabled,
 } from '../../../../../../../script.js';
 import {
     GENERATE_INTERCEPTOR_ORDER,
@@ -13,19 +11,21 @@ import type { ShopPromptEventHandlers } from '../apps/shop/host/prompt-runtime.j
 import type { MapPromptEventHandlers } from '../apps/map/host/prompt-runtime.js';
 import type { TaskPromptEventHandlers } from '../apps/tasks/host/prompt-runtime.js';
 import type { WorldPromptEventHandlers } from '../apps/world/host/prompt-runtime.js';
+import type { createAssistantFloorObserver } from './assistant-floor-observer.js';
 import { createMainGenerationRuntime, type MainGenerationRuntime } from './main-generation-runtime.js';
 
 type SimplePromptHandlers = MapPromptEventHandlers | TaskPromptEventHandlers | WorldPromptEventHandlers;
 
-export function setSillyTavernPrompt(key: string, value: string, depth = 1): void {
-    setExtensionPrompt(
-        key,
-        value,
-        Number(extension_prompt_types.IN_CHAT) || 1,
-        depth,
-        false,
-        Number(extension_prompt_roles.SYSTEM) || 0,
-    );
+export function subscribeBankReplies(observer: ReturnType<typeof createAssistantFloorObserver>): () => void {
+    const events = createModuleEvents('xiaobaiOsBankReplies');
+    events.on(event_types.GENERATION_STARTED, (type: unknown, _options: unknown, dryRun: unknown) => {
+        observer.started(String(type || ''), Boolean(dryRun), isStreamingEnabled());
+    });
+    events.on(event_types.STREAM_TOKEN_RECEIVED, (text: unknown) => observer.token(String(text || '')));
+    events.on(event_types.MESSAGE_RECEIVED, (index: unknown, type: unknown) => {
+        observer.received(Number(index), String(type || ''));
+    });
+    return () => events.cleanup();
 }
 
 export function subscribeShopPromptEvents(handlers: ShopPromptEventHandlers): () => void {

@@ -9,6 +9,7 @@
     <title>剧情总结 · Story Summary</title>
     <link rel="stylesheet" href="story-summary.css">
     <link rel="stylesheet" href="story-summary-timeline.css">
+    <link rel="stylesheet" href="maintenance/ui.css">
     <style>
         #xb-frame-boot {
             position: fixed;
@@ -249,6 +250,7 @@
                 <div class="settings-tabs">
                     <div class="settings-tab active" data-tab="tab-summary">总结</div>
                     <div class="settings-tab" data-tab="tab-vector">向量</div>
+                    <button type="button" class="settings-tab" data-tab="tab-agent" id="memory-agent-tab"></button>
                     <div class="settings-tab" data-tab="tab-prompts">提示词</div>
                     <div class="settings-tab" data-tab="tab-debug">调试</div>
                     <div class="settings-tab" data-tab="tab-guide">说明</div>
@@ -830,6 +832,7 @@
                     </div>
                 </div>
 
+                <div class="tab-pane" id="tab-agent"></div>
                 <div class="tab-pane" id="tab-prompts">
                     <div class="settings-section">
                         <div class="settings-btn-row" style="margin: 0 0 12px 0; align-items: center;">
@@ -1118,8 +1121,8 @@
                 </div>
             </div>
             <div class="modal-foot">
-                <button class="btn" id="settings-cancel">取消</button>
-                <button class="btn btn-p" id="settings-save">保存</button>
+                <button class="btn" id="settings-cancel"></button>
+                <button class="btn btn-p" id="settings-save"></button>
             </div>
         </div>
     </div>

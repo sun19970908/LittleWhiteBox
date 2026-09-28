@@ -15,10 +15,10 @@ async function prepare(id) {
         const { record } = await h.tasks.acceptListing({ actionId: 'accept', boardId: board.view.domain.board.boardId, listingId: board.view.domain.board.listings[0].listingId }, () => true);
         tool = { name: 'TaskComplete', arguments: JSON.stringify({ taskId: record.taskId, revision: record.taskRevision, resultSummary: '守卫已收信' }) };
     } else if (id === 'map') {
-        tool = { name: 'MapAtlasEdit', arguments: JSON.stringify({ locations: [{ key: 'port', name: '港口', scale: 'city' }] }) };
+        tool = { name: 'MapAtlasEdit', arguments: JSON.stringify({ locations: [{ key: 'port', name: '港口', scale: 'region' }] }) };
     } else { tool = { name: 'WorldEdit', arguments: '{"overview":"updated"}' }; }
     const participant = id === 'map' ? createMapMaintenanceParticipant({ map: h.map, readSettings: () => ({ autoMaintenance: true }) })
-        : id === 'tasks' ? createTaskMaintenanceParticipant({ tasks: h.tasks, readSettings: () => ({ autoMaintenance: true }) })
+        : id === 'tasks' ? createTaskMaintenanceParticipant({ tasks: h.tasks, readSettings: () => ({ autoMaintenance: true }), captureSurface: h.capture })
             : createWorldMaintenanceParticipant(h.world, () => ({ subscribed: true }));
     let step = 0;
     const runner = createMaintenanceRunner({

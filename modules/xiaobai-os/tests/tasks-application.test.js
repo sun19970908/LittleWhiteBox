@@ -17,6 +17,7 @@ import { createTasksService } from '../apps/tasks/application/service.js';
 import { createTaskController } from '../apps/tasks/host/controller.js';
 import { createTaskCompletionRuntime } from '../apps/tasks/host/completion-runtime.js';
 import { createTaskMaintenanceParticipant } from '../apps/tasks/host/maintenance-participant.js';
+import { createTaskMaintenanceSession } from '../apps/tasks/maintenance/session.js';
 import { buildTaskPromptBlock } from '../apps/tasks/host/prompt-runtime.js';
 import { createTasksModule } from '../apps/tasks/module.js';
 import { TASKS_PARTITION } from '../apps/tasks/partition.js';
@@ -27,6 +28,8 @@ import { createTransactionCoordinator } from '../kernel/transaction-coordinator.
 
 const allowCommit = () => true;
 const binding = { kind: 'character', ownerLocator: 'tasks.png', chatId: 'chat-a' };
+const checked = record => ({ taskId: record.taskId, expectedTaskRevision: record.taskRevision,
+    expectedEventId: record.eventId });
 
 function listing() {
     return {
@@ -128,7 +131,7 @@ async function createHarness() {
         now: () => ++clock,
         ids: createTaskIdFactory({ randomUuid: () => `opaque-${++opaqueId}`, now: () => clock }),
         getPlayerDisplayName: () => '主人',
-        getObservedAssistantCount: () => 3,
+        getEvidenceDigest: () => 'accepted-story',
     });
     await tasks.refreshCurrent();
     return { capabilities, coordinator, economy, state, store, tasks };
@@ -146,7 +149,6 @@ async function publishAndAssign(harness, prefix, form = publishedForm()) {
         expectedTaskRevision: published.record.taskRevision,
         expectedEventId: published.record.eventId,
         candidates: [candidate()],
-        observedAssistantCount: 3,
     }, allowCommit);
     return await harness.tasks.assignCandidate({
         actionId: `${prefix}-assign`,
@@ -214,8 +216,11 @@ test('cancelling either active task line closes escrow once and removes story/ma
         await t.test(source, async () => {
             const h = await createHarness();
             const active = source === 'received' ? await acceptTask(h) : await publishAndAssign(h, 'published');
-            const participant = createTaskMaintenanceParticipant({ tasks: h.tasks, readSettings: () => ({ autoMaintenance: true }) });
-            const turn = { assistantCount: 4 };
+            const turn = { chatIdentity: h.state.capture.identityKey,
+                messages: [{ index: 0, role: 'assistant', speakerName: '角色', text: '剧情有新进展', swipeId: null }] };
+            const surface = { identityKey: turn.chatIdentity, messages: [{ mes: '剧情有新进展' }] };
+            const participant = createTaskMaintenanceParticipant({ tasks: h.tasks,
+                readSettings: () => ({ autoMaintenance: true }), captureSurface: () => surface });
             const pending = participant.createSession(turn, 'automatic');
             assert.equal(pending.executeTool('TaskComplete', {
                 taskId: active.record.taskId, revision: active.record.taskRevision, resultSummary: '已送达',
@@ -233,7 +238,7 @@ test('cancelling either active task line closes escrow once and removes story/ma
             const replay = await h.tasks.cancel(command, allowCommit);
             assert.equal(replay.changed, false);
             assert.deepEqual(h.state.persisted, saved);
-            await assert.rejects(pending.commit(allowCommit), /task_terminal/);
+            await assert.rejects(pending.commit(allowCommit, { completed: true }), /task_terminal/);
             await assert.rejects(h.tasks.cancel(cancellation(cancelled.record, 'cancel-again'), allowCommit), /task_terminal/);
             assert.deepEqual(h.state.persisted, saved);
             assert.equal((await h.tasks.refreshCurrent()).records[0].status, 'cancelled');
@@ -245,7 +250,8 @@ test('cancellation respects CAS and save confirmation before refunding or removi
     const h = await createHarness();
     const active = await publishAndAssign(h, 'save');
     const progressed = await h.tasks.commitMaintenance({
-        commands: [maintenanceCommand('progress', 'progress', active.record, '途中遇到封路')], observedAssistantCount: 4,
+        commands: [maintenanceCommand('progress', 'progress', active.record, '途中遇到封路')],
+        checkedTasks: [checked(active.record)], evidenceDigest: 'new-story',
     }, allowCommit);
     await assert.rejects(h.tasks.cancel(cancellation(active.record), allowCommit), /task_revision_conflict/);
     const command = cancellation(progressed.record);
@@ -265,6 +271,26 @@ test('cancellation respects CAS and save confirmation before refunding or removi
     assert.equal(h.economy.getPlayerBalance(), 100);
 });
 
+test('an inspected revision cannot acknowledge a later task revision without repeating the model check', async () => {
+    const h = await createHarness();
+    const board = await h.tasks.replaceBoard({ expectedBoardId: null, generatedAt: 10,
+        listings: [listing()] }, allowCommit);
+    const accepted = await h.tasks.acceptListing({ actionId: 'accept-revision', boardId: board.view.domain.board.boardId,
+        listingId: board.view.domain.board.listings[0].listingId }, allowCommit);
+    const previous = accepted.record;
+    const advanced = await h.tasks.commitMaintenance({ commands: [
+        maintenanceCommand('progress', 'admin-update-revision', previous, '管理员更新的进度'),
+    ], checkedTasks: [], evidenceDigest: '' }, allowCommit);
+    const stale = await h.tasks.commitMaintenance({ commands: [], checkedTasks: [checked(previous)],
+        evidenceDigest: 'old-inspection' }, allowCommit);
+    assert.equal(stale.changed, false);
+    assert.deepEqual(stale.staleTaskIds, [previous.taskId]);
+    assert.notEqual(h.tasks.readCurrent().domain.checks[previous.taskId].digest, 'old-inspection');
+    const fresh = await h.tasks.commitMaintenance({ commands: [], checkedTasks: [checked(advanced.record)],
+        evidenceDigest: 'new-inspection' }, allowCommit);
+    assert.equal(fresh.view.domain.checks[previous.taskId].digest, 'new-inspection');
+});
+
 test('both task lines notify after settlement without UI activation, but history and rereads stay silent', async t => {
     const h = await createHarness();
     const notices = [];
@@ -278,7 +304,7 @@ test('both task lines notify after settlement without UI activation, but history
     await h.tasks.commitMaintenance({ commands: [
         maintenanceCommand('complete', 'complete-received', received.record, '已送达'),
         maintenanceCommand('complete', 'complete-published', published.record, '已送达'),
-    ], observedAssistantCount: 4 }, allowCommit);
+    ], checkedTasks: [checked(received.record), checked(published.record)], evidenceDigest: 'new-story' }, allowCommit);
     assert.equal(notices.length, 2);
     assert.ok(h.tasks.readCurrent().records.every(record => record.status === 'completed'));
     assert.equal(h.economy.getPlayerBalance(), 170);
@@ -298,7 +324,8 @@ test('completion save failures and uncertain results stay silent until recovery 
     runtime.startBackground();
     t.after(() => runtime.stopBackground());
     const received = await acceptTask(h);
-    const input = { commands: [maintenanceCommand('complete', 'recover-completion', received.record, '已送达')], observedAssistantCount: 4 };
+    const input = { commands: [maintenanceCommand('complete', 'recover-completion', received.record, '已送达')],
+        checkedTasks: [checked(received.record)], evidenceDigest: 'new-story' };
     h.state.replaceImpl = async () => ({ status: 'failed', error: { code: 'disk_failed', message: 'disk failed', retryable: true } });
     await assert.rejects(h.tasks.commitMaintenance(input, allowCommit), error => error.code === 'disk_failed');
     assert.equal(notices.length, 0);
@@ -328,7 +355,8 @@ test('late completion from another chat is not announced, and returning only est
         h.state.persisted = structuredClone(input.candidate);
         return { status: 'confirmed' };
     };
-    await h.tasks.commitMaintenance({ commands: [maintenanceCommand('complete', 'late-completion', received.record, '已送达')], observedAssistantCount: 4 }, allowCommit);
+    await h.tasks.commitMaintenance({ commands: [maintenanceCommand('complete', 'late-completion', received.record, '已送达')],
+        checkedTasks: [checked(received.record)], evidenceDigest: 'new-story' }, allowCommit);
     assert.equal(notices.length, 0);
     h.state.capture = original;
     h.state.replaceImpl = null;
@@ -336,7 +364,8 @@ test('late completion from another chat is not announced, and returning only est
     await h.tasks.refreshCurrent();
     assert.equal(notices.length, 0);
     const next = await publishAndAssign(h, 'after-return');
-    await h.tasks.commitMaintenance({ commands: [maintenanceCommand('complete', 'next-completion', next.record, '已送达')], observedAssistantCount: 5 }, allowCommit);
+    await h.tasks.commitMaintenance({ commands: [maintenanceCommand('complete', 'next-completion', next.record, '已送达')],
+        checkedTasks: [checked(next.record)], evidenceDigest: 'later-story' }, allowCommit);
     assert.equal(notices.length, 1);
 });
 
@@ -348,25 +377,28 @@ test('a notification failure cannot roll back settlement or retrigger it on rere
     runtime.startBackground();
     t.after(() => runtime.stopBackground());
     const received = await acceptTask(h);
-    await h.tasks.commitMaintenance({ commands: [maintenanceCommand('complete', 'toast-failure', received.record, '已送达')], observedAssistantCount: 4 }, allowCommit);
+    await h.tasks.commitMaintenance({ commands: [maintenanceCommand('complete', 'toast-failure', received.record, '已送达')],
+        checkedTasks: [checked(received.record)], evidenceDigest: 'new-story' }, allowCommit);
     assert.equal(h.economy.getPlayerBalance(), 250);
     await h.tasks.refreshCurrent();
     assert.equal(notifications, 1);
 });
 
 test('Tasks module owns a strict partition and declares its runtime capabilities', async () => {
-    assert.equal(TASKS_PARTITION.parse({ schemaVersion: 1, revision: 0, board: null, events: [] }).ok, true);
+    assert.equal(TASKS_PARTITION.parse(TASKS_PARTITION.createInitial()).ok, true);
     assert.equal(TASKS_PARTITION.parse({ schemaVersion: 1, revision: 0, board: null, events: [], extra: true }).ok, false);
 
     const module = createTasksModule({
         getPlayerDisplayName: () => '主人',
-        getObservedAssistantCount: () => 3,
+        getEvidenceDigest: () => '',
+        getStoryLabel: () => '',
         install: async () => ({}),
     });
     assert.deepEqual(module.capabilities.map(capability => capability.id), [
         ECONOMY_READ_CAPABILITY.id,
         ECONOMY_TRANSACTION_CAPABILITY.id,
         AGENT_CAPABILITY.id,
+        'prompt.injection',
         MAINTENANCE_CAPABILITY.id,
         MANAGEMENT_CAPABILITY.id,
         MAP_CONTEXT_CAPABILITY.id,
@@ -375,7 +407,7 @@ test('Tasks module owns a strict partition and declares its runtime capabilities
     assert.equal(module.clearData, undefined);
 });
 
-test('Tasks module injects the current player name and Assistant count into its service', async () => {
+test('Tasks module injects the current player name and story label into its service', async () => {
     const harness = await createHarness();
     let installed = null;
     let opaqueId = 0;
@@ -383,7 +415,8 @@ test('Tasks module injects the current player name and Assistant count into its 
     const runtime = { stopBackground: () => {stopCount += 1;} };
     const module = createTasksModule({
         getPlayerDisplayName: () => '模块主人',
-        getObservedAssistantCount: () => 17,
+        getEvidenceDigest: () => 'accepted-story',
+        getStoryLabel: () => '原聊天',
         service: {
             now: () => 2_000,
             ids: createTaskIdFactory({ randomUuid: () => `module-${++opaqueId}`, now: () => 2_000 }),
@@ -412,7 +445,7 @@ test('Tasks module injects the current player name and Assistant count into its 
     }, allowCommit);
 
     assert.equal(published.record.issuer.displayName, '模块主人');
-    assert.equal(published.record.lastObservedAssistantCount, 17);
+    assert.equal(published.view.domain.storyLabel, '原聊天');
     await module.dispose(result);
     assert.equal(stopCount, 1);
 });
@@ -473,7 +506,7 @@ test('received and published tasks retain settlement, refund, recruitment and ba
 
         const completed = await harness.tasks.commitMaintenance({
             commands: [maintenanceCommand('complete', 'received-complete', accepted.record, '封蜡信已经送达')],
-            observedAssistantCount: 4,
+            checkedTasks: [checked(accepted.record)], evidenceDigest: 'new-story',
         }, allowCommit);
         assert.equal(completed.record.status, 'completed');
         assert.equal(projectBalances(ledgerOf(harness)).player, 250);
@@ -498,7 +531,7 @@ test('received and published tasks retain settlement, refund, recruitment and ba
         const candidateId = assigned.record.assignee.partyId;
         const completed = await completedHarness.tasks.commitMaintenance({
             commands: [maintenanceCommand('complete', 'assigned-complete', assigned.record, '药箱已经送达')],
-            observedAssistantCount: 5,
+            checkedTasks: [checked(assigned.record)], evidenceDigest: 'new-story',
         }, allowCommit);
         const balances = projectBalances(ledgerOf(completedHarness));
         assert.equal(completed.record.status, 'completed');
@@ -506,6 +539,31 @@ test('received and published tasks retain settlement, refund, recruitment and ba
         assert.equal(balances[`counterparty:task:${candidateId}`], 80);
         assert.equal(balances.player, 20);
     });
+});
+
+test('revising a staged task decision settles only the final reward through the real ledger', async () => {
+    const h = await createHarness();
+    const board = await h.tasks.replaceBoard({ expectedBoardId: null, listings: [listing()], generatedAt: 10 }, allowCommit);
+    const accepted = await h.tasks.acceptListing({ actionId: 'revised-accept', boardId: board.view.domain.board.boardId,
+        listingId: board.view.domain.board.listings[0].listingId }, allowCommit);
+    const session = createTaskMaintenanceSession(h.tasks, [accepted.record], 'new-story');
+    const identity = { taskId: accepted.record.taskId, revision: accepted.record.taskRevision };
+    const before = structuredClone(ledgerOf(h));
+    assert.equal(session.executeTool('TaskProgress', { ...identity, progressSummary: '送信途中' }).ok, true);
+    assert.equal(session.executeTool('TaskFail', { ...identity, resultSummary: '信件可能遗失' }).ok, true);
+    const complete = { ...identity, resultSummary: '确认封蜡信已经送达' };
+    assert.equal(session.executeTool('TaskComplete', complete).ok, true);
+    assert.equal(session.executeTool('TaskComplete', complete).changed, false);
+    assert.deepEqual(ledgerOf(h), before);
+    await session.commit(allowCommit, { completed: true });
+    assert.equal(h.tasks.readCurrent().records[0].status, 'completed');
+    const balances = projectBalances(ledgerOf(h));
+    assert.equal(balances.player, 250);
+    assert.equal(balances[`escrow:task:${accepted.record.taskId}`], 0);
+    assert.equal(ledgerOf(h).transactions.length, before.transactions.length + 1);
+    const settled = structuredClone(ledgerOf(h));
+    await assert.rejects(session.commit(allowCommit, { completed: true }));
+    assert.deepEqual(ledgerOf(h), settled);
 });
 
 test('commit guards and failed replaces publish neither prepared Tasks nor Economy state', async () => {

@@ -5,6 +5,7 @@ import { createAdministratorToolExecutor, type AdministratorToolExecutor, type A
 import { runAdministratorLoop } from '../agent/provider-loop.js';
 import { administratorContext, contextUsage, historyBefore, type AdministratorHistory } from '../agent/history.js';
 import { ADMINISTRATOR_PROMPT } from '../agent/prompt.js';
+import { administratorReferenceMessage } from '../agent/reference-data.js';
 import { ADMINISTRATOR_POLICY as POLICY } from '../domain/policy.js';
 import { settledOperations } from '../domain/data.js';
 import type { AdministratorContextUsage, AdministratorLive, AdministratorOperation, AdministratorTurn } from '../domain/types.js';
@@ -14,6 +15,8 @@ import { parseAdministratorUpload, type AdministratorImages, type AdministratorU
 import type { AdministratorConversation } from './conversation.js';
 import { administratorError, ADMINISTRATOR_COPY } from '../ui/copy.js';
 import { createAdministratorId } from './identity.js';
+import { administratorProcess } from './process.js';
+import type { AdministratorEnvironmentReader } from '../domain/environment.js';
 
 interface ActiveRun {
     current(): boolean;
@@ -34,6 +37,7 @@ interface PendingSend {
 export function createAdministratorRuntime(deps: {
     conversation: AdministratorConversation; repository: AdministratorRepository; images: AdministratorImages;
     gateway: XiaobaiOsAgentGateway; management: ManagementRegistry; capture(): AdministratorChatSurface | null;
+    readEnvironment: AdministratorEnvironmentReader;
     changed(): void;
 }) {
     const { conversation, repository } = deps;
@@ -44,6 +48,9 @@ export function createAdministratorRuntime(deps: {
     let usage: AdministratorContextUsage = { used: 0, limit: POLICY.inputBudget, trigger: POLICY.summaryTrigger, rules: 0, tools: 0, history: 0, images: 0, runtime: 0 };
     let streamTimer: ReturnType<typeof setTimeout> | null = null;
     const sameChat = (active: ActiveRun) => active.current() && repository.identity() === active.identity && deps.capture()?.identityKey === active.sourceIdentity;
+    // A failed run owns its unsaved display until confirmation, abandonment or chat reset.
+    // This never replaces confirmed conversation data or starts another dispatch.
+    const unsavedRun = () => run?.failed && !run.promise && sameChat(run) && conversation.unsaved() ? run : null;
     function changed(immediate = false) {
         if (immediate) { if (streamTimer) { clearTimeout(streamTimer); streamTimer = null; } deps.changed(); }
         else if (!streamTimer) { streamTimer = setTimeout(() => { streamTimer = null; deps.changed(); }, POLICY.streamInterval); }
@@ -75,6 +82,7 @@ export function createAdministratorRuntime(deps: {
         try {
             const config = await deps.gateway.loadConfig();
             active.executor = await createAdministratorToolExecutor({ registry: deps.management, reader: active.reader,
+                readEnvironment: deps.readEnvironment,
                 operations: active.turn.operations,
                 guard: () => sameChat(active) && active.reader.isCurrent(), onChange: () => { if (sameChat(active)) { changed(true); } },
                 saveReceipts: confirmation => persistTurn(active, confirmation),
@@ -85,10 +93,10 @@ export function createAdministratorRuntime(deps: {
             const userText = active.turn.user?.text ?? '';
             const text = await runAdministratorLoop({ gateway: deps.gateway, config, state: active.context!,
                 system: [ADMINISTRATOR_PROMPT, active.executor.prompt].join('\n\n'),
-                prefix: [{ role: 'system', content: `Current reference data:\n${safePromptJson(active.executor.data)}` }],
+                prefix: [administratorReferenceMessage(active.executor.data)],
                 request: { role: 'user', content: dataUrl ? [{ type: 'text', text: userText || ADMINISTRATOR_COPY.imageRequest }, { type: 'image_url', image_url: { url: dataUrl } }] : userText },
                 requestForCounting: { role: 'user', content: userText }, imageCount: dataUrl ? 1 : 0,
-                tools: active.executor.tools, signal: active.abort.signal, execute: active.executor.execute, save: () => persistTurn(active),
+                getTools: active.executor.getTools, signal: active.abort.signal, execute: active.executor.execute, save: () => persistTurn(active),
                 onText: value => { active.text = value; if (sameChat(active)) { changed(); } },
                 onPhase: value => { active.phase = value; if (sameChat(active)) { changed(true); } },
                 onContext: value => { if (sameChat(active)) { usage = value; changed(); } },
@@ -188,11 +196,11 @@ export function createAdministratorRuntime(deps: {
             if (!current() || run?.promise || deps.capture()?.identityKey !== sourceIdentity) { return; }
             const abort = new AbortController();
             const reader = createAdministratorChatReader(deps.capture, () => abort.signal);
-            const executor = await createAdministratorToolExecutor({ registry: deps.management, reader, operations: [], guard: () => false, onChange() {}, async saveReceipts() {} });
+            const executor = await createAdministratorToolExecutor({ registry: deps.management, reader, readEnvironment: deps.readEnvironment, operations: [], guard: () => false, onChange() {}, async saveReceipts() {} });
             if (!current() || run?.promise || deps.capture()?.identityKey !== sourceIdentity) { return; }
             const projected = administratorContext(conversation.read());
-            usage = contextUsage([ADMINISTRATOR_PROMPT, executor.prompt].join('\n\n'), executor.tools,
-                [{ role: 'system', content: `Current reference data:\n${safePromptJson(executor.data)}` }],
+            usage = contextUsage([ADMINISTRATOR_PROMPT, executor.prompt].join('\n\n'), executor.getTools(),
+                [administratorReferenceMessage(executor.data)],
                 projected, 0, agent.providerConfig);
             changed(true);
         },
@@ -223,10 +231,21 @@ export function createAdministratorRuntime(deps: {
         },
         live(): AdministratorLive | null {
             if (pendingSend?.preparing && pendingSend.current()) {
-                return { turnId: pendingSend.turn.id, text: '', totalChars: 0, operations: [], operationCount: 0, phase: pendingSend.stopped ? 'stopping' : 'preparing' };
+                return { turnId: pendingSend.turn.id, text: '', totalChars: 0, process: [], preview: [], phase: pendingSend.stopped ? 'stopping' : 'preparing' };
             }
             return run?.promise && sameChat(run) ? { turnId: run.turn.id, text: run.text.slice(0, POLICY.textBlock), totalChars: run.text.length,
-                operations: [...run.turn.operations, ...run.preview].slice(-POLICY.visibleOperations), operationCount: run.turn.operations.length + run.preview.length, phase: run.abort.signal.aborted ? 'stopping' : run.phase } : null;
+                process: administratorProcess(run.turn, true), preview: run.preview, phase: run.abort.signal.aborted ? 'stopping' : run.phase } : null;
+        },
+        unsavedProcess() {
+            const active = unsavedRun();
+            return active ? { turnId: active.turn.id, rounds: administratorProcess(active.turn) } : null;
+        },
+        process(turnId: string) {
+            const visible = run?.promise && sameChat(run) ? run : unsavedRun();
+            const active = visible?.turn.id === turnId ? visible : null;
+            const turn = active?.turn ?? conversation.read().turns.find(item => item.id === turnId);
+            if (!turn) { throw new Error('administrator_message_missing'); }
+            return administratorProcess(turn, !!active?.promise);
         },
         async send(submissionId: unknown, text: string, upload?: unknown) {
             if (run?.promise || conversation.unsaved()) { throw new Error('administrator_busy'); }

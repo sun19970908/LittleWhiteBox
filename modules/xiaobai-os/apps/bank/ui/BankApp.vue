@@ -17,6 +17,7 @@ import BankPositions from './BankPositions.vue';
 import BankRecords from './BankRecords.vue';
 import BankVault from './BankVault.vue';
 import BankProductIcon from './BankProductIcon.vue';
+import { bankActivityKey } from './activity-identity.js';
 import './bank.css';
 
 interface PendingAction {
@@ -41,6 +42,8 @@ const recordsError = ref('');
 let claimActionId: string | null = null;
 let unsubscribe = () => {};
 let requestGeneration = 0;
+let activityGeneration = 0;
+let nextActivityOffset = state.value.activityPage.offset + state.value.activities.length;
 useAppBack(() => {
     if (pending.value) { closeAction(); return true; }
     if (page.value !== 'vault') { navigate('vault'); return true; }
@@ -52,7 +55,6 @@ const writeDisabledReason = computed(() => {
     if (actionBusy.value) {return '正在处理上一项银行操作';}
     if (refreshing.value) {return '正在刷新银行记录';}
     if (state.value.status !== 'ready') {return state.value.message || '暂时不能交易';}
-    if (state.value.generationActive) {return '故事正在继续，请等回复结束';}
     return '';
 });
 const refreshDisabled = computed(() => refreshing.value || actionBusy.value || requiresConfirmation.value);
@@ -68,7 +70,9 @@ function binding(): { chatIdentity: string } {
 }
 
 function applyState(next: BankClientState): void {
+    activityGeneration += 1;
     state.value = structuredClone(next);
+    nextActivityOffset = next.activityPage.offset + next.activities.length;
     refreshing.value = false;
     loadingMore.value = false;
     errorMessage.value = '';
@@ -115,6 +119,23 @@ async function confirmSave(): Promise<void> {
             result: { state: BankClientState };
         };
         if (generation === requestGeneration) {applyState(response.result.state);}
+    } catch (error) {
+        if (generation === requestGeneration) {errorMessage.value = readableError(error);}
+    } finally {
+        if (generation === requestGeneration) {refreshing.value = false;}
+    }
+}
+
+async function retryTurns(): Promise<void> {
+    if (refreshing.value || actionBusy.value) {return;}
+    const generation = ++requestGeneration;
+    refreshing.value = true;
+    errorMessage.value = '';
+    try {
+        const response = await props.bridge.request('bank/retry-turns', binding(), REQUEST_TIMEOUT_MS) as {
+            result: BankClientState;
+        };
+        if (generation === requestGeneration) {applyState(response.result);}
     } catch (error) {
         if (generation === requestGeneration) {errorMessage.value = readableError(error);}
     } finally {
@@ -201,7 +222,8 @@ async function settleDue(): Promise<void> {
 async function loadMore(): Promise<void> {
     if (!state.value.activityPage.hasMore || loadingMore.value || actionBusy.value) {return;}
     const generation = requestGeneration;
-    const offset = state.value.activities.length;
+    const listGeneration = activityGeneration;
+    const offset = nextActivityOffset;
     loadingMore.value = true;
     recordsError.value = '';
     try {
@@ -209,14 +231,21 @@ async function loadMore(): Promise<void> {
             ...binding(),
             offset,
         }, REQUEST_TIMEOUT_MS) as { result: BankActivityPageView };
-        if (generation !== requestGeneration) {return;}
-        const known = new Set(state.value.activities.map((activity) => activity.id));
-        state.value.activities.push(...response.result.activities.filter((activity) => !known.has(activity.id)));
+        if (generation !== requestGeneration || listGeneration !== activityGeneration) {return;}
+        if (response.result.activityPage.offset !== offset) {throw new Error('bank_activity_page_changed');}
+        const known = new Set(state.value.activities.map(bankActivityKey));
+        for (const activity of response.result.activities) {
+            const key = bankActivityKey(activity);
+            if (known.has(key)) {continue;}
+            state.value.activities.push(activity);
+            known.add(key);
+        }
+        nextActivityOffset = response.result.activityPage.offset + response.result.activities.length;
         state.value.activityPage = response.result.activityPage;
     } catch (error) {
-        if (generation === requestGeneration) {recordsError.value = readableError(error);}
+        if (generation === requestGeneration && listGeneration === activityGeneration) {recordsError.value = readableError(error);}
     } finally {
-        if (generation === requestGeneration) {loadingMore.value = false;}
+        if (generation === requestGeneration && listGeneration === activityGeneration) {loadingMore.value = false;}
     }
 }
 
@@ -251,7 +280,8 @@ onBeforeUnmount(() => {
             <aside class="bank-notice" :class="{ 'is-error': Boolean(errorMessage) || state.status === 'blocked' || state.status === 'conflict' }" role="status">
                 <p>{{ noticeMessage }}</p>
                 <button v-if="requiresConfirmation" type="button" :disabled="refreshing || actionBusy" @click="confirmSave">{{ refreshing ? '正在检查…' : '检查保存' }}</button>
-                <button v-else-if="state.status === 'blocked' || state.status === 'conflict'" type="button" :disabled="refreshDisabled" @click="refresh">{{ refreshing ? '正在读取…' : '重新加载' }}</button>
+                <button v-else-if="state.unsavedTurns > 0 && state.status === 'blocked'" type="button" :disabled="refreshing || actionBusy" @click="retryTurns">{{ refreshing ? '正在保存…' : '重试计期' }}</button>
+                <button v-else-if="!state.turnConfirmationAbandoned && (state.status === 'blocked' || state.status === 'conflict')" type="button" :disabled="refreshDisabled" @click="refresh">{{ refreshing ? '正在读取…' : '重新加载' }}</button>
             </aside>
         </div>
         <div ref="content" class="bank-scroll">

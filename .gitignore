@@ -17,3 +17,4 @@ output/playwright/
 # One-off local model probes
 output/dice-frequency-eval*.json
 output/dice-frequency-eval.mjs
+output/memory-maintenance-check*/

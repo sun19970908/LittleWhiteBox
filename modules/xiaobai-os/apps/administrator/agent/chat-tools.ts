@@ -1,14 +1,38 @@
 import type { ManagementTool } from '../../../capabilities/management/index.js';
 import { MANAGEMENT_READ_CHARS } from '../../../capabilities/management/read-page.js';
+import { ADMINISTRATOR_POLICY as POLICY } from '../domain/policy.js';
 
 const floor = { type: 'integer', minimum: 0, description: 'SillyTavern floor number, counted from 0 without renumbering.' };
+const chatScope = 'All floors in the current chat are available, including hidden and system messages; each floor uses its currently selected message version.';
 export const ADMINISTRATOR_CHAT_TOOLS: readonly ManagementTool[] = [
     { effect: 'read', label: '搜索原文', target: a => String(a.query ?? ''), definition: { type: 'function', function: {
-        name: 'ChatSearch', description: 'Search the currently selected story messages for a literal case-insensitive phrase. data contains items (floor, speaker, snippet, offset), next (continuation arguments) and complete. Returns the first match in each floor, up to 20 floors per call; system messages are excluded. A miss means the phrase was not found, not that the event never happened.',
-        parameters: { type: 'object', properties: { query: { type: 'string', minLength: 1, maxLength: 200, description: 'One name, object name or short phrase. Spaces and punctuation match literally. Search separate clues separately; if no match, shorten or reword the phrase.' }, from: { ...floor, description: 'Inclusive start floor, default 0.' }, to: { ...floor, description: 'Inclusive end floor, default last floor.' } }, required: ['query'], additionalProperties: false },
+        name: 'ChatSearch', description: [
+            'Find a literal, case-insensitive phrase in the current chat.',
+            chatScope,
+            'data contains items with floor, speaker, snippet and its text offset, plus next (continuation arguments) and complete.',
+            'Use it to locate relevant passages before reading their surrounding context.',
+            `Returns the first match on each matching floor, up to ${POLICY.chatSearchMatches} matches per call.`,
+            'When next is present, pass those arguments to continue the search. A miss means the phrase was not found in the searched range, not that the event never happened.',
+        ].join('\n'),
+        parameters: { type: 'object', properties: {
+            query: { type: 'string', minLength: 1, maxLength: POLICY.chatQueryChars, description: 'One name, object name or short phrase. Spaces and punctuation match literally. Search separate clues separately; if no match, shorten or reword the phrase.' },
+            from: { ...floor, description: 'Inclusive start floor in SillyTavern’s zero-based numbering. Default 0.' },
+            to: { ...floor, description: 'Inclusive end floor in the same numbering. Default last floor.' },
+        }, required: ['query'], additionalProperties: false },
     } } },
     { effect: 'read', label: '读取原文', target: a => `#${a.from}${a.to !== undefined && a.to !== a.from ? `–#${a.to}` : ''}`, definition: { type: 'function', function: {
-        name: 'ChatRead', description: `Read the currently selected story messages in an inclusive floor range. data contains items (floor, speaker, role, text, offset, totalChars), scanned (covered range), omittedSystemFloors, next (continuation arguments) and complete. At most ${MANAGEMENT_READ_CHARS} text characters and 20 floors per call. Continuation requires the same floor version; after an edit or swipe change, read that floor again from offset 0.`,
-        parameters: { type: 'object', properties: { from: floor, to: { ...floor, description: 'Inclusive end floor, default from.' }, offset: { type: 'integer', minimum: 0, description: 'Text offset within the starting floor, default 0. Use the returned continuation offset.' } }, required: ['from'], additionalProperties: false },
+        name: 'ChatRead', description: [
+            'Read an inclusive floor range of the current chat.',
+            chatScope,
+            'data contains items with floor, speaker, role, text, offset and totalChars; scanned gives the covered range.',
+            'Use it for exact message text and context around a known floor.',
+            `Each call covers at most ${POLICY.chatReadFloors} floors and returns at most ${MANAGEMENT_READ_CHARS} text characters. next holds continuation arguments; complete is true when the requested range is finished.`,
+            'Continuation requires the same message version. After an edit or swipe change, read that floor again from offset 0.',
+        ].join('\n'),
+        parameters: { type: 'object', properties: {
+            from: floor,
+            to: { ...floor, description: 'Inclusive end floor. Default from, which reads a single floor.' },
+            offset: { type: 'integer', minimum: 0, description: 'Text offset within the starting floor, not a floor number. Default 0; use the offset from next for continuation.' },
+        }, required: ['from'], additionalProperties: false },
     } } },
 ];

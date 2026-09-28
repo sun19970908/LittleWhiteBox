@@ -14,6 +14,7 @@ import {
     type BankChange,
     type BankDepositPosition,
     type BankDomainV1,
+    type BankLegacyDomainV1,
     type BankEvent,
     type BankEventResult,
     type BankFundPosition,
@@ -380,11 +381,34 @@ export function validateBankState(value: unknown): asserts value is BankState {
     });
 }
 
-/** Accepts only schema v1's exact serialized shape and validates every replay transition. */
-export function validateBankDomain(value: unknown): asserts value is BankDomainV1 {
+function validateBankEvents(value: unknown, legacy: boolean): void {
     if (!isRecord(value)) {invalid('domain.shape');}
-    if (value.schemaVersion !== BANK_SCHEMA_VERSION) {throwBankError('bank_unsupported_version');}
-    const domain = exactRecord(value, ['schemaVersion', 'events'], 'domain');
+    if (value.schemaVersion !== (legacy ? 1 : BANK_SCHEMA_VERSION)) {throwBankError('bank_unsupported_version');}
+    const domain = exactRecord(value, legacy ? ['schemaVersion', 'events']
+        : ['schemaVersion', 'currentTurn', 'events', 'history'], 'domain');
+    if (!legacy) {
+        safeInteger(domain.currentTurn, 0, 'domain.currentTurn');
+        if (!Array.isArray(domain.history)) {invalid('domain.history');}
+        const ids = new Set<string>();
+        for (const raw of domain.history) {
+            const imported = exactRecord(raw, [
+                'sourceStoryId', 'id', 'sourceId', 'detail', 'amountIn', 'payout', 'net',
+                'revision', 'eventId', 'actionId', 'assistantTurn', 'createdAt',
+            ], 'domain.history.entry');
+            const sourceStoryId = canonicalId(imported.sourceStoryId, 'domain.history.sourceStoryId');
+            const activity = validateActivity(Object.fromEntries(Object.entries(imported).filter(([key]) => (
+                ['id', 'sourceId', 'detail', 'amountIn', 'payout', 'net'].includes(key)
+            ))), 'domain.history.activity');
+            safeInteger(imported.revision, 1, 'domain.history.revision');
+            canonicalId(imported.eventId, 'domain.history.eventId');
+            canonicalId(imported.actionId, 'domain.history.actionId');
+            safeInteger(imported.assistantTurn, 0, 'domain.history.assistantTurn');
+            safeInteger(imported.createdAt, 0, 'domain.history.createdAt');
+            const id = `${sourceStoryId}:${activity.id}`;
+            if (ids.has(id)) {invalid('domain.history.duplicate');}
+            ids.add(id);
+        }
+    }
     if (!Array.isArray(domain.events)) {invalid('domain.events');}
 
     const eventIds = new Set<string>();
@@ -393,11 +417,25 @@ export function validateBankDomain(value: unknown): asserts value is BankDomainV
     const activityIds = new Set<string>();
     const activitySourceIds = new Set<string>();
     const state: BankState = { openDeposits: [], openInvestments: [] };
+    let previousTurn = 0;
     for (let index = 0; index < domain.events.length; index += 1) {
         const event = validateEvent(domain.events[index], index + 1);
+        if (!legacy && (event.assistantTurn < previousTurn || event.assistantTurn > Number(domain.currentTurn))) {
+            invalid('event.assistantTurn');
+        }
+        previousTurn = event.assistantTurn;
         if (eventIds.has(event.eventId) || actionIds.has(event.actionId)) {invalid('event.id-duplicate');}
         eventIds.add(event.eventId);
         actionIds.add(event.actionId);
         applyValidatedEvent(state, event, entityIds, activityIds, activitySourceIds);
     }
+}
+
+/** The production v1 parser lives only at the upgrade boundary. */
+export function validateLegacyBankDomain(value: unknown): asserts value is BankLegacyDomainV1 {
+    validateBankEvents(value, true);
+}
+
+export function validateBankDomain(value: unknown): asserts value is BankDomainV1 {
+    validateBankEvents(value, false);
 }

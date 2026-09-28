@@ -14,6 +14,23 @@ import { TASKS_PARTITION } from '../apps/tasks/partition.js';
 import { createTasksService } from '../apps/tasks/application/service.js';
 import { USER_DOCUMENT_FILENAME } from '../kernel/user-document.js';
 
+test('only an opted-in candidate can be abandoned, and an old abort cannot release another owner', async () => {
+    const h = await userEconomyHarness(); await h.economy.refresh();
+    const finished = new AbortController();
+    const settled = [];
+    await h.store(DICE_PARTITION).transact(tx => tx.replace(tx.currentOrInitial()),
+        { signal: finished.signal, abandonOnAbort: true, onSettled: status => settled.push(status) });
+    const recoverable = new AbortController();
+    h.state.mode = 'unknown';
+    const saved = await h.store(BANK_PARTITION).transact(tx => tx.replace(tx.currentOrInitial()), { signal: recoverable.signal });
+    assert.equal(saved.status, 'unconfirmed');
+    finished.abort(); recoverable.abort();
+    const blocked = await h.store(DICE_PARTITION).transact(tx => tx.replace(tx.currentOrInitial()));
+    assert.equal(blocked.error.code, 'storage_unconfirmed');
+    assert.equal(h.transactions.hasPendingCommit(BANK_PARTITION.key), true);
+    assert.deepEqual(settled, ['confirmed']);
+});
+
 // Real reference and binding owners, with failures only at the host persistence boundary.
 function storyFixture() {
     const state = { current: { identityKey: 'chat-a', binding: { kind: 'character', ownerLocator: 'a.png', chatId: 'a' }, metadata: {} },
@@ -41,31 +58,19 @@ function storyFixture() {
     return { state, references, manager, files, resolveStory };
 }
 
-test('unconfirmed local references cannot debit a wallet; a successful retry persists the same story before payment', async t => {
+test('global bank trades without creating or waiting for a chat reference', async t => {
     const story = storyFixture();
     const h = await userEconomyHarness(story);
     await h.economy.refresh();
-    const bank = createBankService(h.store(BANK_PARTITION), h.transactions, h.economy, {
-        getCurrentAssistantTurn: () => 0, isMainGenerationActive: () => false,
-    });
+    const bank = createBankService(h.store(BANK_PARTITION), h.transactions, h.economy);
     t.after(bank.dispose);
     const empty = await bank.refreshCurrent();
-    for (let attempt = 0; attempt < 2; attempt++) {
-        await assert.rejects(bank.openDeposit({ actionId: 'deposit', expectedRevision: empty.revision,
-            expectedEventId: empty.eventId, productId: 'short-term', amount: 100 }), { code: 'storage_unconfirmed' });
-        assert.equal(h.economy.getPlayerBalance(), 100);
-        assert.deepEqual(h.document().stories, {});
-        assert.equal(story.state.persisted, null);
-        assert.equal((await bank.refreshCurrent()).deposits.length, 0);
-    }
-    const reference = story.references.capture().reference;
-    story.state.rejectSave = false;
     const saved = await bank.openDeposit({ actionId: 'deposit', expectedRevision: empty.revision,
         expectedEventId: empty.eventId, productId: 'short-term', amount: 100 });
     assert.equal(saved.deposits.length, 1);
     assert.equal(h.economy.getPlayerBalance(), 0);
-    assert.deepEqual(story.state.persisted.extensions.LittleWhiteBox.xiaobaiOsRef, reference);
-    story.state.current.metadata = structuredClone(story.state.persisted);
+    assert.deepEqual(h.document().stories, {});
+    assert.equal(story.state.persisted, null);
     assert.equal((await bank.refreshCurrent()).deposits.length, 1);
 });
 
@@ -119,7 +124,8 @@ test('a server change during candidate preparation conflicts without an upload; 
 test('task retry preserves its original evidence guard, while readback can confirm an already saved reward', async t => {
     for (const saved of [false, true]) { await t.test(String(saved), async t => {
         const h = await userEconomyHarness();
-        const tasks = createTasksService(h.store(TASKS_PARTITION), h.transactions, h.economy, { getObservedAssistantCount: () => 3 });
+        const tasks = createTasksService(h.store(TASKS_PARTITION), h.transactions, h.economy,
+            { getEvidenceDigest: () => 'accepted-story' });
         t.after(tasks.dispose);
         const board = await tasks.replaceBoard({ expectedBoardId: null, generatedAt: 10, listings: [{
             grade: 'B', tags: ['禁忌', '旧城'], posture: '中介入', title: '送信', hook: '一封信需要送达。',
@@ -129,7 +135,9 @@ test('task retry preserves its original evidence guard, while readback can confi
             listingId: board.view.domain.board.listings[0].listingId }, () => true);
         let evidenceValid = true;
         h.state.mode = 'unknown';
-        await assert.rejects(tasks.commitMaintenance({ observedAssistantCount: 4, commands: [{
+        await assert.rejects(tasks.commitMaintenance({ checkedTasks: [{ taskId: accepted.record.taskId,
+            expectedTaskRevision: accepted.record.taskRevision, expectedEventId: accepted.record.eventId }],
+            evidenceDigest: 'new-story', commands: [{
             kind: 'complete', actionId: 'complete', taskId: accepted.record.taskId,
             expectedTaskRevision: accepted.record.taskRevision, expectedEventId: accepted.record.eventId, resultSummary: '已送达',
         }] }, () => evidenceValid), { code: 'storage_unconfirmed' });

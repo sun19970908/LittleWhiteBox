@@ -34,7 +34,7 @@ function harness(session, overrides = {}) {
             return overrides.summarize ? overrides.summarize(request, summaries.length) : { text: '# 皮下人设\n甲\n# 长期记忆\n乙' };
         },
     });
-    const options = { session, buildPrompt, config: {}, signal: controller.signal, disableAssistantPrefill: false,
+    const options = { session, buildPrompt, config: {}, signal: controller.signal,
         onPhase: phase => phases.push(phase),
         commit: async (memory, archivedCount) => { await overrides.commit?.(memory, archivedCount); commits.push({ memory, archivedCount }); },
     };
@@ -168,18 +168,19 @@ test('complete summary outcomes from supported providers replace memory, includi
     }
 });
 
-test('counting and generation use the same final request with either Prefill mode', async () => {
-    for (const disableAssistantPrefill of [false, true]) {
-        const h = harness(sessionWithRounds(3));
-        const builtPrompt = await h.run({ disableAssistantPrefill });
-        let sent;
-        await createFourthWallAgentResponse({ run: async request => { sent = request; return {}; } })({
-            config: {}, builtPrompt, disableAssistantPrefill, stream: false, signal: h.controller.signal,
-        });
-        assert.deepEqual(h.counts.at(-1), buildFourthWallAgentRequest(builtPrompt, disableAssistantPrefill));
-        assert.deepEqual(counterMessages(h.counts.at(-1)), counterMessages(sent));
-        assert.deepEqual(sent.tools, []);
-    }
+test('counting and generation use the same system protocol and final user request', async () => {
+    const h = harness(sessionWithRounds(3));
+    const builtPrompt = await h.run();
+    let sent;
+    await createFourthWallAgentResponse({ run: async request => { sent = request; return {}; } })({
+        config: {}, builtPrompt, stream: false, signal: h.controller.signal,
+    });
+    assert.deepEqual(h.counts.at(-1), buildFourthWallAgentRequest(builtPrompt));
+    assert.deepEqual(counterMessages(h.counts.at(-1)), counterMessages(sent));
+    assert.ok(sent.systemPrompt.includes(builtPrompt.protocol));
+    assert.ok(!sent.messages.some(message => message.content.includes(builtPrompt.protocol)));
+    assert.equal(sent.messages.at(-1).role, 'user');
+    assert.deepEqual(sent.tools, []);
 });
 
 test('bounded history pages navigate both directions and reject stale or shifted edits', () => {

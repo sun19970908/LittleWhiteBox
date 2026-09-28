@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
-import { administratorHarness, settled } from './administrator-harness.js';
+import { administratorHarness, settled, withLoadedTools } from './administrator-harness.js';
 import { createAdministratorData, parseAdministratorData } from '../apps/administrator/domain/data.js';
 import { administratorContext } from '../apps/administrator/agent/history.js';
 
@@ -24,25 +24,28 @@ test('returned tool evidence and provider payloads survive completion, reopening
     const payload = { google: { parts: [{ thoughtSignature: 'opaque-signature', functionCall: { name: 'ChatRead', args: { from: 55 } } }] } };
     const finalPayload = { google: { parts: [{ text: 'answer', thoughtSignature: 'final-signature' }] } };
     let requests = 0;
-    h.state.generate = async () => ++requests === 1
+    h.state.generate = withLoadedTools([], async () => ++requests === 1
         ? { ...call('ChatRead', { from: 55 }), providerPayload: payload, toolCalls: [{ ...call('ChatRead', { from: 55 }).toolCalls[0], providerId: '' }] }
-        : { text: 'answer', providerPayload: finalPayload };
+        : { text: 'answer', providerPayload: finalPayload });
     await h.request('send', { text: '核对55楼' }); await settled(h.runtime);
     const saved = h.repository.read().turns[0];
-    assert.deepEqual(saved.toolMessages[0].providerPayload, payload);
+    const readCall = messages => messages.find(message => (message.toolCalls ?? message.tool_calls)?.some(call => (call.name ?? call.function?.name) === 'ChatRead'));
+    assert.deepEqual(readCall(saved.toolMessages).providerPayload, payload);
     assert.deepEqual(saved.assistantPayload, finalPayload);
-    assert.equal(saved.toolMessages[0].content, 'checking');
-    const evidence = toolResults(h.state.requests[1].messages);
+    assert.equal(readCall(saved.toolMessages).content, 'checking');
+    const evidence = toolResults(h.state.requests.at(-1).messages);
     assert.deepEqual(toolResults(administratorContext(h.repository.read()).messages), evidence);
     assert.ok(h.runtime.context().runtime > 0);
     const reload = await administratorHarness(h.state.persisted.partitions);
     assert.equal(reload.state.requests.length, 0);
-    assert.equal(reload.runtime.context().runtime, h.runtime.context().runtime);
+    assert.deepEqual(administratorContext(reload.repository.read()).runtime, administratorContext(h.repository.read()).runtime);
+    // Whole-request rounding can shift the marginal count when idle history adds receipts.
+    assert.ok(reload.runtime.context().runtime > 0);
     await reload.request('send', { text: '接着说' }); await settled(reload.runtime);
     const replay = reload.state.requests[0].messages;
     assert.deepEqual(toolResults(replay), evidence);
-    assert.deepEqual(replay.find(message => message.tool_calls).providerPayload, payload);
-    assert.equal(replay.find(message => message.tool_calls).tool_calls[0].providerToolCallId, '');
+    assert.deepEqual(readCall(replay).providerPayload, payload);
+    assert.equal(readCall(replay).tool_calls[0].providerToolCallId, '');
     assert.deepEqual(replay.find(message => message.content === 'answer').providerPayload, finalPayload);
     assert.equal(reload.runtime.context().runtime, 0);
     assert.ok(reload.runtime.context().history > h.runtime.context().history);
@@ -52,7 +55,7 @@ test('returned tool evidence and provider payloads survive completion, reopening
 test('saving a completed tool result fails closed and confirmation only persists history, without another business dispatch', async () => {
     for (const status of ['failed', 'unconfirmed']) {
         const h = await administratorHarness();
-        h.state.generate = async () => call('WorldEdit', { overview: 'saved business' });
+        h.state.generate = withLoadedTools(['world'], async () => call('WorldEdit', { overview: 'saved business' }));
         h.state.replace = async input => {
             const results = input.candidate.partitions.administrator?.turns[0]?.toolMessages.filter(message => message.role === 'tool') ?? [];
             if (results.some(message => JSON.parse(message.content).status === 'saved')) {
@@ -62,17 +65,17 @@ test('saving a completed tool result fails closed and confirmation only persists
         };
         await h.request('send', { text: '修改概况' }); await settled(h.runtime);
         assert.equal(h.conversation.unsaved(), true);
-        assert.equal(h.state.requests.length, 1);
+        assert.equal(h.state.requests.length, 2);
         const business = structuredClone(h.state.persisted.partitions.world);
         assert.equal(business.overview, 'saved business');
         h.state.replace = null;
         await h.request('confirm'); await settled(h.runtime);
         assert.equal(h.conversation.unsaved(), false);
-        assert.equal(h.state.requests.length, 1);
+        assert.equal(h.state.requests.length, 2);
         assert.deepEqual(h.state.persisted.partitions.world, business);
         const turn = h.repository.read().turns[0];
-        assert.equal(JSON.parse(turn.toolMessages[1].content).status, 'saved');
-        assert.equal(turn.operations[0].status, 'saved');
+        assert.equal(JSON.parse(turn.toolMessages.at(-1).content).status, 'saved');
+        assert.equal(turn.operations.at(-1).status, 'saved');
         const reload = await administratorHarness(h.state.persisted.partitions);
         assert.equal(reload.state.requests.length, 0);
         assert.deepEqual(reload.repository.read().turns[0], turn);
@@ -81,15 +84,16 @@ test('saving a completed tool result fails closed and confirmation only persists
 
 test('cancelling a tool batch retains paired completed, uncertain and undispatched results without replaying execution on reload', async () => {
     const h = await administratorHarness(); const executions = [];
-    h.registry.register({ id: 'probe', async open() { return {
-        prompt: '', initial: {}, tools: [{ effect: 'read', label: 'probe', target: () => '', definition: { type: 'function', function: { name: 'Probe', parameters: {} } } }],
+    const tools = [{ effect: 'read', label: 'probe', target: () => '', definition: { type: 'function', function: { name: 'Probe', parameters: {} } } }];
+    h.registry.register({ id: 'probe', label: 'Probe', prompt: '', tools, async open() { return {
+        prompt: '', initial: {}, tools,
         async execute(_, args) {
             executions.push(args.step);
             if (args.step === 2) { await h.request('stop'); throw new DOMException('cancelled', 'AbortError'); }
             return { ok: true, status: 'read', data: { step: args.step } };
         },
     }; } });
-    h.state.generate = async () => ({ toolCalls: [1, 2, 3].map(step => call('Probe', { step }, String(step)).toolCalls[0]) });
+    h.state.generate = withLoadedTools(['probe'], async () => ({ toolCalls: [1, 2, 3].map(step => call('Probe', { step }, String(step)).toolCalls[0]) }));
     await h.request('send', { text: '检查' }); await settled(h.runtime);
     assert.deepEqual(executions, [1, 2]);
     const saved = h.repository.read();
@@ -97,8 +101,9 @@ test('cancelling a tool batch retains paired completed, uncertain and undispatch
     assert.deepEqual(parseAdministratorData(saved), saved);
     const results = toolResults(saved.turns[0].toolMessages).map(message => JSON.parse(message.content));
     assert.equal(results[0].status, 'read');
-    assert.equal(results[1].status, 'unconfirmed');
-    assert.equal(results[2].code, 'tool_not_executed');
+    assert.equal(results[1].status, 'read');
+    assert.equal(results[2].status, 'unconfirmed');
+    assert.equal(results[3].code, 'tool_not_executed');
     const reload = await administratorHarness(h.state.persisted.partitions);
     assert.equal(reload.state.requests.length, 0);
     await reload.request('send', { text: '哪些完成了' }); await settled(reload.runtime);
@@ -108,7 +113,7 @@ test('cancelling a tool batch retains paired completed, uncertain and undispatch
 
 test('deleting a reply removes its tool history and affected summary without reverting business data', async () => {
     const h = await administratorHarness(); let step = 0;
-    h.state.generate = async () => ++step === 1 ? call('WorldEdit', { overview: 'keep business' }) : { text: 'done', providerPayload: { opaque: 'payload' } };
+    h.state.generate = withLoadedTools(['world'], async () => ++step === 1 ? call('WorldEdit', { overview: 'keep business' }) : { text: 'done', providerPayload: { opaque: 'payload' } });
     await h.request('send', { text: '修改' }); await settled(h.runtime);
     const candidate = structuredClone(h.conversation.read()), turnId = candidate.turns[0].id;
     candidate.summary = { text: 'summary', throughId: turnId, throughToolMessage: 2 };
@@ -139,12 +144,12 @@ test('incomplete tool pairs and summary cursors inside a group are rejected at t
 
 test('late stream callbacks from a previous model step cannot become the interrupted answer', async () => {
     const h = await administratorHarness(); let oldStream, step = 0;
-    h.state.generate = async request => {
+    h.state.generate = withLoadedTools([], async request => {
         if (++step === 1) { oldStream = request.onStreamProgress; return call('ChatRead', { from: 55 }); }
         oldStream({ text: 'stale intermediate text' });
         throw new Error('offline');
-    };
+    });
     await h.request('send', { text: '检查' }); await settled(h.runtime);
     assert.equal(h.repository.read().turns[0].assistant, null);
-    assert.equal(h.repository.read().turns[0].toolMessages[0].content, 'checking');
+    assert.equal(h.repository.read().turns[0].toolMessages.find(message => message.toolCalls?.some(call => call.name === 'ChatRead')).content, 'checking');
 });

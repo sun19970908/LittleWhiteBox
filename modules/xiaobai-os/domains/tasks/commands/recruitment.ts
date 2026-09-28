@@ -1,7 +1,6 @@
 import {
     TASK_CANCELLED_SUMMARY,
     assertFreshTaskIdentities,
-    normalizeObservedAssistantCount,
     normalizeTaskActionId,
     normalizeTaskCandidates,
     normalizeTaskCas,
@@ -46,17 +45,15 @@ export function replaceTaskCandidates(
 ): TaskCommandResult {
     validateTaskDomain(domain);
     const command = requireTaskCommandKeys(input, ['actionId', 'taskId', 'expectedTaskRevision', 'expectedEventId',
-        'candidates', 'observedAssistantCount']);
+        'candidates']);
     const actionId = normalizeTaskActionId(command.actionId);
     const taskId = normalizeTaskIdentity(command.taskId);
     const cas = normalizeTaskCas(command.expectedTaskRevision, command.expectedEventId);
     const candidates = normalizeTaskCandidates(command.candidates);
-    const observedAssistantCount = normalizeObservedAssistantCount(command.observedAssistantCount);
     const existing = domain.events.find(event => event.actionId === actionId);
     if (existing) {
         if (existing.kind !== 'candidates-replaced' || existing.taskId !== taskId
             || !replayCasMatches(domain, existing, cas.expectedTaskRevision, cas.expectedEventId)
-            || existing.observedAssistantCount !== observedAssistantCount
             || !sameTaskValue(existing.candidates, candidates)) {throw new TaskError('task_action_conflict');}
         return taskReplayResult(domain, existing);
     }
@@ -65,7 +62,7 @@ export function replaceTaskCandidates(
     assertCas(record, cas.expectedTaskRevision, cas.expectedEventId);
     assertFreshTaskIdentities(domain, [actionId, ...candidates.map(candidate => candidate.candidateId)]);
     return appendTaskEvent(domain, { kind: 'candidates-replaced', actionId, taskId,
-        observedAssistantCount, candidates }, environment);
+        candidates }, environment);
 }
 
 export function assignTaskCandidate(
@@ -75,17 +72,16 @@ export function assignTaskCandidate(
 ): TaskCommandResult {
     validateTaskDomain(domain);
     const command = requireTaskCommandKeys(input, ['actionId', 'taskId', 'expectedTaskRevision', 'expectedEventId',
-        'candidateId', 'observedAssistantCount']);
+        'candidateId']);
     const actionId = normalizeTaskActionId(command.actionId);
     const taskId = normalizeTaskIdentity(command.taskId);
     const cas = normalizeTaskCas(command.expectedTaskRevision, command.expectedEventId);
     const candidateId = normalizeTaskIdentity(command.candidateId);
-    const observedAssistantCount = normalizeObservedAssistantCount(command.observedAssistantCount);
     const existing = domain.events.find(event => event.actionId === actionId);
     if (existing) {
         if (existing.kind !== 'assigned' || existing.taskId !== taskId || existing.assignee.partyId !== candidateId
             || !replayCasMatches(domain, existing, cas.expectedTaskRevision, cas.expectedEventId)
-            || existing.observedAssistantCount !== observedAssistantCount) {throw new TaskError('task_action_conflict');}
+            ) {throw new TaskError('task_action_conflict');}
         return taskReplayResult(domain, existing);
     }
     const record = currentRecord(domain, taskId);
@@ -94,7 +90,7 @@ export function assignTaskCandidate(
     const candidate = record.candidates.find(entry => entry.candidateId === candidateId);
     if (!candidate) {throw new TaskError('task_candidate_missing');}
     assertFreshTaskIdentities(domain, [actionId]);
-    return appendTaskEvent(domain, { kind: 'assigned', actionId, taskId, observedAssistantCount,
+    return appendTaskEvent(domain, { kind: 'assigned', actionId, taskId,
         assignee: { kind: 'world', partyId: candidate.candidateId, displayName: candidate.name,
             description: candidate.description, pitch: candidate.pitch, capability: candidate.capability,
             risk: candidate.risk } }, environment);
@@ -107,22 +103,21 @@ export function cancelTask(
 ): TaskCommandResult {
     validateTaskDomain(domain);
     const command = requireTaskCommandKeys(input, ['actionId', 'taskId', 'expectedTaskRevision', 'expectedEventId',
-        'observedAssistantCount']);
+        ]);
     const actionId = normalizeTaskActionId(command.actionId);
     const taskId = normalizeTaskIdentity(command.taskId);
     const cas = normalizeTaskCas(command.expectedTaskRevision, command.expectedEventId);
-    const observedAssistantCount = normalizeObservedAssistantCount(command.observedAssistantCount);
     const existing = domain.events.find(event => event.actionId === actionId);
     if (existing) {
         if (existing.kind !== 'cancelled' || existing.taskId !== taskId
             || !replayCasMatches(domain, existing, cas.expectedTaskRevision, cas.expectedEventId)
-            || existing.observedAssistantCount !== observedAssistantCount) {throw new TaskError('task_action_conflict');}
+            ) {throw new TaskError('task_action_conflict');}
         return taskReplayResult(domain, existing);
     }
     const record = currentRecord(domain, taskId);
     if (record.status !== 'active' && record.status !== 'recruiting') {throw new TaskError('task_terminal');}
     assertCas(record, cas.expectedTaskRevision, cas.expectedEventId);
     assertFreshTaskIdentities(domain, [actionId]);
-    return appendTaskEvent(domain, { kind: 'cancelled', actionId, taskId, observedAssistantCount,
+    return appendTaskEvent(domain, { kind: 'cancelled', actionId, taskId,
         resultSummary: TASK_CANCELLED_SUMMARY }, environment);
 }

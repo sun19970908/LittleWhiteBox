@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { resolveAgentAuth } from '../provider-auth.js';
 import {
     buildEffectiveReasoningConfig,
     buildSdkRequestInspection,
@@ -316,6 +317,7 @@ function isOfficialOpenAIBaseUrl(baseUrl) {
 }
 
 function shouldRetryWithLegacySystem(error) {
+    if (error?.status === 401 || error?.status === 403) return false;
     const text = String(error?.message || error || '').toLowerCase();
     return text.includes('instructions')
         || text.includes('unsupported')
@@ -342,8 +344,9 @@ function comparePartKeys(left, right) {
 export class OpenAIResponsesAdapter {
     constructor(config) {
         this.config = config;
+        this.auth = resolveAgentAuth('openai-responses', config.apiKey);
         this.client = new OpenAI({
-            apiKey: config.apiKey,
+            ...this.auth.sdkOptions,
             baseURL: String(config.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, ''),
             timeout: Number(config.timeoutMs) || 15 * 60 * 1000,
             maxRetries: 0,
@@ -408,10 +411,7 @@ export class OpenAIResponsesAdapter {
             model: this.config.model,
             transport: 'openai-responses',
             url: `${baseUrl}/responses`,
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: this.config.apiKey ? `Bearer ${this.config.apiKey}` : '',
-            },
+            headers: this.auth.requestHeaders,
             body,
             sdk: stream ? 'client.responses.stream' : 'client.responses.create',
             effectiveConfig: buildEffectiveReasoningConfig(task, {

@@ -233,9 +233,6 @@ function validateAgent(value) {
     }
     assertPlainObject(config.reasoning, 'agent.providerConfig.reasoning');
     assertSafeJson(config.reasoning, 'agent.providerConfig.reasoning');
-    if (!HOSTED_AGENT_CHANNELS.has(channel) && !String(config.apiKey || '').trim()) {
-        throw invalid('direct agent channels require agent.providerConfig.apiKey');
-    }
     return { channel, providerConfig: cloneJson(config) };
 }
 

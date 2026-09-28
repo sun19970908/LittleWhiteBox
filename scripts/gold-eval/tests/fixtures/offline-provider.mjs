@@ -52,6 +52,10 @@ globalThis.fetch = async (input, init = {}) => {
             headers: { 'retry-after': '0' } });
     }
     if (process.env.LWB_OFFLINE_MALFORMED === kind) return Response.json({ choices: [] });
+    if (process.env.LWB_OFFLINE_EMPTY_SUMMARY === kind) return Response.json({
+        choices: [{ finish_reason: 'stop', message: { content: '', reasoning_content: 'fixture reasoning' } }],
+        usage: { completion_tokens: 2, completion_tokens_details: { reasoning_tokens: 2 } },
+    });
     if (kind === 'fixture-embedding') return Response.json({ data: body.input.map((_, index) => ({ index, embedding: [1, 0] })) });
     if (kind === 'fixture-rerank') return Response.json({ results: body.documents.map((_, index) => ({ index, relevance_score: 0.9 })) });
     const floor = body.messages.find(message => message.content.startsWith('<新对话内容>'))?.content.match(/^#(\d+) /m)?.[1];

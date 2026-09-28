@@ -134,6 +134,14 @@ node scripts/story-summary-replay-runner.mjs --config="C:\path\to\prepared.json"
 授权属于原job的持久恢复事实，所有者/生命周期/删除路径沿用原journal，不另建缓存、配置或锁。
 失败scope现在保留实际调用trace与有限安全原因类别，不能把包装层的local-guard误当原请求未发出。
 
+Summary收到完整HTTP 200、`finish_reason=stop`、最终`content`为空而`reasoning_content`非空且因此解析失败时，
+可针对已核对的单笔请求执行`--retry-empty-summary=<id>`，并同时带上上述三个`--retry-journal-sha256`、
+`--retry-source-manifest`、`--retry-source-sha256`及`--resume-prepared --allow-api`。仅已失效且原因属于Summary解析的
+原manifest可批准；journal复核原回包字节、原scope、请求身份与哈希，旧200不删除，补试追加`retryOf`收据并计费。
+完整空正文200最多3次（原回包加两次定点补试）；若补试另遇408/429/5xx仍服从冻结传输重试与总预算。
+不改变模型、low参数或整个生成批次；错误目标或配置漂移
+必须在读取凭据前拒绝。其他格式错误200、未知计费状态及已有成功正文仍按原规则处理。
+
 ## 研究控制面
 
 跨天研究使用外部工作区的 `STUDY.json` 作为唯一可执行当前状态。不可变 `runs/` 保存证据，

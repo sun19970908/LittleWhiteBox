@@ -40,7 +40,6 @@ function applyTaskEvent(records: Map<string, TaskRecord>, event: TaskEvent): voi
             sourceListingId: event.listingId,
             createdAt: event.createdAt,
             updatedAt: event.createdAt,
-            lastObservedAssistantCount: event.observedAssistantCount,
         });
         return;
     }
@@ -66,7 +65,6 @@ function applyTaskEvent(records: Map<string, TaskRecord>, event: TaskEvent): voi
             resultSummary: '',
             createdAt: event.createdAt,
             updatedAt: event.createdAt,
-            lastObservedAssistantCount: event.observedAssistantCount,
         });
         return;
     }
@@ -114,7 +112,6 @@ function applyTaskEvent(records: Map<string, TaskRecord>, event: TaskEvent): voi
     current.taskRevision = event.taskRevision;
     current.eventId = event.eventId;
     current.updatedAt = event.createdAt;
-    current.lastObservedAssistantCount = event.observedAssistantCount;
 }
 
 function replayTaskEventRecords(
@@ -151,8 +148,4 @@ export function projectTaskRecords(domain: Readonly<TaskDomainV1>): TaskRecord[]
 
 export function projectTaskRecord(domain: Readonly<TaskDomainV1>, taskId: string): TaskRecord | null {
     return projectTaskRecords(domain).find(record => record.taskId === taskId) ?? null;
-}
-
-export function calculateElapsedAssistantReplies(record: Readonly<TaskRecord>, observedAssistantCount: number): number {
-    return Math.max(0, observedAssistantCount - record.lastObservedAssistantCount);
 }

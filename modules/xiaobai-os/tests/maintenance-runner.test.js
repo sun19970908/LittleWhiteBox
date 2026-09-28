@@ -58,6 +58,7 @@ function createParticipant(id, options = {}) {
     const records = { commits: 0, invalidations: [], sessions: [], toolCalls: [] };
     const participant = {
         id,
+        ...(options.writeGate ? { writeGate: options.writeGate } : {}),
         isEnabled: options.isEnabled || (() => true),
         createSession(source, mode) {
             records.sessions.push({ source, mode });
@@ -83,7 +84,7 @@ function createParticipant(id, options = {}) {
                 getResult: () => ({ status: failed ? (staged ? 'partial' : 'failed') : staged ? 'updated' : 'unchanged', changed: staged }),
                 async commit(guard) {
                     if (!guard()) {throw new Error('stale source');}
-                    if (options.commit) {await options.commit(guard, records);}
+                    if (options.commit) {return await options.commit(guard, records);}
                     else {records.commits += 1;}
                 },
                 invalidate(reason) {records.invalidations.push(reason); staged = false;},
@@ -92,6 +93,79 @@ function createParticipant(id, options = {}) {
     };
     return { participant, records };
 }
+
+test('a user-file save waits for task checks without making a normally ready chat file fail', async () => {
+    const userFile = createWriteGate('saving');
+    const task = createParticipant('tasks', { writeGate: userFile, initiallyStaged: true });
+    const map = createParticipant('map', { initiallyStaged: true });
+    const chat = surface([user('U1'), assistant('A1'), user('U2')]);
+    const h = createHarness({ chat, participants: [task.participant, map.participant] });
+    assert.equal(h.runner.handleMessageSent(2), true);
+    await flush();
+    assert.equal(task.records.commits, 0);
+    userFile.set('ready');
+    await flush();
+    await flush();
+    assert.equal(task.records.commits, 1);
+    assert.equal(map.records.commits, 1);
+    h.runner.stopBackground();
+});
+
+test('an unavailable user file fails only the task participant; map can still finish', async () => {
+    const userFile = createWriteGate('saving');
+    const task = createParticipant('tasks', { writeGate: userFile, initiallyStaged: true });
+    const map = createParticipant('map', { initiallyStaged: true });
+    const h = createHarness({ participants: [task.participant, map.participant],
+        chat: surface([user('U1'), assistant('A1'), user('U2')]) });
+    assert.equal(h.runner.handleMessageSent(2), true);
+    await flush();
+    userFile.set('failed');
+    await flush();
+    await flush();
+    assert.equal(task.records.commits, 0);
+    assert.equal(map.records.commits, 1);
+    h.runner.stopBackground();
+});
+
+test('an unknown user-file task save leaves another file participant free to commit', async () => {
+    const userFile = createWriteGate();
+    const task = createParticipant('tasks', { writeGate: userFile, initiallyStaged: true,
+        commit() {userFile.set('unconfirmed'); throw unconfirmedMutationError('unknown task save');} });
+    const map = createParticipant('map', { initiallyStaged: true });
+    const h = createHarness({ participants: [task.participant, map.participant],
+        chat: surface([user('U1'), assistant('A1'), user('U2')]) });
+    assert.equal(h.runner.handleMessageSent(2), true);
+    await flush();
+    await flush();
+    assert.equal(task.records.commits, 0);
+    assert.equal(map.records.commits, 1);
+    h.runner.stopBackground();
+});
+
+test('a failed chat file blocks map without blocking a ready user-file task', async () => {
+    const chatFile = createWriteGate('failed');
+    const userFile = createWriteGate();
+    const task = createParticipant('tasks', { writeGate: userFile, initiallyStaged: true });
+    const map = createParticipant('map', { initiallyStaged: true });
+    const h = createHarness({ participants: [task.participant, map.participant], gate: chatFile,
+        chat: surface([user('U1'), assistant('A1'), user('U2')]) });
+    assert.equal(h.runner.handleMessageSent(2), true);
+    await flush();
+    await flush();
+    assert.equal(task.records.commits, 1);
+    assert.equal(map.records.commits, 0);
+    h.runner.stopBackground();
+});
+
+test('an obsolete task check without business writes is reported as stale, not committed', async () => {
+    const task = createParticipant('tasks', { initiallyStaged: true,
+        commit: () => ({ status: 'stale', changed: false }) });
+    const h = createHarness({ participants: [task.participant] });
+    const outcome = await runManual(h.runner, 'tasks');
+    assert.equal(outcome.participantResults[0].reason, 'task-version-changed');
+    assert.deepEqual(outcome.committedParticipantIds, []);
+    h.runner.stopBackground();
+});
 
 function createWriteGate(initial = 'ready') {
     let state = initial;
@@ -108,6 +182,7 @@ function createHarness({
     participants = [],
     chat = surface(),
     provider = 'sillytavern-openai-compatible',
+    config = validConfig(provider),
     agent,
     gate = createWriteGate(),
     generationActive = false,
@@ -117,7 +192,7 @@ function createHarness({
     const calls = { loadConfig: 0, openSession: 0, run: 0, requests: [] };
     const resolvedAgent = agent || { supportsSessionToolLoop: false, async run() {return { text: 'no changes' };} };
     const gateway = {
-        async loadConfig() {calls.loadConfig += 1; return validConfig(provider);},
+        async loadConfig() {calls.loadConfig += 1; return config;},
         async openSession() {
             calls.openSession += 1;
             return {
@@ -142,6 +217,19 @@ function createHarness({
     });
     return { calls, gate, runner, setSurface: next => {currentSurface = next;} };
 }
+
+test('maintenance opens direct Agent sessions without a key but still requires a model', async () => {
+    for (const model of ['test-model', '']) {
+        const config = validConfig('openai-compatible');
+        Object.assign(config.presets.maintenance.modelConfigs['openai-compatible'], { model, apiKey: '' });
+        const map = createParticipant('map');
+        const h = createHarness({ config, participants: [map.participant] });
+        const outcome = await runManual(h.runner);
+        assert.equal(h.calls.run, model ? 1 : 0);
+        assert.equal(outcome.status, model ? 'unchanged' : 'failed');
+        h.runner.stopBackground();
+    }
+});
 
 test('aggregate outcome reports partial only when some participant actually preserved a change', () => {
     const result = (participantId, status, changed = false) => ({ participantId, status, changed });
@@ -169,13 +257,13 @@ test('real Map rebuild replaces old content only after a complete successful run
                     async run(_request, round) {
                         if (round === 1) {
                             return { toolCalls: [{ id: 'new-place', name: 'MapAtlasEdit', arguments: JSON.stringify({
-                                locations: [{ key: 'new', name: 'New' }, ...(['unresolved', 'corrected'].includes(ending) ? [{ key: 'broken', name: '' }] : [])],
+                                locations: [{ key: 'new', name: 'New', scale: 'region' }, ...(['unresolved', 'corrected'].includes(ending) ? [{ key: 'broken', name: '' }] : [])],
                             }) }] };
                         }
                         if (ending === 'provider-error') {throw new Error('offline');}
                         if (ending === 'cancelled') {h.runner.cancelAll(); return { text: 'cancelled' };}
                         if (ending === 'corrected' && round === 2) {
-                            return { toolCalls: [{ id: 'repair', name: 'MapAtlasEdit', arguments: JSON.stringify({ locations: [{ key: 'broken', name: 'Repaired' }] }) }] };
+                            return { toolCalls: [{ id: 'repair', name: 'MapAtlasEdit', arguments: JSON.stringify({ locations: [{ key: 'broken', name: 'Repaired', scale: 'region' }] }) }] };
                         }
                         return { text: 'done' };
                     },
@@ -223,7 +311,7 @@ test('real Map manual and rebuild jobs persist after new turns, but not after th
                 const h = createHarness({ chat, participants: [participant], agent: {
                     async run(_request, round) {
                         if (round === 1) { return { toolCalls: [{ id: 'place', name: 'MapAtlasEdit',
-                            arguments: JSON.stringify({ locations: [{ key: 'harbor', name: 'Harbor' }] }) }] }; }
+                            arguments: JSON.stringify({ locations: [{ key: 'harbor', name: 'Harbor', scale: 'region' }] }) }] }; }
                         staged.resolve(); return finish.promise;
                     },
                 } });
@@ -505,7 +593,10 @@ test('a successful participant tool clears its earlier cross-tool transport fail
             async run(request, round) {
                 if (round === 1) {return { toolCalls: [{ id: 'bad', name: 'map_edit', arguments: '{bad json' }] };}
                 if (round === 2) {
-                    assert.match(request.messages.at(-1).content, /invalid_tool_arguments_json|Correct the arguments/);
+                    const failure = JSON.parse(request.messages.at(-1).content);
+                    assert.equal(failure.code, 'arguments_invalid_json');
+                    assert.equal(failure.data.stage, 'arguments');
+                    assert.equal(typeof failure.data.parserMessage, 'string');
                     return { toolCalls: [{ id: 'fixed', name: 'map_read', arguments: '{"fixed":true}' }] };
                 }
                 return { text: 'done' };

@@ -12,7 +12,7 @@ import { build } from 'esbuild';
 import { resolveCapturePath, runGoldReaderOnly } from './gold-eval/reader-session.mjs';
 import { selectPreparedJob, assertCredentialFree, assertPreparedArguments, verifyPreparedCode, assertPreparedJobNotStarted, loadPreparedCredentials, withPreparedRequestBudget } from './story-summary-replay/prepared-config.mjs';
 import { openRequestJournal, preparedJournalBinding } from './story-summary-replay/request-journal.mjs';
-import { prepareUnknownRetry, prepareReviewedContinuation } from './story-summary-replay/prepared-resume.mjs';
+import { prepareUnknownRetry, prepareEmptySummaryRetry, prepareReviewedContinuation } from './story-summary-replay/prepared-resume.mjs';
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const explicitConfig = readFlag(process.argv.slice(2), 'config');
@@ -134,6 +134,10 @@ function runtimeAliasPlugin() {
     return {
         name: 'story-summary-replay-alias',
         setup(buildApi) {
+            buildApi.onResolve({ filter: /metadata-confirmation\.js$/ }, (args) => {
+                if (!args.importer.endsWith(`${path.sep}data${path.sep}memory-commit.js`)) return null;
+                return { path: path.join(replayDir, 'shims', 'metadata-confirmation.js') };
+            });
             buildApi.onResolve({ filter: /extensions\.js$/ }, (args) => {
                 if (!args.importer) return null;
                 return { path: shimExtensions };
@@ -483,6 +487,8 @@ async function main() {
         console.log(`[story-summary-replay] rollback storage check: ${JSON.stringify(rollbackStorage)}`);
         const swipeRollback = await replayModule.runStorySummarySwipeRollbackCheck();
         console.log(`[story-summary-replay] swipe rollback check: ${JSON.stringify(swipeRollback)}`);
+        const maintenanceStorage = await replayModule.runStorySummaryMemoryMaintenanceStorageCheck();
+        console.log(`[story-summary-replay] memory maintenance storage check: ${JSON.stringify(maintenanceStorage)}`);
         console.log('[story-summary-replay] cancellation check completed');
         return;
     }
@@ -556,21 +562,28 @@ async function main() {
     if (prepared) {
         const retryFlags = ['retry-unknown', 'retry-journal-sha256', 'retry-source-manifest', 'retry-source-sha256']
             .map(name => readFlag(process.argv.slice(2), name));
-        if (retryFlags.some(Boolean) && (!resumePrepared || retryFlags.some(value => !value))) {
-            throw new Error('Unknown retry requires --resume-prepared and all four exact approval flags');
+        const retryEmptySummary = readFlag(process.argv.slice(2), 'retry-empty-summary');
+        if ((retryFlags.some(Boolean) || retryEmptySummary) && (!resumePrepared
+            || retryFlags.slice(1).some(value => !value)
+            || Boolean(retryFlags[0]) === Boolean(retryEmptySummary))) {
+            throw new Error('Targeted retry requires --resume-prepared, exactly one request kind and all approval flags');
         }
-        const retryUnknown = retryFlags.some(Boolean) ? await prepareUnknownRetry(localConfig, localConfig.__codeState, {
-            requestId: Number(retryFlags[0]), journalSha256: retryFlags[1],
+        const retryApproval = (retryFlags[0] || retryEmptySummary) ? {
+            requestId: Number(retryFlags[0] || retryEmptySummary), journalSha256: retryFlags[1],
             sourceManifestPath: retryFlags[2], sourceManifestSha256: retryFlags[3],
-        }) : null;
+        } : null;
+        const retryUnknown = retryFlags[0]
+            ? await prepareUnknownRetry(localConfig, localConfig.__codeState, retryApproval) : null;
+        const retryInvalidSummary = retryEmptySummary
+            ? await prepareEmptySummaryRetry(localConfig, localConfig.__codeState, retryApproval) : null;
         const applyTransition = process.argv.includes('--apply-transition');
-        if (applyTransition && (!resumePrepared || retryUnknown)) throw new Error('Continuation requires resume without unknown retry');
+        if (applyTransition && (!resumePrepared || retryApproval)) throw new Error('Continuation requires resume without targeted retry');
         const transition = applyTransition ? await prepareReviewedContinuation(localConfig, localConfig.__codeState) : null;
         const journal = await openRequestJournal({
             directory: localConfig.outputPath,
             binding: preparedJournalBinding(localConfig, localConfig.__codeState),
             maxRequests: localConfig.prepared.maxRequests, resume: resumePrepared,
-            retryUnknown, transition, readOnly: checkPreparedResume,
+            retryUnknown, retryInvalidSummary, transition, readOnly: checkPreparedResume,
         });
         try {
             // Validate/lock receipts BEFORE opening private credentials. A missing

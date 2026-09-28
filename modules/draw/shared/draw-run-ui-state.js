@@ -1,4 +1,5 @@
 import { matchesDrawRunActivityTarget } from './draw-run-activity.js';
+import { DRAW_CAPSULE_COPY } from './draw-capsule-copy.js';
 
 const DRAW_RUN_UI_STATES = new Set(['submitting', 'accepted', 'uncertain', 'cancelling']);
 const DRAW_RUN_COMPLETION_TARGET_STATES = new Set(['idle', 'accepted', 'uncertain', 'cancelling']);
@@ -19,24 +20,29 @@ function getDrawRunProgressStage(detail) {
 }
 
 export function getDrawRunProgressIcon(detail = {}) {
-    return ANALYSIS_STAGES.has(getDrawRunProgressStage(detail)) ? '⏳' : '🎨';
+    return getDrawRunProgressPhase(detail) === 'analysis' ? '⏳' : '🎨';
+}
+
+export function getDrawRunProgressPhase(detail = {}) {
+    const stage = getDrawRunProgressStage(detail);
+    if (stage === 'queued') return 'queued';
+    if (ANALYSIS_STAGES.has(stage)) return 'analysis';
+    if (REATTACH_STAGES.has(stage)) return 'reattaching';
+    if (stage === 'compiling') return 'preparing';
+    if (stage === 'reconnecting') return 'reconnecting';
+    if (stage === 'cooldown') return 'cooldown';
+    return 'generating';
 }
 
 export function formatDrawRunProgress(detail = {}) {
-    const stage = getDrawRunProgressStage(detail);
-    if (stage === 'queued') return '排队';
-    if (ANALYSIS_STAGES.has(stage)) return '分析';
-    if (REATTACH_STAGES.has(stage)) return '接回中';
-    if (stage === 'compiling') return '准备中';
-    if (stage === 'reconnecting') return '重连';
-    if (stage === 'cooldown') return '等待中';
-
+    const phase = getDrawRunProgressPhase(detail);
+    if (phase !== 'generating') return DRAW_CAPSULE_COPY[phase];
     const current = Number(detail.current);
     const total = Number(detail.total);
     if (Number.isInteger(current) && current > 0 && Number.isInteger(total) && total > 0) {
         return `${current}/${total}`;
     }
-    return '生成中';
+    return DRAW_CAPSULE_COPY.generating;
 }
 
 export function matchesDrawRunActivityDetail(detail = {}, target = {}) {

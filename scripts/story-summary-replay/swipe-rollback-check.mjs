@@ -64,7 +64,7 @@ export async function runSwipeRollbackCheck() {
             const writesBeforeSwipe = writes;
             chat[floor].mes = '换成另一个版本的剧情';
             const swipeResult = await rollbackSummaryIfNeeded({ changedFromFloor: floor });
-            assert.equal(swipeResult.status, scenario.rolledBackBySwipe ? 'rolled_back' : 'not_needed', scenario.name);
+            assert.equal(swipeResult.status, scenario.rolledBackBySwipe ? 'rolled_back' : 'not_needed', `${scenario.name}: ${swipeResult.reason || ''}`);
             assert.equal(writes - writesBeforeSwipe, scenario.rolledBackBySwipe ? 1 : 0, scenario.name);
             assert.equal(store.lastSummarizedMesId, scenario.expected, scenario.name);
             assert.equal(store.json.facts[0].o, scenario.expected === 19 ? '家' : '车站', scenario.name);

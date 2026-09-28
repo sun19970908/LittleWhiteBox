@@ -64,7 +64,7 @@ function clearSheetFailure() {
                     <span aria-hidden="true" /><span class="dice-sr">{{ state.actionChecksEnabled ? '关闭' : '开启' }}</span>
                 </button>
             </div>
-            <p class="dice-intro">当你尝试不确定的事——说服陌生人、翻越高墙、破译符文——由骰子裁决，而非 AI。一次真随机掷骰仲裁结果，故事顺从命运。</p>
+            <p class="dice-intro">当你尝试不确定的事——说服陌生人、翻越高墙、破译符文——由骰点裁决，而非 AI。</p>
             <fieldset v-if="state.actionChecksEnabled" class="dice-frequency" :disabled="busy" aria-describedby="dice-rule-description">
                 <legend>检定规则</legend>
                 <div class="dice-frequency-options">
@@ -101,7 +101,7 @@ function clearSheetFailure() {
             <aside class="dice-notice">
                 <p>请勿开启酒馆的「自动续写」。</p>
                 <p>{{ continuationNotice }}</p>
-                <p>酒馆 1.14 / 1.15：行动检定的自动续写会发送输入框中尚未发送的文字。</p>
+                <p>酒馆 1.14 / 1.15：点击检定的「继续」会发送输入框中尚未发送的文字。</p>
                 <p>功能开启期间，会自动创建「小白 OS · 行动检定显示」全局正则。</p>
             </aside>
         </section>

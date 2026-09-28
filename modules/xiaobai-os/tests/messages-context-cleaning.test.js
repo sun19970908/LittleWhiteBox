@@ -37,8 +37,13 @@ test('Messages uses live default/custom Summary cleaning before 4000-character c
     t.after(() => {if (previous) {Object.defineProperty(globalThis, 'localStorage', previous);} else {delete globalThis.localStorage;}});
     let scan;
     const raw = '<think>' + '思考'.repeat(3000) + '</think><custom>不能带入世界书</custom>门口放着两碗牛肉面。';
-    host.context = { chatId: 'chat', characterId: 0, characters: [], chat: [{ is_user: false, mes: raw }],
-        getWorldInfoPrompt: async messages => {scan = messages; return {};},
+    host.context = { chatId: 'chat', characterId: 0, characters: [{ avatar: 'role.png', name: '林月' }],
+        chat: [{ is_user: false, mes: raw }],
+        getCharacterCardFields() {return { mesExamples: '' };},
+        getWorldInfoPrompt: async messages => {scan = messages; return {
+            worldInfoBefore: '', worldInfoAfter: '', worldInfoDepth: [], worldInfoExamples: [],
+            anBefore: [], anAfter: [], outletEntries: {},
+        };},
     };
     const adapter = createMessagesContext({ messages: () => host.context.chat }, () => []);
     const contact = { name: '林月', note: '' }; const incoming = { id: 'current', seq: 1, from: '我', payload: { type: 'text', text: '到家了' } };

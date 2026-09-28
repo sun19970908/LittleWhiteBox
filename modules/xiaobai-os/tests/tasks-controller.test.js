@@ -39,10 +39,13 @@ function createHarness() {
     const emptyView = () => ({
         domain: null,
         records: [],
+        commissions: [],
+        currentScopeId: null,
         playerBalance: 100,
         writeState: host.writeState,
     });
     const tasks = {
+        ensureReady: async () => undefined,
         readCurrent: emptyView,
         refreshCurrent: async () => {
             await host.refreshRequest?.promise;
@@ -384,9 +387,10 @@ test('late generation results are rejected after chat change without publishing 
     const reopened = await controller.activate(activation(host));
     assert.equal(reopened.generation.state, 'idle');
     assert.equal(reopened.generation.message, '');
+    const stalePosts = host.posts.filter(post => post.payload?.state?.chatIdentity === 'character:1:chat-a').length;
     await new Promise(resolve => setImmediate(resolve));
     assert.deepEqual(host.reports, []);
-    assert.equal(host.posts.some(post => post.payload?.state?.chatIdentity === 'character:1:chat-b'), false);
+    assert.equal(host.posts.filter(post => post.payload?.state?.chatIdentity === 'character:1:chat-a').length, stalePosts);
     assert.deepEqual(host.calls.slice(-3), [
         ['cancel-generation', 'chat-changed'],
         ['cancel-maintenance', 'chat-changed'],

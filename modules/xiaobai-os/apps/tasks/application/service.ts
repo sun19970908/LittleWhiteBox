@@ -9,7 +9,12 @@ import type {
     XiaobaiOsFileControls,
     XiaobaiOsFileState,
 } from '../../../kernel/contracts.js';
+import type { UserTransactions } from '../../../kernel/user-transactions.js';
+import { upgradeTasksUserFile } from '../upgrade/user-file.js';
+import { TASKS_PARTITION } from '../partition.js';
+import { createPartitionDocument, type PartitionDocument } from '../../../kernel/partition-document.js';
 import { collectTaskIdentityIds } from '../../../domains/tasks/invariants.js';
+import { cancelTask } from '../../../domains/tasks/commands/recruitment.js';
 import { projectTaskRecords } from '../../../domains/tasks/projection.js';
 import type {
     TaskCandidateDraft,
@@ -21,13 +26,16 @@ import type {
 import { createTaskIdFactory, type TaskIdFactory } from './ids.js';
 import { createTaskLocalActions } from './local-actions.js';
 import { createTaskMaintenanceCommit } from './maintenance-commit.js';
-import { validateTaskEconomyConsistency } from './economy-protocol.js';
+import { postTaskEconomyEvent, validateTaskEconomyConsistency } from './economy-protocol.js';
 
 export type CommitGuard = () => boolean | Promise<boolean>;
 
 export interface TasksServiceView {
+    initialization: 'loading' | 'ready' | 'failed';
     domain: TaskDomainV1 | null;
     records: TaskRecord[];
+    commissions: Array<{ scopeId: string; sourceLabel: string; task: TaskRecord }>;
+    currentScopeId: string | null;
     playerBalance: number;
     writeState: XiaobaiOsFileState;
     pendingSave: boolean;
@@ -35,6 +43,7 @@ export interface TasksServiceView {
 
 export interface TasksActionResult {
     changed: boolean;
+    staleTaskIds?: string[];
     record?: TaskRecord;
     view: TasksServiceView;
 }
@@ -62,7 +71,6 @@ export interface ReplaceCandidatesRequest {
     expectedTaskRevision: number;
     expectedEventId: string;
     candidates: readonly TaskCandidateDraft[];
-    observedAssistantCount: number;
 }
 
 export interface AssignCandidateRequest {
@@ -94,10 +102,15 @@ export type TaskMaintenanceCommand =
 
 export interface MaintenanceCommitRequest {
     commands: readonly TaskMaintenanceCommand[];
-    observedAssistantCount: number;
+    checkedTasks: readonly { taskId: string; expectedTaskRevision: number; expectedEventId: string }[];
+    evidenceDigest: string;
 }
 
 export interface TasksService {
+    document: Pick<PartitionDocument, 'read'>;
+    ensureReady(evidenceDigest?: string, identityKey?: string): Promise<void>;
+    cancelCommission(input: CancelTaskRequest & { scopeId: string }): Promise<TasksActionResult>;
+    readCommission(scopeId: string, taskId: string): { domain: TaskDomainV1; record: TaskRecord };
     readCurrent: () => TasksServiceView;
     refreshCurrent: () => Promise<TasksServiceView>;
     createActionId: () => string;
@@ -109,6 +122,7 @@ export interface TasksService {
     replaceBoard: (input: ReplaceBoardRequest, guard: CommitGuard) => Promise<TasksActionResult>;
     commitMaintenance: (input: MaintenanceCommitRequest, guard: CommitGuard) => Promise<TasksActionResult>;
     getWriteState: () => XiaobaiOsFileState;
+    subscribeWriteState: (listener: () => void) => () => void;
     confirmPending: (guard?: () => boolean) => Promise<PendingCommitRecoveryResult>;
     adoptServerState: () => Promise<PendingCommitRecoveryResult>;
     subscribe: (listener: () => void) => () => void;
@@ -119,20 +133,25 @@ export interface TasksServiceDependencies {
     now?: () => number;
     ids?: TaskIdFactory;
     getPlayerDisplayName?: () => string;
-    getObservedAssistantCount?: () => number;
+    getEvidenceDigest?: () => string;
+    getStoryLabel?: () => string;
+    userTransactions?: UserTransactions;
 }
 
 export interface PreparedTaskAction {
     domain: TaskDomainV1;
     changed: boolean;
+    persist?: boolean;
     record?: TaskRecord;
+    staleTaskIds?: string[];
 }
 
 export interface TaskApplicationContext {
     now: () => number;
     ids: TaskIdFactory;
     getPlayerDisplayName: () => string;
-    getObservedAssistantCount: () => number;
+    getEvidenceDigest: () => string;
+    getStoryLabel: () => string;
     execute(
         guard: CommitGuard,
         mutate: (domain: TaskDomainV1, economy: EconomyTransactionCapability) => PreparedTaskAction,
@@ -168,7 +187,9 @@ export function createTasksService(
         now = Date.now,
         ids = createTaskIdFactory({ now }),
         getPlayerDisplayName = () => '玩家',
-        getObservedAssistantCount = () => 0,
+        getEvidenceDigest = () => '',
+        getStoryLabel = () => '',
+        userTransactions,
     }: TasksServiceDependencies = {},
 ): TasksService {
     const listeners = new Set<() => void>();
@@ -190,11 +211,64 @@ export function createTasksService(
     const unsubscribeFiles = files.subscribeFileState(schedulePublish);
 
     const currentDomain = (): TaskDomainV1 | null => store.peekCurrent()?.value ?? null;
+    let upgraded = !userTransactions;
+    let upgradeInFlight: Promise<void> | null = null;
+    let readyIdentity = '';
+    let initializing: { identity: string; work: Promise<void> } | null = null;
+    let failedIdentity = '';
 
-    function buildView(domain = currentDomain()): TasksServiceView {
+    async function ensureReady(evidenceDigest = getEvidenceDigest(), identityKey = store.peekBinding()?.identityKey): Promise<void> {
+        if (!upgraded && userTransactions) {
+            if (!upgradeInFlight) {
+                upgradeInFlight = upgradeTasksUserFile(userTransactions).then(() => {upgraded = true;})
+                    .finally(() => {upgradeInFlight = null;});
+            }
+            try {await upgradeInFlight;}
+            catch (error) {failedIdentity = identityKey ?? ''; schedulePublish(); throw error;}
+        }
+        if (!identityKey || store.peekBinding()?.identityKey !== identityKey) {return;}
+        if (readyIdentity === identityKey) {return;}
+        if (initializing?.identity === identityKey) {return initializing.work;}
+        const work = (async () => {
+            await store.read();
+            if (store.peekBinding()?.identityKey !== identityKey) {return;}
+            const current = currentDomain();
+            if (current && Object.values(current.checks).some(receipt => receipt.phase === 'pending')) {
+                const result = await store.transact(transaction => {
+                    const domain = transaction.currentOrInitial();
+                    const pending = Object.values(domain.checks).filter(receipt => receipt.phase === 'pending');
+                    if (!pending.length) {return;}
+                    for (const receipt of pending) {receipt.phase = 'baseline'; receipt.digest = evidenceDigest;}
+                    transaction.replace(domain);
+                }, { commitGuard: () => store.peekBinding()?.identityKey === identityKey });
+                if (result.status !== 'confirmed' && result.status !== 'unchanged') {throw transactionError(result);}
+            }
+            if (store.peekBinding()?.identityKey === identityKey) {readyIdentity = identityKey; failedIdentity = '';}
+        })();
+        initializing = { identity: identityKey, work };
+        schedulePublish();
+        try {await work;}
+        catch (error) {failedIdentity = identityKey; throw error;}
+        finally {if (initializing?.work === work) {initializing = null;} schedulePublish();}
+    }
+
+    function buildView(domain?: TaskDomainV1 | null): TasksServiceView {
+        const identity = store.peekBinding()?.identityKey ?? '';
+        const initialization = identity && readyIdentity === identity && upgraded ? 'ready'
+            : identity && failedIdentity === identity ? 'failed' : 'loading';
+        const current = initialization === 'ready' ? domain === undefined ? currentDomain() : domain : null;
+        const currentScopeId = store.peekBinding()?.osId ?? null;
         return {
-            domain: domain ? structuredClone(domain) : null,
-            records: domain ? projectTaskRecords(domain) : [],
+            initialization,
+            domain: current ? structuredClone(current) : null,
+            records: current ? projectTaskRecords(current) : [],
+            commissions: (initialization === 'ready' ? userTransactions?.peekOwnedStories(TASKS_PARTITION)
+                ?? (current && currentScopeId ? [{ scopeId: currentScopeId, value: current }] : []) : [])
+                .flatMap(({ scopeId, value }) => projectTaskRecords(value)
+                    .filter(record => record.source === 'published'
+                        && (record.status === 'recruiting' || record.status === 'active'))
+                    .map(record => ({ scopeId, sourceLabel: value.storyLabel || '旧聊天', task: record }))),
+            currentScopeId,
             playerBalance: economy.getPlayerBalance(),
             writeState: files.getFileState(),
             pendingSave: files.hasPendingCommit(),
@@ -202,6 +276,8 @@ export function createTasksService(
     }
 
     async function refreshCurrent(): Promise<TasksServiceView> {
+        await ensureReady();
+        if (store.peekBinding()?.identityKey !== readyIdentity) {throw new Error('tasks_chat_changed');}
         await economy.refresh();
         const result = await store.transact(transaction => {
             const domain = transaction.current;
@@ -222,6 +298,7 @@ export function createTasksService(
         guard: CommitGuard,
         mutate: (domain: TaskDomainV1, transactionEconomy: EconomyTransactionCapability) => PreparedTaskAction,
     ): Promise<TasksActionResult> {
+        await ensureReady();
         await assertCommitGuard(guard);
         const result = await store.transact(transaction => {
             const domain = transaction.currentOrInitial();
@@ -229,7 +306,7 @@ export function createTasksService(
             validateTaskEconomyConsistency(domain, transactionEconomy);
             const prepared = mutate(domain, transactionEconomy);
             validateTaskEconomyConsistency(prepared.domain, transactionEconomy);
-            if (prepared.changed) { transaction.replace(prepared.domain); }
+            if (prepared.changed || prepared.persist) { transaction.replace(prepared.domain); }
             return prepared;
         }, {
             commitGuard: async () => {
@@ -243,6 +320,7 @@ export function createTasksService(
         const prepared = result.result;
         return {
             changed: prepared.changed,
+            ...(prepared.staleTaskIds?.length ? { staleTaskIds: prepared.staleTaskIds } : {}),
             ...(prepared.record ? { record: structuredClone(prepared.record) } : {}),
             view: buildView(result.status === 'confirmed' ? result.snapshot.value : prepared.domain),
         };
@@ -252,12 +330,57 @@ export function createTasksService(
         now,
         ids,
         getPlayerDisplayName,
-        getObservedAssistantCount,
+        getEvidenceDigest,
+        getStoryLabel,
         execute,
     };
     const localActions = createTaskLocalActions(context);
 
+    async function cancelCommission(input: CancelTaskRequest & { scopeId: string }): Promise<TasksActionResult> {
+        if (!userTransactions) {throw new Error('tasks_global_commissions_unavailable');}
+        const result = await userTransactions.transactOwned(TASKS_PARTITION,
+            [ECONOMY_TRANSACTION_CAPABILITY], access => {
+                const entry = access.stories().find(story => story.scopeId === input.scopeId);
+                if (!entry) {throw new Error('tasks_commission_not_found');}
+                const parsed = TASKS_PARTITION.parse(entry.raw);
+                if (!parsed.ok) {throw new Error(parsed.error.message);}
+                const domain = parsed.value;
+                const account = access.useCapability(input.scopeId, ECONOMY_TRANSACTION_CAPABILITY);
+                validateTaskEconomyConsistency(domain, account);
+                const record = projectTaskRecords(domain).find(candidate => candidate.taskId === input.taskId);
+                if (!record || record.source !== 'published' || record.issuer.kind !== 'player') {
+                    throw new Error('tasks_commission_not_found');
+                }
+                const { scopeId: _scopeId, ...command } = input;
+                const action = cancelTask(domain, command, {
+                    now, createId: () => ids.create('event', collectTaskIdentityIds(domain)),
+                });
+                if (action.changed && action.event) {
+                    postTaskEconomyEvent(account, action.event, action.record);
+                    access.replaceStory(input.scopeId, action.domain);
+                    validateTaskEconomyConsistency(action.domain, account);
+                }
+                return { changed: action.changed, record: action.record };
+            });
+        if ('result' in result) {return { ...result.result, view: buildView() };}
+        throw transactionError(result);
+    }
+
+    function readCommission(scopeId: string, taskId: string): { domain: TaskDomainV1; record: TaskRecord } {
+        const entry = userTransactions?.peekOwnedStories(TASKS_PARTITION)
+            .find(story => story.scopeId === scopeId);
+        if (!entry) {throw new Error('tasks_commission_not_found');}
+        const record = projectTaskRecords(entry.value).find(candidate => candidate.taskId === taskId);
+        if (!record || record.source !== 'published' || record.issuer.kind !== 'player'
+            || !['recruiting', 'active'].includes(record.status)) {
+            throw new Error('tasks_commission_not_found');
+        }
+        return { domain: entry.value, record };
+    }
+
     return Object.freeze({
+        document: { read: createPartitionDocument(store, TASKS_PARTITION).read },
+        ensureReady,
         readCurrent: () => buildView(),
         refreshCurrent,
         createActionId() {
@@ -265,8 +388,11 @@ export function createTasksService(
             return ids.create('action', domain ? collectTaskIdentityIds(domain) : new Set());
         },
         ...localActions,
+        cancelCommission,
+        readCommission,
         commitMaintenance: createTaskMaintenanceCommit(context),
         getWriteState: () => files.getFileState(),
+        subscribeWriteState: (listener: () => void) => files.subscribeFileState(listener),
         confirmPending: (guard?: () => boolean) => files.retryPending({ beforeRetry: guard }),
         adoptServerState: () => files.adoptServerState(),
         subscribe(listener: () => void) {

@@ -6,6 +6,8 @@ import { EventCenter } from "./core/event-manager.js";
 import { initPluginUpdate } from "./modules/plugin-update/plugin-update.js";
 import { initTasks } from "./modules/scheduled-tasks/scheduled-tasks.js";
 import { initMessagePreview, addHistoryButtonsDebounced, removeOwnedHistoryButtons } from "./modules/message-preview.js";
+import { mountReplyProgressSettings } from './modules/reply-progress/index.js';
+import { createReplyProgressHostRuntime } from './modules/reply-progress/host.js';
 import {
     cleanupChatMessageImages,
     initChatMessageImages,
@@ -97,6 +99,8 @@ extension_settings[EXT_ID] = extension_settings[EXT_ID] || {
 };
 
 const settings = extension_settings[EXT_ID];
+let replyProgressSettingsView = null;
+const replyProgressRuntime = createReplyProgressHostRuntime();
 let xiaobaiOsSettingsError = null;
 const xiaobaiOsSettingsReady = prepareXiaobaiOsSettings().catch((error) => {
     xiaobaiOsSettingsError = error;
@@ -565,6 +569,7 @@ async function waitForElement(selector, root = document, timeout = 10000) {
 }
 
 function toggleSettingsControls(enabled) {
+    replyProgressSettingsView?.syncEnabled();
     const controls = [
         'xiaobaix_recorded_enabled', 'xiaobaix_preview_enabled',
         'scheduled_tasks_enabled', 'xiaobaix_template_enabled',
@@ -626,6 +631,7 @@ async function initEnabledXiaobaiOs() {
 }
 
 async function toggleAllFeatures(enabled) {
+    replyProgressSettingsView?.syncEnabled();
     if (enabled) {
         await xiaobaiOsSettingsReady;
         toggleSettingsControls(true);
@@ -713,6 +719,14 @@ async function setupSettings() {
         const response = await fetch(`${extensionFolderPath}/settings.html`);
         const settingsHtml = await response.text();
         $(settingsContainer).append(settingsHtml);
+
+        replyProgressSettingsView?.destroy();
+        replyProgressSettingsView = mountReplyProgressSettings({
+            anchor: settingsContainer.querySelector('.littlewhitebox-log-toggle-row'),
+            settings,
+            saveSettings: saveSettingsDebounced,
+            runtime: replyProgressRuntime,
+        });
 
         setupDebugButtonInSettings();
 
@@ -984,6 +998,7 @@ async function setupSettings() {
             }
             ON.forEach(k => setChecked(MAP[k], true));
             OFF.forEach(k => setChecked(MAP[k], false));
+            replyProgressSettingsView?.resetDefaults();
             const osToggle = document.getElementById('xiaobaix_os_enabled');
             if (osToggle) osToggle.checked = false;
             try {

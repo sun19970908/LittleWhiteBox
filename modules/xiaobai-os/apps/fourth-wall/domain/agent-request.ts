@@ -14,16 +14,13 @@ const SYSTEM_PROMPT = [
     '严格遵循后续提示词里的输出格式，优先输出可被解析的 <thinking> 与 <msg> 内容。',
 ].join('\n');
 
-export function buildFourthWallAgentRequest(
-    prompt: Partial<FourthWallBuiltPrompt>, disableAssistantPrefill = false,
-): FourthWallAgentRequest {
+export function buildFourthWallAgentRequest(prompt: Partial<FourthWallBuiltPrompt>): FourthWallAgentRequest {
     const messages: FourthWallAgentRequest['messages'] = [];
     if (prompt.msg1?.trim()) { messages.push({ role: 'user', content: prompt.msg1.trim() }); }
     if (prompt.msg2?.trim()) { messages.push({ role: 'assistant', content: prompt.msg2.trim() }); }
-    const user = [prompt.msg3?.trim(), disableAssistantPrefill ? prompt.msg4?.trim() : ''].filter(Boolean).join('\n\n');
+    const user = [prompt.msg3?.trim(), prompt.msg4?.trim()].filter(Boolean).join('\n\n');
     if (user) { messages.push({ role: 'user', content: user }); }
-    if (!disableAssistantPrefill && prompt.msg4?.trim()) { messages.push({ role: 'assistant', content: prompt.msg4.trim() }); }
-    return { systemPrompt: SYSTEM_PROMPT, messages, tools: [] };
+    return { systemPrompt: [SYSTEM_PROMPT, prompt.protocol?.trim()].filter(Boolean).join('\n\n'), messages, tools: [] };
 }
 
 export function counterMessages(request: Pick<FourthWallAgentRequest, 'systemPrompt' | 'messages'>) {

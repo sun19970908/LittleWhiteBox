@@ -33,9 +33,7 @@ export function configureXiaobaiOsAgent(
 
 export function openXiaobaiOsAgentSession(providerConfigValue: UnknownRecord): XiaobaiOsAgentSession {
     const providerConfig = providerConfigValue || {};
-    const adapter = createAgentAdapter(providerConfig, {
-        missingApiKeyMessage: '请先在共享 Agent API 配置中填写当前预设的 API Key。',
-    });
+    const adapter = createAgentAdapter(providerConfig);
     return Object.freeze({
         supportsSessionToolLoop: adapter.supportsSessionToolLoop === true,
         async run(request: Omit<XiaobaiOsAgentRunRequest, 'providerConfig'>): Promise<UnknownRecord> {
@@ -71,9 +69,7 @@ export async function testXiaobaiOsAgentConnection(
     options: { signal?: AbortSignal } = {},
 ): Promise<{ provider: string; model: string; latencyMs: number }> {
     const startedAt = globalThis.performance?.now?.() ?? Date.now();
-    const adapter = createAgentAdapter(providerConfig, {
-        missingApiKeyMessage: '请先填写当前预设的 API Key。',
-    });
+    const adapter = createAgentAdapter(providerConfig);
     const result = await adapter.chat({
         systemPrompt: '这是一次由用户主动发起的连接测试。只回复 OK。',
         messages: [{ role: 'user', content: 'OK' }],

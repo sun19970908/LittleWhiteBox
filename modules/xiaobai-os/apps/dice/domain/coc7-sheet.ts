@@ -5,7 +5,7 @@ import { COC7_ATTRIBUTES, COC7_ATTRIBUTE_IDS, COC7_SKILL_IDS, type Coc7Attribute
 export const COC7_POINTS = { max: 80, step: 5 } as const;
 export const COC7_POINT_GROUPS = {
     attributes: { ids: COC7_ATTRIBUTE_IDS, min: 20, allocation: [70, 60, 40, 30] },
-    skills: { ids: COC7_SKILL_IDS, min: 10, allocation: [80, 70, 60, 50, 40, 40, 30, 30, 30, 20, 20, 10] },
+    skills: { ids: COC7_SKILL_IDS, min: 20, allocation: [80, 70, 60, 50, 40, 40, 30, 30, 20, 20, 20, 20] },
 } as const;
 export type Coc7PointGroup = keyof typeof COC7_POINT_GROUPS;
 export interface Coc7Sheet {

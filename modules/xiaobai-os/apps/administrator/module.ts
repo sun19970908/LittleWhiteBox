@@ -9,8 +9,9 @@ import { createAdministratorConversation } from './application/conversation.js';
 import { createAdministratorRuntime } from './application/runtime.js';
 import { createAdministratorController } from './host/controller.js';
 import type { AdministratorChatSurface } from './host/chat-reader.js';
+import type { AdministratorEnvironmentReader } from './domain/environment.js';
 
-export function createAdministratorModule(deps: { images: AdministratorImages; capture(): AdministratorChatSurface | null }): XiaobaiOsAppModule {
+export function createAdministratorModule(deps: { images: AdministratorImages; capture(): AdministratorChatSurface | null; readEnvironment: AdministratorEnvironmentReader }): XiaobaiOsAppModule {
     let repository: ReturnType<typeof createAdministratorRepository> | null = null;
     return {
         descriptor: ADMINISTRATOR_APP_DESCRIPTOR, partition: ADMINISTRATOR_PARTITION,
@@ -21,7 +22,7 @@ export function createAdministratorModule(deps: { images: AdministratorImages; c
             const conversation = createAdministratorConversation(repository, deps.images);
             let controller: ReturnType<typeof createAdministratorController>;
             const runtime = createAdministratorRuntime({ conversation, repository, images: deps.images, gateway: context.useCapability(AGENT_CAPABILITY),
-                management: context.useCapability(MANAGEMENT_CAPABILITY), capture: deps.capture, changed: () => controller?.emit() });
+                management: context.useCapability(MANAGEMENT_CAPABILITY), capture: deps.capture, readEnvironment: deps.readEnvironment, changed: () => controller?.emit() });
             controller = createAdministratorController(conversation, runtime);
             return controller;
         },

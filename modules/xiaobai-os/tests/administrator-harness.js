@@ -18,6 +18,12 @@ import { createManagementRegistry } from '../capabilities/management/index.js';
 import { createCapabilityRegistry } from '../kernel/capability-registry.js';
 import { XiaobaiOsPartitionRegistry } from '../kernel/partition-registry.js';
 import { createTransactionCoordinator } from '../kernel/transaction-coordinator.js';
+import { xiaobaiOsApps } from '../shell/app-catalog.js';
+import { TOOLS_LOAD } from '../apps/administrator/agent/tool-loader.js';
+
+// Scripted providers in existing business tests first acquire the selected packages.
+export const withLoadedTools = (apps, generate) => request => request.tools.length === 1 && request.tools[0].function.name === TOOLS_LOAD
+    ? { toolCalls: [{ id: 'load-tools', name: TOOLS_LOAD, arguments: JSON.stringify({ apps }) }] } : generate(request);
 
 export const tick = () => new Promise(resolve => setTimeout(resolve, 0));
 export async function settled(runtime) { for (let index = 0; runtime.busy() && index < 200; index++) { await tick(); } if (runtime.busy()) { throw new Error('fixture_run_not_settled'); } }
@@ -31,6 +37,9 @@ export async function administratorHarness(initial = {}, { fresh = false } = {})
         } }, writes: [], replace: null, removed: [], imageFailure: false, requests: [],
         messages: Array.from({ length: 60 }, (_, floor) => ({ mes: `floor-${floor}`, is_user: floor % 2 === 0, name: 'test', swipe_id: 0 })),
         generate: async () => ({ text: '已核实。' }),
+        environment: { observedAt: 1, apps: xiaobaiOsApps.map(({ id, name, description }) => ({ id, name, description, load: { state: 'ready' } })),
+            maintenance: [], mainChatGenerating: false, storage: { chat: { state: 'ready', hasPendingCommit: false }, user: { state: 'ready', hasPendingCommit: false } } },
+        environmentReads: [], inspect: null,
     };
     if (fresh) { state.capture.reference = null; state.persisted = null; }
     const capabilities = createCapabilityRegistry(createEconomyCapabilityRegistrations());
@@ -59,10 +68,11 @@ export async function administratorHarness(initial = {}, { fresh = false } = {})
     const gateway = { async loadConfig() { return {}; }, async openSession() { return { providerConfig: {}, supportsSessionToolLoop: false,
         async run(request) { state.requests.push(request); return state.generate(request); } }; } };
     const pushed = []; let controller;
-    const runtime = createAdministratorRuntime({ conversation, repository, images, gateway, management: registry, capture, changed: () => controller?.emit() });
+    const readEnvironment = identity => { state.environmentReads.push(identity); return state.inspect ? state.inspect(identity) : structuredClone(state.environment); };
+    const runtime = createAdministratorRuntime({ conversation, repository, images, gateway, management: registry, capture, readEnvironment, changed: () => controller?.emit() });
     controller = createAdministratorController(conversation, runtime);
     await controller.activate({ isCurrent: () => true, activationToken: 'test', post: (type, payload) => { pushed.push({ type, payload }); return true; } });
-    return { state, coordinator, tasks, map, world, economy, registry, repository, images, conversation, runtime, controller, gateway, capture, pushed,
+    return { state, coordinator, tasks, map, world, economy, registry, repository, images, conversation, runtime, controller, gateway, capture, readEnvironment, pushed,
         async request(type, payload = {}) { return controller.handleMessage({ type: `administrator/${type}`, payload: { chatIdentity: state.capture.identityKey,
             ...(type === 'send' ? { submissionId: `submission-${++id}` } : {}), ...payload } }); } };
 }

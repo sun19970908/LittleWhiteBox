@@ -12,18 +12,22 @@ export const PROMPT_CONTEXT_LIMITS = Object.freeze({
     characterDescription: 4_000,
     characterPersonality: 2_000,
     characterScenario: 2_000,
+    characterNote: 2_000,
+    exampleDialogue: 4_000,
     worldBefore: 8_000,
     worldAfter: 8_000,
     worldDepthEntry: 2_000,
     worldDepthTotal: 8_000,
     storyEvents: 20_000,
 });
+export type PromptContextLimitOverrides = Partial<Record<keyof typeof PROMPT_CONTEXT_LIMITS, number>>;
 
 function isRecord(value: unknown): value is UnknownRecord {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
 export function truncatePromptText(value: string, maximum: number): string {
+    if (value.length <= maximum) {return value;}
     return Array.from(value).slice(0, maximum).join('');
 }
 
@@ -68,15 +72,15 @@ function normalizeSwipeId(value: unknown): number | string | null {
     return null;
 }
 
-function normalizeWorldDepth(value: unknown): string[] {
+function normalizeWorldDepth(value: unknown, limits: Record<keyof typeof PROMPT_CONTEXT_LIMITS, number>): string[] {
     if (!Array.isArray(value)) {return [];}
     const depth: string[] = [];
-    let remaining = PROMPT_CONTEXT_LIMITS.worldDepthTotal;
+    let remaining = limits.worldDepthTotal;
     for (const entry of value) {
         if (remaining <= 0) {break;}
         const normalized = normalizePromptBody(
             entry,
-            Math.min(PROMPT_CONTEXT_LIMITS.worldDepthEntry, remaining),
+            Math.min(limits.worldDepthEntry, remaining),
         );
         if (!normalized) {continue;}
         depth.push(normalized);
@@ -86,12 +90,16 @@ function normalizeWorldDepth(value: unknown): string[] {
 }
 
 /** Normalizes host values into the one runtime-only prompt context shape. */
-export function normalizePromptContext(value: PromptContextInput | unknown): PromptContextSnapshot {
+export function normalizePromptContext(
+    value: PromptContextInput | unknown,
+    overrides: PromptContextLimitOverrides = {},
+): PromptContextSnapshot {
+    const limits = { ...PROMPT_CONTEXT_LIMITS, ...overrides };
     const source = isRecord(value) ? value : {};
     const rawPlayer = isRecord(source.player) ? source.player : {};
     const player = {
         displayName: normalizePromptName(rawPlayer.displayName, 'User'),
-        persona: normalizePromptBody(rawPlayer.persona, PROMPT_CONTEXT_LIMITS.persona),
+        persona: normalizePromptBody(rawPlayer.persona, limits.persona),
     };
     const characters = (Array.isArray(source.characters) ? source.characters : [])
         .flatMap((entry) => {
@@ -101,17 +109,17 @@ export function normalizePromptContext(value: PromptContextInput | unknown): Pro
             return [{
                 characterKey,
                 displayName: normalizePromptName(entry.displayName, characterKey),
-                description: normalizePromptBody(entry.description, PROMPT_CONTEXT_LIMITS.characterDescription),
-                personality: normalizePromptBody(entry.personality, PROMPT_CONTEXT_LIMITS.characterPersonality),
-                scenario: normalizePromptBody(entry.scenario, PROMPT_CONTEXT_LIMITS.characterScenario),
+                description: normalizePromptBody(entry.description, limits.characterDescription),
+                personality: normalizePromptBody(entry.personality, limits.characterPersonality),
+                scenario: normalizePromptBody(entry.scenario, limits.characterScenario),
             }];
         })
-        .slice(0, PROMPT_CONTEXT_LIMITS.characters);
+        .slice(0, limits.characters);
     const recentMessages = (Array.isArray(source.recentMessages) ? source.recentMessages : [])
         .flatMap((entry) => {
             if (!isRecord(entry) || (entry.role !== 'user' && entry.role !== 'assistant')) {return [];}
             if (!Number.isSafeInteger(entry.index) || Number(entry.index) < 0) {return [];}
-            const text = normalizePromptBody(entry.text, PROMPT_CONTEXT_LIMITS.messageText);
+            const text = normalizePromptBody(entry.text, limits.messageText);
             if (!text) {return [];}
             return [{
                 index: Number(entry.index),
@@ -122,13 +130,25 @@ export function normalizePromptContext(value: PromptContextInput | unknown): Pro
             }];
         })
         .sort((left, right) => left.index - right.index)
-        .slice(-PROMPT_CONTEXT_LIMITS.recentMessages);
+        .slice(-limits.recentMessages);
     const rawWorldInfo = isRecord(source.worldInfo) ? source.worldInfo : {};
+    const rawExtras = isRecord(rawWorldInfo.extras) ? rawWorldInfo.extras : null;
     const worldInfo = {
-        before: normalizePromptBody(rawWorldInfo.before, PROMPT_CONTEXT_LIMITS.worldBefore),
-        after: normalizePromptBody(rawWorldInfo.after, PROMPT_CONTEXT_LIMITS.worldAfter),
-        depth: normalizeWorldDepth(rawWorldInfo.depth),
+        before: normalizePromptBody(rawWorldInfo.before, limits.worldBefore),
+        after: normalizePromptBody(rawWorldInfo.after, limits.worldAfter),
+        depth: normalizeWorldDepth(rawWorldInfo.depth, limits),
+        ...(rawExtras ? { extras: {
+            exampleBefore: normalizeWorldDepth(rawExtras.exampleBefore, limits),
+            exampleAfter: normalizeWorldDepth(rawExtras.exampleAfter, limits),
+            authorNoteBefore: normalizeWorldDepth(rawExtras.authorNoteBefore, limits),
+            authorNoteAfter: normalizeWorldDepth(rawExtras.authorNoteAfter, limits),
+        } } : {}),
     };
-    const storyEvents = normalizePromptBody(source.storyEvents, PROMPT_CONTEXT_LIMITS.storyEvents);
-    return { player, characters, recentMessages, worldInfo, storyEvents };
+    const storyEvents = normalizePromptBody(source.storyEvents, limits.storyEvents);
+    return { player, characters,
+        ...(source.exampleDialogue !== undefined
+            ? { exampleDialogue: normalizePromptBody(source.exampleDialogue, limits.exampleDialogue) } : {}),
+        ...(source.characterNote !== undefined
+            ? { characterNote: normalizePromptBody(source.characterNote, limits.characterNote) } : {}),
+        recentMessages, worldInfo, storyEvents };
 }

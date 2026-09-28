@@ -19,13 +19,13 @@ function view(domain) {
     return { active: records.filter(task => task.status === 'active'), recruiting: records.filter(task => task.status === 'recruiting') };
 }
 function action(record, actionId) {
-    return { taskId: record.taskId, actionId, expectedTaskRevision: record.taskRevision, expectedEventId: record.eventId, observedAssistantCount: 1 };
+    return { taskId: record.taskId, actionId, expectedTaskRevision: record.taskRevision, expectedEventId: record.eventId };
 }
 
 test('a user-published task stays in My published after assignment, then remains accessible in history', () => {
     const env = environment();
     let result = publishTask(createEmptyTaskDomain(), {
-        taskId: 'mine', actionId: 'publish', playerDisplayName: '林白', observedAssistantCount: 0,
+        taskId: 'mine', actionId: 'publish', playerDisplayName: '林白',
         form: { title: '找回手札', objective: '找回旧书店的蓝色手札', location: '旧书店', risk: '', reward: 50 },
     }, env);
     assert.deepEqual(taskLanes(view(result.domain)).published.map(task => task.taskId), ['mine']);
@@ -56,7 +56,7 @@ test('terminal-issued tasks belong only to My accepted; a target NPC is not the 
         listings: [{ listingId: 'letter', grade: 'C', tags: ['接触'], posture: '易介入', title: '钟楼的信', hook: '守卫在等一封信', objective: '把信交给钟楼守卫', location: '钟楼', timing: '任意时候', risk: '盘问', reward: 60 }],
     }).domain;
     const result = acceptTaskListing(domain, {
-        taskId: 'accepted', actionId: 'accept', boardId: 'board', listingId: 'letter', playerDisplayName: '林白', observedAssistantCount: 0,
+        taskId: 'accepted', actionId: 'accept', boardId: 'board', listingId: 'letter', playerDisplayName: '林白',
     }, env);
     const lanes = taskLanes(view(result.domain));
     assert.deepEqual(lanes.published, []);

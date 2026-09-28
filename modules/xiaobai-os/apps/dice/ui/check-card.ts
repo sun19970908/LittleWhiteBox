@@ -3,6 +3,7 @@ import { createD20Result } from './d20-result.js';
 import { createCoc7Result } from './coc7-result.js';
 import { diceSpan } from './card-elements.js';
 import { createCardTexture } from './card-texture.js';
+import { DICE_SESSION_COPY as labels } from './session-copy.js';
 
 /** A saved check's view. It never rolls, saves, or starts generation. */
 export function createCheckCard(record: ActionCheckRecord, pending: boolean) {
@@ -13,11 +14,11 @@ export function createCheckCard(record: ActionCheckRecord, pending: boolean) {
     element.dataset.diceRecord = record.id;
     element.dataset.rule = record.rule;
     element.setAttribute('role', 'group');
-    const result = record.rule === 'coc7' ? createCoc7Result(record) : createD20Result(record);
+    let result = record.rule === 'coc7' ? createCoc7Result(record) : createD20Result(record);
     const name = record.rule === 'coc7' ? record.request.stat : [record.request.character, record.request.stat].filter(Boolean).join(' · ');
     const identity = diceSpan('xb-dice-identity', name);
     identity.hidden = record.rule === 'coc7';
-    const rolling = diceSpan('xb-dice-rolling-label', '正在掷骰');
+    const rolling = diceSpan('xb-dice-rolling-label', labels.rolling);
     result.rollingSlot.append(rolling);
     const copy = diceSpan('xb-dice-copy');
     copy.append(diceSpan('xb-dice-action', record.request.action));
@@ -25,11 +26,11 @@ export function createCheckCard(record: ActionCheckRecord, pending: boolean) {
         const text = diceSpan('xb-dice-stakes-text', record.request.stakes);
         if (record.request.stakes.length > 96) {
             const details = document.createElement('details'); details.className = 'xb-dice-stakes';
-            const summary = document.createElement('summary'); summary.textContent = '风险与后果';
+            const summary = document.createElement('summary'); summary.textContent = labels.stakesDetails;
             details.append(summary, text); copy.append(details);
         } else {
             const stakes = diceSpan('xb-dice-stakes');
-            stakes.append(diceSpan('xb-dice-stakes-label', '风险'), text); copy.append(stakes);
+            stakes.append(diceSpan('xb-dice-stakes-label', labels.stakes), text); copy.append(stakes);
         }
     }
     const status = diceSpan('xb-dice-status'); status.hidden = true;
@@ -45,13 +46,29 @@ export function createCheckCard(record: ActionCheckRecord, pending: boolean) {
         copy.hidden = false; rolling.hidden = true;
         result.settle();
     }
-    if (pending) {
-        element.dataset.state = 'rolling';
-        element.setAttribute('aria-label', `${name}检定，正在掷骰`);
-        copy.hidden = true;
-        result.draw(0);
-    } else { settle(); }
-    return { element, status, settle, draw: result.draw };
+    function present(isPending: boolean, retainCopy = false): void {
+        delete element.dataset.state;
+        delete element.dataset.revealed;
+        delete element.dataset.outcome;
+        delete element.dataset.verdict;
+        rolling.hidden = false;
+        if (isPending) {
+            element.dataset.state = 'rolling';
+            element.setAttribute('aria-label', `${name}检定，${labels.rolling}`);
+            copy.hidden = !retainCopy;
+            result.draw(0);
+        } else { settle(); }
+    }
+    function update(next: ActionCheckRecord, isPending: boolean): void {
+        record = next;
+        const replacement = record.rule === 'coc7' ? createCoc7Result(record) : createD20Result(record);
+        result.element.replaceWith(replacement.element);
+        result = replacement;
+        result.rollingSlot.append(rolling);
+        present(isPending, true);
+    }
+    present(pending);
+    return { element, status, settle, update, draw: (progress: number) => result.draw(progress) };
 }
 
 export type CheckCard = ReturnType<typeof createCheckCard>;

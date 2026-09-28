@@ -1,5 +1,5 @@
 import { normalizeAgentSettings } from '../../../../agent-core/config.js';
-import { isSillyTavernProvider, resolveActiveProviderConfig } from '../../../../agent-core/provider-resolution.js';
+import { resolveActiveProviderConfig } from '../../../../agent-core/provider-resolution.js';
 import type { XiaobaiOsAgentGateway } from '../../../capabilities/agent/gateway.js';
 import { jsonValuesEqual } from '../../../host/json-values-equal.js';
 import type { TasksActionResult, TasksService } from '../application/service.js';
@@ -143,8 +143,7 @@ export function createTaskGenerationRequests({
     function assertConfigured(value: unknown): void {
         const config = normalizeAgentSettings((value || {}) as UnknownRecord);
         const provider = resolveActiveProviderConfig(config);
-        if (!String(provider.model || '').trim()
-            || (!isSillyTavernProvider(provider.provider) && !String(provider.apiKey || '').trim())) {
+        if (!String(provider.model || '').trim()) {
             throw new Error('tasks_agent_not_configured');
         }
     }
@@ -194,9 +193,9 @@ export function createTaskGenerationRequests({
         kind: GenerationKind,
         request: ActiveRequest,
         boundary: TaskGenerationBoundary,
-    ): Promise<{ valid: boolean; assistantCount: number }> {
+    ): Promise<{ valid: boolean }> {
         if (!requestActive(kind, request) || isMainGenerationActive() || tasks.getWriteState() !== 'ready') {
-            return { valid: false, assistantCount: 0 };
+            return { valid: false };
         }
         try {
             const current = await captureCurrent(false);
@@ -214,10 +213,9 @@ export function createTaskGenerationRequests({
                         { ...boundary.contextSnapshot, worldInfo: null, worldContent: null },
                     )
                     && casValid,
-                assistantCount: current.assistantCount,
             };
         } catch {
-            return { valid: false, assistantCount: 0 };
+            return { valid: false };
         }
     }
 
@@ -312,7 +310,6 @@ export function createTaskGenerationRequests({
                 expectedTaskRevision: boundary.expectedTaskRevision,
                 expectedEventId: boundary.expectedEventId,
                 candidates: compile.data.candidates,
-                observedAssistantCount: checked.assistantCount,
             }, async () => (await boundaryStillCurrent(kind, request, boundary)).valid);
             return { kind, status: compile.status, changed: action.changed, compile, action };
         } catch (error) {

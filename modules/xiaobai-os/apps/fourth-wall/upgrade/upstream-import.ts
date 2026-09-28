@@ -108,11 +108,6 @@ export function convertUpstreamFourthWall(
     const settings = {
         maxChatLayers: rawSettings.maxChatLayers === 9999 ? 20 : optionalInteger(rawSettings.maxChatLayers, 20, 'fw.settings.maxChatLayers'),
         stream: optionalBoolean(rawSettings.stream, true, 'fw.settings.stream'),
-        disableAssistantPrefill: optionalBoolean(
-            rawSettings.disableAssistantPrefill,
-            false,
-            'fw.settings.disableAssistantPrefill',
-        ),
     };
     let sessions: FourthWallChatState['sessions'];
     if (source.sessions !== undefined) {
@@ -142,7 +137,7 @@ export function convertUpstreamFourthWall(
         ? source.activeSessionId
         : sessions[0]?.id ?? '';
     return {
-        schemaVersion: 2,
+        schemaVersion: 3,
         state: parseFourthWallChatState({ settings, sessions, activeSessionId }),
     };
 }

@@ -12,48 +12,58 @@ import { createModuleEvents, event_types } from "../../../../core/event-manager.
 import { NovelDrawStorage } from "../../../../core/server-storage.js";
 import { initAfterAiGate, notifyAfterAiHint, registerAfterAiHandler } from "../../../../core/after-ai-gate.js";
 import {
-    openDB, storePreview, getPreview, getPreviewsBySlot,
-    getDisplayPreviewForSlot, storeFailedPlaceholder, deleteFailedRecordsForSlot,
-    setSlotSelection, clearSlotSelection,
-    updatePreviewSavedUrl, deletePreview, getCacheStats, clearExpiredCache, clearAllCache,
-    getGallerySummary, getCharacterPreviews, openGallery, closeGallery, destroyGalleryCache,
-    getPreviewDisplayUrl, getBase64ImagePayload, preloadPreviewDisplayUrl, warmSlotPreviewNeighbors
-} from '../../shared/gallery-cache.js';
-import {
-    ScenePlannerError,
-    generateAndParseScenePlan,
-    prepareScenePlannerInput,
-} from '../../shared/scene-planner.js';
-import { classifyScenePlannerErrorForUi } from '../../shared/scene-planner-error-ui.js';
+    openDB,
+    storePreview,
+    getPreview,
+    getCardPreview,
+    getPreviewsBySlot,
+    getDisplayPreviewForSlot,
+    storeFailedPlaceholder,
+    setSlotSelection,
+    clearSlotSelection,
+    updatePreviewSavedUrl,
+    deletePreview,
+    getCacheStats,
+    clearExpiredCache,
+    clearAllCache,
+    getGallerySummary,
+    getCharacterPreviews,
+    openGallery,
+    closeGallery,
+    destroyGalleryCache,
+    getPreviewDisplayUrl,
+    getBase64ImagePayload,
+    preloadPreviewDisplayUrl,
+    warmSlotPreviewNeighbors,
+} from "../../shared/gallery-cache.js";
+import { ScenePlannerError, generateAndParseScenePlan, prepareScenePlannerInput } from "../../shared/scene-planner.js";
+import { classifyScenePlannerErrorForUi } from "../../shared/scene-planner-error-ui.js";
 import {
     loadSharedDrawSettings,
     getSharedDrawSettings,
     updateSharedDrawSettingsPersistent,
     normalizeSharedCacheDays,
     mergeNovelDrawProviderSettingsIntoStorageRoot,
-} from '../../shared/draw-settings.js';
-import { getLastDrawAgentDiagnostic } from '../../shared/draw-agent.js';
-import { attachDrawAgentSettingsSurface } from '../../shared/agent-settings-surface.js';
-import { createSerialImageRequestQueue } from '../../shared/serial-image-request-queue.js';
-import { isCharacterEnabled } from '../../shared/character-selection.js';
-import {
-    buildKnownCharacterPrompt,
-    joinTags,
-} from '../../shared/character-prompts.js';
-import { resolveAutoLearnCharacter } from './novel-character-learning.js';
+} from "../../shared/draw-settings.js";
+import { getLastDrawAgentDiagnostic } from "../../shared/draw-agent.js";
+import { attachDrawAgentSettingsSurface } from "../../shared/agent-settings-surface.js";
+import { createSerialImageRequestQueue } from "../../shared/serial-image-request-queue.js";
+import { isCharacterEnabled } from "../../shared/character-selection.js";
+import { joinTags } from "../../shared/character-prompts.js";
+import { resolveAutoLearnCharacter } from "./novel-character-learning.js";
 import {
     NovelImageResponseError,
     extractImageFromResponse,
     formatImageBase64,
     readImageResponse,
-} from './novel-image-response.js';
+} from "./novel-image-response.js";
 import {
     buildNovelAIConnectionProbe,
     isNovelImageBackendJobEnabled,
     resolveNovelImageTransport,
     resolveNovelAIBackendImageApi,
     snapshotNovelRequestConfig,
-} from './novel-request-config.js';
+} from "./novel-request-config.js";
 import {
     loadTagGuide,
     loadPromptTemplates,
@@ -64,69 +74,44 @@ import {
     getLoadedTagGuideById,
     getPromptChainPreview,
     normalizeNovelPromptGuideOverrides,
-} from './novel-prompts.js';
-import { parseNovelPromptPresetImport } from './novel-prompt-import.js';
-import { createScenePlannerDefaultPresets, isPovPromptPreset, SCENE_PLANNER_PRESET_INSTALL_NOTICE } from '../../shared/scene-planner-presets.js';
+} from "./novel-prompts.js";
+import { parseNovelPromptPresetImport } from "./novel-prompt-import.js";
+import { createScenePlannerDefaultPresets, isPovPromptPreset, SCENE_PLANNER_PRESET_INSTALL_NOTICE } from "../../shared/scene-planner-presets.js";
 import {
     getNovelModelCapability,
     getNovelModelCapabilitiesForUi,
     isNovelV5Model,
     NOVEL_PROMPT_GUIDES,
-} from './novel-model-capabilities.js';
-import {
-    NovelV5RequestError,
-    V5_QUALITY_IDS,
-    V5_UC_IDS,
-} from './novel-v5-request.js';
-import {
-    compile as compileNovelScenePlan,
-    compileNovelImageRequest,
-} from './compiler.js';
-import {
-    readNovelV5ErrorText,
-    readNovelV5FinalImage,
-    NovelV5StreamError,
-} from './novel-v5-stream.js';
-import {
-    decodeNovelBackendJobResult,
-    hasNovelV5FinalImageCapability,
-} from './novel-backend-job-result.js';
+} from "./novel-model-capabilities.js";
+import { NovelV5RequestError, V5_QUALITY_IDS, V5_UC_IDS } from "./novel-v5-request.js";
+import { compile as compileNovelScenePlan, compileNovelImageRequest } from "./compiler.js";
+import { readNovelV5ErrorText, readNovelV5FinalImage, NovelV5StreamError } from "./novel-v5-stream.js";
+import { decodeNovelBackendJobResult, hasNovelV5FinalImageCapability } from "./novel-backend-job-result.js";
 import {
     createImageBackendJobMonitorRegistry,
     createImageBackendJobsClient,
     hasImageBackendJobsCapability,
     ImageBackendJobsError,
     reportImageBackendJobState,
-} from '../../shared/backend-image-jobs.js';
-import {
-    classifyImageJobDeliveryTarget,
-    commitImageJobDeliverySlotRemoval,
-    ImageJobDeliveryTargetState,
-    requireImageJobDeliveryTarget,
-} from '../../shared/image-job-delivery-target.js';
-import { submitRecoverableImageJob } from '../../shared/recoverable-image-jobs.js';
-import {
-    isDrawRunCancelledError,
-    isDrawRunPendingError,
-    submitProviderDrawRun,
-} from '../../shared/draw-run-production.js';
-import {
-    cancelPendingDrawRuns,
-    hasPendingDrawRun,
-} from '../../shared/draw-run-controls.js';
-import { migrateLegacyNovelPromptSettings } from './novel-prompt-migration.js';
-import { WorldbookProcessor } from '../../shared/worldbook-processor.js';
+} from "../../shared/backend-image-jobs.js";
+import { submitRecoverableImageJob } from "../../shared/recoverable-image-jobs.js";
+import { submitProviderDrawRun } from "../../shared/draw-run-production.js";
+import { cancelPendingDrawRuns, captureDrawCancellationTarget } from "../../shared/draw-run-controls.js";
+import { migrateLegacyNovelPromptSettings } from "./novel-prompt-migration.js";
+import { WorldbookProcessor } from "../../shared/worldbook-processor.js";
 import {
     openCloudPresetsModal,
     downloadPresetAsFile,
     parsePresetData,
-    destroyCloudPresets
-} from './cloud-presets.js';
+    destroyCloudPresets,
+} from "./cloud-presets.js";
 import { postToIframe, isTrustedMessage } from "../../../../core/iframe-messaging.js";
 import {
-    loadLocalDanbooruDB, unloadLocalDanbooruDB,
-    searchLocalDanbooru, isDanbooruDBLoaded,
-} from '../../shared/danbooru-local-db.js';
+    loadLocalDanbooruDB,
+    unloadLocalDanbooruDB,
+    searchLocalDanbooru,
+    isDanbooruDBLoaded,
+} from "../../shared/danbooru-local-db.js";
 import {
     clearDrawSavedEntry,
     syncDrawSavedFromPreview,
@@ -135,27 +120,26 @@ import {
     stopSharedDrawPreviewRuntime,
     renderAllDrawPreviews,
     renderPreviewsForMessage as renderSharedPreviewsForMessage,
-    buildPendingImageHtml,
     buildDrawSlotSelector,
     toScenePlannerProgress,
-    isAnyMessageBeingEdited,
     isMessageBeingEdited,
-    notifyMessageRewritten,
     DEFAULT_MESSAGE_FILTER_RULES,
-} from '../../shared/draw-common.js';
-import { replaceSceneSlotElements } from '../../shared/scene-slot-dom.js';
-import { createSceneSource, normalizeMessageSceneSourceText } from '../../shared/scene-source.js';
-import { createDrawImageSlotRegex, stripDrawImageSlots } from '../../shared/image-marker-syntax.js';
-import {
-    commitRecoverableScenePlacements,
-    commitSceneSlotDelivery,
-    ScenePlacementError,
-    assertSceneSourceUnchanged,
-    commitSettledScenePlacements,
-    insertScenePlacementsPreservingSlots,
-    removeSceneSlotPlaceholders,
-    setActiveMessageText,
-} from '../../shared/scene-placement.js';
+    buildImageHtml,
+    buildFailedPlaceholderHtml,
+    ensureDrawImageStyles,
+} from "../../shared/draw-common.js";
+import { replaceSceneSlotElements } from "../../shared/scene-slot-dom.js";
+import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
+import { createDrawImageSlotRegex, stripDrawImageSlots } from "../../shared/image-marker-syntax.js";
+import { ScenePlacementError, assertSceneSourceUnchanged } from "../../shared/scene-placement.js";
+import { submitPreparedChatImages, registerPreparedImageProvider } from "../../shared/prepared-chat-images.js";
+import { prepareImageInput } from '../../shared/prepared-image-input.js';
+import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImagePhase, getFloorImageState, releaseFloorImageJob, observeFloorImageJob, failFloorImageJob, clearFloorImageJobs, resolveFloorImageJobTarget, rebaseFloorImageJobsAfterSwipeDeletion } from '../../shared/floor-image-job.js';
+import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
+import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
+import { redrawImageCard, removeChatImageSlot, restoreImageCard } from "../../shared/image-card-actions.js";
+import { persistCardTagEdits } from "../../shared/card-tag-editor.js";
+import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
 // ═══════════════════════════════════════════════════════════════════════════
@@ -397,75 +381,16 @@ let agentSettingsSurface = null;
 // ═══════════════════════════════════════════════════════════════════════════
 
 function ensureStyles() {
+    ensureDrawImageStyles();
     if (document.getElementById('xiaobaix-novel-draw-style')) return;
     const style = document.createElement('style');
     style.id = 'xiaobaix-novel-draw-style';
     style.textContent = `
-.xb-nd-img{margin:0.8em 0;text-align:center;position:relative;display:block;width:100%;border-radius:14px;padding:4px}
-.xb-nd-img[data-state="preview"]{border:1px dashed rgba(255,152,0,0.35)}
-.xb-nd-img[data-state="failed"]{border:1px dashed rgba(248,113,113,0.5);background:rgba(248,113,113,0.05);padding:20px}
-.xb-nd-img[data-state="pending"]{border:1px dashed rgba(212,165,116,0.4);background:rgba(212,165,116,0.06);padding:18px;color:inherit}
-.xb-nd-img.busy img{opacity:0.5}
-.xb-nd-img-wrap{position:relative;overflow:hidden;border-radius:10px;touch-action:pan-y pinch-zoom}
-.xb-nd-img img{width:auto;height:auto;max-width:100%;border-radius:10px;cursor:pointer;box-shadow:0 3px 15px rgba(0,0,0,0.25);display:block;user-select:none;-webkit-user-drag:none;transition:transform 0.25s ease,opacity 0.2s ease}
-.xb-nd-img img.sliding-left{animation:ndSlideOutLeft 0.25s ease forwards;will-change:transform,opacity}
-.xb-nd-img img.sliding-right{animation:ndSlideOutRight 0.25s ease forwards;will-change:transform,opacity}
-.xb-nd-img img.sliding-in-left{animation:ndSlideInLeft 0.25s ease forwards;will-change:transform,opacity}
-.xb-nd-img img.sliding-in-right{animation:ndSlideInRight 0.25s ease forwards;will-change:transform,opacity}
-@keyframes ndSlideOutLeft{from{transform:translateX(0);opacity:1}to{transform:translateX(-30%);opacity:0}}
-@keyframes ndSlideOutRight{from{transform:translateX(0);opacity:1}to{transform:translateX(30%);opacity:0}}
-@keyframes ndSlideInLeft{from{transform:translateX(30%);opacity:0}to{transform:translateX(0);opacity:1}}
-@keyframes ndSlideInRight{from{transform:translateX(-30%);opacity:0}to{transform:translateX(0);opacity:1}}
-.xb-nd-nav-pill{position:absolute;bottom:10px;left:10px;display:inline-flex;align-items:center;gap:2px;background:rgba(0,0,0,0.75);border-radius:20px;padding:4px 6px;font-size:12px;color:rgba(255,255,255,0.8);font-weight:500;user-select:none;z-index:5;opacity:0.72;transition:opacity 0.2s}
-.xb-nd-nav-pill:hover{opacity:0.92}
-.xb-nd-nav-arrow{width:24px;height:24px;border:none;background:transparent;color:rgba(255,255,255,0.8);cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:50%;font-size:14px;transition:background 0.15s,color 0.15s;padding:0}
-.xb-nd-nav-arrow:hover{background:rgba(255,255,255,0.15);color:#fff}
-.xb-nd-nav-arrow:disabled{opacity:0.3;cursor:not-allowed}
-.xb-nd-nav-text{min-width:36px;text-align:center;font-variant-numeric:tabular-nums;padding:0 2px}
-@media(hover:none),(pointer:coarse){.xb-nd-nav-pill{opacity:0.78;padding:5px 8px}}
-.xb-nd-menu-wrap{position:absolute;top:8px;right:8px;z-index:10}
-.xb-nd-menu-wrap.busy{pointer-events:none;opacity:0.3}
-.xb-nd-menu-trigger{width:32px;height:32px;border-radius:50%;border:none;background:rgba(0,0,0,0.75);color:rgba(255,255,255,0.85);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;opacity:0.85}
-.xb-nd-menu-trigger:hover{background:rgba(0,0,0,0.85);opacity:1}
-.xb-nd-menu-wrap.open .xb-nd-menu-trigger{background:rgba(0,0,0,0.9);opacity:1}
-.xb-nd-dropdown{position:absolute;top:calc(100% + 4px);right:0;background:rgba(20,20,24,0.98);border:1px solid rgba(255,255,255,0.12);border-radius:16px;padding:4px;display:none;flex-direction:column;gap:2px;opacity:0;visibility:hidden;transform:translateY(-4px) scale(0.96);transform-origin:top right;transition:all 0.15s ease;box-shadow:0 8px 24px rgba(0,0,0,0.4);pointer-events:none}
-.xb-nd-menu-wrap.open .xb-nd-dropdown{display:flex;opacity:1;visibility:visible;transform:translateY(0) scale(1);pointer-events:auto}
-.xb-nd-dropdown button{width:32px;height:32px;border:none;background:transparent;color:rgba(255,255,255,0.85);cursor:pointer;font-size:14px;border-radius:50%;display:flex;align-items:center;justify-content:center;transition:background 0.15s;padding:0;margin:0}
-.xb-nd-dropdown button:hover{background:rgba(255,255,255,0.15)}
-.xb-nd-dropdown button[data-action="delete-image"]{color:rgba(248,113,113,0.9)}
-.xb-nd-dropdown button[data-action="delete-image"]:hover{background:rgba(248,113,113,0.2)}
-.xb-nd-indicator{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,0.85);padding:8px 16px;border-radius:8px;color:#fff;font-size:12px;z-index:10}
-.xb-nd-edit{animation:nd-slide-up 0.2s ease-out}
-.xb-nd-edit-input{width:100%;min-height:60px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;font-size:12px;padding:8px;resize:vertical;font-family:monospace}
-.xb-nd-failed-icon{color:rgba(248,113,113,0.9);font-size:24px;margin-bottom:8px}
-.xb-nd-failed-title{color:rgba(255,255,255,0.7);font-size:13px;margin-bottom:4px}
-.xb-nd-failed-desc{color:rgba(255,255,255,0.4);font-size:11px;margin-bottom:12px}
-.xb-nd-failed-btns{display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
-.xb-nd-failed-btns button{padding:8px 16px;border-radius:8px;font-size:12px;cursor:pointer;transition:all 0.15s}
-.xb-nd-retry-btn{border:1px solid rgba(212,165,116,0.5);background:rgba(212,165,116,0.2);color:#fff}
-.xb-nd-retry-btn:hover{background:rgba(212,165,116,0.35)}
-.xb-nd-edit-btn{border:1px solid rgba(255,255,255,0.2);background:rgba(255,255,255,0.1);color:#fff}
-.xb-nd-edit-btn:hover{background:rgba(255,255,255,0.2)}
-.xb-nd-remove-btn{border:1px solid rgba(248,113,113,0.3);background:transparent;color:rgba(248,113,113,0.8)}
-.xb-nd-remove-btn:hover{background:rgba(248,113,113,0.1)}
-@keyframes nd-slide-up{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}
-@keyframes fadeInOut{0%{opacity:0;transform:translateX(-50%) translateY(-10px)}15%{opacity:1;transform:translateX(-50%) translateY(0)}85%{opacity:1;transform:translateX(-50%) translateY(0)}100%{opacity:0;transform:translateX(-50%) translateY(-10px)}}
 #xiaobaix-novel-draw-overlay .nd-backdrop{position:absolute;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.7)}
 #xiaobaix-novel-draw-overlay .nd-frame-wrap{position:absolute;z-index:1}
 #xiaobaix-novel-draw-iframe{width:100%;height:100%;border:none;background:#0d1117}
 @media(min-width:769px){#xiaobaix-novel-draw-overlay .nd-frame-wrap{top:12px;left:12px;right:12px;bottom:12px}#xiaobaix-novel-draw-iframe{border-radius:12px}}
 @media(max-width:768px){#xiaobaix-novel-draw-overlay .nd-frame-wrap{top:0;left:0;right:0;bottom:0}#xiaobaix-novel-draw-iframe{border-radius:0}}
-.xb-nd-edit-content{max-height:250px;overflow-y:auto;margin-bottom:8px}
-.xb-nd-edit-content::-webkit-scrollbar{width:4px}
-.xb-nd-edit-content::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:2px}
-.xb-nd-edit-group{margin-bottom:8px}
-.xb-nd-edit-group:last-child{margin-bottom:0}
-.xb-nd-edit-label{font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:4px;display:flex;align-items:center;gap:4px}
-.xb-nd-edit-label .char-icon{font-size:8px;opacity:0.6}
-.xb-nd-edit-input{width:100%;min-height:50px;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.15);border-radius:6px;color:#fff;font-size:11px;padding:8px;resize:vertical;font-family:monospace;line-height:1.4}
-.xb-nd-edit-input:focus{border-color:rgba(212,165,116,0.5);outline:none}
-.xb-nd-edit-input.scene{border-color:rgba(212,165,116,0.3)}
-.xb-nd-edit-input.char{border-color:rgba(147,197,253,0.3)}
 `;
     document.head.appendChild(style);
 }
@@ -493,11 +418,6 @@ function syncOverlayFrameLayout() {
 
 function createPlaceholder(slotId) { return `[image:${slotId}]`; }
 
-async function persistChatSilently() {
-    const ctx = getContext();
-    if (!ctx?.saveChat) return;
-    await Promise.resolve(ctx.saveChat());
-}
 
 async function clearNovelDrawSavedEntry(messageId, slotId) {
     return clearDrawSavedEntry(messageId, slotId);
@@ -609,32 +529,32 @@ function insertPreviewIntoRenderedMessage({ messageId, slotId, html }) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // 中止分两种，绝不能混为一谈：
-// - reason 'user'：用户亲手停的（停止键、Escape、面板取消）。只有这一种才允许把取消
+// - reason 'user'：用户明确取消图片任务。文字停止键和 Escape 不绑定图片取消；只有这一种才允许把取消
 //   传导到后端，删掉一个已经付过钱的任务。
 // - 其它 reason：模块卸载、聊天切换这类生命周期中止。前端必须停手，但后端任务要留着，
 //   靠恢复记录在下次打开时接回——否则「重载一次扩展」就等于烧掉一批图。
-function cancelPendingDrawRun(messageId) {
+function cancelPendingDrawRun(messageId, target) {
     // Draw Run 归属于当前 swipe。用户在任务期间切换图片 Provider 后，
     // 新 Provider 的按钮仍要能取消这一个既有任务。
-    if (!hasPendingDrawRun(messageId)) return false;
-    void cancelPendingDrawRuns(messageId).catch((error) => {
+    if (!target.entries.length) return false;
+    void cancelPendingDrawRuns(messageId, { ctx: target.ctx, target }).catch((error) => {
         console.error('[NovelDraw] 后台 Draw Run 取消失败:', error);
         toastr.error(error?.message || '后台画图取消失败，请稍后重试', '小白X画图');
     });
     return true;
 }
 
-function abortGeneration(messageId = null, { reason = 'user' } = {}) {
+function abortGeneration(messageId = null, { reason = 'user', target = captureDrawCancellationTarget(messageId) } = {}) {
     if (messageId !== null && messageId !== undefined) {
-        const job = generationJobs.get(String(messageId));
+        const jobs = getFloorImageJobs(generationJobs, getContext(), messageId, target);
         let aborted = false;
-        if (job) {
+        for (const job of jobs) {
             job.abortReason ||= reason;
             if (reason === 'user') job.backendCancel.abort();
             job.controller.abort();
             aborted = true;
         }
-        if (reason === 'user' && cancelPendingDrawRun(messageId)) aborted = true;
+        if (reason === 'user' && cancelPendingDrawRun(messageId, target)) aborted = true;
         return aborted;
     }
 
@@ -650,47 +570,40 @@ function abortGeneration(messageId = null, { reason = 'user' } = {}) {
 
 function isGenerating(messageId = null) {
     if (messageId !== null && messageId !== undefined) {
-        const job = generationJobs.get(String(messageId));
-        return Boolean(job && job.chatId === String(getContext()?.chatId || ''));
+        const job = getFloorImageJob(generationJobs, getContext(), messageId);
+        return Boolean(job);
     }
     return autoBusy || generationJobs.size > 0;
 }
 
 export function getGenerationPhase(messageId) {
-    const job = generationJobs.get(String(messageId));
-    if (!job || job.chatId !== String(getContext()?.chatId || '')) return null;
-    return job.phase;
+    const job = getFloorImageJob(generationJobs, getContext(), messageId);
+    return getFloorImagePhase(job);
+}
+
+export function getGenerationState(messageId) {
+    return getFloorImageState(generationJobs, getContext(), messageId);
 }
 
 function hasGenerationJob(messageId) {
     return isGenerating(messageId);
 }
 
-function createGenerationJob(messageId) {
-    const key = String(messageId);
-    if (generationJobs.has(key)) {
-        throw new NovelDrawError('该楼层已有任务进行中', ErrorType.UNKNOWN);
-    }
-
-    const job = {
-        key,
-        chatId: String(getContext()?.chatId || ''),
+function createGenerationJob(messageId, options) {
+    const job = acquireFloorImageJob(generationJobs, getContext(), messageId, () => ({
         phase: 'starting',
         messageId,
         controller: new AbortController(),
         backendCancel: new AbortController(),
         abortReason: null,
         createdAt: Date.now(),
-    };
-    generationJobs.set(key, job);
+    }), options);
     generationJobSignals.set(job.controller.signal, job);
     return job;
 }
 
 function releaseGenerationJob(job) {
-    if (job && generationJobs.get(job.key) === job) {
-        generationJobs.delete(job.key);
-    }
+    releaseFloorImageJob(generationJobs, job);
 }
 
 function enqueueImageRequest(run, options = {}) {
@@ -735,6 +648,10 @@ function classifyError(e) {
 }
 
 function parseApiError(status, text, fallbackType = ErrorType.UNKNOWN) {
+    return imageHttpFailure(describeApiError(status, text, fallbackType), status);
+}
+
+function describeApiError(status, text, fallbackType) {
     switch (status) {
         case 401: return new NovelDrawError('API Key 无效', ErrorType.AUTH);
         case 402: return new NovelDrawError('Anlas 不足', ErrorType.QUOTA);
@@ -749,6 +666,12 @@ function parseApiError(status, text, fallbackType = ErrorType.UNKNOWN) {
 }
 
 function handleFetchError(e) {
+    const normalized = normalizeFetchError(e);
+    if (e.imageRequestOutcome) normalized.imageRequestOutcome = e.imageRequestOutcome;
+    return normalized;
+}
+
+function normalizeFetchError(e) {
     if (e.name === 'AbortError') return new NovelDrawError('超时', ErrorType.TIMEOUT);
     if (e instanceof NovelV5RequestError) return new NovelDrawError(e.message, ErrorType.REQUEST_CONFIG);
     if (e instanceof NovelImageResponseError) return new NovelDrawError(e.message, ErrorType.PARSE);
@@ -758,7 +681,8 @@ function handleFetchError(e) {
             : e.code === 'V5_STREAM_READ_FAILED'
                 ? ErrorType.NETWORK
                 : ErrorType.PARSE;
-        return new NovelDrawError(e.message, type);
+        const error = new NovelDrawError(e.message, type);
+        return e.code === 'V5_PROVIDER_ERROR' ? withImageRequestOutcome(error, ImageRequestOutcome.REJECTED) : error;
     }
     if (e.message?.includes('Failed to fetch')) return new NovelDrawError('网络错误', ErrorType.NETWORK);
     if (e instanceof NovelDrawError) return e;
@@ -1456,21 +1380,20 @@ function countFields(char) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // 后端发送：前端负责解析完整端点，ST server plugin 只代发并返回 base64。
-async function generateViaBackend({ url, legacyBaseUrl, apiKey, insecure, payload, signal, timeout }) {
+async function generateViaBackend({ url, legacyBaseUrl, apiKey, insecure, payload, signal, timeout, attempt }) {
     let res;
     try {
-        const request = endpoint => fetch(endpoint, {
-            method: 'POST',
-            headers: getRequestHeaders(),
-            signal,
-            body: JSON.stringify({
-                url: endpoint === NAI_BACKEND_GENERATE ? legacyBaseUrl : url,
-                key: apiKey,
-                insecure: !!insecure,
-                payload,
-                timeout,
-            }),
-        });
+        const request = endpoint => {
+            const body = JSON.stringify({ url: endpoint === NAI_BACKEND_GENERATE ? legacyBaseUrl : url,
+                key: apiKey, insecure: !!insecure, payload, timeout });
+            attempt.submit();
+            return fetch(endpoint, {
+                method: 'POST',
+                headers: getRequestHeaders(),
+                signal,
+                body,
+            });
+        };
         res = await request(NAI_BACKEND_GENERATE_V2);
         // Compatibility with the upstream-released v1.0.1 server plugin.
         // Remove this fallback when that public backend API is retired.
@@ -1483,7 +1406,7 @@ async function generateViaBackend({ url, legacyBaseUrl, apiKey, insecure, payloa
         throw new NovelDrawError('后端代发失败（未安装 littlewhitebox-image-jobs 插件或 SillyTavern 未开启 server plugins）', ErrorType.NETWORK);
     }
     if (res.status === 404) {
-        throw new NovelDrawError('后端端点不存在：请安装 plugins/littlewhitebox-image-jobs 并在 config.yaml 开启 enableServerPlugins 后重启酒馆', ErrorType.NETWORK);
+        throw imageHttpFailure(new NovelDrawError('后端端点不存在：请安装 plugins/littlewhitebox-image-jobs 并在 config.yaml 开启 enableServerPlugins 后重启酒馆', ErrorType.NETWORK), 404);
     }
     if (!res.ok) {
         throw parseApiError(res.status, await res.text().catch(() => ''));
@@ -1505,24 +1428,26 @@ async function generateViaBackend({ url, legacyBaseUrl, apiKey, insecure, payloa
     return formatImageBase64(data.base64, data.mime);
 }
 
-async function generateV5ViaBackend({ url, apiKey, insecure, payload, signal, timeout }) {
+async function generateV5ViaBackend({ url, apiKey, insecure, payload, signal, timeout, attempt }) {
     let response;
     try {
+        const body = JSON.stringify({ url, key: apiKey, insecure: !!insecure, payload, timeout });
+        attempt.submit();
         response = await fetch(NAI_BACKEND_GENERATE_STREAM, {
             method: 'POST',
             headers: getRequestHeaders(),
             signal,
-            body: JSON.stringify({ url, key: apiKey, insecure: !!insecure, payload, timeout }),
+            body,
         });
     } catch (error) {
         if (error?.name === 'AbortError') throw error;
         throw new NovelDrawError('V5 后端代发失败，请检查 littlewhitebox-image-jobs 插件', ErrorType.NETWORK);
     }
     if (response.status === 404) {
-        throw new NovelDrawError(
+        throw imageHttpFailure(new NovelDrawError(
             `V5 后端端点不存在：请安装当前 littlewhitebox-image-jobs（兼容后端最低 v${NAI_BACKEND_V5_MIN_VERSION}）`,
             ErrorType.NETWORK,
-        );
+        ), 404);
     }
     if (!response.ok) {
         throw parseApiError(response.status, await readNovelV5ErrorText(response), ErrorType.PROVIDER);
@@ -1693,6 +1618,7 @@ function prepareNovelImageRequest(
 }
 
 async function executePreparedNovelRequest(prepared, requestConfig, signal) {
+    const attempt = createImageRequestAttempt();
     const controller = new AbortController();
     const forwardAbort = () => controller.abort();
     signal?.addEventListener('abort', forwardAbort, { once: true });
@@ -1706,6 +1632,7 @@ async function executePreparedNovelRequest(prepared, requestConfig, signal) {
             if (prepared.isV5) {
                 await assertV5BackendCapability(controller.signal);
                 const response = await generateV5ViaBackend({
+                    attempt,
                     url: prepared.apiUrl,
                     apiKey: requestConfig.apiKey,
                     insecure: requestConfig.insecureTLS,
@@ -1722,6 +1649,7 @@ async function executePreparedNovelRequest(prepared, requestConfig, signal) {
                 return imageBytesToBase64(image);
             }
             const base64 = await generateViaBackend({
+                attempt,
                 url: prepared.apiUrl,
                 legacyBaseUrl: prepared.legacyBaseUrl,
                 apiKey: requestConfig.apiKey,
@@ -1738,6 +1666,7 @@ async function executePreparedNovelRequest(prepared, requestConfig, signal) {
         if (prepared.isV5) {
             body.append('request', new Blob([JSON.stringify(prepared.payload)], { type: 'application/json' }), 'blob');
         }
+        attempt.submit();
         const response = await fetch(prepared.apiUrl, {
             method: 'POST',
             headers: {
@@ -1767,8 +1696,7 @@ async function executePreparedNovelRequest(prepared, requestConfig, signal) {
         console.log(`[NovelDraw] 完成 ${Date.now() - startedAt}ms`);
         return base64;
     } catch (error) {
-        if (signal?.aborted) throw new NovelDrawError('已取消', ErrorType.ABORTED);
-        throw handleFetchError(error);
+        throw attempt.failure(handleFetchError(error));
     } finally {
         clearTimeout(timeoutId);
         signal?.removeEventListener('abort', forwardAbort);
@@ -1800,6 +1728,7 @@ async function runNovelImageBatch({
     onStateChange,
     onItemReady,
     onItemSettled,
+    onItemStarting,
 }) {
     if (!Array.isArray(requests) || requests.length === 0) return { mode: 'empty', outcomes: [] };
     const settings = getRuntimeSettings();
@@ -1895,10 +1824,10 @@ async function runNovelImageBatch({
                 cancelSignal: effectiveCancelSignal,
                 detachSignal: detachScope.signal,
                 onStateChange: (state, data) => reportImageBackendJobState(onStateChange, state, data),
-                onItemReady: async ({ index, kind, response }) => {
+                onItemReady: async ({ kind, response, ...details }) => {
                     const base64 = await decodeNovelBackendJobResult({ response, kind });
-                    await onItemReady?.({ index, base64 });
-                    outcomes[index] = { state: 'ready', base64 };
+                    await onItemReady?.({ ...details, base64 });
+                    outcomes[details.index] = { state: 'ready', base64 };
                 },
                 onItemSettled: async (item) => {
                     // 早先已交付并 ACK 过的项是成功事实，绝不能触发失败 UI；
@@ -1963,7 +1892,10 @@ async function runNovelImageBatch({
         }
         try {
             const base64 = await enqueueImageRequest(
-                () => executePreparedNovelRequest(prepared[index], requestConfig, signal),
+                async () => {
+                    if (await onItemStarting?.({ index }) === false) return null;
+                    return executePreparedNovelRequest(prepared[index], requestConfig, signal);
+                },
                 {
                     signal,
                     batchKey: queueBatch,
@@ -1980,12 +1912,11 @@ async function runNovelImageBatch({
                     },
                 },
             );
+            if (base64 === null) continue;
             await onItemReady?.({ index, base64 });
             outcomes[index] = { state: 'ready', base64 };
         } catch (error) {
-            const normalized = signal?.aborted
-                ? new NovelDrawError('已取消', ErrorType.ABORTED)
-                : handleFetchError(error);
+            const normalized = handleFetchError(error);
             const state = signal?.aborted ? 'cancelled' : 'failed';
             outcomes[index] = { state, error: normalized };
             await onItemSettled?.({ index, state, error: normalized, source: 'frontend' });
@@ -2019,76 +1950,7 @@ async function generateNovelImage({ scene, characterPrompts, negativePrompt, par
 // 图片渲染
 // ═══════════════════════════════════════════════════════════════════════════
 
-function buildImageHtml({ slotId, imgId, url, tags, positive, messageId, state = ImageState.PREVIEW, historyCount = 1, currentIndex = 0 }) {
-    const escapedTags = escapeHtml(tags);
-    const escapedPositive = escapeHtml(positive);
-    const isPreview = state === ImageState.PREVIEW;
-    const isBusy = state === ImageState.SAVING || state === ImageState.REFRESHING;
 
-    let indicator = '';
-    if (state === ImageState.SAVING) indicator = '<div class="xb-nd-indicator">💾 保存中...</div>';
-    else if (state === ImageState.REFRESHING) indicator = '<div class="xb-nd-indicator"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 生成中...</div>';
-
-    const border = isPreview ? 'border:1px dashed rgba(255,152,0,0.35);' : '';
-    const lazyAttr = url.startsWith('data:') ? '' : 'loading="lazy"';
-    const displayVersion = historyCount - currentIndex;
-
-    const navPill = `<div class="xb-nd-nav-pill" data-total="${historyCount}" data-current="${currentIndex}">
-        <button class="xb-nd-nav-arrow" data-action="nav-prev" title="上一版本" ${currentIndex >= historyCount - 1 ? 'disabled' : ''}>‹</button>
-        <span class="xb-nd-nav-text">${displayVersion} / ${historyCount}</span>
-        <button class="xb-nd-nav-arrow" data-action="nav-next" title="${currentIndex === 0 ? '重新生成' : '下一版本'}">›</button>
-    </div>`;
-    const menuBusy = isBusy ? ' busy' : '';
-    const menuHtml = `<div class="xb-nd-menu-wrap${menuBusy}">
-        <button class="xb-nd-menu-trigger" data-action="toggle-menu" title="操作">⋮</button>
-        <div class="xb-nd-dropdown">
-            ${isPreview ? '<button data-action="save-image" title="保存到服务器">⬇</button>' : ''}
-            <button data-action="refresh-image" title="重新生成">⟳</button>
-            <button data-action="edit-tags" title="编辑TAG">✐️</button>
-            <button data-action="delete-image" title="删除">✕</button>
-        </div>
-    </div>`;
-
-    return `<div class="xb-nd-img ${isBusy ? 'busy' : ''}" data-slot-id="${slotId}" data-img-id="${imgId}" data-tags="${escapedTags}" data-positive="${escapedPositive}" data-mesid="${messageId}" data-state="${state}" data-current-index="${currentIndex}" data-history-count="${historyCount}" style="margin:0.8em auto;position:relative;display:block;width:fit-content;max-width:100%;${border}border-radius:14px;padding:4px;">
-${indicator}
-<div class="xb-nd-img-wrap" data-total="${historyCount}">
-    <img src="${escapeHtml(url)}" style="max-width:100%;width:auto;height:auto;border-radius:10px;cursor:pointer;box-shadow:0 3px 15px rgba(0,0,0,0.25);${isBusy ? 'opacity:0.5;' : ''}" data-action="open-gallery" ${lazyAttr}>
-    ${navPill}
-</div>
-${menuHtml}
-<div class="xb-nd-edit" style="display:none;position:absolute;bottom:8px;left:8px;right:8px;background:rgba(0,0,0,0.9);border-radius:10px;padding:10px;text-align:left;z-index:15;">
-    <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:6px;">编辑 TAG（场景描述）</div>
-    <textarea class="xb-nd-edit-input">${escapedTags}</textarea>
-    <div style="display:flex;gap:6px;margin-top:8px;">
-        <button data-action="save-tags" style="flex:1;padding:6px 12px;background:rgba(212,165,116,0.3);border:1px solid rgba(212,165,116,0.5);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">保存 TAG</button>
-        <button data-action="cancel-edit" style="padding:6px 12px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">取消</button>
-    </div>
-</div>
-</div>`;
-}
-
-function buildFailedPlaceholderHtml({ slotId, messageId, tags, positive, errorType, errorMessage }) {
-    const escapedTags = escapeHtml(tags);
-    const escapedPositive = escapeHtml(positive);
-    return `<div class="xb-nd-img" data-slot-id="${slotId}" data-tags="${escapedTags}" data-positive="${escapedPositive}" data-mesid="${messageId}" data-state="failed" style="margin:0.8em 0;text-align:center;position:relative;display:block;width:100%;border:1px dashed rgba(248,113,113,0.5);border-radius:14px;padding:20px;background:rgba(248,113,113,0.05);">
-<div class="xb-nd-failed-icon">⚠️</div>
-<div class="xb-nd-failed-title">${escapeHtml(errorType || '生成失败')}</div>
-<div class="xb-nd-failed-desc">${escapeHtml(errorMessage || '点击重试')}</div>
-<div class="xb-nd-failed-btns">
-    <button class="xb-nd-retry-btn" data-action="retry-image">⟳ 重新生成</button>
-    <button class="xb-nd-edit-btn" data-action="edit-tags">✐ 编辑TAG</button>
-    <button class="xb-nd-remove-btn" data-action="remove-placeholder">✕ 移除</button>
-</div>
-<div class="xb-nd-edit" style="display:none;margin-top:12px;text-align:left;">
-    <div style="font-size:11px;color:rgba(255,255,255,0.6);margin-bottom:6px;">编辑 TAG（场景描述）</div>
-    <textarea class="xb-nd-edit-input">${escapedTags}</textarea>
-    <div style="display:flex;gap:6px;margin-top:8px;">
-        <button data-action="save-tags-retry" style="flex:1;padding:6px 12px;background:rgba(212,165,116,0.3);border:1px solid rgba(212,165,116,0.5);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">保存并重试</button>
-        <button data-action="cancel-edit" style="padding:6px 12px;background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);border-radius:6px;color:#fff;font-size:12px;cursor:pointer;">取消</button>
-    </div>
-</div>
-</div>`;
-}
 
 function setImageState(container, state) {
     container.dataset.state = state;
@@ -2130,7 +1992,7 @@ async function navigateToImage(container, targetIndex) {
     if (targetIndex < 0 || targetIndex >= historyCount || targetIndex === currentIndex) return;
 
     const previews = await getPreviewsBySlot(slotId);
-    const successPreviews = previews.filter(p => p.status !== 'failed' && (p.base64 || p.savedUrl));
+    const successPreviews = previews.filter(hasPreviewImage);
     if (targetIndex >= successPreviews.length) return;
 
     const targetPreview = successPreviews[targetIndex];
@@ -2297,6 +2159,9 @@ async function handleDelegatedClick(e) {
         case 'retry-image':
             await retryFailedImage(container);
             break;
+        case 'restore-image':
+            await restoreImageCard(container);
+            break;
         case 'save-tags-retry':
             await saveTagsAndRetry(container);
             break;
@@ -2405,21 +2270,14 @@ async function toggleEditPanel(container, show) {
 
     if (!editPanel) return;
 
-    const origLabel = Array.from(editPanel.children).find(el =>
-        el.tagName === 'DIV' && el.textContent.includes('编辑 TAG')
-    );
+    const origLabel = editPanel.querySelector('[data-draw-edit-label]');
     const origTextarea = Array.from(editPanel.children).find(el =>
         el.tagName === 'TEXTAREA' && !el.dataset.type
     );
 
     if (show) {
-        const imgId = container.dataset.imgId;
-        const currentTags = container.dataset.tags || '';
-
-        let preview = null;
-        if (imgId) {
-            try { preview = await getPreview(imgId); } catch {}
-        }
+        const preview = await getCardPreview({ imgId: container.dataset.imgId, slotId: container.dataset.slotId });
+        const currentTags = preview?.tags ?? container.dataset.tags ?? '';
 
         if (origLabel) origLabel.style.display = 'none';
         if (origTextarea) origTextarea.style.display = 'none';
@@ -2479,189 +2337,25 @@ async function toggleEditPanel(container, show) {
 }
 
 async function saveEditedTags(container) {
-    const imgId = container.dataset.imgId;
-    const slotId = container.dataset.slotId;
-    const messageId = parseInt(container.dataset.mesid);
-    const editPanel = container.querySelector('.xb-nd-edit');
-
-    if (!editPanel) return;
-
-    const sceneInput = editPanel.querySelector('textarea[data-type="scene"]');
-    if (!sceneInput) return;
-
-    const newSceneTags = sceneInput.value.trim();
-    if (!newSceneTags) {
-        alert('场景 TAG 不能为空');
-        return;
-    }
-
-    let originalPreview = null;
     try {
-        originalPreview = await getPreview(imgId);
-    } catch (e) {
-        console.error('[NovelDraw] 获取原始预览失败:', e);
-    }
-
-    const charInputs = editPanel.querySelectorAll('textarea[data-type="char"]');
-    let newCharPrompts = null;
-
-    if (charInputs.length > 0 && originalPreview?.characterPrompts?.length > 0) {
-        newCharPrompts = [];
-        charInputs.forEach(input => {
-            const index = parseInt(input.dataset.index);
-            const newPrompt = input.value.trim();
-
-            if (originalPreview.characterPrompts[index]) {
-                newCharPrompts.push({
-                    ...originalPreview.characterPrompts[index],
-                    prompt: newPrompt
-                });
-            }
+        await persistCardTagEdits(container, (tags, characters, record) => {
+            const preset = getActiveParamsPreset();
+            return { positive: joinTags(preset?.positivePrefix, tags),
+                negativePrompt: record?.negativePrompt ?? preset?.negativePrefix ?? '' };
         });
+        toggleEditPanel(container, false);
+        showToast(DRAW_SLOT_COPY.tagSaved);
+        return true;
+    } catch (error) {
+        console.error(DRAW_SLOT_COPY.tagSaveFailed, error);
+        showToast(error.message, 'error');
+        return false;
     }
-
-    container.dataset.tags = newSceneTags;
-
-    if (originalPreview) {
-        const preset = getActiveParamsPreset();
-        const newPositive = joinTags(preset?.positivePrefix, newSceneTags);
-
-        await storePreview({
-            imgId,
-            slotId: originalPreview.slotId || slotId,
-            messageId,
-            base64: originalPreview.base64,
-            tags: newSceneTags,
-            positive: newPositive,
-            savedUrl: originalPreview.savedUrl,
-            characterPrompts: newCharPrompts || originalPreview.characterPrompts,
-            negativePrompt: originalPreview.negativePrompt,
-        });
-
-        if (originalPreview.savedUrl) {
-            await syncNovelDrawSavedFromPreview(messageId, { ...originalPreview, tags: newSceneTags, positive: newPositive }, { slotId: originalPreview.slotId || slotId });
-        }
-
-        container.dataset.positive = escapeHtml(newPositive);
-    }
-
-    toggleEditPanel(container, false);
-
-    const charCount = newCharPrompts?.length || 0;
-    const msg = charCount > 0
-        ? `TAG 已保存 (场景 + ${charCount} 个角色)`
-        : 'TAG 已保存';
-    showToast(msg);
 }
 
 async function refreshSingleImage(container) {
-    const tags = container.dataset.tags;
-    const currentState = container.dataset.state;
-    const slotId = container.dataset.slotId;
-    const messageId = parseInt(container.dataset.mesid);
-    const currentImgId = container.dataset.imgId;
-    const sourceContext = getContext();
-    const galleryMeta = {
-        chatId: String(sourceContext.chatId || sourceContext.characterId || 'unknown'),
-        characterName: getChatCharacterName(),
-    };
-    const sourceMessage = sourceContext.chat?.[messageId];
-    let job = null;
-
-    if (!tags || currentState === ImageState.SAVING || currentState === ImageState.REFRESHING || !slotId) return;
-
-    toggleEditPanel(container, false);
-    setImageState(container, ImageState.REFRESHING);
-
-    try {
-        job = createGenerationJob(`slot:${slotId}`);
-        const preset = getActiveParamsPreset();
-        const settings = getRuntimeSettings();
-
-        let characterPrompts = null;
-        let negativePrompt = preset.negativePrefix || '';
-
-        if (currentImgId) {
-            const existingPreview = await getPreview(currentImgId);
-            if (existingPreview?.chatId) galleryMeta.chatId = existingPreview.chatId;
-            if (existingPreview?.characterName) galleryMeta.characterName = existingPreview.characterName;
-            if (existingPreview?.characterPrompts?.length) {
-                characterPrompts = existingPreview.characterPrompts;
-            }
-            if (existingPreview?.negativePrompt) {
-                negativePrompt = existingPreview.negativePrompt;
-            }
-        }
-
-        if (!characterPrompts) {
-            const message = sourceContext.chat?.[messageId];
-            const presentCharacters = detectPresentCharacters(String(message?.mes || ''), settings.characterTags || []);
-            characterPrompts = presentCharacters.map(c => ({
-                prompt: buildKnownCharacterPrompt(c),
-                uc: c.negativeTags || '',
-                center: { x: 0.5, y: 0.5 }
-            }));
-        }
-
-        const scene = joinTags(preset.positivePrefix, tags);
-
-        const base64 = await generateNovelImage({
-            scene,
-            characterPrompts,
-            negativePrompt,
-            params: preset.params || {},
-            signal: job.controller.signal,
-        });
-
-        const newImgId = generateImgId();
-        await storePreview({
-            ...galleryMeta,
-            imgId: newImgId,
-            slotId,
-            messageId,
-            base64,
-            tags,
-            positive: scene,
-            characterPrompts,
-            negativePrompt,
-        });
-        await setSlotSelection(slotId, newImgId);
-        const currentContext = getContext();
-        const stillAttached = currentContext.chatId === sourceContext.chatId
-            && currentContext.chat?.[messageId] === sourceMessage;
-        if (!stillAttached) {
-            showToast('聊天已切换，新图片已保留在画廊中', 'info', 5000);
-            return;
-        }
-        await clearNovelDrawSavedEntry(messageId, slotId).catch(() => {});
-
-        const previews = await getPreviewsBySlot(slotId);
-        const successPreviews = previews.filter(p => p.status !== 'failed' && (p.base64 || p.savedUrl));
-        const activeContainer = getMesTextElement(messageId)?.querySelector(buildDrawSlotSelector(slotId));
-        if (activeContainer) {
-            activeContainer.querySelector('img').src = getPreviewDisplayUrl({ imgId: newImgId, base64 });
-            activeContainer.dataset.imgId = newImgId;
-            activeContainer.dataset.positive = escapeHtml(scene);
-            activeContainer.dataset.currentIndex = '0';
-            activeContainer.dataset.historyCount = String(successPreviews.length);
-            setImageState(activeContainer, ImageState.PREVIEW);
-            updateNavControls(activeContainer, 0, successPreviews.length);
-        }
-
-        showToast(`图片已刷新（共 ${successPreviews.length} 个版本）`);
-    } catch (e) {
-        console.error('[NovelDraw] 刷新失败:', e);
-        const currentContext = getContext();
-        const stillAttached = currentContext.chatId === sourceContext.chatId
-            && currentContext.chat?.[messageId] === sourceMessage;
-        if (stillAttached) {
-            alert('刷新失败: ' + e.message);
-            const activeContainer = getMesTextElement(messageId)?.querySelector(buildDrawSlotSelector(slotId));
-            if (activeContainer) setImageState(activeContainer, ImageState.PREVIEW);
-        }
-    } finally {
-        releaseGenerationJob(job);
-    }
+    try { await redrawImageCard("novelai", container); }
+    catch (error) { console.error(DRAW_SLOT_COPY.redrawFailed, error); globalThis.toastr?.error(error.message); }
 }
 
 async function saveSingleImage(container) {
@@ -2704,7 +2398,7 @@ async function deleteCurrentImage(container) {
     try {
         await deletePreview(imgId);
         const previews = await getPreviewsBySlot(slotId);
-        const successPreviews = previews.filter(p => p.status !== 'failed' && (p.base64 || p.savedUrl));
+        const successPreviews = previews.filter(hasPreviewImage);
 
         if (successPreviews.length > 0) {
             const latest = successPreviews[0];
@@ -2742,154 +2436,17 @@ async function deleteCurrentImage(container) {
 }
 
 async function retryFailedImage(container) {
-    const slotId = container.dataset.slotId;
-    const messageId = parseInt(container.dataset.mesid);
-    const tags = container.dataset.tags;
-    let latestFailed = null;
-    const sourceContext = getContext();
-    const sourceMessage = sourceContext.chat?.[messageId];
-    const galleryMeta = {
-        chatId: String(sourceContext.chatId || sourceContext.characterId || 'unknown'),
-        characterName: getChatCharacterName(),
-    };
-    let job = null;
-    if (!slotId) return;
-
-    // Template-only UI markup.
-    // eslint-disable-next-line no-unsanitized/property
-    container.innerHTML = `<div style="padding:30px;text-align:center;color:rgba(255,255,255,0.6);"><div style="font-size:24px;margin-bottom:8px;">🎨</div><div>生成中...</div></div>`;
-
-    try {
-        job = createGenerationJob(`slot:${slotId}`);
-        const preset = getActiveParamsPreset();
-        const settings = getRuntimeSettings();
-        const scene = tags ? joinTags(preset.positivePrefix, tags) : preset.positivePrefix;
-        const negativePrompt = preset.negativePrefix || '';
-
-        let characterPrompts = null;
-        const failedPreviews = await getPreviewsBySlot(slotId);
-        latestFailed = failedPreviews.find(p => p.status === 'failed');
-        if (latestFailed?.chatId) galleryMeta.chatId = latestFailed.chatId;
-        if (latestFailed?.characterName) galleryMeta.characterName = latestFailed.characterName;
-        if (latestFailed?.characterPrompts?.length) {
-            characterPrompts = latestFailed.characterPrompts;
-        }
-
-        if (!characterPrompts) {
-            const message = sourceContext.chat?.[messageId];
-            const presentCharacters = detectPresentCharacters(String(message?.mes || ''), settings.characterTags || []);
-            characterPrompts = presentCharacters.map(c => ({
-                prompt: buildKnownCharacterPrompt(c),
-                uc: c.negativeTags || '',
-                center: { x: 0.5, y: 0.5 }
-            }));
-        }
-
-        const base64 = await generateNovelImage({
-            scene,
-            characterPrompts,
-            negativePrompt,
-            params: preset.params || {},
-            signal: job.controller.signal,
-        });
-
-        const newImgId = generateImgId();
-        await storePreview({
-            ...galleryMeta,
-            imgId: newImgId,
-            slotId,
-            messageId,
-            base64,
-            tags: tags || '',
-            positive: scene,
-            characterPrompts,
-            negativePrompt,
-        });
-        await deleteFailedRecordsForSlot(slotId);
-        await setSlotSelection(slotId, newImgId);
-
-        const currentContext = getContext();
-        const stillAttached = currentContext.chatId === sourceContext.chatId
-            && currentContext.chat?.[messageId] === sourceMessage;
-        if (!stillAttached) {
-            showToast('聊天已切换，新图片已保留在画廊中', 'info', 5000);
-            return;
-        }
-
-        const imgHtml = buildImageHtml({
-            slotId,
-            imgId: newImgId,
-            url: getPreviewDisplayUrl({ imgId: newImgId, base64 }),
-            tags: tags || '',
-            positive: scene,
-            messageId,
-            state: ImageState.PREVIEW,
-            historyCount: 1,
-            currentIndex: 0
-        });
-        const activeContainer = getMesTextElement(messageId)?.querySelector(buildDrawSlotSelector(slotId));
-        // Template-only UI markup built locally.
-        // eslint-disable-next-line no-unsanitized/property
-        if (activeContainer) activeContainer.outerHTML = imgHtml;
-        showToast('图片生成成功！');
-    } catch (e) {
-        console.error('[NovelDraw] 重试失败:', e);
-        const errorType = classifyError(e);
-        await storeFailedPlaceholder({
-            ...galleryMeta,
-            slotId,
-            messageId,
-            tags: tags || '',
-            positive: container.dataset.positive || '',
-            errorType: errorType.code,
-            errorMessage: errorType.desc
-        });
-        const currentContext = getContext();
-        const stillAttached = currentContext.chatId === sourceContext.chatId
-            && currentContext.chat?.[messageId] === sourceMessage;
-        if (!stillAttached) return;
-        const activeContainer = getMesTextElement(messageId)?.querySelector(buildDrawSlotSelector(slotId));
-        // Template-only UI markup built locally.
-        // eslint-disable-next-line no-unsanitized/property
-        if (activeContainer) activeContainer.outerHTML = buildFailedPlaceholderHtml({
-            slotId,
-            messageId,
-            tags: tags || '',
-            positive: container.dataset.positive || '',
-            errorType: errorType.label,
-            errorMessage: errorType.desc
-        });
-        showToast(`重试失败: ${errorType.desc}`, 'error');
-    } finally {
-        releaseGenerationJob(job);
-    }
+    await refreshSingleImage(container);
 }
 
 async function saveTagsAndRetry(container) {
-    const textarea = container.querySelector('.xb-nd-edit-input');
-    if (!textarea) return;
-    const newTags = textarea.value.trim();
-    if (!newTags) { alert('TAG 不能为空'); return; }
-    container.dataset.tags = newTags;
-    const preset = getActiveParamsPreset();
-    container.dataset.positive = escapeHtml(joinTags(preset?.positivePrefix, newTags));
-    toggleEditPanel(container, false);
-    await retryFailedImage(container);
+    if (await saveEditedTags(container)) await retryFailedImage(container);
 }
 
 async function removePlaceholder(container) {
-    const slotId = container.dataset.slotId;
-    const messageId = parseInt(container.dataset.mesid);
-    if (!confirm('确定移除此占位符？')) return;
-    await deleteFailedRecordsForSlot(slotId);
-    await clearSlotSelection(slotId);
-    await clearNovelDrawSavedEntry(messageId, slotId);
-    const ctx = getContext();
-    const message = ctx.chat?.[messageId];
-    if (message) message.mes = removeSceneSlotPlaceholders(message.mes, [slotId]);
-    container.remove();
-    await persistChatSilently();
-    showToast('占位符已移除');
+    if (!confirm(DRAW_SLOT_COPY.removeConfirm)) return;
+    try { await removeChatImageSlot(container); }
+    catch (error) { console.error(DRAW_SLOT_COPY.removeFailed, error); globalThis.toastr?.error(error.message); }
 }
 
 function notifyNovelDrawAfterAi(data, source) {
@@ -3009,12 +2566,6 @@ export async function applyNovelDrawRunAutoLearn(record = {}) {
     }
 }
 
-function notifyDetachedGeneration(successCount) {
-    const count = Math.max(0, Number(successCount) || 0);
-    if (count > 0) {
-        toastr.info(`聊天或楼层已经变化，已生成 ${count} 张图片但未写入原楼层；可在画图设置的图片管理中查看。`, '小白X画图');
-    }
-}
 
 async function buildNovelScenePlannerOptions({
     sceneSource,
@@ -3067,7 +2618,7 @@ async function generateImagesFromText(options = {}) {
     if (!text.trim()) throw new NovelDrawError('正文内容为空，无法配图', ErrorType.PARSE);
     const galleryMeta = buildTextSourceGalleryMeta(options);
     const messageId = String(options.messageId || galleryMeta.messageId || `text:${Date.now()}`);
-    const job = createGenerationJob(messageId);
+    const job = createGenerationJob(messageId, { scope: 'text' });
     const forwardExternalAbort = () => {
         job.abortReason ||= 'user';
         job.backendCancel.abort();
@@ -3228,25 +2779,52 @@ async function generateImagesFromText(options = {}) {
     }
 }
 
+let preparedImageDispose = null;
+
+async function runPreparedNovelSlots(input) {
+    const { ctx, message, messageId, sourceText, tasks, onStateChange } = input;
+    const job = input.job || createGenerationJob(messageId);
+    try {
+        const settings = input.settings || cloneSettingsObject(getRuntimeSettings());
+        const preset = input.preset || cloneSettingsObject(getActiveParamsPreset());
+        const recipe = createNovelGenerationRecipe({
+            settings,
+            preset,
+            itemCount: tasks.length,
+            resolveForBackend: resolveNovelImageTransport(settings) !== 'frontend',
+        });
+        const { compiledBatch, requests, metadata } = prepareImageInput('novelai', tasks, recipe);
+        job.phase = 'gen';
+        const monitorGeneration = backendJobMonitors.captureGeneration();
+        return await submitPreparedChatImages({
+            ctx, message, messageId, sourceText, tasks, metadata, swipeIndex: input.swipeIndex,
+            nativeMessage: input.nativeMessage, onPrepared: input.onPrepared, placementSource: input.placementSource,
+            backend: resolveNovelImageTransport(settings) === 'backend-job',
+            signal: job.controller.signal, onStateChange, onPlacement: input.onPlacement,
+            run: handlers => runNovelImageBatch({
+                ...handlers, requests, compiledBatch, generationConfig: settings,
+                backendCancelSignal: job.backendCancel.signal, monitorGeneration, queueBatch: job,
+            }),
+        });
+    } finally {
+        if (!input.job) releaseGenerationJob(job);
+    }
+}
+
 async function generateAndInsertImages({
     messageId,
     onStateChange,
-    skipLock = false,
     automatic = false,
 }) {
-    const monitorGeneration = backendJobMonitors.captureGeneration();
-    if (skipLock) {
-        // 兼容旧调用：当前改为 message 级去重 + 图片请求队列，不再使用全局生成锁
-    }
 
     const job = createGenerationJob(messageId);
-    let placementLifecycle = null;
+    onStateChange = observeFloorImageJob(job, { getCurrentContext: getContext, onStateChange, classifyError });
 
     try {
         await loadSettings();
         await loadSharedDrawSettings();
-        const ctx = getContext();
-        const message = ctx.chat?.[messageId];
+        const { ctx, message, messageId: liveId } = resolveFloorImageJobTarget(job, getContext());
+        messageId = liveId;
         if (!message) throw new NovelDrawError('消息不存在', ErrorType.PARSE);
 
         const signal = job.controller.signal;
@@ -3326,565 +2904,14 @@ async function generateAndInsertImages({
 
         await maybeAutoLearnFromTasks(tasks, settings);
 
-        const initialChatId = ctx.chatId;
-        const galleryMeta = {
-            chatId: String(ctx.chatId || ctx.characterId || 'unknown'),
-            characterName: getChatCharacterName(),
-        };
-        if (isMessageBeingEdited(messageId)) {
-            throw new ScenePlacementError('该楼层正在编辑，请保存或取消编辑后再配图。', 'SCENE_MESSAGE_EDITING');
-        }
-        const originalMes = message.mes;
-        const slotIds = tasks.map(() => generateSlotId());
-        const results = new Array(tasks.length);
-        let successCount = 0;
-        const strippedNow = normalizeMessageSceneSourceText(message.mes);
-        assertSceneSourceUnchanged(strippedNow, sceneSource.sourceHash);
-        const plannedMes = insertScenePlacementsPreservingSlots(originalMes, tasks.map((task, index) => ({
-            placement: task.placement,
-            content: createPlaceholder(slotIds[index]),
-        })), { block: true });
 
-        placementLifecycle = {
-            message,
-            originalMes,
-            slotIds,
-            results,
-            getSuccessCount: () => successCount,
-            initialChatId,
-            plannedMes,
-            syncRenderedMessage: null,
-            settled: false,
-            // 占位符是否已经提前持久化进正文。只有后台链路会置位：它必须在 POST 之前
-            // 把槽位落盘，否则刷新回来图有了却无处安放。本地链路一直到最后才写正文。
-            committedEarly: false,
-        };
-
-        // 前端停手 ≠ 取消后端任务。job.controller 一旦 abort，本地循环、DOM 更新全部停下；
-        // 但只有用户亲手取消才允许把取消传导到后端，因为那一步会连带删掉已经生成好的结果。
-        // 聊天切换、正文变化、扩展卸载都只是「这个页面不再照看它了」，任务要继续跑。
-        const { messageFormatting } = await import('../../../../../../../../script.js');
-        const syncRenderedMessage = async (sourceText = plannedMes) => {
-            if (isMessageBeingEdited(messageId)) return;
-            const formatted = messageFormatting(sourceText, message.name, message.is_system, message.is_user, messageId);
-            $(`[mesid="${messageId}"] .mes_text`).html(formatted);
-            await notifyMessageRewritten(messageId);
-        };
-        const renderPendingSlots = () => {
-            const settledSlotIds = new Set(results.filter(Boolean).map((item) => item.slotId));
-            slotIds.forEach((slotId, index) => {
-                if (settledSlotIds.has(slotId)) return;
-                insertPreviewIntoRenderedMessage({
-                    messageId,
-                    slotId,
-                    html: buildPendingImageHtml({
-                        slotId,
-                        messageId,
-                        index: index + 1,
-                        total: slotIds.length,
-                    }),
-                });
-            });
-        };
-        const recoverRenderedSlots = async () => {
-            await syncRenderedMessage();
-            renderPendingSlots();
-            await renderSharedPreviewsForMessage(messageId);
-        };
-        placementLifecycle.syncRenderedMessage = syncRenderedMessage;
-        if (message.mes !== originalMes) {
-            throw new ScenePlacementError('正文在准备插图位置时发生变化，未写入图片。', 'SCENE_SOURCE_CHANGED');
-        }
-        await syncRenderedMessage();
-        renderPendingSlots();
-        await renderSharedPreviewsForMessage(messageId);
-
-        job.phase = 'gen';
-        onStateChange?.('gen', { current: 0, total: tasks.length });
-
-        let requiresFinalDomSync = false;
-        let terminationReason = '';
-        const checkPlacementContext = () => {
-            if (terminationReason) return false;
-            if (!moduleInitialized) {
-                terminationReason = 'detached';
-                job.controller.abort();
-                return false;
-            }
-            const currentCtx = getContext();
-            if (currentCtx.chatId !== initialChatId) {
-                console.warn('[NovelDraw] 聊天已切换，中止生成');
-                terminationReason = 'detached';
-                job.controller.abort();
-                return false;
-            }
-            const currentMsg = currentCtx.chat?.[messageId];
-            if (!placementLifecycle.committedEarly && (!currentMsg || currentMsg !== message)) {
-                console.warn('[NovelDraw] 消息已删除或被替换，中止生成');
-                terminationReason = 'detached';
-                job.controller.abort();
-                return false;
-            }
-            // 正文变化在两条链路上的后果完全不同，所以判断也必须不同。
-            //
-            // 本地链路的占位符还没落盘，最终要拿 originalMes 当基准一次性写进去，正文一变
-            // 这个基准就失效了，只能停手。
-            //
-            // 后台链路的占位符早已落盘：正文里那些槽位是真实存在的，图回来就有地方放。
-            // 此时用户改正文只说明「分析结果和新正文对不上」，不代表他不要这些图；为此
-            // 中止一批已经付过钱的任务是在替他做主。每张图交付前会单独确认自己的槽位还在，
-            // 用户删掉的槽位自然不会被交付，这比整批停手精确得多。
-            if (isMessageBeingEdited(messageId)) {
-                if (!placementLifecycle.committedEarly) {
-                    console.warn('[NovelDraw] 楼层正在编辑，中止生成');
-                    terminationReason = 'source_changed';
-                    job.controller.abort();
-                }
-                return false;
-            }
-            if (!placementLifecycle.committedEarly && message.mes !== originalMes) {
-                console.warn('[NovelDraw] 正文已变化，中止生成');
-                terminationReason = 'source_changed';
-                job.controller.abort();
-                return false;
-            }
-            return true;
-        };
-        const renderSettledSlot = async (slotId, createHtml) => {
-            if (!checkPlacementContext()) return;
-            const target = placementLifecycle.committedEarly
-                ? resolveDeliveryTarget(slotId)
-                : { messageId, isActiveSwipe: true };
-            if (!target?.isActiveSwipe) return;
-            const html = typeof createHtml === 'function' ? createHtml(target.messageId) : createHtml;
-            try {
-                const inserted = insertPreviewIntoRenderedMessage({ messageId: target.messageId, slotId, html });
-                if (!inserted) {
-                    requiresFinalDomSync = true;
-                    if (!placementLifecycle.committedEarly) await recoverRenderedSlots();
-                }
-            } catch (error) {
-                requiresFinalDomSync = true;
-                console.warn('[NovelDraw] 增量渲染失败, 继续生成:', error);
-            }
-        };
-        const compiledBatch = compileNovelScenePlan(
-            tasks,
-            createNovelGenerationRecipe({
-                settings,
-                preset,
-                itemCount: tasks.length,
-                resolveForBackend: resolveNovelImageTransport(settings) !== 'frontend',
-            }),
-        );
-        const batchItems = compiledBatch.artifacts.map(({ task, promptData }, index) => {
-            const { scene, characterPrompts, negativePrompt } = promptData;
-            return {
-                task,
-                slotId: slotIds[index],
-                // imgId 必须在提交之前就分配好：接回时按同一个 imgId 落库，重复交付天然幂等，
-                // 不会因为「已经落过一次」而在画廊里留下两张同样的图。
-                imgId: generateImgId(),
-                scene,
-                characterPrompts,
-                tagsForStore: task.scene,
-                negativePrompt,
-                request: {
-                    scene,
-                    characterPrompts,
-                    negativePrompt,
-                    params: preset.params || {},
-                },
-            };
-        });
-
-        // 后台链路的恢复记录：只记「槽位事实」，不记密钥、不记排版。
-        // 排版是当前正文的属性，刷新后必须重新观察，把它冻在记录里只会覆盖用户后来的编辑。
-        const recoverablePlan = {
-            delivery: {
-                mode: 'slots',
-                chatId: String(initialChatId || ''),
-                messageId: String(messageId),
-            },
-            gallery: { ...galleryMeta, messageId: String(messageId) },
-            items: batchItems.map((item, index) => ({
-                index,
-                slotId: item.slotId,
-                imgId: item.imgId,
-                previewMetadata: {
-                    tags: item.tagsForStore,
-                    positive: item.scene,
-                    characterPrompts: item.characterPrompts,
-                    negativePrompt: item.negativePrompt,
-                },
-            })),
-        };
-
-        // 后台链路提交前的唯一一次正文写入。
-        //
-        // 读取、比对、赋值三步之间不得出现 await：一旦中间让出执行权，用户的编辑就会插在
-        // 「比对通过」和「写入」之间，被我们连带覆盖掉。所以严格 CAS 必须发生在真正持久化
-        // 的这一刻，而不是写之前某个更早的检查点。
-        const commitPlannedPlacements = async () => {
-            const committed = await commitRecoverableScenePlacements({
-                getCurrentChatId: () => getContext().chatId,
-                getCurrentMessage: id => getContext().chat?.[id],
-                expectedChatId: initialChatId,
-                messageId,
-                message,
-                originalText: originalMes,
-                plannedText: plannedMes,
-                slotIds,
-                isEditing: isMessageBeingEdited,
-                persist: persistChatSilently,
-                syncAfterRollback: async (sourceText) => {
-                    await syncRenderedMessage(sourceText);
-                    await renderSharedPreviewsForMessage(messageId);
-                },
-            });
-            if (committed) placementLifecycle.committedEarly = true;
-            return committed;
-        };
-
-        const resolveDeliveryTarget = (slotId) => {
-            const currentCtx = getContext();
-            return requireImageJobDeliveryTarget({
-                currentChatId: currentCtx.chatId,
-                targetChatId: initialChatId,
-                chat: currentCtx.chat,
-                slotId,
-            });
-        };
-        const renderBatchPreviews = async ({ final = false } = {}) => {
-            const currentCtx = getContext();
-            if (String(currentCtx.chatId || '') !== String(initialChatId || '')) return;
-            const messageIds = new Set();
-            for (const slotId of slotIds) {
-                const target = classifyImageJobDeliveryTarget({
-                    currentChatId: currentCtx.chatId,
-                    targetChatId: initialChatId,
-                    chat: currentCtx.chat,
-                    slotId,
-                });
-                if (target.state === ImageJobDeliveryTargetState.ALIVE && target.isActiveSwipe) {
-                    messageIds.add(target.messageId);
-                }
-            }
-            if (messageIds.size === 0) {
-                const currentMessageId = currentCtx.chat?.indexOf(message) ?? -1;
-                if (currentMessageId >= 0) messageIds.add(currentMessageId);
-            }
-            await Promise.all([...messageIds].map(currentMessageId => renderSharedPreviewsForMessage(
-                currentMessageId,
-                final ? { refreshSlotIds: slotIds } : undefined,
-            )));
-        };
-        const renderRemovedTargets = async (targets, removedSlotIds) => {
-            const messageIds = new Set((Array.isArray(targets) ? targets : [])
-                .filter(target => target?.isActiveSwipe)
-                .map(target => target.messageId));
-            await Promise.all([...messageIds].map(targetMessageId => renderSharedPreviewsForMessage(
-                targetMessageId,
-                { refreshSlotIds: removedSlotIds },
-            )));
-        };
-
-        const recordSlotFailure = async (index, error, guard = async () => {}) => {
-            const item = batchItems[index];
-            if (!item || results[index]) return null;
-            console.error(`[NovelDraw] 图${index + 1} 失败:`, error?.message || error);
-            const errorType = classifyError(error);
-            const failedImgId = `failed-${item.imgId}`;
-            const committed = await commitSceneSlotDelivery({
-                committedEarly: placementLifecycle.committedEarly,
-                resolveTarget: () => resolveDeliveryTarget(item.slotId),
-                guard,
-                persist: target => storeFailedPlaceholder({
-                    ...galleryMeta,
-                    imgId: failedImgId,
-                    slotId: item.slotId,
-                    messageId: target?.messageId ?? messageId,
-                    tags: item.tagsForStore,
-                    positive: item.scene,
-                    errorType: errorType.code,
-                    errorMessage: errorType.desc,
-                    characterPrompts: item.characterPrompts,
-                    negativePrompt: item.negativePrompt,
-                }),
-                rollbackPersisted: () => deletePreview(failedImgId),
-                select: () => setSlotSelection(item.slotId, failedImgId),
-                rollbackSelection: () => clearSlotSelection(item.slotId),
-            });
-            if (!committed) return null;
-            results[index] = { slotId: item.slotId, tags: item.tagsForStore, success: false, error: errorType };
-            return errorType;
-        };
-
-        // 后台链路的结算。只有一种情况允许删除槽位：用户亲手取消。
-        //
-        // 失败的槽位要留下可重试的失败卡，还在后台跑的槽位要留着等接回。把它们一起删掉
-        // 才是最糟的选择——用户既看不到失败原因，也再也接不回那些已经付过钱的图。
-        const settleBackendPlacements = async ({ error, guard = async () => {} } = {}) => {
-            const unfinished = slotIds.filter((slotId, index) => !results[index]);
-            if (job.abortReason === 'user') {
-                let removedTargets = [];
-                if (unfinished.length > 0) {
-                    removedTargets = await commitImageJobDeliverySlotRemoval({
-                        slotIds: unfinished,
-                        resolveTarget: resolveDeliveryTarget,
-                        isEditing: isMessageBeingEdited,
-                        isAnyEditing: isAnyMessageBeingEdited,
-                        guard,
-                        persist: persistChatSilently,
-                    });
-                }
-                await renderRemovedTargets(removedTargets, unfinished).catch(() => {});
-                await renderBatchPreviews().catch(() => {});
-                return;
-            }
-
-            if (error) {
-                // 整批失败（比如后端连接断了）：单项 settled 通知根本没来过，
-                // 这里补齐每个槽位的失败记录，槽位一律保留。
-                for (const index of slotIds.keys()) {
-                    if (results[index]) continue;
-                    const errorType = await recordSlotFailure(index, error, guard);
-                    if (!errorType) continue;
-                    const item = batchItems[index];
-                    await renderSettledSlot(item.slotId, targetMessageId => buildFailedPlaceholderHtml({
-                        slotId: item.slotId,
-                        messageId: targetMessageId,
-                        tags: item.tagsForStore,
-                        positive: item.scene,
-                        errorType: errorType.label,
-                        errorMessage: errorType.desc,
-                    }));
-                }
-            }
-        };
-        const resolveBackendSettlement = ({ error } = {}) => {
-            if (job.abortReason === 'user') return { mode: 'discard' };
-            if (!error) return { mode: 'complete' };
-            const errorType = classifyError(error);
-            return { mode: 'fail', errorType };
-        };
-
-        const batchResult = await runNovelImageBatch({
-            requests: batchItems.map(item => item.request),
-            compiledBatch,
-            signal,
-            backendCancelSignal: job.backendCancel.signal,
-            monitorGeneration,
-            recoverable: {
-                plan: recoverablePlan,
-                commitPlacements: commitPlannedPlacements,
-                settlePlacements: settleBackendPlacements,
-                resolveSettlement: resolveBackendSettlement,
-                afterForget: () => renderBatchPreviews({ final: true }),
-            },
-            queueBatch: job,
-            onStateChange: (state, data) => {
-                checkPlacementContext();
-                onStateChange?.(state, data);
-            },
-            onItemReady: async ({ index, base64, guard = async () => {} }) => {
-                const item = batchItems[index];
-                const imgId = item.imgId;
-                // 落库与选中先做完，再谈渲染：这两步是这张图唯一的持久事实，
-                // 而后端只有在它们都落定之后才会收到 ACK 并丢掉结果。
-                const committed = await commitSceneSlotDelivery({
-                    committedEarly: placementLifecycle.committedEarly,
-                    resolveTarget: () => resolveDeliveryTarget(item.slotId),
-                    guard,
-                    persist: target => storePreview({
-                        ...galleryMeta,
-                        imgId,
-                        slotId: item.slotId,
-                        messageId: target?.messageId ?? messageId,
-                        base64,
-                        tags: item.tagsForStore,
-                        positive: item.scene,
-                        characterPrompts: item.characterPrompts,
-                        negativePrompt: item.negativePrompt,
-                    }),
-                    rollbackPersisted: () => deletePreview(imgId),
-                    select: () => setSlotSelection(item.slotId, imgId),
-                    rollbackSelection: () => clearSlotSelection(item.slotId),
-                });
-                if (!committed) return;
-                results[index] = { slotId: item.slotId, imgId, tags: item.tagsForStore, success: true };
-                successCount++;
-                await renderSettledSlot(item.slotId, targetMessageId => buildImageHtml({
-                    slotId: item.slotId,
-                    imgId,
-                    url: getPreviewDisplayUrl({ imgId, base64 }),
-                    tags: item.tagsForStore,
-                    positive: item.scene,
-                    messageId: targetMessageId,
-                    state: ImageState.PREVIEW,
-                    historyCount: 1,
-                    currentIndex: 0,
-                }));
-            },
-            onItemSettled: async ({ index, state, error, guard = async () => {} }) => {
-                if (state === 'cancelled') return;
-                // 失败记录是持久事实，不能被渲染守卫挡掉：聊天切走了、楼层正在编辑，
-                // 都不改变「这张图失败了」，用户回来时必须看到失败卡而不是一个空占位符。
-                const errorType = await recordSlotFailure(index, error, guard);
-                if (!errorType) return;
-                const item = batchItems[index];
-                await renderSettledSlot(item.slotId, targetMessageId => buildFailedPlaceholderHtml({
-                    slotId: item.slotId,
-                    messageId: targetMessageId,
-                    tags: item.tagsForStore,
-                    positive: item.scene,
-                    errorType: errorType.label,
-                    errorMessage: errorType.desc,
-                }));
-            },
-        });
-        if (batchResult.aborted && !terminationReason) {
-            terminationReason = job.abortReason === 'user' ? 'aborted' : 'detached';
-        }
-
-        if (signal.aborted || terminationReason) {
-            const abortCtx = getContext();
-            const abortMsgValid = abortCtx.chatId === initialChatId && abortCtx.chat?.[messageId] === message;
-            const canCommit = !placementLifecycle.committedEarly
-                && abortMsgValid
-                && message.mes === originalMes
-                && !isMessageBeingEdited(messageId);
-            const canSync = abortMsgValid
-                && !isMessageBeingEdited(messageId)
-                && (placementLifecycle.committedEarly || canCommit);
-            if (canCommit) {
-                setActiveMessageText(message, commitSettledScenePlacements(plannedMes, {
-                    allSlotIds: slotIds,
-                    settledSlotIds: results.filter(Boolean).map(item => item.slotId),
-                }));
-            }
-
-            if (canSync) {
-                try {
-                    await syncRenderedMessage(message.mes);
-                    await renderSharedPreviewsForMessage(messageId);
-                } catch (e) {
-                    console.warn('[NovelDraw] abort DOM 同步失败:', e);
-                }
-            }
-            if (canCommit) {
-                persistChatSilently().catch(() => {});
-            }
-
-            placementLifecycle.settled = true;
-            if (terminationReason === 'source_changed') {
-                throw new ScenePlacementError(
-                    '正文在配图期间发生变化或正在编辑；已生成图片保留在画廊中，未写入楼层。',
-                    'SCENE_SOURCE_CHANGED',
-                );
-            }
-            const aborted = terminationReason === 'aborted' || (signal.aborted && !terminationReason);
-            if (!aborted) notifyDetachedGeneration(successCount);
-            onStateChange?.('success', { success: successCount, total: tasks.length, aborted, detached: !aborted });
-            return {
-                success: successCount,
-                total: tasks.length,
-                results: results.filter(Boolean),
-                aborted,
-                terminationReason: aborted ? 'aborted' : 'detached',
-            };
-        }
-
-        if (placementLifecycle.committedEarly) {
-            placementLifecycle.settled = true;
-            onStateChange?.('success', { success: successCount, total: tasks.length });
-            return { success: successCount, total: tasks.length, results: results.filter(Boolean) };
-        }
-
-        const finalCtx = getContext();
-        const messageAttached = finalCtx.chatId === initialChatId && finalCtx.chat?.[messageId] === message;
-        if (!messageAttached) {
-            placementLifecycle.settled = true;
-            notifyDetachedGeneration(successCount);
-            onStateChange?.('success', { success: successCount, total: tasks.length, detached: true });
-            return { success: successCount, total: tasks.length, results: results.filter(Boolean), aborted: false, terminationReason: 'detached' };
-        }
-        const shouldUpdateDom = !isMessageBeingEdited(messageId)
-            && (placementLifecycle.committedEarly || message.mes === originalMes);
-        if (!placementLifecycle.committedEarly && !shouldUpdateDom) {
-            placementLifecycle.settled = true;
-            throw new ScenePlacementError(
-                '正文在配图期间发生变化或正在编辑；已生成图片保留在画廊中，未写入楼层。',
-                'SCENE_SOURCE_CHANGED',
-            );
-        }
-        if (!placementLifecycle.committedEarly) {
-            try {
-                setActiveMessageText(message, plannedMes);
-                await persistChatSilently();
-            } catch (error) {
-                requiresFinalDomSync = true;
-                console.warn('[NovelDraw] 追加图片槽位的保存未确认，当前排版仍保留:', error);
-            }
-        }
-
-        if (shouldUpdateDom && requiresFinalDomSync) {
-            try {
-                const formatted = messageFormatting(
-                    message.mes,
-                    message.name,
-                    message.is_system,
-                    message.is_user,
-                    messageId
-                );
-                $('[mesid="' + messageId + '"] .mes_text').html(formatted);
-                await notifyMessageRewritten(messageId);
-                await renderSharedPreviewsForMessage(messageId);
-                const { processMessageById } = await import('../../../iframe-renderer.js');
-                processMessageById(messageId, true);
-            } catch (error) {
-                console.warn('[NovelDraw] 最终 DOM 同步失败:', error);
-            }
-        } else if (shouldUpdateDom) {
-            console.log('[NovelDraw] 已跳过最终 full rerender，仅后台保存正文与局部 DOM patch');
-        }
-
-        const resultColor = successCount === tasks.length ? '#3ecf8e' : '#f0b429';
-        console.log(`%c[NovelDraw] 完成: ${successCount}/${tasks.length} 张`, `color: ${resultColor}; font-weight: bold`);
-
-        onStateChange?.('success', { success: successCount, total: tasks.length });
-
-        placementLifecycle.settled = true;
-        return { success: successCount, total: tasks.length, results: results.filter(Boolean) };
-
+        assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), sceneSource.sourceHash);
+        return await runPreparedNovelSlots({ ctx, message, messageId, sourceText: message.mes,
+            tasks, settings, preset, job, onStateChange });
+    } catch (error) {
+        failFloorImageJob(job, error);
+        throw error;
     } finally {
-        if (placementLifecycle && !placementLifecycle.settled) {
-            const {
-                message,
-                originalMes,
-                slotIds,
-                results,
-                initialChatId,
-                plannedMes,
-                syncRenderedMessage,
-                committedEarly,
-            } = placementLifecycle;
-            const currentCtx = getContext();
-            const canCommit = !committedEarly
-                && currentCtx.chatId === initialChatId
-                && currentCtx.chat?.[messageId] === message
-                && message.mes === originalMes
-                && !isMessageBeingEdited(messageId);
-            if (canCommit) {
-                setActiveMessageText(message, commitSettledScenePlacements(plannedMes, {
-                    allSlotIds: slotIds,
-                    settledSlotIds: results.filter(Boolean).map(item => item.slotId),
-                }));
-                if (syncRenderedMessage) await syncRenderedMessage(message.mes).catch(() => {});
-                await renderSharedPreviewsForMessage(messageId).catch(() => {});
-                await persistChatSilently().catch(() => {});
-            }
-        }
         releaseGenerationJob(job);
     }
 }
@@ -3901,134 +2928,57 @@ async function autoGenerateForLastAI() {
     const chat = ctx.chat || [];
     const lastIdx = chat.length - 1;
     if (lastIdx < 0) return;
-    
+
     const lastMessage = chat[lastIdx];
     if (!lastMessage || lastMessage.is_user) return;
-    
+
     const content = stripDrawImageSlots(lastMessage.mes).trim();
     if (content.length < 50) return;
-    
+
     if (lastMessage.extra?.xb_novel_auto_done) return;
 
     if (autoBusy || hasGenerationJob(lastIdx)) {
         console.log('[NovelDraw] 自动模式：当前楼层已有任务进行中，跳过');
         return;
     }
-    
+
     autoBusy = true;
-    
+
     try {
-        const { setStateForMessage, setFloatingState, FloatState, ensureNovelDrawPanel } = await import('./floating-panel.js');
+        const { setStateForMessage, ensureNovelDrawPanel } = await import('./floating-panel.js');
         const floatingOn = s.showFloatingButton === true;
         const floorOn = s.showFloorButton !== false;
         const useFloatingOnly = floatingOn && floorOn;
 
-        const updateState = (state, data = {}) => {
-            if (useFloatingOnly || (floatingOn && !floorOn)) {
-                setFloatingState?.(state, data);
-            } else if (floorOn) {
-                setStateForMessage(lastIdx, state, data);
-            }
-        };
-        
+
         if (floorOn && !useFloatingOnly) {
             const messageEl = document.querySelector(`.mes[mesid="${lastIdx}"]`);
             if (messageEl) {
                 ensureNovelDrawPanel(messageEl, lastIdx, { force: true });
             }
         }
-        
+
         const result = await generateAndInsertImages({
             messageId: lastIdx,
             skipLock: true,
             automatic: true,
-            onStateChange: (state, data) => {
-                switch (state) {
-                    case 'submitting':
-                        updateState(FloatState.SUBMITTING, data);
-                        break;
-                    case 'accepted':
-                        updateState(FloatState.ACCEPTED, data);
-                        break;
-                    case 'uncertain':
-                        updateState(FloatState.UNCERTAIN, data);
-                        break;
-                    case 'queued':
-                        updateState(FloatState.QUEUED, data);
-                        break;
-                    case 'llm': 
-                        updateState(FloatState.LLM); 
-                        break;
-                    case 'gen': 
-                    case 'progress': 
-                        updateState(FloatState.GEN, data); 
-                        break;
-                    case 'cooldown': 
-                        updateState(FloatState.COOLDOWN, data); 
-                        break;
-                    case 'reconnecting':
-                        updateState(FloatState.RECONNECTING, data);
-                        break;
-                    case 'cancelling':
-                        updateState(FloatState.CANCELLING, data);
-                        break;
-                    case 'backend_legacy':
-                        updateState(FloatState.BACKEND_LEGACY, data);
-                        break;
-                    case 'success': 
-                        updateState(
-                            (data.aborted && data.success === 0) ? FloatState.IDLE
-                                : (data.success < data.total) ? FloatState.PARTIAL
-                                    : FloatState.SUCCESS,
-                            data
-                        );
-                        break;
-                }
+            onStateChange: (state, data, liveId) => {
+                setStateForMessage(liveId, state, data);
             }
         });
-        
+
         // 后台流程由 automatic marker 在成功 handoff 时原子转成 auto_done；
         // 浏览器流程仍沿用原有完成标记。
         if (!['accepted', 'uncertain'].includes(result?.status)) {
             lastMessage.extra ||= {};
             lastMessage.extra.xb_novel_auto_done = true;
         }
-        
-    } catch (e) {
-        console.error('[NovelDraw] 自动配图失败:', e);
-        try {
-            const { setStateForMessage, setFloatingState, FloatState } = await import('./floating-panel.js');
-            const floatingOn = s.showFloatingButton === true;
-            const floorOn = s.showFloorButton !== false;
-            const useFloatingOnly = floatingOn && floorOn;
 
-            if (e?.uncertain === true) {
-                if (useFloatingOnly || (floatingOn && !floorOn)) {
-                    setFloatingState?.(FloatState.UNCERTAIN);
-                } else if (floorOn) {
-                    setStateForMessage(lastIdx, FloatState.UNCERTAIN);
-                }
-                return;
-            }
-            if (isDrawRunPendingError(e)) {
-                toastr?.info?.(e.message);
-                return;
-            }
-            if (isDrawRunCancelledError(e)) {
-                if (useFloatingOnly || (floatingOn && !floorOn)) {
-                    setFloatingState?.(FloatState.IDLE);
-                } else if (floorOn) {
-                    setStateForMessage(lastIdx, FloatState.IDLE);
-                }
-                return;
-            }
-
-            if (useFloatingOnly || (floatingOn && !floorOn)) {
-                setFloatingState?.(FloatState.ERROR, { error: classifyError(e) });
-            } else if (floorOn) {
-                setStateForMessage(lastIdx, FloatState.ERROR, { error: classifyError(e) });
-            }
-        } catch {}
+    } catch (error) {
+        if (!error.drawTaskReported) {
+            console.error(error);
+            globalThis.toastr?.error(error.message);
+        }
     } finally {
         autoBusy = false;
     }
@@ -4921,13 +3871,13 @@ export async function initNovelDraw() {
     const renderExistingPanels = () => {
         const context = getContext();
         const chat = context.chat || [];
-        
+
         chat.forEach((message, messageId) => {
             if (!message || message.is_user) return;
-            
+
             const messageEl = document.querySelector(`.mes[mesid="${messageId}"]`);
             if (!messageEl) return;
-            
+
             ensureNovelDrawPanelRef?.(messageEl, messageId);
         });
     };
@@ -4946,14 +3896,14 @@ export async function initNovelDraw() {
         if (Number(messageId) === findLastAIMessageId()) {
             floatingPanel.refreshDrawRunUiState?.();
         }
-        
+
         const messageEl = document.querySelector(`.mes[mesid="${messageId}"]`);
         if (!messageEl) return;
-        
+
         const context = getContext();
         const message = context.chat?.[messageId];
         if (message?.is_user) return;
-        
+
         ensureNovelDrawPanelRef?.(messageEl, messageId);
     });
 
@@ -4969,11 +3919,6 @@ export async function initNovelDraw() {
         }
     });
 
-    // ST 停止键 / Escape → 同时中止 novel-draw 生成
-    events.on(event_types.GENERATION_STOPPED, () => {
-        console.log('[NovelDraw] ST 停止信号，中止图片生成');
-        abortGeneration();
-    });
 
     // 聊天切换时重新创建面板
     events.on(event_types.CHAT_CHANGED, () => {
@@ -4981,6 +3926,10 @@ export async function initNovelDraw() {
         setTimeout(renderExistingPanels, 200);
     });
     events.on(event_types.MESSAGE_SWIPED, () => {
+        floatingPanel.refreshDrawRunUiState?.();
+    });
+    events.on(event_types.MESSAGE_SWIPE_DELETED, detail => {
+        rebaseFloorImageJobsAfterSwipeDeletion(generationJobs, getContext(), detail);
         floatingPanel.refreshDrawRunUiState?.();
     });
 
@@ -4994,6 +3943,15 @@ export async function initNovelDraw() {
     // 全局 API
     // ════════════════════════════════════════════════════════════════════
 
+    preparedImageDispose?.();
+    preparedImageDispose = registerPreparedImageProvider("novelai", createImageCardRedrawProvider({
+        execute: runPreparedNovelSlots,
+        createJob: createGenerationJob,
+        releaseJob: releaseGenerationJob,
+        getCurrentContext: getContext,
+        setStateForMessage: floatingPanel.setStateForMessage,
+        classifyError,
+    }));
     window.xiaobaixNovelDraw = {
         mountMessagePanel: floatingPanel.ensureNovelDrawPanel,
         releaseMessagePanel: floatingPanel.releaseNovelDrawPanel,
@@ -5032,6 +3990,8 @@ export async function initNovelDraw() {
 }
 
 export async function cleanupNovelDraw() {
+    preparedImageDispose?.();
+    preparedImageDispose = null;
     const cleanupGeneration = ++moduleLifecycleGeneration;
     moduleInitialized = false;
     settingsCache = null;
@@ -5048,7 +4008,7 @@ export async function cleanupNovelDraw() {
 
     backendJobMonitors.deactivate();
     abortGeneration(null, { reason: 'teardown' });
-    generationJobs = new Map();
+    clearFloorImageJobs(generationJobs);
     novelImageRequestQueue.clear();
 
     window.removeEventListener('message', handleFrameMessage);

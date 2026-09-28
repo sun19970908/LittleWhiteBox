@@ -35,6 +35,14 @@ createPlanLedger({ plansTable });
 
 不要让 `agent-core` 默认绑定某个 App 的数据库。
 
+## API Key 与免密反代
+
+共享主配置与分身配置的 API Key 均可留空。空值、空白或未提供的 Key 表示不提供模型密码；填写 Key 时按所选 Provider 鉴权。设置和请求共用 CORE 的鉴权规则，各 App 不再以空 Key 判断模型未配置。
+
+OpenAI 兼容、Responses、Anthropic 的免密请求不发送认证头；Google 受当前 SDK 约束发送空 `x-goog-api-key`。SDK 内部适配不保存占位密钥，也不把占位值或 Node 环境凭据发给反代。模型拉取和实际请求均保留供应商鉴权错误，不切换身份重试。
+
+直连反代必须允许浏览器跨域。酒馆托管渠道仍遵守宿主协议：SillyTavern 1.18.0 的 Claude 转发强制要求密码，免密 Claude 反代应选择直连 Anthropic，不会自动替用户切换渠道。官方 API、Tavily 和图片生成供应商自身的鉴权要求不变。
+
 ## DeepSeek 思考与工具调用
 
 直连「OpenAI 兼容」仅在 DeepSeek 显式开启思考且携带原生工具时，将 `required` 或指定函数的 `tool_choice` 转为 `auto`，保留思考与工具定义。同一条件下，回放保留已有的 `reasoning_content`，包括较早轮次及未调用工具的文字回复；不生成或补写不存在的思考内容。DeepSeek 接口要求工具请求回传这些内容，且不支持思考模式下强制工具调用。关闭思考、跟随模型、`auto`、`none` 及其他模型的工具选择不受影响，不增加重试或改动功能自己的结果校验。

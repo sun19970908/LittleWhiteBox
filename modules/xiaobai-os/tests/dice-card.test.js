@@ -179,9 +179,26 @@ test('D100 explains the required threshold, exact ties and special outcomes with
     assert.equal(createCheckCard(historical, false).element.dataset.verdict, 'achieved');
 });
 
+test('D100 easy cards show the bonus, cap and saved outcome without rerolling', t => {
+    browser(t);
+    for (const [value, roll, threshold, verdict] of [[40, 50, 60, 'achieved'], [80, 95, 95, 'achieved'], [80, 96, 95, 'not_achieved']]) {
+        const saved = coc7Record(roll, 'easy', value);
+        const record = parseDiceRecords({ schemaVersion: 3, checks: [saved] }).checks[0];
+        const card = createCheckCard(record, false);
+        assert.equal(card.element.dataset.verdict, verdict);
+        const basis = card.element.querySelector('[data-bonus]');
+        assert.equal(Number(basis.dataset.value), value);
+        assert.equal(Number(basis.dataset.bonus), 20);
+        assert.equal(Number(basis.dataset.cap), 95);
+        assert.equal(Number(basis.dataset.threshold), threshold);
+        assert.equal(card.element.querySelector('[data-comparison]').dataset.comparison,
+            verdict === 'achieved' ? 'at_or_below' : 'above');
+    }
+});
+
 test('D100 cards retain mapped inputs and untrained sources after history reload', t => {
     browser(t);
-    for (const [stat, kind, value] of [['潜行', 'mapped', 10], ['隐匿潜行', 'mapped', 10], ['火系魔法', 'untrained', 40], ['运动与隐匿', 'untrained', 40]]) {
+    for (const [stat, kind, value] of [['潜行', 'mapped', 20], ['隐匿潜行', 'mapped', 20], ['火系魔法', 'untrained', 40], ['运动与隐匿', 'untrained', 40]]) {
         const candidate = prepareActionCheck({ id: 'resolved', rule: 'coc7', generatedFrom: 0, coc7Sheet: emptyCoc7Draft(), random: () => .2,
             body: '<xb_action_check>' + JSON.stringify({ action: '尝试行动', stat, difficulty: 'hard' }) + '</xb_action_check>' });
         const history = parseDiceRecords(JSON.parse(JSON.stringify(candidate.records)));

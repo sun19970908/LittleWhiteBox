@@ -15,7 +15,7 @@ async function harness(ensureDisplay = async () => {}, root = {}) {
     let persist = () => {};
     const settings = createSettingsRepository({ getExtensionSettings: () => root, saveSettings: () => persist() });
     await settings.prepare();
-    const wallet = await userEconomyHarness({ initialPartitions: async () => ({ economy: ECONOMY_PARTITION.createInitial(), dice: { sheet: settings.readLegacyDiceSheet() } }) });
+    const wallet = await userEconomyHarness({ initialPartitions: async () => ({ economy: ECONOMY_PARTITION.createInitial(), dice: { ...DICE_PARTITION.createInitial(), sheet: settings.readLegacyDiceSheet() } }) });
     const sheets = createDiceSheetService(wallet.store(DICE_PARTITION), wallet.transactions);
     await sheets.refresh();
     await settings.finishDiceSheetMigration();

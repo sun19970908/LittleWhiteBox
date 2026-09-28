@@ -47,12 +47,20 @@ export async function runAlignmentCheck({ modules, extSettings, summarize }) {
         wrapperHead: 'BEGIN_MEMORY', wrapperTail: 'END_MEMORY',
         vectorConfig: { enabled: true, l0Concurrency: 99, l0Api: api, embeddingApi: api, rerankApi: api },
     };
+    const evidenceChunks = [5, 12].flatMap((count, floor) => Array.from({ length: count }, (_, chunkIdx) => ({
+        chunkId: `c-${floor}-${chunkIdx}`, floor, chunkIdx, speaker: floor === 0 ? '用户' : '角色',
+        isUser: floor === 0, textHash: `fixture-${floor}-${chunkIdx}`,
+        text: floor === 1 && chunkIdx === 2 ? '角色把钥匙藏在蓝色盒子里。' : `历史证据[${floor}:${chunkIdx}]。`,
+    })));
+    const anchorScores = new Map([['c-1-2', 0.8], ['c-1-6', 0.7], ['c-1-10', 0.6]]);
     const native = Array.from({ length: 8 }, (_, floor) => ({
         is_user: floor % 2 === 0, name: floor % 2 === 0 ? '用户' : '角色',
-        mes: floor === 1 ? '角色把钥匙藏在蓝色盒子里。' : `角色和用户在房间里交谈 ${floor}。`,
+        mes: floor < 2 ? evidenceChunks.filter(chunk => chunk.floor === floor).map(chunk => chunk.text).join('')
+            : `角色和用户在房间里交谈 ${floor}。`,
         extra: { type: 'fixture' }, is_system: false,
     }));
-    const focus = { is_user: true, name: '用户', mes: '角色把钥匙藏在哪里？', extra: {} };
+    // An exact keyword hit would bypass evidence reranking via must-keep floors.
+    const focus = { is_user: true, name: '用户', mes: '先前那件东西放哪儿了？', extra: {} };
     const sample = parseReplaySample(native.concat(focus).map(row => JSON.stringify(row)).join('\n'));
     const history = sample.messages.slice(0, -1);
     const store = {
@@ -80,9 +88,11 @@ export async function runAlignmentCheck({ modules, extSettings, summarize }) {
     try {
         await modules.getMeta(chatId);
         await modules.updateMeta(chatId, { fingerprint, lastChunkFloor: 7 });
-        await modules.saveChunks(chatId, [{ chunkId: 'c-1-0', floor: 1, chunkIdx: 0, speaker: '角色',
-            isUser: false, text: native[1].mes, textHash: 'fixture' }]);
-        await modules.saveChunkVectors(chatId, [{ chunkId: 'c-1-0', vector: [1, 0] }], fingerprint);
+        await modules.saveChunks(chatId, evidenceChunks);
+        await modules.saveChunkVectors(chatId, evidenceChunks.map(({ chunkId, floor, chunkIdx }) => {
+            const score = floor === 0 ? 0.9 + chunkIdx / 100 : (anchorScores.get(chunkId) ?? 0.1);
+            return { chunkId, vector: [score, Math.sqrt(1 - score * score)] };
+        }), fingerprint);
         await modules.saveEventVectors(chatId, [{ eventId: 'evt-1', vector: [1, 0] }], fingerprint);
         await modules.saveStateVectors(chatId, [{ atomId: 'atom-1', floor: 1, vector: [1, 0], rVector: [1, 0] }], fingerprint);
         modules.invalidateLexicalIndex();
@@ -110,6 +120,18 @@ export async function runAlignmentCheck({ modules, extSettings, summarize }) {
         assert.ok(replay.evidenceTrace.eventEvidence.some(row => row.kind === 'l1' && row.admitted));
         assert.ok(replay.evidenceTrace.eventEvidence.every(row => typeof row.admitted === 'boolean'));
         assert.ok(productRequests.some(row => row.path.endsWith('/rerank')));
+        // Inspect the actual provider payload: USER is complete, AI alone gets
+        // three anchors and neighbours, and both sides form one ordered document.
+        const evidenceDocs = productRequests.filter(row => row.path.endsWith('/rerank'))
+            .flatMap(row => row.body.documents)
+            .filter(text => evidenceChunks.some(chunk => text.includes(chunk.text)));
+        assert.equal(evidenceDocs.length, 1);
+        const selectedChunks = evidenceChunks.filter(chunk => evidenceDocs[0].includes(chunk.text))
+            .sort((left, right) => evidenceDocs[0].indexOf(left.text) - evidenceDocs[0].indexOf(right.text));
+        assert.deepEqual(selectedChunks.map(chunk => chunk.chunkId), [
+            'c-0-0', 'c-0-1', 'c-0-2', 'c-0-3', 'c-0-4',
+            'c-1-1', 'c-1-2', 'c-1-3', 'c-1-5', 'c-1-6', 'c-1-7', 'c-1-9', 'c-1-10', 'c-1-11',
+        ]);
         const expectedRequestCount = productRequests.length;
 
         // Empty product results must stay empty, including wrapper handling.

@@ -2,13 +2,14 @@ import type {
     EconomyActionLeg,
     EconomyTransactionCapability,
 } from '../../../capabilities/economy/index.js';
-import { validateBankDomain } from '../../../domains/bank/invariants.js';
-import { replayBankEvents } from '../../../domains/bank/timeline.js';
+import { validateBankDomain, validateLegacyBankDomain } from '../../../domains/bank/invariants.js';
+import { replayBankEventChanges } from '../../../domains/bank/timeline.js';
 import {
     throwBankError,
     type BankActivity,
     type BankDomainV1,
     type BankEvent,
+    type BankLegacyDomainV1,
 } from '../../../domains/bank/types.js';
 import type { EconomyTransaction } from '../../../domains/economy/types.js';
 
@@ -86,22 +87,19 @@ function sameLeg(transaction: EconomyTransaction, expected: EconomyActionLeg): b
         && transaction.toAccountId === expected.toAccountId
         && transaction.amount === expected.amount
         && transaction.kind === expected.kind
-        && transaction.title === expected.title
-        && transaction.note === (expected.note || '')
         && transaction.sourceDomain === BANK_SOURCE_DOMAIN
         && transaction.sourceId === expected.sourceId
         && transaction.reversalOfTransactionId === undefined;
 }
 
-export function validateBankEconomyConsistency(
-    domain: BankDomainV1,
+function validateBankEventEconomyConsistency(
+    events: readonly BankEvent[],
     economy: EconomyTransactionCapability,
-    path = 'partitions.bank',
+    path: string,
 ): void {
-    validateBankDomain(domain);
     const owned = economy.listOwnedTransactions();
     const consumed = new Set<number>();
-    for (const event of domain.events) {
+    for (const event of events) {
         const expected = buildBankEconomyLegs(event);
         const actual = owned.filter(transaction => transaction.actionId === event.actionId);
         if (actual.length !== expected.length || actual.some((transaction, index) => !sameLeg(transaction, expected[index]))) {
@@ -111,11 +109,11 @@ export function validateBankEconomyConsistency(
     }
     if (consumed.size !== owned.length) { inconsistency(`${path}:orphan-transaction`); }
 
-    const state = replayBankEvents(domain);
+    const state = replayBankEventChanges(events);
     const open = new Map(
         [...state.openDeposits, ...state.openInvestments].map(position => [position.id, position.principal]),
     );
-    const allPositionIds = new Set(domain.events.flatMap(event => (
+    const allPositionIds = new Set(events.flatMap(event => (
         event.command.kind === 'deposit-open' || event.command.kind === 'fund-open'
             ? [event.command.positionId]
             : []
@@ -125,4 +123,22 @@ export function validateBankEconomyConsistency(
             inconsistency(`${path}:escrow:${positionId}`);
         }
     }
+}
+
+export function validateBankEconomyConsistency(
+    domain: BankDomainV1,
+    economy: EconomyTransactionCapability,
+    path = 'partitions.bank',
+): void {
+    validateBankDomain(domain);
+    validateBankEventEconomyConsistency(domain.events, economy, path);
+}
+
+/** Production v1's story-local turn numbers are not a monotonic global clock. */
+export function validateLegacyBankEconomyConsistency(
+    domain: unknown,
+    economy: EconomyTransactionCapability,
+): asserts domain is BankLegacyDomainV1 {
+    validateLegacyBankDomain(domain);
+    validateBankEventEconomyConsistency(domain.events, economy, 'stories.bank');
 }

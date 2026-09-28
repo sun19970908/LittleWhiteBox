@@ -1,62 +1,51 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { parseHTML } from 'linkedom';
+import { parseChatImageTags, findRenderedChatImageTags, normalizeChatMessageImageTags } from '../chat-message-image-markup.js';
 
-import {
-    enhanceChatMessageImageHtml,
-    enhanceChatMessageImageTextNodes,
-    normalizeChatMessageImageTags,
-    resetPendingChatMessageImageSlots,
-    restoreChatMessageImageSlots,
-} from '../chat-message-image-markup.js';
-
-test('disabled Draw preserves ordinary chat image markers', () => {
-    const source = 'before [img: 1girl, smile] after';
-    assert.equal(enhanceChatMessageImageHtml(source, false), source);
+test('tag aliases normalize input while retaining exact source offsets', () => {
+    const source = '前文[图片: sketchy: 1girl,  smile, ]后文[img: tree]';
+    const tags = parseChatImageTags(source);
+    assert.equal(tags.length, 2);
+    assert.equal(tags[0].tags, 'nsfw, 1girl, smile');
+    for (const tag of tags) assert.equal(source.slice(tag.start, tag.end), tag.marker);
+    assert.equal(normalizeChatMessageImageTags('a,, b'), 'a, b');
 });
 
-test('ordinary chat image aliases project to Draw-owned slots', () => {
-    const result = enhanceChatMessageImageHtml('[图片: nsfw: 1girl, blue hair]', true);
-    assert.match(result, /class="xb-img-slot"/);
-    assert.match(result, /data-tags="nsfw%2C%201girl%2C%20blue%20hair"/);
+test('code, comments, escapes and HTML attributes are not image requests', () => {
+    const source = [
+        '`[img: inline]` [img: yes]',
+        '```text\n[img: fenced]\n```',
+        '    [img: indented]',
+        '<div title="[img: attr]">[图片: visible]</div>',
+        '<pre>[img: htmlcode]</pre><!--[img: comment]-->',
+        '\\[img: escaped]',
+        '<script>"[img: script]"</script>',
+    ].join('\n');
+    assert.deepEqual(parseChatImageTags(source).map(item => item.tags), ['yes', 'visible']);
 });
 
-test('ordinary chat image tags use the shared Draw prompt form', () => {
-    assert.equal(normalizeChatMessageImageTags(' sketchy: 1girl,  blue hair, , smile '), 'nsfw, 1girl, blue hair, smile');
+test('identical tags remain distinct positions, in text traversal order', () => {
+    const source = '[img: a] [img: b] [img: a]';
+    const { document } = parseHTML(`<div>${source}</div>`);
+    const { matched, unmatched } = findRenderedChatImageTags(document.querySelector('div'), parseChatImageTags(source));
+    assert.deepEqual(matched.map(item => item.candidate.start), [0, 9, 18]);
+    assert.equal(unmatched.length, 0);
 });
 
-test('image projection changes visible text without rewriting attributes or code examples', () => {
-    const { document } = parseHTML('<div id="message" data-example="[img: attribute]">before &lt;img src=x onerror=alert(1)&gt; [img: visible]<code>[img:hidden]</code></div>');
-    const message = document.getElementById('message');
-
-    assert.equal(enhanceChatMessageImageTextNodes(message, true), true);
-    assert.equal(message.dataset.example, '[img: attribute]');
-    assert.equal(message.querySelector('code').textContent, '[img:hidden]');
-    assert.equal(message.querySelector('.xb-img-slot')?.dataset.tags, 'visible');
-    assert.equal(message.querySelector('img'), null);
-    assert.match(message.textContent, /<img src=x onerror=alert\(1\)>/);
+test('display-only and ambiguous duplicate output is not assigned a raw position', () => {
+    const { document } = parseHTML('<div>[img: a] [img: synthetic]<code>[img: c]</code></div>');
+    const result = findRenderedChatImageTags(document.querySelector('div'), parseChatImageTags('[img: a] [img: a]'));
+    assert.equal(result.matched.length, 0);
+    assert.equal(result.unmatched.length, 2);
 });
 
-test('Draw cleanup restores the exact original ordinary chat image marker', () => {
-    const source = '[图片: Sketchy: 1girl, blue hair]';
-    const { document } = parseHTML(`<div id="message">${enhanceChatMessageImageHtml(source, true)}</div>`);
-    const message = document.getElementById('message');
-
-    restoreChatMessageImageSlots(message);
-
-    assert.equal(message.textContent, source);
-});
-
-test('Draw provider refresh releases only owned pending chat image slots for observation', () => {
-    const { document } = parseHTML(`<div id="message">${enhanceChatMessageImageHtml('[img: 1girl]', true)}<div class="xb-img-slot" data-loading="1" data-observed="1"></div></div>`);
-    const message = document.getElementById('message');
-    const owned = message.querySelector('[data-xb-draw-chat-image="1"]');
-    owned.dataset.loading = '1';
-    owned.dataset.observed = '1';
-
-    resetPendingChatMessageImageSlots(message);
-
-    assert.equal(owned.dataset.loading, '');
-    assert.equal(owned.dataset.observed, '');
-    assert.equal(message.querySelector('.xb-img-slot:not([data-xb-draw-chat-image])').dataset.loading, '1');
+test('visible text can be matched without changing code or attributes', () => {
+    const source = '<div title="[img: attribute]">[img: visible]<code>[img: code]</code></div>';
+    const { document } = parseHTML(source);
+    const root = document.querySelector('div');
+    const result = findRenderedChatImageTags(root, parseChatImageTags(source));
+    assert.equal(result.matched.length, 1);
+    assert.equal(result.matched[0].candidate.tags, 'visible');
+    assert.equal(root.getAttribute('title'), '[img: attribute]');
 });

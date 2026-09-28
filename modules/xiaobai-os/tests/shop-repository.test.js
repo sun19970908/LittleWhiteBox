@@ -195,6 +195,7 @@ test('Shop module declares both Economy capabilities without a ledger-breaking p
     assert.deepEqual(module.capabilities.map(capability => capability.id), [
         'economy.read',
         'economy.transaction',
+        'prompt.injection',
     ]);
     assert.equal(module.clearData, undefined);
 });

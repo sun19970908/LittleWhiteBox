@@ -2,7 +2,7 @@ import type { CheckCard } from './check-card.js';
 
 export const DICE_REVEAL_MS = 2000;
 
-/** Only a fresh, confirmed check enters this finite, abortable presentation gate. */
+/** Only a new roll animates. Restored cards are static; continuing never waits for this. */
 export function revealCheckCard(card: CheckCard, signal: AbortSignal): Promise<void> {
     if (signal.aborted || document.hidden || matchMedia('(prefers-reduced-motion: reduce)').matches) {
         card.settle(); delete card.element.dataset.revealed; return Promise.resolve();
@@ -32,7 +32,7 @@ export function revealCheckCard(card: CheckCard, signal: AbortSignal): Promise<v
             if (!card.element.isConnected) { finish(); return; }
             const progress = (now - started) / DICE_REVEAL_MS;
             if (progress >= 1) { finish(); return; }
-            // The solid lands first; give the revealed card 300ms before releasing continuation.
+            // Show the landed face for 300ms before completing the animation.
             try {
                 if (progress >= .85) { card.settle(); }
                 else { card.draw(progress / .85); }

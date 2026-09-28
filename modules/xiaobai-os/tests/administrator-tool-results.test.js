@@ -5,6 +5,7 @@ import { createAdministratorChatReader } from '../apps/administrator/host/chat-r
 import { ADMINISTRATOR_POLICY } from '../apps/administrator/domain/policy.js';
 import { createManagementRegistry } from '../capabilities/management/index.js';
 import { MANAGEMENT_READ_CHARS } from '../capabilities/management/read-page.js';
+import { TOOLS_LOAD } from '../apps/administrator/agent/tool-loader.js';
 
 async function fixture(messages = [], registry = createManagementRegistry()) {
     const surface = { identityKey: 'tool-results', playerName: 'Player', assistantName: 'Narrator', messages };
@@ -12,16 +13,19 @@ async function fixture(messages = [], registry = createManagementRegistry()) {
     const operations = [];
     const executor = await createAdministratorToolExecutor({
         registry, reader: createAdministratorChatReader(() => surface, () => abort.signal),
+        readEnvironment: () => ({ observedAt: 1, apps: [], maintenance: [], mainChatGenerating: false,
+            storage: { chat: { state: 'ready', hasPendingCommit: false }, user: { state: 'ready', hasPendingCommit: false } } }),
         operations, guard: () => !abort.signal.aborted,
         onChange() {}, async saveReceipts() { assert.fail('read tools must not save business data'); },
     });
     let sequence = 0;
+    await executor.execute(TOOLS_LOAD, { apps: registry.list().map(app => app.id) }, 'load', -1);
     return { executor, operations, surface, call: (name, args) => executor.execute(name, args, String(++sequence), sequence) };
 }
 
 test('result continuation keeps one reference and cursor while reconstructing HTML and Unicode story pages', async () => {
     const original = '<p>她说："好。🙂"</p>\n'.repeat(2200);
-    const h = await fixture([{ mes: original, swipe_id: 0 }, { mes: '末楼', swipe_id: 0 }]);
+    const h = await fixture([{ mes: original, swipe_id: 0, is_system: true }, { mes: '末楼', swipe_id: 0 }]);
     const texts = ['', ''];
     let args = { from: 0, to: 1 };
     let continuationCalls = 0;
@@ -60,14 +64,15 @@ test('result continuation keeps one reference and cursor while reconstructing HT
 test('continuing a near-budget result does not evict its source; details expire with that source', async () => {
     const registry = createManagementRegistry();
     const result = { ok: true, status: 'read', data: '原'.repeat(ADMINISTRATOR_POLICY.evidenceChars - 1000) };
+    const tools = [{ effect: 'read', label: 'Read', target: () => '', definition: { type: 'function', function: {
+        name: 'LargeRead', description: '', parameters: { type: 'object', properties: {} },
+    } } }];
     registry.register({
-        id: 'fixture', label: 'Fixture',
+        id: 'fixture', label: 'Fixture', prompt: '', tools,
         async open() {
             return {
                 prompt: '', initial: {},
-                tools: [{ effect: 'read', label: 'Read', target: () => '', definition: { type: 'function', function: {
-                    name: 'LargeRead', description: '', parameters: { type: 'object', properties: {} },
-                } } }],
+                tools,
                 async execute() { return result; },
             };
         },

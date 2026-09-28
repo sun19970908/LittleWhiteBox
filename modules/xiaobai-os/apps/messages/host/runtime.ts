@@ -8,11 +8,18 @@ import type { MessagesModifications, ModificationTarget } from '../application/m
 import { regenerateMessageReply } from '../application/regenerate.js';
 import { previewMessageContext } from '../application/context-preview.js';
 import type { MessageContact, PrivateMessage } from '../../../domains/messages/types.js';
+import { messageSyncCopy } from '../sync-copy.js';
 
 function contextFailure(cause: unknown): string {
     const code = cause instanceof Error ? cause.message : '';
     return code === 'messages_context_capacity' ? '上下文超过 158k，近期原文已保留。请减少背景材料或附图后重试。'
-        : code === 'messages_summary_not_reduced' ? '这次总结没能缩短聊天记录，摘要没有保存，请重试。' : '';
+        : code === 'messages_summary_not_reduced' ? '这次总结没能缩短聊天记录，摘要没有保存，请重试。'
+            : code === 'prompt_context_character_fields_unavailable' || code === 'prompt_context_character_fields_failed'
+                ? '当前人物资料暂时无法读取，消息已保留，请重试。'
+                : code === 'prompt_context_world_info_unavailable' || code === 'prompt_context_world_info_failed'
+                    ? '当前世界书暂时无法读取，消息已保留，请重试。'
+                    : code === 'prompt_context_story_events_failed'
+                        ? '剧情记忆暂时无法读取，消息已保留，请重试。' : '';
 }
 
 export function createMessagesRuntime(deps: SendDependencies & {
@@ -20,12 +27,15 @@ export function createMessagesRuntime(deps: SendDependencies & {
     identity(): string; isGenerating(): boolean; changed(): void;
 }) {
     let epoch = 0;
-    let active: { controller: AbortController; contactId: string; messageId: string; stage: string; identity: string } | null = null;
+    type Run = { controller: AbortController; contactId: string; messageId: string; stage: string; identity: string };
+    let active: Run | null = null;
+    let latestRun: Run | null = null;
     let error = '';
+    let syncError = '';
     let outgoing: (PendingOutgoingMessage & { identity: string }) | null = null;
     let failure: MessageSendFailure | null = null;
-    let task: Promise<void> | null = null;
-    function cancel() {epoch++; active?.controller.abort();}
+    const tasks = new Set<Promise<void>>();
+    function cancel() {epoch++; active?.controller.abort(); active = null; deps.changed();}
     function guard() {
         const captured = epoch; const identity = deps.identity();
         return () => !!identity && captured === epoch && identity === deps.identity() && !deps.isGenerating();
@@ -52,18 +62,24 @@ export function createMessagesRuntime(deps: SendDependencies & {
         if (pending && payload && JSON.stringify(pending.payload) !== JSON.stringify(payload)) {throw new Error('messages_action_conflict');}
         payload ??= pending?.payload;
         if (payload && !pending) {outgoing = { identity: deps.identity(), contactId, messageId, payload, createdAt: Date.now() };}
-        error = ''; failure = null;
+        error = ''; syncError = ''; failure = null;
         const run = { contactId, messageId, stage: 'saving', controller: new AbortController(), identity: deps.identity() };
-        active = run;
+        active = run; latestRun = run;
         const current = guard();
         deps.changed();
-        task = sendPrivateMessage(deps, {
+        const task = sendPrivateMessage(deps, {
             contactId, messageId, payload, signal: run.controller.signal, guard: current,
-            stage(stage) {run.stage = stage; deps.changed();},
+            recoverInput: () => run.identity === deps.identity() && !deps.isGenerating()
+                && deps.service.current().contacts.some(contact => contact.id === contactId),
+            stage(stage) {
+                run.stage = stage;
+                if (stage === 'syncing' && active === run) {active = null;}
+                deps.changed();
+            },
         }).catch(cause => {
             const stage = cause instanceof MessageSendError ? cause.stage : run.stage;
             console.warn('[LittleWhiteBox] 私人信息未完成', { stage, messageId, cause });
-            if (deps.identity() === run.identity) {
+            if (deps.identity() === run.identity && latestRun === run) {
                 const domain = deps.service.current();
                 const sent = domain.messages.some(message => message.id === messageId);
                 const hasImages = domain.messages.some(message => message.contactId === contactId
@@ -72,42 +88,45 @@ export function createMessagesRuntime(deps: SendDependencies & {
                     : deps.service.pending() ? (sent ? '还不确定回复是否保存成功，请先检查保存。' : '还不确定是否发送成功，请先检查保存。')
                         : stage === 'uploading' ? '图片发送失败，可以重试。'
                             : cause instanceof Error && cause.message === 'messages_image_missing' ? '消息里的原图暂时无法读取，请恢复图库中的原图后重试。'
-                                : stage === 'syncing' ? '消息已保留，尚未写入主聊天。点上方「查看」继续处理。'
+                                : stage === 'syncing' ? messageSyncCopy.failed
                                     : !sent ? '发送失败，可以重试。'
                                         : '暂时没有收到回复。请检查 API 配置或网络，再重试这条消息。'
                                             + (hasImages ? '若模型不支持图片，可更换支持图片的模型后重试。' : ''));
-                if (stage === 'syncing') {error = message;}
+                if (stage === 'syncing') {syncError = message;}
                 else {failure = { contactId, messageId, message };}
             }
-        }).finally(() => {pendingOutgoing(); if (active === run) {active = null;} deps.changed();});
+        }).finally(() => {pendingOutgoing(); if (active === run) {active = null;} tasks.delete(task); deps.changed();});
+        tasks.add(task);
     }
     function regenerate(target: ModificationTarget) {
         if (active || pendingOutgoing()) {throw new Error('messages_busy');}
         if (deps.isGenerating()) {throw new Error('messages_not_ready');}
         deps.modifications.authorize(target, 'regenerate');
         const run = { contactId: target.contactId, messageId: target.messageId!, stage: 'replying', controller: new AbortController(), identity: deps.identity() };
-        const current = guard(); active = run; error = ''; failure = null; deps.changed();
-        task = regenerateMessageReply(deps, deps.modifications, target, { signal: run.controller.signal, guard: current,
+        const current = guard(); active = run; latestRun = run; error = ''; failure = null; deps.changed();
+        const task = regenerateMessageReply(deps, deps.modifications, target, { signal: run.controller.signal, guard: current,
             stage(stage) {run.stage = stage; deps.changed();},
         }).catch(cause => {
             console.warn('[LittleWhiteBox] 重新回复未完成', cause);
-            if (run.identity === deps.identity()) {error = deps.service.pending() || deps.service.current().pendingMutation
+            if (run.identity === deps.identity() && latestRun === run) {error = deps.service.pending() || deps.service.current().pendingMutation
                 ? '还不确定修改是否保存成功，请点击「检查保存」。' : contextFailure(cause) || '重新回复未完成，原回复已保留。';}
-        }).finally(() => {if (active === run) {active = null;} deps.changed();});
+        }).finally(() => {if (active === run) {active = null;} tasks.delete(task); deps.changed();});
+        tasks.add(task);
     }
     return {
         start, regenerate, cancel, guard,
         contextStats: (contact: MessageContact, history: PrivateMessage[]) => previewMessageContext(deps, contact, history),
         get active() {return active;}, get error() {return error;},
+        get syncError() {return syncError;},
         get outgoing() {return pendingOutgoing();}, get failure() {return failure;},
-        clearError() {error = ''; failure = null;},
+        clearError() {error = ''; syncError = ''; failure = null;},
         discard(messageId: string) {
             if (active || deps.service.pending()) {throw new Error('messages_busy');}
             if (outgoing?.messageId === messageId) {outgoing = null;}
             if (failure?.messageId === messageId) {failure = null;}
         },
-        reset() {cancel(); outgoing = null; failure = null; error = '';},
-        async stop() {cancel(); await task; outgoing = null; failure = null;},
+        reset() {cancel(); latestRun = null; outgoing = null; failure = null; error = ''; syncError = '';},
+        async stop() {cancel(); latestRun = null; await Promise.allSettled([...tasks]); outgoing = null; failure = null;},
     };
 }
 

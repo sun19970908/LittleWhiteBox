@@ -1,5 +1,13 @@
 import { renderPreviewsForMessage } from '../../../../modules/draw/shared/draw-common.js';
 import { mountChatMessageImages } from '../../../../modules/draw/shared/chat-message-images.js';
+import { configureChatImageTagMigration } from '../../../../modules/draw/shared/chat-image-tag-migration.js';
+import { prepareTauriTavernDrawBranches } from './chat-branches.js';
+
+export function configureTauriTavernDraw(environment) {
+    configureChatImageTagMigration({
+        prepareBranches: environment.isTauriTavern ? prepareTauriTavernDrawBranches : undefined,
+    });
+}
 
 export function mountTauriTavernDrawPanel(element, mesid) {
     if (element.getAttribute('is_user') === 'true') return;
@@ -11,7 +19,7 @@ export function mountTauriTavernDrawPanel(element, mesid) {
 export function createTauriTavernDrawDecorator({ settings, isDrawProviderActive, onError }) {
     return ({ content, mesid, signal }) => {
         if (!settings.enabled || !isDrawProviderActive()) return;
-        const release = mountChatMessageImages(content);
+        const release = mountChatMessageImages(content, mesid);
         void renderPreviewsForMessage(mesid, { content, signal }).catch(error => {
             if (!signal.aborted) onError(error);
         });

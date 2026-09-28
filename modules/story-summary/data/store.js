@@ -1,7 +1,7 @@
 // Story Summary - Store
 // L2 (events/characters/arcs) + L3 (facts) 统一存储
 
-import { getContext, saveMetadataDebounced } from "../../../../../../extensions.js";
+import { getContext } from "../../../../../../extensions.js";
 import { chat_metadata } from "../../../../../../../script.js";
 import { EXT_ID } from "../../../core/constants.js";
 import { xbLog } from "../../../core/debug-core.js";
@@ -14,12 +14,18 @@ import {
 import {
     applyExactSummaryHistoryUndo,
     buildSummaryUndo,
-    isLegacySummaryHistoryEntry,
-    normalizeSummaryUndo,
 } from "./summary-undo.js";
-import { isRelationFact, parseRelationTarget } from "./fact-predicates.js";
-import { projectSummaryEvent } from "./events.js";
+import { isRelationFact, parseRelationTarget, factKey } from "./fact-predicates.js";
+import { projectSummaryEvent, normalizeEventStringArray } from "./events.js";
 import { upgradeStoredEventMemoryRoles } from "./migrations/event-memory-role.js";
+import { upgradeSummaryHistory, createSummaryBatch } from './summary-history.js';
+export { getRollbackOnceTargetEndMesId } from './summary-history.js';
+import { getRollbackOnceTargetEndMesId } from './summary-history.js';
+import { maintenanceImpact, sameMemory, restoreMaintenance } from '../maintenance/domain.js';
+import { deleteStateVectorsByIds, deleteStateVectorsFromFloor } from '../vector/storage/state-store.js';
+import { readSummaryMemory, commitSummaryMemory, getMemoryCommitState, assertMemoryWritable, rememberLoadedMemory,
+    getRuntimeInvalidSourceFloor, noteInvalidMemorySource } from './memory-commit.js';
+import { invalidateMemoryAnchors, updateMaintainedAnchorIndex } from './anchor-invalidation.js';
 
 const MODULE_ID = 'summaryStore';
 const FACTS_LIMIT_PER_SUBJECT = 10;
@@ -29,86 +35,8 @@ function isPlainObject(value) {
     return !!value && typeof value === 'object' && !Array.isArray(value);
 }
 
-function normalizeStringArray(value) {
-    if (!Array.isArray(value)) {
-        return { value: [], changed: value != null };
-    }
-
-    const next = [];
-    let changed = false;
-    for (const item of value) {
-        let text = '';
-        if (typeof item === 'string') {
-            text = item.trim();
-        } else if (isPlainObject(item)) {
-            // Old data may store names/ids as lightweight objects; only accept explicit text-like fields.
-            text = String(item.name || item.text || item.id || '').trim();
-            changed = true;
-        } else if (item != null) {
-            changed = true;
-        }
-        if (!text) {
-            if (item != null) changed = true;
-            continue;
-        }
-        next.push(text);
-        if (typeof item !== 'string' || item !== text) {
-            changed = true;
-        }
-    }
-
-    if (!changed && next.length !== value.length) {
-        changed = true;
-    }
-
-    return { value: changed ? next : value, changed };
-}
-
 function normalizeSummaryHistory(history) {
-    if (!Array.isArray(history)) {
-        return { value: [], changed: history != null };
-    }
-
-    const next = [];
-    let changed = false;
-    for (const item of history) {
-        const endMesId = Number(item?.endMesId);
-        if (!Number.isFinite(endMesId)) {
-            changed = true;
-            continue;
-        }
-        const normalizedEndMesId = Math.trunc(endMesId);
-        const isExactFormat = item?.format === 1;
-        const undo = isExactFormat ? normalizeSummaryUndo(item.undo) : null;
-        const previousEndMesId = Number(item?.previousEndMesId);
-        const hasExactBoundary = isExactFormat
-            && undo
-            && Number.isInteger(previousEndMesId)
-            && previousEndMesId < normalizedEndMesId;
-        const normalized = hasExactBoundary
-            ? { format: 1, previousEndMesId, endMesId: normalizedEndMesId, undo }
-            : (isLegacySummaryHistoryEntry(item)
-                ? { endMesId: normalizedEndMesId }
-                : { format: 1, endMesId: normalizedEndMesId });
-        const itemIsCanonical = isPlainObject(item)
-            && item.endMesId === normalizedEndMesId
-            && (hasExactBoundary
-                ? item.format === 1 && item.previousEndMesId === previousEndMesId && undo === item.undo
-                : (normalized.format === 1
-                    ? item.format === 1 && item.undo == null && item.previousEndMesId == null
-                    : item.format == null && item.undo == null && item.previousEndMesId == null))
-            && Object.keys(item).every(key => key === 'format' || key === 'previousEndMesId' || key === 'endMesId' || key === 'undo');
-        next.push(itemIsCanonical ? item : normalized);
-        if (!itemIsCanonical) {
-            changed = true;
-        }
-    }
-
-    if (!changed && next.length !== history.length) {
-        changed = true;
-    }
-
-    return { value: changed ? next : history, changed };
+    return upgradeSummaryHistory(history);
 }
 
 function normalizeSummaryJson(json) {
@@ -153,14 +81,14 @@ function normalizeSummaryJson(json) {
 
             let normalizedEvent = event;
 
-            const participants = normalizeStringArray(event.participants);
+            const participants = normalizeEventStringArray(event.participants);
             if (participants.changed) {
                 normalizedEvent = normalizedEvent === event ? { ...event } : normalizedEvent;
                 normalizedEvent.participants = participants.value;
                 changed = true;
             }
 
-            const causedBy = normalizeStringArray(event.causedBy);
+            const causedBy = normalizeEventStringArray(event.causedBy);
             if (causedBy.changed) {
                 normalizedEvent = normalizedEvent === event ? { ...event } : normalizedEvent;
                 normalizedEvent.causedBy = causedBy.value;
@@ -329,11 +257,20 @@ export function getSummaryStore() {
     if (!chatId) return null;
     chat_metadata.extensions ||= {};
     chat_metadata.extensions[EXT_ID] ||= {};
+    rememberLoadedMemory();
     chat_metadata.extensions[EXT_ID].storySummary ||= {};
 
     const store = chat_metadata.extensions[EXT_ID].storySummary;
-    let changed = normalizeSummaryStore(store);
+    let changed = false;
     if (!loadedEventStores.has(store)) {
+        try { changed = normalizeSummaryStore(store); }
+        catch (error) {
+            if (!['summary_history_invalid', 'invalid_history'].includes(error.code)) throw error;
+            // Malformed history stays available for export, never becomes a baseline.
+            // This is real structural damage, unlike runtime-only save uncertainty.
+            store.summaryInvalid = true;
+            xbLog.error(MODULE_ID, 'summary_history_invalid', error);
+        }
         changed = upgradeStoredEventMemoryRoles(store) || changed;
         loadedEventStores.add(store);
     }
@@ -347,55 +284,17 @@ export function getSummaryStore() {
 
     if (changed) {
         store.updatedAt = Date.now();
-        saveSummaryStore();
+        // Load conversion stays in memory until the next atomic commit. Never start an
+        // unconfirmed background write while merely reading or switching chats.
         xbLog.info(MODULE_ID, '已自动修正总结存储中的旧结构或异常字段');
     }
 
     return store;
 }
 
-export function saveSummaryStore() {
-    saveMetadataDebounced?.();
-}
-
-export async function saveSummaryStoreImmediately(
-    expectedChatId,
-) {
-    const context = getContext();
-    if (!context?.chatId || context.chatId !== expectedChatId) {
-        throw new Error('summary_chat_changed_before_save');
-    }
-    if (typeof context.saveMetadata !== 'function') {
-        throw new Error('summary_metadata_save_unavailable');
-    }
-
-    await context.saveMetadata();
-}
-
-export function addSummarySnapshot(store, previousEndMesId, endMesId, undo = null) {
+export function addSummarySnapshot(store, previousEndMesId, endMesId, undo, policy) {
     store.summaryHistory ||= [];
-    const normalizedUndo = normalizeSummaryUndo(undo);
-    store.summaryHistory.push(normalizedUndo
-        ? { format: 1, previousEndMesId, endMesId, undo: normalizedUndo }
-        : { endMesId });
-}
-
-export function getRollbackOnceTargetEndMesId(store) {
-    const currentEndMesId = Number(store?.lastSummarizedMesId);
-    if (!Number.isFinite(currentEndMesId) || currentEndMesId < 0) {
-        return null;
-    }
-
-    const history = Array.isArray(store?.summaryHistory) ? store.summaryHistory : [];
-    for (let i = history.length - 1; i >= 0; i--) {
-        const candidate = Number(history[i]?.endMesId);
-        if (!Number.isFinite(candidate)) continue;
-        if (candidate < currentEndMesId) {
-            return Math.trunc(candidate);
-        }
-    }
-
-    return -1;
+    store.summaryHistory.push(createSummaryBatch(previousEndMesId, endMesId, undo, policy));
 }
 
 export function isSummaryRollbackRequired(store, currentLength) {
@@ -406,7 +305,9 @@ export function isSummaryRollbackRequired(store, currentLength) {
 }
 
 export function isSummaryConsumable(store, currentLength) {
-    return store?.summaryInvalid !== true && !isSummaryRollbackRequired(store, currentLength);
+    return getMemoryCommitState() === 'ready' && store?.summaryInvalid !== true
+        && store?.sourceInvalidFromFloor == null
+        && !isSummaryRollbackRequired(store, currentLength);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -427,13 +328,6 @@ export function extractRelationshipsFromFacts(facts) {
             };
         })
         .filter(Boolean);
-}
-
-/**
- * 生成 fact 的唯一键（s + p）
- */
-function factKey(f) {
-    return `${f.s}::${f.p}`;
 }
 
 /**
@@ -689,57 +583,71 @@ export function mergeNewData(oldJson, parsed, endMesId, options = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 // 删除时有效原文前缀由聊天长度决定；swipe 则从被替换楼层起失效。
-export async function rollbackSummaryIfNeeded({ changedFromFloor = null } = {}) {
+export async function rollbackSummaryIfNeeded({ changedFromFloor = null, invalidateFromFloor = null } = {}) {
     const { chat, chatId } = getContext();
     const currentLength = Array.isArray(chat) ? chat.length : 0;
-    const validPrefixLength = Number.isInteger(changedFromFloor) && changedFromFloor >= 0
-        ? Math.min(currentLength, changedFromFloor)
-        : currentLength;
+    let validPrefixLength = Number.isInteger(changedFromFloor) && changedFromFloor >= 0
+        ? Math.min(currentLength, changedFromFloor) : currentLength;
     const store = getSummaryStore();
-
-    if (!store || store.lastSummarizedMesId == null || store.lastSummarizedMesId < 0) {
-        return { status: 'not_needed' };
-    }
-
-    const lastSummarized = store.lastSummarizedMesId;
-
-    if (isSummaryRollbackRequired(store, validPrefixLength)) {
-        xbLog.warn(MODULE_ID, `原文变更影响已总结范围 ${validPrefixLength}-${lastSummarized}，触发回滚`);
-
-        const history = store.summaryHistory || [];
-        let targetEndMesId = -1;
-
-        for (let i = history.length - 1; i >= 0; i--) {
-            if (history[i].endMesId < validPrefixLength) {
-                targetEndMesId = history[i].endMesId;
-                break;
-            }
-        }
-
-        let rollback;
+    if (store?.sourceInvalidFromFloor != null) validPrefixLength = Math.min(validPrefixLength, store.sourceInvalidFromFloor);
+    if (getRuntimeInvalidSourceFloor() != null) validPrefixLength = Math.min(validPrefixLength, getRuntimeInvalidSourceFloor());
+    assertMemoryWritable(chatId);
+    const previous = readSummaryMemory();
+    const next = structuredClone(previous);
+    // Retire before undo, including operations whose anchors were already deleted by the Agent.
+    const invalidFrom = Math.min(validPrefixLength, invalidateFromFloor ?? changedFromFloor ?? currentLength);
+    invalidateMemoryAnchors(next, invalidFrom);
+    const invalidate = () => deleteStateVectorsFromFloor(chatId, invalidFrom);
+    if (!store || !isSummaryRollbackRequired(store, validPrefixLength)) {
+        delete next.storySummary.sourceInvalidFromFloor;
         try {
-            rollback = await executeRollback(chatId, store, targetEndMesId);
-        } catch (error) {
-            xbLog.error(MODULE_ID, '总结回滚发生未处理异常', error);
-            rollback = { status: 'failed', reason: 'rollback_exception', targetEndMesId };
-        }
-
-        if (rollback.status === 'failed') {
-            store.summaryInvalid = true;
-            store.updatedAt = Date.now();
-            try {
-                await saveSummaryStoreImmediately(chatId);
-            } catch (error) {
-                xbLog.error(MODULE_ID, '总结完整性状态未能持久化', error);
+            if (!sameMemory(next, previous) || getRuntimeInvalidSourceFloor() != null) {
+                await commitSummaryMemory(chatId, next, { previous, invalidate, resolvesSourceInvalidity: true });
             }
+            else await invalidate();
+        } catch (error) {
+            // The host has already edited/deleted the source. A failed cleanup must not
+            // leave its old anchors consumable, even when no L2 rollback was required.
+            if (getContext().chatId === chatId && getMemoryCommitState() !== 'unconfirmed') {
+                noteInvalidMemorySource(invalidFrom);
+                const blocked = structuredClone(previous);
+                blocked.storySummary.sourceInvalidFromFloor = invalidFrom;
+                await commitSummaryMemory(chatId, blocked, { previous });
+            }
+            throw error;
         }
-        return rollback;
+        return store?.summaryInvalid ? { status: 'failed', reason: 'history_discontinuous' }
+            : store?.sourceInvalidFromFloor != null ? { status: 'failed', reason: 'source_boundary_invalid' }
+                : { status: 'not_needed' };
     }
+    noteInvalidMemorySource(validPrefixLength);
+    const history = next.storySummary.summaryHistory || [];
+    const target = [...history].reverse().find(entry => entry.endMesId < validPrefixLength)?.endMesId ?? -1;
+    const baseline = history.find(entry => entry.kind === 'baseline');
+    if (baseline && target < baseline.endMesId) {
+        next.storySummary.sourceInvalidFromFloor = validPrefixLength;
+        await commitSummaryMemory(chatId, next, { previous, invalidate });
+        return { status: 'failed', reason: 'source_boundary_invalid', targetEndMesId: target };
+    }
+    const rollback = await executeRollback(chatId, store, target, { previous, next, invalidate });
+    if (rollback.status === 'failed' && getMemoryCommitState() !== 'unconfirmed') {
+        const blocked = structuredClone(previous);
+        if (rollback.reason === 'history_discontinuous') blocked.storySummary.summaryInvalid = true;
+        else blocked.storySummary.sourceInvalidFromFloor = validPrefixLength;
+        // Cache cleanup failed or undo conflicted: preserve memory, persist only the source/integrity block.
+        await commitSummaryMemory(chatId, blocked, { previous });
+    }
+    return rollback;
+}
 
-    if (store.summaryInvalid === true) {
-        return { status: 'failed', reason: 'summary_invalid', targetEndMesId: null };
-    }
-    return { status: 'not_needed' };
+export async function invalidateSummaryAnchors(chatId, fromFloor = 0, reason = 'source_changed') {
+    getSummaryStore();
+    const previous = readSummaryMemory();
+    const next = structuredClone(previous);
+    const impact = invalidateMemoryAnchors(next, fromFloor, reason);
+    await commitSummaryMemory(chatId, next, { previous,
+        invalidate: () => deleteStateVectorsFromFloor(chatId, fromFloor) });
+    return impact;
 }
 
 function hasSummaryContent(json) {
@@ -760,88 +668,58 @@ function hasSummaryContent(json) {
         && Object.keys(json.characters).some(field => field !== 'main');
 }
 
-export async function executeRollback(chatId, store, targetEndMesId) {
-    const previousStore = structuredClone(store);
-    const oldEvents = store.json?.events || [];
-
-    let json = store.json || {};
-    const exactRollback = applyExactSummaryHistoryUndo(
-        json,
-        store.summaryHistory,
-        targetEndMesId,
-        store.lastSummarizedMesId,
-    );
-    if (exactRollback.historyDiscontinuous) {
-        xbLog.error(MODULE_ID, `总结历史链不连续，拒绝回滚: ${store.lastSummarizedMesId} -> ${targetEndMesId}`);
+export async function executeRollback(chatId, store, targetEndMesId, options = {}) {
+    if (getSummaryStore() !== store) throw new Error('summary_store_changed');
+    assertMemoryWritable(chatId);
+    const previous = options.previous || readSummaryMemory();
+    const next = options.next || structuredClone(previous);
+    const draft = next.storySummary;
+    const currentBatch = draft.summaryHistory?.find(entry => entry.endMesId === draft.lastSummarizedMesId);
+    const maintenanceOnly = targetEndMesId === draft.lastSummarizedMesId && currentBatch?.kind === 'baseline';
+    const maintenance = (draft.summaryHistory || []).filter(entry => entry.endMesId > targetEndMesId || (maintenanceOnly && entry === currentBatch))
+        .flatMap(entry => entry.maintenance || []);
+    const impact = maintenanceImpact(maintenance.flatMap(receipt => receipt.operations));
+    let restored;
+    try {
+        restored = maintenanceOnly
+            ? restoreMaintenance({ json: draft.json, atoms: next.stateAtoms }, maintenance)
+            : applyExactSummaryHistoryUndo(draft.json, draft.summaryHistory, targetEndMesId, draft.lastSummarizedMesId, next.stateAtoms);
+    } catch {
         return { status: 'failed', reason: 'history_discontinuous', targetEndMesId };
     }
-    json = exactRollback.json;
-    if (exactRollback.crossedLegacyHistory) {
-        // 升级前的历史没有逆操作，只能保持旧版 best-effort 回滚语义。
-        json.events = (json.events || []).filter(e => (e._addedAt ?? 0) <= targetEndMesId);
-        json.keywords = (json.keywords || []).filter(k => (k._addedAt ?? 0) <= targetEndMesId);
-        json.arcs = (json.arcs || []).filter(a => (a._addedAt ?? 0) <= targetEndMesId);
-        json.arcs.forEach(a => {
-            a.moments = (a.moments || []).filter(m =>
-                typeof m === 'string' || (m._addedAt ?? 0) <= targetEndMesId
-            );
-        });
-
-        if (json.characters) {
-            json.characters.main = (json.characters.main || []).filter(m =>
-                typeof m === 'string' || (m._addedAt ?? 0) <= targetEndMesId
-            );
-        }
-        json.facts = (json.facts || []).filter(f => (f._addedAt ?? 0) <= targetEndMesId);
-        if (targetEndMesId < 0) {
-            // A legacy content rollback can reach an empty story, while its
-            // identity vocabulary remains useful for every later summary.
-            const aliases = normalizeCharacterAliases(json.characterAliases);
-            json = aliases.length ? { characterAliases: aliases } : {};
-        }
-    }
-
-    const retainedEventIds = new Set((json.events || []).map(event => event?.id).filter(Boolean));
-    const deletedEventIds = oldEvents
-        .map(event => event?.id)
-        .filter(id => id && !retainedEventIds.has(id));
-
-    const nextJson = hasSummaryContent(json) ? json : null;
-    // 先清派生向量，再提交事件撤销。否则清理失败后复用事件 ID，会把旧向量
-    // 当成新事件的向量。反过来即使 metadata 保存失败，也只会留下可补齐的缺向量。
-    try {
-        if (targetEndMesId < 0 && !nextJson) {
-            await clearEventVectors(chatId);
-        } else if (deletedEventIds.length > 0) {
-            await deleteEventVectorsByIds(chatId, deletedEventIds);
-        }
-    } catch (error) {
-        xbLog.error(MODULE_ID, '总结回滚失败: event_vector_cleanup_failed', error);
-        return { status: 'failed', reason: 'event_vector_cleanup_failed', targetEndMesId };
-    }
-
-    store.json = nextJson;
-    store.lastSummarizedMesId = targetEndMesId;
-    store.summaryHistory = (store.summaryHistory || []).filter(h => h.endMesId <= targetEndMesId);
-    delete store.summaryInvalid;
+    if (restored.historyDiscontinuous) return { status: 'failed',
+        reason: restored.baselineCrossed ? 'source_boundary_invalid' : 'history_discontinuous', targetEndMesId };
+    const oldEvents = draft.json?.events || [];
+    const retainedEvents = new Map((restored.json.events || []).map(event => [event.id, event]));
+    const deletedEventIds = oldEvents.filter(event => !sameMemory(event, retainedEvents.get(event.id))).map(event => event.id);
+    draft.json = hasSummaryContent(restored.json) ? restored.json : null;
+    next.stateAtoms = restored.atoms;
+    updateMaintainedAnchorIndex(next, impact.floors);
+    draft.lastSummarizedMesId = targetEndMesId;
+    draft.summaryHistory = (draft.summaryHistory || []).filter(entry => entry.endMesId <= targetEndMesId);
+    if (maintenanceOnly) draft.summaryHistory.find(entry => entry.endMesId === targetEndMesId).maintenance = [];
+    delete draft.summaryInvalid;
+    const invalidSourceFloor = Math.min(draft.sourceInvalidFromFloor ?? Infinity, getRuntimeInvalidSourceFloor() ?? Infinity);
+    const sourceResolved = targetEndMesId < invalidSourceFloor;
+    if (sourceResolved) delete draft.sourceInvalidFromFloor;
+    else draft.sourceInvalidFromFloor = invalidSourceFloor;
     if (targetEndMesId < 0) {
-        store.hideSummarizedHistory = false;
-        if (store.json) store.pendingImportBoundary = true;
-        else delete store.pendingImportBoundary;
-    } else {
-        delete store.pendingImportBoundary;
-    }
-    store.updatedAt = Date.now();
+        draft.hideSummarizedHistory = false;
+        if (draft.json) draft.pendingImportBoundary = true;
+        else delete draft.pendingImportBoundary;
+    } else delete draft.pendingImportBoundary;
+    draft.updatedAt = Date.now();
     try {
-        await saveSummaryStoreImmediately(chatId);
+        await commitSummaryMemory(chatId, next, { previous, resolvesSourceInvalidity: sourceResolved, invalidate: async () => {
+            await options.invalidate?.();
+            if (targetEndMesId < 0 && !draft.json) await clearEventVectors(chatId);
+            else if (deletedEventIds.length) await deleteEventVectorsByIds(chatId, deletedEventIds);
+            if (impact.atomIds.length) await deleteStateVectorsByIds(chatId, impact.atomIds);
+        } });
     } catch (error) {
-        for (const key of Object.keys(store)) delete store[key];
-        Object.assign(store, previousStore);
-        xbLog.error(MODULE_ID, '总结回滚失败: metadata_persistence_failed', error);
-        return { status: 'failed', reason: 'metadata_persistence_failed', targetEndMesId };
+        xbLog.error(MODULE_ID, '总结回滚未提交', error);
+        return { status: 'failed', reason: error.code || 'metadata_persistence_failed', targetEndMesId };
     }
-
-    xbLog.info(MODULE_ID, `回滚完成，目标楼层: ${targetEndMesId}`);
     return { status: 'rolled_back', targetEndMesId };
 }
 
@@ -875,31 +753,24 @@ export async function rollbackSummaryOnce(chatId) {
 }
 
 export async function clearSummaryData(chatId) {
-    const store = getSummaryStore();
-    const previousStore = store ? structuredClone(store) : null;
-    // 与回滚相同：成功删除派生向量后，才允许释放全部事件 ID。
-    if (chatId) await clearEventVectors(chatId);
-    if (store) {
-        delete store.json;
-        store.lastSummarizedMesId = -1;
-        store.summaryHistory = [];
-        delete store.pendingImportBoundary;
-        delete store.summaryInvalid;
-        store.hideSummarizedHistory = false;
-        store.updatedAt = Date.now();
-    }
-
-    try {
-        await saveSummaryStoreImmediately(chatId);
-    } catch (error) {
-        if (store && previousStore) {
-            for (const key of Object.keys(store)) delete store[key];
-            Object.assign(store, previousStore);
-        }
-        throw error;
-    }
-
-    xbLog.info(MODULE_ID, '总结数据已清空');
+    getSummaryStore();
+    const previous = readSummaryMemory();
+    const next = structuredClone(previous);
+    const store = next.storySummary;
+    const invalidSourceFloor = Math.min(store.sourceInvalidFromFloor ?? Infinity, getRuntimeInvalidSourceFloor() ?? Infinity);
+    if (Number.isFinite(invalidSourceFloor)) invalidateMemoryAnchors(next, invalidSourceFloor);
+    delete store.json;
+    store.lastSummarizedMesId = -1;
+    store.summaryHistory = [];
+    delete store.pendingImportBoundary;
+    delete store.summaryInvalid;
+    delete store.sourceInvalidFromFloor;
+    store.hideSummarizedHistory = false;
+    store.updatedAt = Date.now();
+    await commitSummaryMemory(chatId, next, { previous, resolvesSourceInvalidity: true, invalidate: async () => {
+        if (Number.isFinite(invalidSourceFloor)) await deleteStateVectorsFromFloor(chatId, invalidSourceFloor);
+        await clearEventVectors(chatId);
+    } });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -908,6 +779,7 @@ export async function clearSummaryData(chatId) {
 
 export function getFacts() {
     const store = getSummaryStore();
+    if (!isSummaryConsumable(store, getContext().chat?.length || 0)) return [];
     return (store?.json?.facts || []).filter(f => !f.retracted);
 }
 

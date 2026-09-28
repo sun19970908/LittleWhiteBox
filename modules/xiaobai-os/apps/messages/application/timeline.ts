@@ -19,6 +19,7 @@ export interface MessagesChatPort {
 export function createMessagesTimeline(service: MessagesService, chat: MessagesChatPort, id: () => string) {
     const createdHere = new Set<string>();
     const observedClosed = new Set<string>();
+    const pendingSync = new Map<string, Promise<void>>();
 
     function matching(segmentId: string) {
         return chat.messages().flatMap((message, index) => projectionMarker(message)?.segmentId === segmentId ? [{ message, index }] : []);
@@ -74,7 +75,7 @@ export function createMessagesTimeline(service: MessagesService, chat: MessagesC
         chat.releaseConfirmation(identity, marker);
     }
 
-    async function sync(segmentId: string, guard: () => boolean): Promise<void> {
+    async function syncNow(segmentId: string, guard: () => boolean): Promise<void> {
         if (!guard()) {throw new Error('messages_boundary_changed');}
         const identity = chat.identity();
         const state = service.current();
@@ -111,6 +112,17 @@ export function createMessagesTimeline(service: MessagesService, chat: MessagesC
         if (!confirmed) {throw new Error('messages_projection_unconfirmed');}
         if (!guard()) {return;} // confirmed fact stays in its original chat; recover receipt next time.
         await receipt(segmentId, marker, guard);
+    }
+
+    function sync(segmentId: string, guard: () => boolean): Promise<void> {
+        const identity = chat.identity();
+        const preceding = pendingSync.get(identity);
+        const task = preceding ? preceding.catch(() => undefined).then(() => syncNow(segmentId, guard))
+            : syncNow(segmentId, guard);
+        pendingSync.set(identity, task);
+        void task.then(() => {if (pendingSync.get(identity) === task) {pendingSync.delete(identity);}},
+            () => {if (pendingSync.get(identity) === task) {pendingSync.delete(identity);}});
+        return task;
     }
 
     async function recover(guard: () => boolean): Promise<void> {

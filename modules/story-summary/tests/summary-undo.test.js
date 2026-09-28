@@ -118,22 +118,22 @@ test('manual edits after alias canonicalization reject the whole undo', () => {
     assert.equal(current.facts[0].s, '红叶');
 });
 
-test('exact history rolls back to the legacy baseline before old best-effort handling', () => {
+test('exact history stops at a baseline and never guesses an inverse across it', () => {
     const baseline = makeBaseline();
     const afterFirst = structuredClone(baseline);
     afterFirst.facts[0] = { ...afterFirst.facts[0], o: '城北' };
     const afterSecond = structuredClone(afterFirst);
     afterSecond.events.push({ id: 'evt-2', summary: '第二批', participants: [], _addedAt: 30 });
     const history = [
-        { endMesId: 10 },
+        { format: 2, kind: 'baseline', endMesId: 10, maintenance: [] },
         {
-            format: 1,
+            format: 2, kind: 'batch',
             previousEndMesId: 10,
             endMesId: 20,
             undo: buildSummaryUndo(baseline, afterFirst),
         },
         {
-            format: 1,
+            format: 2, kind: 'batch',
             previousEndMesId: 20,
             endMesId: 30,
             undo: buildSummaryUndo(afterFirst, afterSecond),
@@ -142,14 +142,13 @@ test('exact history rolls back to the legacy baseline before old best-effort han
 
     const toBaseline = applyExactSummaryHistoryUndo(afterSecond, history, 10, 30);
     assert.equal(toBaseline.historyDiscontinuous, false);
-    assert.equal(toBaseline.crossedLegacyHistory, false);
     assert.deepEqual(toBaseline.json, baseline);
 
     const acrossBaseline = applyExactSummaryHistoryUndo(afterSecond, history, 5, 30);
-    assert.equal(acrossBaseline.historyDiscontinuous, false);
-    assert.equal(acrossBaseline.crossedLegacyHistory, true);
-    assert.equal(acrossBaseline.restoredEndMesId, 10);
-    assert.deepEqual(acrossBaseline.json, baseline);
+    assert.equal(acrossBaseline.historyDiscontinuous, true);
+    assert.equal(acrossBaseline.baselineCrossed, true);
+    assert.equal(acrossBaseline.restoredEndMesId, 30);
+    assert.deepEqual(acrossBaseline.json, afterSecond);
 });
 
 test('a broken history chain is rejected before any partial rollback', () => {
@@ -157,7 +156,7 @@ test('a broken history chain is rejected before any partial rollback', () => {
     const current = structuredClone(baseline);
     current.facts[0] = { ...current.facts[0], o: '城北' };
     const result = applyExactSummaryHistoryUndo(current, [{
-        format: 1,
+        format: 2, kind: 'batch',
         previousEndMesId: 20,
         endMesId: 30,
         undo: buildSummaryUndo(baseline, current),
@@ -176,13 +175,12 @@ test('invalid exact undo data is never downgraded to legacy history', () => {
 
     const current = makeBaseline();
     const result = applyExactSummaryHistoryUndo(current, [{
-        format: 1,
+        format: 2, kind: 'batch',
         previousEndMesId: 10,
         endMesId: 20,
         undo: { version: 1, eventChanges: [{ key: 'evt-1', index: 0, previous: null }] },
     }], 10, 20);
     assert.equal(result.historyDiscontinuous, true);
-    assert.equal(result.crossedLegacyHistory, false);
 });
 
 test('undo change keys must match the identity of their stored objects', () => {
@@ -214,7 +212,7 @@ test('exact first-batch undo reaches boundary -1 and preserves unrelated manual 
     const current = structuredClone(generated);
     current.events.push({ id: 'evt-manual', summary: '人工新增事件', participants: [], _addedAt: 21 });
     const history = [{
-        format: 1,
+        format: 2, kind: 'batch',
         previousEndMesId: -1,
         endMesId: 20,
         undo: buildSummaryUndo(before, generated),

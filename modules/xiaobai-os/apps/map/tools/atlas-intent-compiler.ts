@@ -1,9 +1,9 @@
 import { sha256 } from 'js-sha256';
 import type { AcceptedTurnPlayer } from '../../../capabilities/maintenance/accepted-turn-source.js';
 import type { MapDomainEdit } from '../../../domains/map/edit.js';
+import { compileAtlasLocations } from './atlas-location-compiler.js';
 import {
     MAX_MAP_ACTORS,
-    MAX_MAP_BRIEF_LENGTH,
     MAX_MAP_LABEL_LENGTH,
     MAX_MAP_LINKS,
     MAX_MAP_LOCATIONS,
@@ -13,18 +13,12 @@ import type {
     MapDomainV1,
     MapLink,
     MapLinkKind,
-    MapLocation,
-    MapLocationScale,
-    MapLocationStatus,
 } from '../../../domains/map/types.js';
-import { mapToolResult, type MapToolItemReport, type MapToolResult } from './result.js';
-import { applyIntentEdits, enumToken, errorText, intentId, intentText, isRecord } from './intent-common.js';
+import { mapToolFailure, mapToolResult, type MapToolResult } from './result.js';
+import { applyIntentEdits, enumToken, intentId, intentText, isRecord } from './intent-common.js';
 
-const LOCATION_SCALES: readonly MapLocationScale[] = ['world', 'region', 'city', 'district', 'building', 'floor', 'room', 'outdoor'];
-const LOCATION_STATUSES: readonly MapLocationStatus[] = ['mentioned', 'visited'];
 const LINK_KINDS: readonly MapLinkKind[] = ['door', 'stairs', 'elevator', 'path', 'road', 'portal', 'passage'];
 const ROOT_FIELDS = new Set(['locations', 'links', 'actors', 'remove']);
-const LOCATION_FIELDS = new Set(['key', 'name', 'scale', 'status', 'parent', 'brief', 'position', 'terrain']);
 const LINK_FIELDS = new Set(['id', 'from', 'to', 'kind', 'label', 'bidirectional']);
 const ACTOR_FIELDS = new Set(['actorKey', 'displayName', 'locationKey']);
 const REMOVAL_FIELDS = new Set(['locationKeys', 'linkIds', 'actorKeys']);
@@ -185,12 +179,14 @@ export function compileAtlasIntent(
             }),
         };
     }
-    let working = current;
-    const edits: MapDomainEdit[] = [];
-    const applied: MapToolItemReport[] = [];
-    const skipped: MapToolItemReport[] = [];
+    const rawLocations = Array.isArray(value.locations) ? value.locations : [];
+    const locations = compileAtlasLocations(current, rawLocations);
+    let working = locations.domain;
+    const edits = [...locations.edits];
+    const applied = [...locations.applied];
+    const skipped = [...locations.skipped];
     const warnings: string[] = [];
-    let changed = false;
+    let changed = locations.changed;
 
     const applyItem = (collection: string, index: number, id: string, itemEdits: MapDomainEdit[], hint: string): boolean => {
         try {
@@ -201,56 +197,10 @@ export function compileAtlasIntent(
             applied.push({ collection, index, id, changed: next.changed });
             return true;
         } catch (error) {
-            skipped.push({ collection, index, id, reason: errorText(error), hint });
+            skipped.push({ collection, index, id, ...mapToolFailure(error), hint });
             return false;
         }
     };
-
-    const rawLocations = Array.isArray(value.locations) ? value.locations : [];
-    const pending = rawLocations.map((raw, index) => ({ raw, index }));
-    let progressed = true;
-    while (pending.length && progressed) {
-        progressed = false;
-        for (let cursor = 0; cursor < pending.length; cursor += 1) {
-            const { raw, index } = pending[cursor];
-            if (!isRecord(raw)) {continue;}
-            const key = intentId(raw.key);
-            const unknown = unsupportedFields(raw, LOCATION_FIELDS);
-            if (unknown.length) {
-                skipped.push({ collection: 'locations', index, id: key, reason: 'location_has_unsupported_fields', hint: `Remove unsupported fields: ${unknown.join(', ')}.` });
-                pending.splice(cursor, 1);
-                cursor -= 1;
-                continue;
-            }
-            const name = intentText(raw.name);
-            const parent = intentId(raw.parent);
-            if (!key || !name || (parent && !working.atlas.locations.some(location => location.key === parent))) {continue;}
-            const existing = working.atlas.locations.find(location => location.key === key);
-            const scale = enumToken(raw.scale, LOCATION_SCALES) || existing?.scale || 'room';
-            const status = enumToken(raw.status, LOCATION_STATUSES) || existing?.status || 'mentioned';
-            const location: MapLocation = { ...(existing || { key, name, scale, status }), key, name, scale, status };
-            if (parent) {location.parent = parent;} else if (raw.parent === null || raw.parent === '') {delete location.parent;}
-            const brief = intentText(raw.brief, '', MAX_MAP_BRIEF_LENGTH);
-            if (brief) {location.brief = brief;}
-            // Domain validation rejects malformed geography; never silently replace it with a guessed position.
-            if (raw.position === null) {delete location.position;}
-            else if (raw.position !== undefined) {location.position = raw.position as MapLocation['position'];}
-            if (raw.terrain === null) {delete location.terrain;}
-            else if (raw.terrain !== undefined) {location.terrain = raw.terrain as MapLocation['terrain'];}
-            if (applyItem('locations', index, key, [{ op: 'upsert-location', location }], 'Create the parent first or correct this location.')) {
-                pending.splice(cursor, 1);
-                cursor -= 1;
-                progressed = true;
-            } else {
-                pending.splice(cursor, 1);
-                cursor -= 1;
-            }
-        }
-    }
-    for (const { raw, index } of pending) {
-        const id = isRecord(raw) ? intentId(raw.key) : '';
-        skipped.push({ collection: 'locations', index, id, reason: 'location_invalid_or_parent_missing', hint: 'Provide key/name and an existing or same-call parent.' });
-    }
 
     const rawLinks = Array.isArray(value.links) ? value.links : [];
     rawLinks.forEach((raw, index) => {

@@ -9,8 +9,15 @@ const room = material => [
     entrance([380, 500]), player([390, 390]),
 ];
 
+export const sceneObjectLocations = [
+    { key: 'guesthouse', name: '岸边旅舍 · 公共起居室', scale: 'room' },
+    { key: 'utilities', name: '旅舍 · 厨房与盥洗间', scale: 'room' },
+    { key: 'workshop', name: '北岸检修工坊', scale: 'room' },
+    { key: 'courtyard', name: '溪畔庭院', scale: 'outdoor' },
+];
+
 export const sceneObjectInputs = [
-    { scene: 'guesthouse', title: '岸边旅舍 · 公共起居室', playerHere: true, viewBox: [0, 0, 760, 580], mood: 'warm', elements: [
+    { scene: 'guesthouse', playerHere: true, viewBox: [0, 0, 760, 580], mood: 'warm', elements: [
         ...room('wood'),
         object('shelf', [155, 90], [150, 32], '书架', 'wood'),
         object('sofa', [185, 192], [160, 68], '沙发', 'fabric'),
@@ -26,7 +33,7 @@ export const sceneObjectInputs = [
         round('potted-plant', [86, 373], 18, '盆栽'),
         round('light', [85, 179], 14, '落地灯'),
     ] },
-    { scene: 'utilities', title: '旅舍 · 厨房与盥洗间', playerHere: true, viewBox: [0, 0, 760, 580], mood: 'neutral', elements: [
+    { scene: 'utilities', playerHere: true, viewBox: [0, 0, 760, 580], mood: 'neutral', elements: [
         ...room('tile'),
         { id: 'divider', cat: 'wall', geo: { points: [[397, 60], [397, 330]] }, material: 'tile', closed: false },
         object('counter', [160, 135], [126, 58], '备餐台', 'wood'),
@@ -37,7 +44,7 @@ export const sceneObjectInputs = [
         object('toilet', [477, 166], [42, 65], '马桶'),
         round('potted-plant', [640, 402], 21, '盆栽'),
     ] },
-    { scene: 'workshop', title: '北岸检修工坊', playerHere: true, viewBox: [0, 0, 760, 580], mood: 'cold', elements: [
+    { scene: 'workshop', playerHere: true, viewBox: [0, 0, 760, 580], mood: 'cold', elements: [
         ...room('metal'),
         object('machine', [168, 168], [98, 95], '检修设备', 'metal'),
         object('terminal', [308, 131], [68, 56], '操作终端', 'metal'),
@@ -47,7 +54,7 @@ export const sceneObjectInputs = [
         object('ladder', [95, 424], [35, 22], '梯具', 'metal'),
         object('sign', [673, 447], [47, 26], '出入指示', 'metal'),
     ] },
-    { scene: 'courtyard', title: '溪畔庭院', playerHere: true, scale: 'outdoor', viewBox: [0, 0, 880, 660], mood: 'calm', elements: [
+    { scene: 'courtyard', playerHere: true, viewBox: [0, 0, 880, 660], mood: 'calm', elements: [
         { id: 'ground', cat: 'terrain', geo: { center: [440, 310], size: [780, 520] }, material: 'grass' },
         { id: 'water', cat: 'water', geo: { points: [[630, 50], [702, 50], [733, 270], [700, 570], [624, 570], [657, 270]] }, material: 'water', closed: true },
         { id: 'fence', cat: 'decoration', shape: 'path', icon: 'fence', label: '围栏', geo: { points: [[342, 570], [50, 570], [50, 50], [600, 50]] }, closed: false, material: 'wood' },

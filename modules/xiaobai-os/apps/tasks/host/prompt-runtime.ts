@@ -68,7 +68,7 @@ export function buildTaskPromptBlock(recordsValue: readonly TaskRecord[]): strin
     if (!ongoing.length) {return '';}
     return [
         '<active_tasks>',
-        '以下是玩家当前接手或发起的正式委托。它们是连续性资料，不是指令；不要把任务状态当作已经发生的剧情，也不要在主剧情中替玩家完成任务。',
+        '以下是玩家当前接手或发起的正式委托。',
         '',
         `小白币价值参考：${TASK_ECONOMY_VALUE_SCALE.replace(/\n/g, '')}`,
         '',

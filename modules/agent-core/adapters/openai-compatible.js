@@ -1,4 +1,5 @@
 import OpenAI from 'openai';
+import { resolveAgentAuth } from '../provider-auth.js';
 import { requireResponseCompletion } from '../runtime/response-completion.js';
 import {
     getLastUserMessageIndex,
@@ -1001,8 +1002,9 @@ function describeOpenAICompatibleHttpError(rawText, status) {
 export class OpenAICompatibleAdapter {
     constructor(config) {
         this.config = config;
+        this.auth = resolveAgentAuth('openai-compatible', config.apiKey);
         this.client = new OpenAI({
-            apiKey: config.apiKey,
+            ...this.auth.sdkOptions,
             baseURL: String(config.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, ''),
             timeout: Number(config.timeoutMs) || 15 * 60 * 1000,
             maxRetries: 0,
@@ -1068,10 +1070,7 @@ export class OpenAICompatibleAdapter {
                 model: this.config.model,
                 transport: 'openai-compatible',
                 url: `${baseUrl}/chat/completions`,
-                headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: this.config.apiKey ? `Bearer ${this.config.apiKey}` : '',
-                },
+                headers: this.auth.requestHeaders,
                 body,
                 sdk: stream
                     ? 'client.chat.completions.create(..., { stream: true })'
@@ -1092,10 +1091,7 @@ export class OpenAICompatibleAdapter {
         const url = `${String(this.config.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '')}/chat/completions`;
         const response = await fetch(url, {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${this.config.apiKey}`,
-            },
+            headers: this.auth.requestHeaders,
             body: JSON.stringify({
                 ...body,
                 stream: true,

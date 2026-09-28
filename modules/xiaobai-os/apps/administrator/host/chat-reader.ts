@@ -1,7 +1,8 @@
 import { MANAGEMENT_READ_CHARS, readOffset } from '../../../capabilities/management/read-page.js';
+import { ADMINISTRATOR_POLICY as POLICY } from '../domain/policy.js';
 
 export interface AdministratorChatSurface { identityKey: string; messages: readonly unknown[]; playerName: string; assistantName: string }
-interface SourceMessage { mes?: unknown; name?: unknown; is_user?: unknown; is_system?: unknown; swipe_id?: unknown }
+interface SourceMessage { mes?: unknown; name?: unknown; is_user?: unknown; swipe_id?: unknown }
 interface Evidence { raw: unknown; text: string; swipe: unknown }
 const message = (value: unknown): SourceMessage => value && typeof value === 'object' ? value as SourceMessage : {};
 
@@ -35,37 +36,35 @@ export function createAdministratorChatReader(capture: () => AdministratorChatSu
         if (first > last || last >= messages.length) { throw new Error('administrator_floor_missing'); }
         return { first, last };
     }
+    function changedEvidence(messages: readonly unknown[]) {
+        const floors: number[] = [], missingFloors: number[] = [];
+        for (const [index, old] of evidence) {
+            const raw = messages[index], source = message(raw);
+            if (index >= messages.length) { floors.push(index); missingFloors.push(index); }
+            else if (raw !== old.raw || String(source.mes ?? '') !== old.text || source.swipe_id !== old.swipe) { floors.push(index); }
+        }
+        return { floors, missingFloors };
+    }
     return {
         identity,
+        assertCurrent: () => { current(); },
         releaseEvidence: () => evidence.clear(),
         info: { player: initial.playerName, assistant: initial.assistantName, firstFloor: 0, lastFloor: initial.messages.length - 1 },
-        staleFloors() {
-            const surface = capture();
-            return [...evidence].filter(([index, old]) => {
-                const raw = surface?.messages[index], source = message(raw);
-                return raw !== old.raw || String(source.mes ?? '') !== old.text || source.swipe_id !== old.swipe;
-            }).map(([index]) => index);
-        },
+        staleEvidence: () => changedEvidence(current().messages),
         isCurrent() {
             const surface = capture();
             if (getSignal().aborted || surface?.identityKey !== identity) { return false; }
-            for (const [index, old] of evidence) {
-                const raw = surface.messages[index], source = message(raw);
-                if (raw !== old.raw || String(source.mes ?? '') !== old.text || source.swipe_id !== old.swipe) { return false; }
-            }
-            return true;
+            return changedEvidence(surface.messages).floors.length === 0;
         },
         async read(args: Record<string, unknown>) {
             const { first, last } = bounds(args.from, args.to ?? args.from);
             const items: { floor: number; speaker: string; role: string; text: string; offset: number; totalChars: number }[] = [];
-            const omittedSystemFloors: number[] = [];
             let remaining = MANAGEMENT_READ_CHARS;
-            const result = (scannedTo: number, next: { from: number; to: number; offset: number } | null) => ({ items, omittedSystemFloors, scanned: { from: first, to: scannedTo }, next, complete: next === null });
+            const result = (scannedTo: number, next: { from: number; to: number; offset: number } | null) => ({ items, scanned: { from: first, to: scannedTo }, next, complete: next === null });
             for (let floor = first; floor <= last; floor++) {
-                if (floor - first === 20) { return result(floor - 1, { from: floor, to: last, offset: 0 }); }
+                if (floor - first === POLICY.chatReadFloors) { return result(floor - 1, { from: floor, to: last, offset: 0 }); }
                 if ((floor - first) % 25 === 0) { await new Promise(resolve => setTimeout(resolve, 0)); }
                 const raw = current().messages[floor], source = message(raw), text = String(source.mes ?? '');
-                if (source.is_system) { omittedSystemFloors.push(floor); continue; }
                 const offset = floor === first ? readOffset(args.offset, 0, text.length) : 0;
                 let end = Math.min(text.length, offset + remaining);
                 if (end < text.length && /[\uD800-\uDBFF]/u.test(text[end - 1])) { end--; }
@@ -78,7 +77,7 @@ export function createAdministratorChatReader(capture: () => AdministratorChatSu
             return result(last, null);
         },
         async search(args: Record<string, unknown>) {
-            if (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 200) { throw new Error('administrator_query_invalid'); }
+            if (typeof args.query !== 'string' || !args.query.trim() || args.query.length > POLICY.chatQueryChars) { throw new Error('administrator_query_invalid'); }
             if (!current().messages.length) { return { items: [], next: null, complete: true }; }
             const { first, last } = bounds(args.from, args.to);
             const needle = new RegExp(args.query.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'), 'iu');
@@ -86,14 +85,13 @@ export function createAdministratorChatReader(capture: () => AdministratorChatSu
             for (let floor = first; floor <= last; floor++) {
                 if ((floor - first) % 25 === 0) { await new Promise(resolve => setTimeout(resolve, 0)); }
                 const raw = current().messages[floor], source = message(raw);
-                if (source.is_system) { continue; }
                 const text = String(source.mes ?? ''), found = needle.exec(text)?.index ?? -1;
                 if (found >= 0) {
                     retain(floor, raw);
                     const offset = Math.max(0, found - 100);
                     items.push({ floor, speaker: String(source.name ?? ''), snippet: text.slice(offset, offset + 350), offset });
                 }
-                if (items.length === 20 && floor < last) { return { items, next: { query: args.query, from: floor + 1, to: last }, complete: false }; }
+                if (items.length === POLICY.chatSearchMatches && floor < last) { return { items, next: { query: args.query, from: floor + 1, to: last }, complete: false }; }
             }
             return { items, next: null, complete: true };
         },

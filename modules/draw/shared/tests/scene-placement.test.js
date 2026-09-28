@@ -10,9 +10,7 @@ import {
 import {
     ScenePlacementError,
     assertSceneSourceUnchanged,
-    commitRecoverableScenePlacements,
     commitSceneSlotDelivery,
-    commitSettledScenePlacements,
     insertScenePlacements,
     insertScenePlacementsPreservingSlots,
     isSceneSlotAlive,
@@ -170,26 +168,6 @@ test('scene placement rejects changed text and foreign placements without a tail
     assert.equal(tail, '手动正文。[image:manual]');
 });
 
-// 本地链路的排版提交：基准是规划文本，只剔掉没有任何结果的槽位。
-// 失败也算有结果（要留下可重试的失败卡），所以只有从未产出的槽位才会被剔除。
-// 注意结果不是「原文逐字复原」：block 插入时补的换行与正文原有的换行在文本上完全同形，
-// 删除时只能折叠成一个换行，否则当占位符原本就位于两段之间时会把两段粘在一起。
-test('local placement commit keeps every slot that produced a result and drops the rest', () => {
-    const planned = '第一段。\n[image:a]\n第二段。\n[image:b]';
-    assert.equal(commitSettledScenePlacements(planned, {
-        allSlotIds: ['a', 'b'],
-        settledSlotIds: [],
-    }), '第一段。\n第二段。');
-    assert.equal(commitSettledScenePlacements(planned, {
-        allSlotIds: ['a', 'b'],
-        settledSlotIds: ['a'],
-    }), '第一段。\n[image:a]\n第二段。');
-    assert.equal(commitSettledScenePlacements(planned, {
-        allSlotIds: ['a', 'b'],
-        settledSlotIds: ['a', 'b'],
-    }), planned);
-});
-
 // 后台链路的结算跑在当前活着的正文上，用的就是这个原语。结算期间用户可能改过正文、
 // 也可能有别的任务插入了自己的槽位，删除必须严格限定在指定的槽位上。
 test('slot removal on live text never touches edits or slots that belong to someone else', () => {
@@ -218,47 +196,7 @@ test('slot liveness is checked per slot and never matches a different id', () =>
     assert.equal(isSceneSlotAlive(text, ''), false);
 });
 
-test('recoverable placement save failure removes only this batch slots and preserves concurrent edits', async () => {
-    const message = { mes: 'story\n[image:old-slot]' };
-    const saveError = new Error('save failed');
-
-    await assert.rejects(commitRecoverableScenePlacements({
-        getCurrentChatId: () => 'chat-1',
-        getCurrentMessage: () => message,
-        expectedChatId: 'chat-1',
-        messageId: 3,
-        message,
-        originalText: 'story\n[image:old-slot]',
-        plannedText: 'story\n[image:old-slot]\n[image:ours]\n[image:other]',
-        slotIds: ['ours'],
-        persist() {
-            message.mes += '\nuser edit';
-            throw saveError;
-        },
-    }), error => error === saveError);
-
-    assert.equal(message.mes, 'story\n[image:old-slot]\n[image:other]\nuser edit');
-});
-
-test('recoverable placement keeps the active swipe synchronized during commit and rollback', async () => {
-    const message = { mes: 'story', swipe_id: 1, swipes: ['other', 'story'] };
-    await assert.rejects(commitRecoverableScenePlacements({
-        getCurrentChatId: () => 'chat-1',
-        getCurrentMessage: () => message,
-        expectedChatId: 'chat-1',
-        messageId: 0,
-        message,
-        originalText: 'story',
-        plannedText: 'story\n[image:ours]',
-        slotIds: ['ours'],
-        persist: async () => { throw new Error('save failed'); },
-    }));
-
-    assert.equal(message.mes, 'story');
-    assert.deepEqual(message.swipes, ['other', 'story']);
-});
-
-test('adding two images keeps the three existing slots in place for every local settlement', () => {
+test('adding two images keeps existing slots and synchronizes only the active swipe', () => {
     const original = '第一段。[image:old-1]第二段。[image:old-2]第三段。[image:old-3]尾声。';
     const source = createSceneSource(normalizeMessageSceneSourceText(original));
     const planned = insertScenePlacementsPreservingSlots(original, ['new-1', 'new-2'].map(slotId => ({
@@ -267,18 +205,10 @@ test('adding two images keeps the three existing slots in place for every local 
     })));
     assert.equal(planned, '第一段。[image:old-1]第二段。[image:old-2][image:new-1][image:new-2]第三段。[image:old-3]尾声。');
 
-    // 成功和失败卡都属于已交付结果；取消/中断只丢弃本批没有结果的槽位。
-    for (const settledSlotIds of [[], ['new-1'], ['new-2'], ['new-1', 'new-2']]) {
-        const message = { mes: original, swipe_id: 1, swipes: ['另一版本', original] };
-        setActiveMessageText(message, commitSettledScenePlacements(planned, {
-            allSlotIds: ['new-1', 'new-2'], settledSlotIds,
-        }));
-        assert.equal(removeSceneSlotPlaceholders(message.mes, ['new-1', 'new-2']), original);
-        for (const slotId of ['new-1', 'new-2']) {
-            assert.equal(isSceneSlotAlive(message.mes, slotId), settledSlotIds.includes(slotId));
-        }
-        assert.deepEqual(message.swipes, ['另一版本', message.mes]);
-    }
+    const message = { mes: original, swipe_id: 1, swipes: ['另一版本', original] };
+    setActiveMessageText(message, planned);
+    assert.equal(removeSceneSlotPlaceholders(message.mes, ['new-1', 'new-2']), original);
+    assert.deepEqual(message.swipes, ['另一版本', planned]);
 });
 
 test('tail additions follow existing trailing slots, including an image-only message', () => {

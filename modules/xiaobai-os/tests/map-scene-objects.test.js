@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { setImmediate } from 'node:timers';
 import { Box3, Matrix4, Raycaster, Vector3 } from 'three';
 import { MAP_ICON_TOKENS, MAP_OBJECT_ICONS } from '../domains/map/semantics.js';
-import { createEmptyMapDomain } from '../domains/map/state.js';
+import { mapAtlasFixture } from './fixtures/map-atlas.js';
 import { parseMapDomain, validateMapDomain } from '../domains/map/invariants.js';
 import { compileSceneIntent } from '../apps/map/tools/scene-intent-compiler.js';
 import { sceneForTool } from '../apps/map/tools/scene-reader.js';
@@ -20,7 +20,7 @@ import { sceneObjectInputs } from './fixtures/scene-map-objects.js';
 
 const player = { actorKey: 'player', displayName: '小白' };
 const compile = input => {
-    const result = compileSceneIntent(createEmptyMapDomain(), input, player);
+    const result = compileSceneIntent(mapAtlasFixture([{ key: input.scene }]), input, player);
     assert.deepEqual(result.result.skipped, []);
     validateMapDomain(result.domain);
     return result.domain;

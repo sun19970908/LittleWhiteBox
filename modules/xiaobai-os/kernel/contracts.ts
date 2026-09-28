@@ -55,9 +55,14 @@ export interface XiaobaiOsStoragePort {
     delete(osId: string, signal?: AbortSignal): Promise<'deleted' | 'missing'>;
 }
 
+export interface PartitionValidationReport {
+    issues: readonly { code: string; path: string; message: string }[];
+    unchecked: readonly string[];
+}
+
 export type PartitionParseResult<T> =
     | { ok: true; value: T }
-    | { ok: false; error: { code: 'partition_invalid'; message: string } };
+    | { ok: false; error: { code: 'partition_invalid'; message: string; validation?: PartitionValidationReport } };
 
 export interface PartitionRegistration<T> {
     key: string;
@@ -91,6 +96,8 @@ export interface PartitionSnapshot<T> {
 }
 
 export interface ScopedTransaction<T> {
+    /** Owner's stored JSON, including invalid content; undefined means absent. Writes still validate. */
+    readonly rawCurrent: unknown;
     readonly current: T | null;
     currentOrInitial(): T;
     replace(next: T): void;
@@ -100,8 +107,19 @@ export interface ScopedTransaction<T> {
 export interface TransactionOptions {
     signal?: AbortSignal;
     commitGuard?: () => boolean | Promise<boolean>;
+    /** Only an explicitly recoverable command may replace its run-scoped guard when retrying its prepared candidate. */
+    recoveryGuard?: () => boolean | Promise<boolean>;
     /** Keep a definitely rejected candidate in memory so an explicit retry can submit it unchanged. */
     retainFailedCandidate?: boolean;
+    /** Terminal outcome for this exact user-document candidate, including later recovery from another app. */
+    onSettled?: (result: 'confirmed' | 'rejected' | 'abandoned') => void;
+    /** Release a definitely rejected retry instead of retaining its candidate for manual recovery. */
+    discardRejectedCandidate?: boolean;
+    /**
+     * User-file opt-in: abort releases this candidate after any in-flight I/O, without undoing a server write.
+     * Requires signal. The next operation must read the server before preparing another write.
+     */
+    abandonOnAbort?: boolean;
 }
 
 export interface KernelWriteFailure {
@@ -122,6 +140,8 @@ export interface PartitionStore<T> {
     peekBinding(): { identityKey: string; osId: string | null } | null;
     peekCurrent(): PartitionSnapshot<T> | null;
     read(): Promise<PartitionSnapshot<T>>;
+    /** Does not validate the owner's content. An absent partition has value undefined. */
+    readRaw(): Promise<PartitionSnapshot<unknown>>;
     transact<R>(
         command: (context: ScopedTransaction<T>) => R | Promise<R>,
         options?: TransactionOptions,
@@ -174,7 +194,8 @@ export interface PendingCommitRecoveryOptions {
 
 export interface XiaobaiOsFileControls {
     retryPending(options?: PendingCommitRecoveryOptions): Promise<PendingCommitRecoveryResult>;
-    adoptServerState(): Promise<PendingCommitRecoveryResult>;
+    /** Optional owner guard is checked inside the queue before abandoning a candidate. */
+    adoptServerState(guard?: () => boolean): Promise<PendingCommitRecoveryResult>;
     getFileState(): XiaobaiOsFileState;
     /** Whether this document has a prepared candidate, optionally scoped to its owning partition. */
     hasPendingCommit(partitionKey?: string): boolean;

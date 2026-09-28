@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onUnmounted, reactive, ref } from 'vue';
+import { computed, nextTick, onUnmounted, reactive, ref } from 'vue';
 import AppDialog from '../../../shell/app-src/components/AppDialog.vue';
 import { useAppBack } from '../../../shell/app-src/navigation/app-navigation.js';
 import type { XiaobaiOsAppProps } from '../../../shell/app-contract.js';
@@ -12,23 +12,27 @@ import MessageIcon from './MessageIcon.vue';
 import ContactAvatar from './ContactAvatar.vue';
 import { emptyDraft, type MessageDraft } from './draft.js';
 import { createMessageId } from '../application/identity.js';
+import { messageSyncCopy } from '../sync-copy.js';
 import './messages.css';
 
 const props = defineProps<XiaobaiOsAppProps>();
 const state = ref(props.initialState as MessagesClientState);
 const emptyPage = (contactId = ''): ThreadPage => ({ contactId, messages: [], hasMore: false, hasNewer: false, retryMessageId: null, revision: '', permissions: {} });
 const selected = ref(''); const page = ref<ThreadPage>(emptyPage());
-const loading = ref(false); const working = ref(false); const error = ref('');
+const loading = ref(false); const working = ref(false); const syncing = ref(false); const dismissing = ref(false); const error = ref('');
 const threadError = ref('');
 const conversation = ref<InstanceType<typeof Conversation> | null>(null);
 const dialogOpen = ref(false); const mode = ref<'add' | 'detail' | 'delete' | 'delete-message' | 'sync' | 'recover' | 'adopt' | 'settings'>('add');
+const syncDialog = computed(() => dialogOpen.value && (mode.value === 'sync' || mode.value === 'recover'));
+const dialogClose = ref<HTMLButtonElement | null>(null);
+const unsyncedCount = computed(() => state.value.syncNotice.messageIds.length);
 const messageToDelete = ref('');
 const operationRevision = ref('');
 const deletionReason = computed(() => mode.value === 'delete' ? contact.value?.deleteReason ?? '' : page.value.permissions[messageToDelete.value]?.reason ?? '');
 const name = ref(''); const note = ref(''); const personSearch = ref('');
 const peopleStatus = ref<'loading' | 'ready' | 'failed'>('ready');
 const contactAction = ref(createMessageId());
-let alive = true; let threadRequest = 0;
+let alive = true; let threadRequest = 0; let dialogGeneration = 0;
 const drafts = reactive(new Map<string, MessageDraft>());
 const draft = computed({ get: () => drafts.get(selected.value) ?? emptyDraft(), set: value => {drafts.set(selected.value, value);} });
 const submitted = ref<PendingOutgoingMessage | null>(null);
@@ -40,7 +44,8 @@ const contact = computed(() => state.value.contacts.find(person => person.id ===
 const waitingFor = computed(() => state.value.busy && state.value.busy.contactId !== selected.value
     ? state.value.contacts.find(person => person.id === state.value.busy?.contactId)?.name ?? '另一位联系人' : '');
 const needsSave = computed(() => state.value.pendingSave || state.value.pendingModification || ['unconfirmed', 'conflict', 'failed'].includes(state.value.fileState));
-const disabled = computed(() => working.value || !!state.value.busy || needsSave.value || state.value.fileState !== 'ready' || state.value.generationActive);
+const disabled = computed(() => working.value || !!state.value.busy || state.value.operationPending
+    || needsSave.value || state.value.fileState !== 'ready' || state.value.generationActive);
 const people = computed(() => state.value.knownPeople.filter(person => !state.value.contacts.some(contact => contact.name === person.name)
     && `${person.name} ${person.aliases.join(' ')}`.toLocaleLowerCase().includes(personSearch.value.toLocaleLowerCase())));
 async function request<T>(type: string, payload: Record<string, unknown> = {}): Promise<T> {
@@ -86,9 +91,9 @@ function select(id: string) {
 }
 function back() {selected.value = ''; threadRequest++; threadError.value = ''; page.value = emptyPage();}
 useAppBack(() => { back(); return true; }, () => !!selected.value);
-async function run(task: () => Promise<void>) {
+async function run(task: () => Promise<void>, showFailure: () => boolean = () => true) {
     if (working.value) {return;} working.value = true; error.value = '';
-    try {await task();} catch (cause) {if (alive) {error.value = cause instanceof Error && cause.message !== 'host_request_timeout' ? cause.message : '暂时没收到操作结果，请先检查保存再重试。';}}
+    try {await task();} catch (cause) {if (alive && showFailure()) {error.value = cause instanceof Error && cause.message !== 'host_request_timeout' ? cause.message : messageSyncCopy.operationTimeout;}}
     finally {working.value = false;}
 }
 function send(payload: OutgoingMessage) {
@@ -136,8 +141,31 @@ function discard(messageId: string) {
 }
 function operation(type: string) {void run(async () => apply(await request(type)));}
 function saveSettings(settings: Settings) {void run(async () => {apply(await request('messages/settings', { settings })); close();});}
-function sync() {void run(async () => {apply(await request('messages/sync')); close();});}
+function sync() {
+    if (syncing.value) {return;}
+    syncing.value = true; error.value = '';
+    const started = dialogGeneration;
+    void request<MessagesClientState>('messages/sync')
+        .then(next => {apply(next); if (dialogGeneration === started) {close();}})
+        .catch(cause => {if (alive && dialogGeneration === started && state.value.settings.syncNoticeEnabled) {
+            error.value = cause instanceof Error && cause.message !== 'host_request_timeout'
+                ? cause.message : messageSyncCopy.operationTimeout;
+        }})
+        .finally(() => {syncing.value = false;});
+}
+function dismissSyncNotice() {
+    if (dismissing.value || !state.value.settings.syncNoticeEnabled) {return;}
+    dismissing.value = true; error.value = '';
+    const started = dialogGeneration;
+    void request<MessagesClientState>('messages/dismiss-sync-notice')
+        .then(next => {apply(next); if (dialogOpen.value && dialogGeneration === started) {close();} error.value = '';})
+        .catch(cause => {if (alive) {error.value = cause instanceof Error && cause.message !== 'host_request_timeout'
+            ? cause.message : messageSyncCopy.settingsFailed;}})
+        .finally(() => {dismissing.value = false;});
+}
 function open(next: typeof mode.value) {
+    if (dialogOpen.value) {void nextTick(() => dialogClose.value?.focus());}
+    dialogGeneration++;
     mode.value = next; error.value = ''; name.value = ''; note.value = contact.value?.note ?? ''; personSearch.value = '';
     contactAction.value = createMessageId(); dialogOpen.value = true;
     operationRevision.value = state.value.revision;
@@ -153,12 +181,14 @@ async function refreshPeople() {
         apply(next); peopleStatus.value = 'ready';
     } catch {if (current()) {peopleStatus.value = 'failed';}}
 }
-function close() {dialogOpen.value = false;}
+function close() {if (syncDialog.value) {error.value = '';} dialogOpen.value = false; dialogGeneration++;}
+function cancelDialog() {close();}
 function backDialog() {
+    if (working.value && syncDialog.value) {close(); return;}
     if (working.value) { return; }
     if (mode.value === 'delete') { mode.value = 'detail'; }
     else if (mode.value === 'recover') { mode.value = 'sync'; }
-    else { close(); }
+    else { cancelDialog(); }
 }
 function add(personName = name.value) {
     if (!personName.trim() || disabled.value || peopleStatus.value === 'loading') {return;}
@@ -197,29 +227,39 @@ onUnmounted(() => {alive = false; threadRequest++; unsubscribe();});
         <div v-if="needsSave" class="messages-banner" role="status">
             <span>{{ state.fileState === 'conflict' ? '服务器上的存档已有变化，请选择如何处理。' : '还不确定部分消息是否保存成功，请先检查保存。' }}</span>
             <div class="messages-save-actions">
-                <button :disabled="working || !!state.busy" @click="operation('messages/confirm')">检查保存</button>
-                <button v-if="state.fileState === 'conflict'" :disabled="working || !!state.busy || state.generationActive" @click="open('adopt')">使用已保存版本</button>
+                <button :disabled="working || state.operationPending || !!state.busy" @click="operation('messages/confirm')">检查保存</button>
+                <button v-if="state.fileState === 'conflict' || state.recoveryBlocked" :disabled="working || state.operationPending || !!state.busy || state.generationActive" @click="open('adopt')">使用已保存版本</button>
             </div>
         </div>
-        <div v-else-if="state.unsynced && !state.busy" class="messages-banner" role="status"><span>{{ state.unsynced }} 条消息已保留，尚未写入主聊天。</span><button :disabled="disabled" @click="open('sync')">查看</button></div>
+        <div v-else-if="unsyncedCount && state.settings.syncNoticeEnabled && !state.busy" class="messages-banner" role="status">
+            <span>{{ messageSyncCopy.pending(unsyncedCount) }}</span>
+            <span v-if="state.syncNotice.error">{{ state.syncNotice.error }}</span>
+            <div class="messages-save-actions">
+                <button :disabled="disabled" @click="open('sync')">{{ messageSyncCopy.view }}</button>
+                <button :disabled="dismissing" @click="dismissSyncNotice">{{ messageSyncCopy.dismiss }}</button>
+            </div>
+        </div>
         <div v-if="state.generationActive" class="messages-notice">故事正在继续，稍后就能发送消息。</div>
-        <p v-if="error || state.error" class="messages-error" role="alert">{{ error || state.error }}</p>
+        <p v-if="(error && !syncDialog) || state.error" class="messages-error" role="alert">{{ (!syncDialog && error) || state.error }}</p>
         <div v-if="threadError" class="messages-banner" role="alert"><span>{{ threadError }}</span><button :disabled="loading" @click="readThread()">重新加载</button></div>
         <Conversation
             v-if="contact" :key="contact.id" ref="conversation" v-model:draft="draft" :context-state="state"
             :contact="contact" :page="page" :bridge="bridge" :chat-identity="state.chatIdentity" :disabled="disabled"
             :send-disabled="disabled || !!outgoing" :busy="state.busy" :outgoing="pendingBubble"
             :send-failure="state.sendFailure" :send-error="sendError" :working="working" :pending-save="needsSave"
-            :retry-disabled="working || !!state.busy || state.generationActive || state.fileState === 'conflict'"
+            :retry-disabled="working || state.operationPending || !!state.busy || state.generationActive || state.fileState === 'conflict'"
             :loading="loading" :load-more="() => readThread(true)" :media="state.media" :waiting-for="waitingFor"
             @back="back" @details="open('detail')" @send="send" @retry="retry" @discard="discard"
             @delete-message="confirmMessageDelete" @regenerate="regenerate" @latest="readThread(false, true)"
         />
         <ContactList v-show="!contact" :contacts="state.contacts" :busy-contact-id="state.busy?.contactId ?? ''" :drafts="drafts" @select="select" @add="open('add')" @settings="open('settings')" />
-        <AppDialog v-if="dialogOpen" class="messages-dialog" aria-labelledby="messages-dialog-title" :busy="working" @close="backDialog">
-            <header><ContactAvatar v-if="mode === 'detail' && contact" :identity="contact.id" :name="contact.name" small /><h2 id="messages-dialog-title">{{ mode === 'settings' ? '信息设置' : mode === 'add' ? '新的对话' : mode === 'detail' ? contact?.name : mode === 'delete' ? '删除联系人？' : mode === 'delete-message' ? '删除这条消息？' : mode === 'sync' ? '消息还未写入主聊天' : mode === 'adopt' ? '使用已保存版本？' : '在当前位置补记？' }}</h2><button class="messages-icon-button" aria-label="关闭" :disabled="working" @click="close"><MessageIcon name="close" /></button></header>
-            <p v-if="error" class="messages-error" role="alert">{{ error }}</p>
-            <MessagesSettings v-if="mode === 'settings'" :settings="state.settings" :busy="working || !!state.busy" @save="saveSettings" />
+        <AppDialog v-if="dialogOpen" class="messages-dialog" aria-labelledby="messages-dialog-title" :busy="working && !syncDialog" @close="backDialog">
+            <header><ContactAvatar v-if="mode === 'detail' && contact" :identity="contact.id" :name="contact.name" small /><h2 id="messages-dialog-title">{{ mode === 'settings' ? '信息设置' : mode === 'add' ? '新的对话' : mode === 'detail' ? contact?.name : mode === 'delete' ? '删除联系人？' : mode === 'delete-message' ? '删除这条消息？' : mode === 'sync' ? messageSyncCopy.title : mode === 'adopt' ? '使用已保存版本？' : '在当前位置补记？' }}</h2><button ref="dialogClose" class="messages-icon-button" aria-label="关闭" :disabled="working && !syncDialog" @click="cancelDialog"><MessageIcon name="close" /></button></header>
+            <p v-if="error || (syncDialog && state.syncNotice.error)" class="messages-error" role="alert">{{ error || state.syncNotice.error }}</p>
+            <template v-if="mode === 'settings'">
+                <MessagesSettings :settings="state.settings" :busy="working || state.operationPending" @save="saveSettings" />
+                <button v-if="unsyncedCount" class="messages-secondary messages-sync-entry" :disabled="working" @click="open('sync')">{{ messageSyncCopy.title }} · {{ unsyncedCount }}</button>
+            </template>
             <template v-else-if="mode === 'add'">
                 <label class="messages-search"><MessageIcon name="search" /><input v-model="personSearch" placeholder="查找已知人物" aria-label="查找已知人物" aria-describedby="messages-people-source"></label>
                 <div id="messages-people-source" class="messages-subtle messages-people-source">人物来自当前聊天的剧情总结，需要开启总结功能；找不到的人可以手动添加。</div>
@@ -236,9 +276,9 @@ onUnmounted(() => {alive = false; threadRequest++; unsubscribe();});
             <form v-else-if="mode === 'detail'" @submit.prevent="saveNote"><label>身份说明 / 备注<textarea v-model="note" maxlength="600" rows="3" placeholder="帮助辨认这位联系人" /></label><button class="messages-primary" :disabled="disabled">保存备注</button><button type="button" class="messages-danger" :disabled="disabled" @click="mode = 'delete'">删除联系人与通讯记录</button></form>
             <template v-else-if="mode === 'delete'"><p v-if="deletionReason" role="status">{{ deletionReason }}</p><p v-else>删除与 {{ contact?.name }} 的全部通讯和摘要，同时更新主聊天记录。其他联系人和图库文件保留，删除后不能恢复。</p><button class="messages-danger" :disabled="disabled || !!deletionReason" @click="remove">确认删除</button><button class="messages-secondary" @click="mode = 'detail'">保留联系人</button></template>
             <template v-else-if="mode === 'delete-message'"><p v-if="deletionReason" role="status">{{ deletionReason }}</p><p v-else>删除这条消息，同时更新主聊天记录。后续回复、其他消息和图库文件保留，删除后不能恢复。</p><button class="messages-danger" :disabled="disabled || !!deletionReason" @click="removeMessage">确认删除</button><button class="messages-secondary" @click="close">取消</button></template>
-            <template v-else-if="mode === 'sync'"><p>信息 APP 已保留这些消息。重试只会补上主聊天里的记录，不会再次向对方发送，也不会重新生成回复。</p><button class="messages-primary" :disabled="disabled" @click="sync">补到主聊天</button><details class="messages-manual"><summary>原来的记录已被修改或删除？</summary><p>不会覆盖你的修改。需要这些消息继续进入剧情时，可以在当前位置另加一条补记。</p><button class="messages-secondary" :disabled="disabled" @click="mode = 'recover'">查看补记方式</button></details></template>
+            <template v-else-if="mode === 'sync'"><p>{{ messageSyncCopy.pending(unsyncedCount) }}</p><p>{{ messageSyncCopy.description }}</p><button class="messages-primary" :disabled="disabled || syncing" @click="sync">{{ messageSyncCopy.retry }}</button><button v-if="state.settings.syncNoticeEnabled" class="messages-secondary" :disabled="dismissing" @click="dismissSyncNotice">{{ messageSyncCopy.dismiss }}</button><details class="messages-manual"><summary>原来的记录已被修改或删除？</summary><p>不会覆盖你的修改。需要这些消息继续进入剧情时，可以在当前位置另加一条补记。</p><button class="messages-secondary" :disabled="disabled" @click="mode = 'recover'">查看补记方式</button></details></template>
             <template v-else-if="mode === 'adopt'"><p>将读取服务器上的当前聊天小白 OS 存档，放弃本地尚未确认的修改。信息 APP 会显示服务器已保存的联系人和消息。</p><p class="messages-subtle">这项选择作用于当前聊天的整份 OS 存档，不会删除主聊天里的记录，也不会重新生成回复。</p><button class="messages-danger" :disabled="working || !!state.busy || state.generationActive" @click="adoptServer">确认使用已保存版本</button><button class="messages-secondary" :disabled="working" @click="close">暂不处理</button></template>
-            <template v-else><p>先检查已有记录；仍未写入的消息会在主聊天当前位置标为「补录」，保留原发送时间。不会覆盖旧记录或恢复你删除的那一条。</p><button class="messages-primary" :disabled="disabled" @click="recover">确认补记</button><button class="messages-secondary" @click="close">暂不补记</button></template>
+            <template v-else><p>先检查已有记录；仍未写入的消息会在主聊天当前位置标为「补录」，保留原发送时间。不会覆盖旧记录或恢复你删除的那一条。</p><button class="messages-primary" :disabled="disabled" @click="recover">确认补记</button><button class="messages-secondary" :disabled="working" @click="close">暂不补记</button></template>
         </AppDialog>
     </main>
 </template>

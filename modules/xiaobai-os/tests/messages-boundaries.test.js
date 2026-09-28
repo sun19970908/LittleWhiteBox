@@ -62,7 +62,7 @@ test('optional media failures and unsafe cached image URLs do not break text com
 
 test('excluded communications stay out of recent story and worldbook scanning without renumbering or changing turn count', async () => {
     let scanned;
-    const context = { chatId: 'chat', characterId: 0, characters: [],
+    const context = { chatId: 'chat', characterId: 0, characters: [{ avatar: 'role.png', name: '林月' }],
         chat: [{ is_user: false, mes: '普通剧情' }, { is_user: false, mes: '其他人的私人通讯' }, { is_user: true, mes: '新的行动' }],
         getWorldInfoPrompt: async messages => {scanned = messages; return {};},
     };
@@ -80,7 +80,7 @@ test('current contact and private dialogue activate lore without leaking another
     const incoming = { from: '玩家', payload: { type: 'text', text: '明天见？' } };
     const history = [{ from: '林月', payload: { type: 'voice', transcript: '在白鹭码头等我。' } }];
     let scan;
-    const host = { chatId: 'chat', characterId: 0, characters: [],
+    const host = { chatId: 'chat', characterId: 0, characters: [{ avatar: 'role.png', name: '林月' }],
         chat: [{ is_user: false, mes: '在公司加班。' }, { is_user: false, mes: '另一联系人私聊的绝密暗号' }],
         getWorldInfoPrompt: async messages => {scan = messages; return { worldInfoBefore: messages.some(text => text.includes('林月')) ? '林月的人设' : '' };},
     };

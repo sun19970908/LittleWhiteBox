@@ -21,9 +21,7 @@ export function getActiveProviderConfig(configValue = {}, options = {}) {
 }
 
 export function createAdapter(providerConfig = {}) {
-    return createAgentAdapter(providerConfig, {
-        missingApiKeyMessage: '请先填写 API Key。',
-    });
+    return createAgentAdapter(providerConfig);
 }
 
 export { getToolModeLabel };

@@ -35,7 +35,7 @@ export async function runRollbackStorageCheck() {
         for (const name of cases) {
             const chatId = `rollback-storage-${name}`;
             let metadataWrites = 0;
-            let failMetadata = name.endsWith('metadata-failure');
+            let failMetadata = false;
             __setReplayContext({
                 chatId,
                 chat: Array.from({ length: name.startsWith('automatic') ? 39 : 40 }, () => ({ mes: '正文' })),
@@ -53,6 +53,9 @@ export async function runRollbackStorageCheck() {
                 ],
             } } } });
             const store = getSummaryStore();
+            await getContext().saveMetadata();
+            metadataWrites = 0;
+            failMetadata = name.endsWith('metadata-failure');
             const before = structuredClone(store);
             await saveEventVectors(chatId, [
                 { eventId: 'evt-1', vector: [1, 0] },
@@ -67,11 +70,11 @@ export async function runRollbackStorageCheck() {
             if (!failMetadata) eventVectorsTable.hook('deleting', failDeletion);
             try {
                 if (name.startsWith('clear')) {
-                    await assert.rejects(clearSummaryData(chatId), /simulated/);
+                    await assert.rejects(clearSummaryData(chatId), { code: failMetadata ? 'metadata_not_saved' : 'memory_cache_invalidation_failed' });
                 } else if (name.startsWith('manual')) {
                     const result = await rollbackSummaryOnce(chatId);
                     assert.equal(result.success, false);
-                    assert.equal(result.reason, 'event_vector_cleanup_failed');
+                    assert.equal(result.reason, 'memory_cache_invalidation_failed');
                 } else {
                     const result = name.startsWith('automatic')
                         ? await rollbackSummaryIfNeeded()
@@ -79,7 +82,7 @@ export async function runRollbackStorageCheck() {
                             ? await rollbackSummaryIfNeeded({ changedFromFloor: 39 })
                             : await executeRollback(chatId, store, name.startsWith('empty') ? -1 : 19);
                     assert.equal(result.status, 'failed', name);
-                    assert.equal(result.reason, failMetadata ? 'metadata_persistence_failed' : 'event_vector_cleanup_failed');
+                    assert.equal(result.reason, failMetadata ? 'metadata_not_saved' : 'memory_cache_invalidation_failed');
                 }
             } finally {
                 eventVectorsTable.hook('deleting').unsubscribe(failDeletion);
@@ -90,7 +93,8 @@ export async function runRollbackStorageCheck() {
             assert.equal(store.lastSummarizedMesId, 39, name);
             assert.equal(getNextEventId(store.json.events), 3, 'failed rollback must not release evt-2');
             if (name.startsWith('automatic') || name.startsWith('swipe')) {
-                assert.equal(store.summaryInvalid, true);
+                assert.equal(store.summaryInvalid, undefined);
+                assert.equal(store.sourceInvalidFromFloor, 39);
                 assert.equal(isSummaryConsumable(store, 40), false);
                 assert.equal(metadataWrites, 1, 'only the unusable-summary marker is persisted');
             } else {

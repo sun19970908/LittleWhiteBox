@@ -7,12 +7,12 @@ import { createShopController } from './host/controller.js';
 import { createShopMessageReceipts } from './host/message-receipts.js';
 import { createShopPromptRuntime, type ShopPromptEventHandlers } from './host/prompt-runtime.js';
 import { createShopModule } from './module.js';
+import { SHOP_PROMPTS } from './prompt-registration.js';
 
 export interface ProductionShopModuleDependencies {
     getChatIdentity: () => XiaobaiOsChatIdentity | null;
     captureChatSurface: () => XiaobaiOsChatSurface | null;
     mainGeneration: MainGenerationRuntime;
-    setPrompt(value: string): void;
     subscribePrompt(handlers: ShopPromptEventHandlers): () => void;
 }
 
@@ -21,7 +21,9 @@ export function createProductionShopModule(dependencies: ProductionShopModuleDep
         getChatIdentity: dependencies.getChatIdentity,
         isMainGenerationActive: dependencies.mainGeneration.isActive,
         subscribeGeneration: dependencies.mainGeneration.subscribe,
-        createRuntime({ shop, economy, execution }) {
+        createRuntime({ shop, economy, prompts, execution }) {
+            const injection = prompts.register(SHOP_PROMPTS);
+            execution.addCleanup(injection.dispose);
             const receipts = createShopMessageReceipts({ captureChatSurface: dependencies.captureChatSurface });
             const deliveries = createShopEffectDeliveryQueue({
                 readCurrent() {
@@ -35,7 +37,7 @@ export function createProductionShopModule(dependencies: ProductionShopModuleDep
                 readShop: deliveries.readCurrent,
                 enqueueDelivery: deliveries.enqueue,
                 bindReplyReceipt: receipts.bind,
-                setPrompt: dependencies.setPrompt,
+                setPrompt: value => injection.set('effects', value),
                 subscribe: dependencies.subscribePrompt,
             });
             let unsubscribeDelivery: (() => void) | null = null;

@@ -42,28 +42,6 @@ export declare function removeSceneSlotPlaceholders(
     markerName?: string,
 ): string;
 
-export declare function commitSettledScenePlacements(
-    plannedText: string,
-    options?: {
-        allSlotIds?: string[];
-        settledSlotIds?: string[];
-    },
-): string;
-
-export declare function commitRecoverableScenePlacements(options: {
-    getCurrentChatId: () => unknown;
-    getCurrentMessage: (messageId: string | number) => { mes?: string } | null | undefined;
-    expectedChatId: unknown;
-    messageId: string | number;
-    message: { mes?: string };
-    originalText: string;
-    plannedText: string;
-    slotIds: string[];
-    isEditing?: (messageId: string | number) => boolean;
-    persist?: () => Promise<unknown> | unknown;
-    syncAfterRollback?: (messageText: string) => Promise<unknown> | unknown;
-}): Promise<boolean>;
-
 export declare function commitSceneSlotDelivery(options: {
     committedEarly?: boolean;
     resolveTarget?: () => unknown;

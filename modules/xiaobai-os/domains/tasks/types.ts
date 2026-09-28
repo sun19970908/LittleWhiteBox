@@ -1,4 +1,4 @@
-export const TASK_DOMAIN_SCHEMA_VERSION = 1 as const;
+export const TASK_DOMAIN_SCHEMA_VERSION = 2 as const;
 export const TASK_SCHEMA_VERSION = TASK_DOMAIN_SCHEMA_VERSION;
 
 export const TASK_DIRECTIONS = ['禁忌', '接触', '夹缝', '窥秘', '掠夺', '怪癖'] as const;
@@ -35,7 +35,15 @@ export interface TaskDomainV1 {
     schemaVersion: typeof TASK_DOMAIN_SCHEMA_VERSION;
     revision: number;
     board: TaskBoard | null;
+    storyLabel: string;
     events: TaskEvent[];
+    checks: Record<string, TaskEvidenceReceipt>;
+}
+
+export interface TaskEvidenceReceipt {
+    taskRevision: number;
+    digest: string;
+    phase: 'pending' | 'baseline' | 'checked';
 }
 
 export interface TaskBoard {
@@ -89,7 +97,6 @@ export interface TaskEventBase {
     actionId: string;
     taskId: string;
     taskRevision: number;
-    observedAssistantCount: number;
     createdAt: number;
 }
 
@@ -150,7 +157,6 @@ export interface TaskRecord {
     sourceListingId?: string;
     createdAt: number;
     updatedAt: number;
-    lastObservedAssistantCount: number;
 }
 
 export interface TaskPublishedForm {
@@ -165,6 +171,7 @@ export interface TaskPublishedForm {
 export interface TaskCommandEnvironment {
     now: () => number;
     createId: (kind: 'event') => string;
+    evidenceDigest?: string;
 }
 
 export interface TaskCommandResult {
@@ -187,7 +194,6 @@ export interface AcceptTaskListingInput {
     boardId: string;
     listingId: string;
     playerDisplayName: string;
-    observedAssistantCount: number;
 }
 
 export interface PublishTaskInput {
@@ -195,7 +201,6 @@ export interface PublishTaskInput {
     taskId: string;
     form: TaskPublishedForm;
     playerDisplayName: string;
-    observedAssistantCount: number;
 }
 
 export interface TaskMutationInput {
@@ -203,7 +208,6 @@ export interface TaskMutationInput {
     taskId: string;
     expectedTaskRevision: number;
     expectedEventId: string;
-    observedAssistantCount: number;
 }
 
 export interface ReplaceTaskCandidatesInput extends TaskMutationInput {

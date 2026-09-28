@@ -15,6 +15,7 @@ import { MAINTENANCE_CAPABILITY } from '../capabilities/maintenance/index.js';
 import { createManagementCapabilityRegistration, MANAGEMENT_CAPABILITY } from '../capabilities/management/index.js';
 import { createKernelComposition } from '../host/kernel-composition.js';
 import { createCapabilityRegistry } from '../kernel/capability-registry.js';
+import { headlessPromptInjection } from './helpers/prompt-injection.js';
 
 function ports() {
     const capture = {
@@ -93,6 +94,7 @@ test('the non-production composition installs D1 modules through declared capabi
         user: { storage: { read: async () => null, replace: async () => {} }, initialPartitions: async () => ({}),
             resolveStory: async () => ports().chatReferences.capture() },
         capabilities: [
+            headlessPromptInjection(),
             ...createEconomyCapabilityRegistrations(),
             createMapContextCapabilityRegistration(),
             createManagementCapabilityRegistration(),
@@ -124,6 +126,7 @@ test('the non-production composition installs D1 modules through declared capabi
         'maintenance.runner',
         MANAGEMENT_CAPABILITY.id,
         MAP_CONTEXT_CAPABILITY.id,
+        'prompt.injection',
     ]);
     assert.deepEqual(fourthWallModule.capabilities.map(token => token.id), ['agent.shared']);
     assert.equal(agentApiModule.partition, undefined);

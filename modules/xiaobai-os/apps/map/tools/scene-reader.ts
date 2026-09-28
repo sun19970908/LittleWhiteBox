@@ -32,7 +32,6 @@ function toolGeometry(element: MapElement): Record<string, unknown> {
 export function sceneForTool(scene: MapScene, owner: MapLocation) {
     return {
         scene: owner.key,
-        title: owner.name,
         viewBox: [...scene.viewBox],
         ...(scene.mood ? { mood: scene.mood } : {}),
         elements: scene.elements.map(element => {

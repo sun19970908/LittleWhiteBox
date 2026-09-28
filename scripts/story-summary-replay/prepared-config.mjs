@@ -25,7 +25,7 @@ export function assertPreparedArguments(argv) {
     for (const arg of argv) {
         if (arg === '--preflight' || arg === '--allow-api' || arg === '--resume-prepared'
             || arg === '--apply-transition' || arg === '--check-prepared-resume'
-            || /^--(?:config|job|retry-unknown|retry-journal-sha256|retry-source-manifest|retry-source-sha256)=.+$/.test(arg)) continue;
+            || /^--(?:config|job|retry-unknown|retry-empty-summary|retry-journal-sha256|retry-source-manifest|retry-source-sha256)=.+$/.test(arg)) continue;
         throw new Error('Prepared runs accept only --config, --job, --preflight, --resume-prepared and --allow-api; edit the profile and repeat preflight');
     }
 }
@@ -123,6 +123,9 @@ export async function withPreparedRequestBudget(config, operation, { journal = n
         if (!allowed.has(url.origin)) reject('Prepared run rejected an unapproved API origin', 'unapproved-origin');
         const saved = archive.match(input, init);
         if (saved) return saved;
+        if (config.goldEval?.probeCaseIds?.length && !url.pathname.endsWith('/rerank')) {
+            reject('Source-only probe can only buy changed rerank requests', 'probe-unexpected-request');
+        }
         if (journal) return journal.dispatch(input, init, originalFetch);
         if (requests >= config.prepared.maxRequests) reject('Prepared request budget exhausted', 'request-budget');
         requests++;

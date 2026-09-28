@@ -1,7 +1,6 @@
 import { is_group_generating } from '../../../../../../../../group-chats.js';
 import { createModuleEvents, event_types } from '../../../../../core/event-manager.js';
 import { registerGenerateInterceptor, unregisterGenerateInterceptor, GENERATE_INTERCEPTOR_ORDER } from '../../../../../shared/common/generate-interceptor.js';
-import { setSillyTavernPrompt } from '../../../host/sillytavern-runtime-adapters.js';
 import { DICE_MESSAGE_KEY } from '../domain/check-records.js';
 import { decideEncounter, encounterLevel, parseEncounterRecords } from '../domain/encounter.js';
 import { buildEncounterPrompt, type EncounterReferences } from '../protocol/encounter-prompt.js';
@@ -21,12 +20,13 @@ export function createEncounterRuntime(dependencies: {
     references(identityKey: string): EncounterReferences | Promise<EncounterReferences>;
     isAuxiliaryMessage(message: DiceHostMessage): boolean;
     changed(fresh?: DiceHostMessage): void;
+    setPrompt(content: string): void;
     random?: () => number;
 }) {
     let observation: Observation | null = null;
     let unsubscribe: (() => void) | null = null;
     let issue: { target: EncounterTarget; error: string } | null = null;
-    const clearPrompt = () => setSillyTavernPrompt(KEY, '');
+    const clearPrompt = () => dependencies.setPrompt('');
     function invalidateRequest(): void { observation = null; clearPrompt(); }
     function cancel(): void {
         invalidateRequest(); issue = null; dependencies.changed();
@@ -82,7 +82,7 @@ export function createEncounterRuntime(dependencies: {
                 if (!level) { return; }
                 const references = await dependencies.references(target.source.key);
                 if (!valid()) { abort(true); return; }
-                setSillyTavernPrompt(KEY, buildEncounterPrompt(level, references));
+                dependencies.setPrompt(buildEncounterPrompt(level, references));
             } catch (error) {
                 clearPrompt();
                 if (!valid()) { abort(true); return; }

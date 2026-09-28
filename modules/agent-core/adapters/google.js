@@ -1,4 +1,5 @@
 import { FunctionCallingConfigMode, GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { resolveAgentAuth } from '../provider-auth.js';
 import { requireResponseCompletion } from '../runtime/response-completion.js';
 import {
     buildEffectiveReasoningConfig,
@@ -536,13 +537,15 @@ function mergeStreamText(previous, incoming) {
 export class GoogleAdapter {
     constructor(config) {
         this.config = config;
+        this.auth = resolveAgentAuth('google', config.apiKey);
         this.supportsSessionToolLoop = true;
         this.activeChat = null;
         this.sessionReasoning = null;
         this.toolCallResponseSequence = 0;
         this.client = new GoogleGenAI({
-            apiKey: config.apiKey,
+            ...this.auth.sdkOptions,
             httpOptions: {
+                headers: this.auth.headers,
                 baseUrl: String(config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
                 timeout: Number(config.timeoutMs) || 15 * 60 * 1000,
             },
@@ -633,7 +636,7 @@ export class GoogleAdapter {
             url: `${baseUrl}/models/${encodeURIComponent(this.config.model || '')}:generateContent`,
             headers: {
                 'Content-Type': 'application/json',
-                'x-goog-api-key': this.config.apiKey || '',
+                ...this.auth.headers,
             },
             body: {
                 chatCreate: payload.createPayload,
@@ -663,7 +666,7 @@ export class GoogleAdapter {
             url: `${baseUrl}/models/${encodeURIComponent(this.config.model || '')}:generateContent`,
             headers: {
                 'Content-Type': 'application/json',
-                'x-goog-api-key': this.config.apiKey || '',
+                ...this.auth.headers,
             },
             body: {
                 sendMessage: sendPayload,

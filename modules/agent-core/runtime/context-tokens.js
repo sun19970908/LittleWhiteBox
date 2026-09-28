@@ -16,6 +16,14 @@ function buildTokenCounterMessages(messages = [], tools = [], providerConfig = {
         && !(providerConfig.toolMode === 'tagged-json' && tools.length);
     const lastUserIndex = getLastUserMessageIndex(messages);
     return messages.map((message, index) => {
+        // Native replay can carry thought text/signatures and multiple model contents.
+        // Count that representation once rather than just its visible text projection.
+        const payload = message.role === 'assistant' ? message.providerPayload : null;
+        const nativeContent = ['google', 'sillytavern-google'].includes(providerConfig.provider)
+            ? payload?.googleContents || payload?.googleContent
+            : ['anthropic', 'sillytavern-claude'].includes(providerConfig.provider) ? payload?.anthropicContent
+                : providerConfig.provider === 'openai-responses' ? payload?.openAIResponseOutput : null;
+        if (nativeContent) return { role: message.role, content: JSON.stringify(nativeContent) };
         const preserved = message.role === 'assistant' ? message.providerPayload?.openaiCompatibleMessage : null;
         const reasoningContent = typeof preserved?.reasoning_content === 'string'
             && (preserveHistoricalReasoning || (nativeReplay && shouldReplayFullNativeMessage(preserved, index, lastUserIndex)))

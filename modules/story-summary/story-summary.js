@@ -25,6 +25,7 @@ import { createModuleEvents } from "../../core/event-manager.js";
 import { postToIframe, isTrustedMessage } from "../../core/iframe-messaging.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
 import { STORY_SUMMARY_TOGGLE_EVENT } from './runtime-events.js';
+import { createMemoryMaintenanceHost } from './maintenance/host.js';
 import { initAfterAiGate, notifyAfterAiHint, registerAfterAiHandler } from "../../core/after-ai-gate.js";
 import { getDefaultApiPrefix, resolveApiBaseUrl } from "../../shared/common/openai-url-utils.js";
 import {
@@ -61,8 +62,7 @@ import {
 } from "./data/chat-toggle.js";
 import {
     getSummaryStore,
-    saveSummaryStore,
-    saveSummaryStoreImmediately,
+    invalidateSummaryAnchors,
     rollbackSummaryIfNeeded,
     rollbackSummaryOnce,
     clearSummaryData,
@@ -70,6 +70,10 @@ import {
     isSummaryConsumable,
     extractRelationshipsFromFacts,
 } from "./data/store.js";
+import { commitSummaryMemory, readSummaryMemory, readPublishedSummaryMemory, assertMemoryWritable, getMemoryCommitState } from './data/memory-commit.js';
+import { prepareImportedSummary } from './data/summary-import.js';
+import { memorySaveError } from './data/memory-copy.js';
+import { hasActiveAnchorHistoryFromFloor } from './data/anchor-invalidation.js';
 import { normalizeCharacterAliases, replaceCharacterAliases } from "./data/character-aliases.js";
 import { stampEditedCharacters } from "./data/character-edits.js";
 import { normalizeEventMemoryRole, projectEditedSummaryEvents } from "./data/events.js";
@@ -150,9 +154,6 @@ import {
     getStateAtomsCount,
     getStateVectorsCount,
     saveStateVectors,
-    deleteStateAtomsFromFloor,
-    deleteStateVectorsFromFloor,
-    deleteL0IndexFromFloor,
     getL0Index,
 } from "./vector/storage/state-store.js";
 
@@ -194,6 +195,31 @@ import { invalidateLexicalIndex, warmupIndex, removeDocumentsByFloor, addEventDo
 // ═══════════════════════════════════════════════════════════════════════════
 
 const MODULE_ID = "storySummary";
+const memoryMaintenance = createMemoryMaintenanceHost({
+    canRun: () => isStorySummaryConsumableForCurrentChat(),
+    invalidateRecall: () => cancelRecallAndClearPrompt('memory-maintained'),
+    refreshSummary: impact => {
+        const chatId = getContext().chatId;
+        removeEventDocuments(impact.eventIds, chatId);
+        addEventDocuments((getSummaryStore()?.json?.events || []).filter(event => impact.eventIds.includes(event.id)), chatId);
+        refreshEntityLexiconAndWarmup();
+        postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(getSummaryStore()) });
+    },
+    changed: () => { void sendMemoryMaintenanceResults(); },
+});
+
+async function sendMemoryMaintenanceResults(offset = 0) {
+    const chatId = getContext()?.chatId;
+    try {
+        const payload = await memoryMaintenance.results(offset);
+        if (getContext()?.chatId === chatId) postToFrame({ type: 'MEMORY_MAINTENANCE_RESULTS', payload: { ...payload, offset } });
+    } catch (error) {
+        xbLog.error(MODULE_ID, 'memory_maintenance_results_failed', error);
+        if (getContext()?.chatId === chatId) postToFrame({ type: 'MEMORY_MAINTENANCE_RESULTS', payload: {
+            chatId, items: [], next: null, state: { status: 'failed', code: 'load_failed' },
+        } });
+    }
+}
 const messageButtonOwnership = createMessageButtonOwnership();
 // 持久化恢复：用户在循环任务里切换 off/on 会写到 extension_settings[EXT_ID].storySummary.hideStateDisabled
 // 这里在模块加载时把它映射回 window 标志位，让控制器 getState() 在第一次 reconcile 前就读到正确值
@@ -295,9 +321,12 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
         return getStorySummaryChatState();
     }
 
+    // The host saves the entire metadata, including any pending memory draft.
+    assertMemoryWritable(targetChatId);
     chatSummaryStateChanging = true;
     setChatStorySummaryEnabled(targetMetadata, EXT_ID, nextEnabled);
     if (!nextEnabled) {
+        memoryMaintenance.cancel();
         cancelActiveSummaryExecution();
         // 元数据已经在内存中生效；必须在首次 await 前封死旧召回的提交窗口。
         cancelRecallAndClearPrompt('chat-disabled');
@@ -1232,6 +1261,7 @@ async function handleClearVectors() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function refreshEntityLexiconAndWarmup() {
+    if (!isStorySummaryConsumableForCurrentChat()) return;
     const vectorCfg = getVectorConfig();
     if (!vectorCfg?.enabled) return;
 
@@ -1245,6 +1275,7 @@ function refreshEntityLexiconAndWarmup() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
+    if (!isStorySummaryConsumableForCurrentChat()) return;
     const { chatId, chat } = getContext();
     const targetChatId = scheduledChatId || chatId;
     if (!targetChatId || !chatId || targetChatId !== chatId || !chat?.length) return;
@@ -1459,6 +1490,7 @@ function warmupEmbeddingConnection() {
 }
 
 function warmupActiveVectorCache() {
+    if (!isStorySummaryConsumableForCurrentChat()) return;
     const vectorCfg = getVectorConfig();
     const { chatId } = getContext();
     logRecallRuntimeCheckpoint("warmupActiveVectorCache:start", `chat=${chatId || "-"} enabled=${vectorCfg?.enabled ? 1 : 0}`);
@@ -1758,7 +1790,7 @@ async function syncEventVectorsOnEditWrite(changedIds, syncToken, targetChatId, 
     try {
         const vectorCfg = getVectorConfig();
         const { chatId } = getContext();
-        if (!chatId || chatId !== targetChatId || !vectorCfg?.enabled) return;
+        if (!chatId || chatId !== targetChatId || !vectorCfg?.enabled || !isStorySummaryConsumableForCurrentChat()) return;
         if (
             syncToken !== eventEditSyncToken
             || isChatStale(chatId)
@@ -2510,53 +2542,6 @@ function formatStorySummaryMemoryText(store) {
     return lines.join("\n").trim();
 }
 
-function stampImportedSummaryJson(json, boundary) {
-    if (!json || typeof json !== "object" || !Number.isFinite(boundary) || boundary < 0) {
-        return;
-    }
-
-    for (const item of (json.keywords || [])) {
-        if (item && typeof item === "object") item._addedAt = boundary;
-    }
-
-    for (const item of (json.events || [])) {
-        if (item && typeof item === "object") item._addedAt = boundary;
-    }
-
-    const mainCharacters = json.characters?.main || [];
-    for (const item of mainCharacters) {
-        if (item && typeof item === "object") item._addedAt = boundary;
-    }
-
-    for (const alias of (json.characterAliases || [])) {
-        if (alias && typeof alias === "object") alias._addedAt = boundary;
-    }
-
-    for (const arc of (json.arcs || [])) {
-        if (!arc || typeof arc !== "object") continue;
-        arc._addedAt = boundary;
-        for (const moment of (arc.moments || [])) {
-            if (moment && typeof moment === "object") moment._addedAt = boundary;
-        }
-    }
-
-    for (const fact of (json.facts || [])) {
-        if (fact && typeof fact === "object") fact._addedAt = boundary;
-    }
-}
-
-function applyImportedSummaryBoundary(store, boundary) {
-    if (!store?.json || !Number.isFinite(boundary) || boundary < 0) {
-        return false;
-    }
-
-    stampImportedSummaryJson(store.json, boundary);
-    store.lastSummarizedMesId = boundary;
-    store.summaryHistory = [{ endMesId: boundary }];
-    delete store.pendingImportBoundary;
-    store.updatedAt = Date.now();
-    return true;
-}
 
 async function importSummaryMemoryPackage(rawText, targetChatId = '') {
     if (!String(rawText || "").trim()) {
@@ -2584,44 +2569,16 @@ async function importSummaryMemoryPackage(rawText, targetChatId = '') {
     if (!store) {
         throw new Error("无法读取当前聊天的总结存储");
     }
-    const previousStore = structuredClone(store);
-
-    await updateMeta(chatId, { lastChunkFloor: -1, fingerprint: null });
+    const previous = readSummaryMemory();
+    const next = prepareImportedSummary(previous, importedJson, (chat?.length || 0) - 1);
+    await commitSummaryMemory(chatId, next, { previous, resolvesSourceInvalidity: true, validate: assertImportActive, invalidate: async () => {
+        await updateMeta(chatId, { lastChunkFloor: -1, fingerprint: null });
+        await clearAllChunks(chatId);
+        await clearEventVectors(chatId);
+        await clearStateVectors(chatId);
+        invalidateLexicalIndex();
+    } });
     assertImportActive();
-    await clearAllAtomsAndVectors(chatId);
-    assertImportActive();
-    await clearAllChunks(chatId);
-    assertImportActive();
-    await clearEventVectors(chatId);
-    assertImportActive();
-    await clearStateVectors(chatId);
-    assertImportActive();
-
-    invalidateLexicalIndex();
-
-    store.json = importedJson;
-    delete store.summaryInvalid;
-    const importBoundary = (Array.isArray(chat) ? chat.length : 0) - 1;
-    if (importBoundary >= 0) {
-        applyImportedSummaryBoundary(store, importBoundary);
-    } else {
-        store.lastSummarizedMesId = -1;
-        store.summaryHistory = [];
-        store.pendingImportBoundary = true;
-    }
-    store.updatedAt = Date.now();
-    let importCommitted = false;
-    try {
-        await saveSummaryStoreImmediately(chatId);
-        importCommitted = true;
-        assertImportActive();
-    } catch (error) {
-        if (!importCommitted) {
-            for (const key of Object.keys(store)) delete store[key];
-            Object.assign(store, previousStore);
-        }
-        throw error;
-    }
 
     refreshEntityLexiconAndWarmup();
     scheduleLexicalWarmup();
@@ -2838,11 +2795,14 @@ const hideState = createHideStateController({
         if (element) element.setAttribute('is_system', String(hidden));
     },
     refresh: () => getContext().swipe?.refresh(),
-    save: state => state.saveChat(),
+    save: state => {
+        assertMemoryWritable(state.chatId);
+        return state.saveChat();
+    },
     onError: (error, stage) => {
         const message = stage === 'boundary'
             ? '读取向量隐藏边界失败，已按有效总结边界恢复原文'
-            : stage === 'save' ? '楼层显隐已更新，但保存聊天失败' : '更新楼层显隐失败';
+            : stage === 'save' ? memorySaveError(error) : '更新楼层显隐失败';
         xbLog.error(MODULE_ID, message, error);
         window.toastr?.warning(message, '剧情总结');
     },
@@ -2865,7 +2825,7 @@ function scheduleLexicalWarmup(delayMs = LEXICAL_WARMUP_DEBOUNCE_MS) {
     const scheduledChatId = getContext().chatId || null;
     lexicalWarmupTimer = setTimeout(() => {
         lexicalWarmupTimer = null;
-        if (isChatStale(scheduledChatId)) return;
+        if (isChatStale(scheduledChatId) || !isStorySummaryConsumableForCurrentChat()) return;
         const quietWait = getBackgroundQuietWaitMs();
         if (quietWait > 0) {
             scheduleLexicalWarmup(quietWait);
@@ -3054,6 +3014,14 @@ async function updateFrameStatsAfterSummary(store, execution) {
 // iframe 消息处理
 // ═══════════════════════════════════════════════════════════════════════════
 
+function reportMemorySaveFailure(error) {
+    const message = memorySaveError(error);
+    window.toastr?.error(message);
+    postToFrame({ type: 'SUMMARY_ERROR', message });
+    postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(readPublishedSummaryMemory().storySummary) });
+    notifyStorySummaryChatState();
+}
+
 async function handleFrameMessage(event) {
     const iframe = document.getElementById("xiaobaix-story-summary-iframe");
     if (!isTrustedMessage(event, iframe, "LittleWhiteBox-StoryFrame")) return;
@@ -3061,6 +3029,20 @@ async function handleFrameMessage(event) {
     const data = event.data;
 
     switch (data.type) {
+        case 'MEMORY_MAINTENANCE_SOURCE':
+            postToFrame({ type: 'MEMORY_MAINTENANCE_SOURCE_RESULT', payload: memoryMaintenance.source(data) });
+            break;
+        case 'MEMORY_MAINTENANCE_QUERY':
+            await sendMemoryMaintenanceResults(data.offset);
+            break;
+        case 'MEMORY_MAINTENANCE_CANCEL':
+            memoryMaintenance.cancel();
+            break;
+        case 'MEMORY_MAINTENANCE_REPAIR':
+            try { await memoryMaintenance.repairIndexes(); }
+            catch (error) { xbLog.error(MODULE_ID, 'memory_maintenance_index_failed', error); }
+            await sendMemoryMaintenanceResults();
+            break;
         case "FRAME_READY": {
             frameReady = true;
             flushPendingFrameMessages();
@@ -3263,7 +3245,8 @@ async function handleFrameMessage(event) {
                         counts: result.counts,
                     });
                 } catch (e) {
-                    postToFrame({ type: "SUMMARY_IMPORT_RESULT", success: false, error: e.message });
+                    postToFrame({ type: "SUMMARY_IMPORT_RESULT", success: false, error: memorySaveError(e) });
+                    notifyStorySummaryChatState();
                 }
             })();
             break;
@@ -3422,7 +3405,7 @@ async function handleFrameMessage(event) {
                 );
             } catch (error) {
                 xbLog.error(MODULE_ID, '清空总结失败', error);
-                await executeSlashCommand('/echo severity=error 清空总结失败，原总结已保留；请查看日志后重试');
+                reportMemorySaveFailure(error);
                 break;
             }
             if (!cleared) break;
@@ -3483,7 +3466,7 @@ async function handleFrameMessage(event) {
             notifyStorySummaryChatState();
 
             if (!result.success) {
-                await executeSlashCommand("/echo severity=error 回退总结失败，原总结已保留；请查看日志后重试");
+                reportMemorySaveFailure({ code: result.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
                 break;
             }
 
@@ -3503,61 +3486,65 @@ async function handleFrameMessage(event) {
             break;
 
         case "UPDATE_SECTION": {
-            const store = getSummaryStore();
-            if (!store || !VALID_SECTIONS.includes(data.section)) break;
-            cancelRecallAndClearPrompt('summary-edited');
-            store.json ||= {};
-
-            // 如果是 events，先记录旧数据用于同步向量
-            const oldEvents = data.section === "events" ? [...(store.json.events || [])] : null;
-            const oldFacts = data.section === "facts" ? [...(store.json.facts || [])] : null;
-
-            store.json[data.section] = data.section === "characters"
-                ? stampEditedCharacters(store.json.characters, data.data, getCurrentFloorHint())
-                : data.section === "events" ? projectEditedSummaryEvents(data.data) : data.data;
-            if (data.section === "facts") {
-                store.json.facts = mergeEditedFactsWithTimestamps(oldFacts, data.data, getCurrentFloorHint());
-            }
-            if (data.section === "characters") {
-                const rels = data?.data?.relationships || [];
-                const floorHint = getCurrentFloorHint();
-                store.json.facts = mergeCharacterRelationshipsIntoFacts(store.json.facts, rels, floorHint);
-            }
-            store.updatedAt = Date.now();
-            saveSummaryStore();
-
-            // 同步 L2 检索索引（事件新增、编辑、删除）
-            if (data.section === "events" && oldEvents) {
-                syncEventVectorsOnEdit(oldEvents, store.json.events);
+            if (!VALID_SECTIONS.includes(data.section)) break;
+            try {
+                const { chatId } = getContext();
+                assertMemoryWritable(chatId);
+                getSummaryStore();
+                const previous = readSummaryMemory();
+                const next = structuredClone(previous);
+                const store = next.storySummary;
+                cancelRecallAndClearPrompt('summary-edited');
+                memoryMaintenance.cancel();
+                store.json ||= {};
+                const oldEvents = data.section === "events" ? previous.storySummary.json?.events || [] : null;
+                const oldFacts = store.json.facts || [];
+                store.json[data.section] = data.section === "characters"
+                    ? stampEditedCharacters(store.json.characters, data.data, getCurrentFloorHint())
+                    : data.section === "events" ? projectEditedSummaryEvents(data.data) : data.data;
+                if (data.section === "facts") store.json.facts = mergeEditedFactsWithTimestamps(oldFacts, data.data, getCurrentFloorHint());
+                if (data.section === "characters") {
+                    store.json.facts = mergeCharacterRelationshipsIntoFacts(store.json.facts, data?.data?.relationships || [], getCurrentFloorHint());
+                }
+                store.updatedAt = Date.now();
+                const committed = await runVectorWriteTask({ chatId, kind: 'summary-manual-edit', scope: VECTOR_WRITE_SCOPES.CONSISTENCY }, () =>
+                    commitSummaryMemory(chatId, next, { previous, invalidate: async () => {
+                        if (oldEvents) {
+                            const nextById = new Map(store.json.events.map(event => [event.id, event]));
+                            const ids = oldEvents.filter(event => buildEventVectorText(event) !== buildEventVectorText(nextById.get(event.id))).map(event => event.id);
+                            await deleteEventVectorsByIds(chatId, ids);
+                            invalidateLexicalIndex();
+                        }
+                    } }));
+                if (!committed) throw new Error('metadata_commit_cancelled');
+                if (oldEvents && getContext().chatId === chatId) await syncEventVectorsOnEdit(oldEvents, store.json.events);
+            } catch (error) {
+                reportMemorySaveFailure(error);
             }
             break;
         }
 
         case "UPDATE_CHARACTER_ALIASES": {
-            const store = getSummaryStore();
-            if (!store || !Array.isArray(data.aliases)) break;
-            cancelRecallAndClearPrompt('character-aliases-edited');
-            store.json ||= {};
-
-            let result;
+            if (!Array.isArray(data.aliases)) break;
             try {
-                result = replaceCharacterAliases(store.json, data.aliases, getCurrentFloorHint());
+                const { chatId } = getContext();
+                assertMemoryWritable(chatId);
+                getSummaryStore();
+                const previous = readSummaryMemory();
+                const next = structuredClone(previous);
+                const store = next.storySummary;
+                cancelRecallAndClearPrompt('character-aliases-edited');
+                memoryMaintenance.cancel();
+                store.json ||= {};
+                const result = replaceCharacterAliases(store.json, data.aliases, getCurrentFloorHint());
+                if (!result.aliasChanged) break;
+                store.updatedAt = Date.now();
+                await commitSummaryMemory(chatId, next, { previous });
+                refreshEntityLexiconAndWarmup();
+                postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(getSummaryStore()) });
             } catch (error) {
-                postToFrame({
-                    type: 'SUMMARY_ERROR',
-                    message: `别名映射未保存：${formatErrorDetails(error, { includeStack: false })}`,
-                });
-                break;
+                reportMemorySaveFailure(error);
             }
-
-            if (!result.aliasChanged) break;
-            store.updatedAt = Date.now();
-            saveSummaryStore();
-
-            // Alias mappings affect terminology and event ownership through
-            // the shared vocabulary. Existing event bodies stay untouched.
-            refreshEntityLexiconAndWarmup();
-            postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(store) });
             break;
         }
 
@@ -3615,6 +3602,7 @@ async function handleFrameMessage(event) {
                     if (previousRecallConfig !== recallConfigKey(savedConfig)) {
                         cancelRecallAndClearPrompt('recall-config-changed');
                     }
+                    if (!savedConfig.memoryMaintenanceEnabled) memoryMaintenance.cancel();
                     const nextVectorConfig = savedConfig?.vector || {};
                     const vectorEnabledChanged = !!previousVectorConfig?.enabled !== !!nextVectorConfig?.enabled;
                     const vectorFingerprintChanged = !!previousVectorConfig?.enabled
@@ -3773,7 +3761,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
     if (rollback.status === 'failed') {
         await deactivateCurrentChatStorySummary();
         notifyStorySummaryChatState();
-        await executeSlashCommand('/echo severity=error 剧情总结无法安全回滚，已停止使用旧总结；请导出当前总结，修正后重新导入，或清空总结数据');
+        reportMemorySaveFailure({ code: rollback.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
         return;
     }
 
@@ -3858,9 +3846,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
 async function truncateVectorDataFromFloor(chatId, newLength) {
     if (!chatId || !(newLength >= 0)) return;
     await syncOnMessageDeleted(chatId, newLength);
-    deleteStateAtomsFromFloor(newLength);
-    deleteL0IndexFromFloor(newLength);
-    await deleteStateVectorsFromFloor(chatId, newLength);
+    await invalidateSummaryAnchors(chatId, newLength);
 }
 
 /**
@@ -3881,7 +3867,8 @@ async function reconcileVectorFloorsOnLoad(chatId, chatLength) {
     // chatLength 为 0 时这三条合起来就是"存在任何派生数据"，无需另开特例。
     const overflowIndex = Object.keys(getL0Index()?.byFloor || {})
         .some((key) => Number(key) >= chatLength);
-    if (!overflowChunks && !overflowAtoms && !overflowIndex) return false;
+    const overflowHistory = hasActiveAnchorHistoryFromFloor(getSummaryStore(), chatLength);
+    if (!overflowChunks && !overflowAtoms && !overflowIndex && !overflowHistory) return false;
 
     xbLog.warn(MODULE_ID, `加载对账：丢弃 floor >= ${chatLength} 的派生数据 chat=${chatId}`);
     await truncateVectorDataFromFloor(chatId, chatLength);
@@ -3899,7 +3886,7 @@ async function handleMessageDeletedNow(scheduledChatId) {
     const rollback = await rollbackSummaryIfNeeded();
     invalidateLexicalIndex();
     // 回滚失败也要裁掉越界派生数据，否则 L0/L1 会一直指向已删楼层。
-    await truncateVectorDataFromFloor(chatId, newLength);
+    await syncOnMessageDeleted(chatId, newLength);
 
     scheduleLexicalWarmup();
     return rollback;
@@ -3923,7 +3910,7 @@ async function finishSummaryContentChange(rollback) {
     if (rollback.status === 'failed') {
         await deactivateCurrentChatStorySummary();
         notifyStorySummaryChatState();
-        await executeSlashCommand('/echo severity=error 剧情总结无法安全回滚，已停止使用旧总结；请导出当前总结，修正后重新导入，或清空总结数据');
+        reportMemorySaveFailure({ code: rollback.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
         return;
     }
     // 删除或 swipe 的事件返回后，宿主就可能开始组装请求，必须等待恢复完成。
@@ -3946,9 +3933,6 @@ async function handleMessageSwipedNow(scheduledChatId, messageId) {
 
     await syncOnMessageSwiped(chatId, messageId);
     // L0 同步：清理 swipe 前该楼及之后依赖旧正文的派生数据。
-    deleteStateAtomsFromFloor(messageId);
-    deleteL0IndexFromFloor(messageId);
-    await deleteStateVectorsFromFloor(chatId, messageId);
 
     scheduleLexicalWarmup();
     return rollback;
@@ -4017,10 +4001,10 @@ async function handleMessageUpdated(scheduledChatId, messageId) {
         },
         async () => {
             if (isChatStale(scheduledChatId)) return { status: 'stale' };
-            const result = await rollbackSummaryIfNeeded();
+            const result = await rollbackSummaryIfNeeded({ invalidateFromFloor: editedFloor });
             // 回滚成功与否都要作废：旧文本的向量留着比缺失更糟。
             if (editedFloor !== null && !isChatStale(scheduledChatId)) {
-                await truncateVectorDataFromFloor(scheduledChatId, editedFloor);
+                await syncOnMessageDeleted(scheduledChatId, editedFloor);
             }
             return result;
         },
@@ -4030,7 +4014,7 @@ async function handleMessageUpdated(scheduledChatId, messageId) {
     if (rollback.status === 'failed') {
         await deactivateCurrentChatStorySummary();
         notifyStorySummaryChatState();
-        await executeSlashCommand('/echo severity=error 剧情总结无法安全回滚，已停止使用旧总结；请导出当前总结，修正后重新导入，或清空总结数据');
+        reportMemorySaveFailure({ code: rollback.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
         return;
     }
     if (editedFloor !== null) {
@@ -4108,6 +4092,7 @@ function cancelRecallAndClearPrompt(reason) {
 // recall must not preserve a view from halfway through the operation.
 async function changeRecallData(chatId, change) {
     if (getContext()?.chatId !== chatId) return;
+    memoryMaintenance.cancel();
     cancelRecallAndClearPrompt('memory-data-changed');
     try {
         return await change();
@@ -4352,6 +4337,7 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
     });
     const waitStartedAt = performance.now();
     let joinStatus = 'pending';
+    runContext?.reportProgress?.(run.diagnostics);
     try {
         const outcome = await recallPrefetch.waitForOutcome(run);
         if (!outcome?.ok) throw outcome?.error || new Error('Story Summary recall produced no outcome');
@@ -4390,6 +4376,7 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
             return selectBestStoryMemoryResult(undefined, getStorySummaryForEna());
         }
     } finally {
+        runContext?.reportProgress?.(null);
         xbLog.info(
             MODULE_ID,
             `Recall join: path=${path} status=${joinStatus} `
@@ -4445,6 +4432,7 @@ function scheduleWithChatGuard(fn, delay = 0, ...args) {
  * 重排，不会丢活。
  */
 function runContentChangeSync(handler, ...args) {
+    memoryMaintenance.cancel();
     const chatId = getContext()?.chatId || null;
     if (!chatId || !isStorySummaryEnabledForCurrentChat()) return undefined;
     if (handler === handleMessageUpdated) {
@@ -4525,6 +4513,7 @@ async function registerEvents() {
     resumeVectorWriteCoordinator();
     window.registerModuleCleanup?.(MODULE_ID, unregisterEvents);
     events = createModuleEvents(MODULE_ID);
+    memoryMaintenance.start();
     activeChatId = getContext().chatId || null;
     registerAfterAiGateHandler();
 
@@ -4571,6 +4560,7 @@ async function registerEvents() {
     initButtonsForAll();
 
     events.on(event_types.CHAT_CHANGED, () => {
+        memoryMaintenance.cancel();
         cancelRecallAndClearPrompt('chat-changed');
         cancelActiveSummaryExecution();
         activeSummaryExecution = null;
@@ -4642,6 +4632,7 @@ async function unregisterEvents() {
 }
 
 async function runStorySummaryTeardown() {
+    memoryMaintenance.stop();
     // The master switch invokes this cleanup directly (without awaiting it).
     // Restore flags synchronously, before waiting for any background writer.
     const hideCleanup = clearHideState();
@@ -4690,6 +4681,7 @@ async function deactivateCurrentChatStorySummary() {
     clearDeferredBackgroundTasks();
     cancelPendingHide();
     cancelRecallAndClearPrompt('deactivated');
+    memoryMaintenance.cancel();
     cancelEmbeddingWriteTasks('Story Summary deactivated for current chat');
     lastRecallLogText = "";
 

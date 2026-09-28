@@ -32,6 +32,7 @@ export function createFourthWallModule(dependencies: FourthWallModuleDependencie
             if (!context.partition) { throw new Error('Fourth Wall partition store is unavailable'); }
             const repository = createFourthWallRepository(
                 context.partition as PartitionStore<FourthWallStoredPartition>,
+                context.files,
                 { upgradeSource: dependencies.upgradeSource },
             );
             return dependencies.install({

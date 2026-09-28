@@ -22,9 +22,8 @@ test('Fourth Wall keeps its prompt protocol while using the shared Agent gateway
     const signal = new AbortController().signal;
     const result = await generate({
         config: { currentPresetName: '共享预设' },
-        builtPrompt: { msg1: 'u1', msg2: 'a1', msg3: 'u2', msg4: 'a2' },
+        builtPrompt: { protocol: 'role protocol', msg1: 'u1', msg2: 'a1', msg3: 'u2', msg4: 'request' },
         stream: true,
-        disableAssistantPrefill: false,
         signal,
         onStreamProgress: snapshot => progress.push(snapshot),
     });
@@ -32,12 +31,12 @@ test('Fourth Wall keeps its prompt protocol while using the shared Agent gateway
     assert.deepEqual(request.messages, [
         { role: 'user', content: 'u1' },
         { role: 'assistant', content: 'a1' },
-        { role: 'user', content: 'u2' },
-        { role: 'assistant', content: 'a2' },
+        { role: 'user', content: 'u2\n\nrequest' },
     ]);
     assert.equal(request.config.currentPresetName, '共享预设');
     assert.equal(request.signal, signal);
     assert.match(request.systemPrompt, /四次元壁/);
+    assert.ok(request.systemPrompt.includes('role protocol'));
     assert.deepEqual(progress, [{ text: 'partial' }]);
     assert.deepEqual(result, {
         text: 'final',
@@ -48,7 +47,7 @@ test('Fourth Wall keeps its prompt protocol while using the shared Agent gateway
     });
 });
 
-test('disabling Assistant Prefill keeps the former prefill in the final user message', async () => {
+test('the final request remains a user message without earlier turns', async () => {
     let request = null;
     const generate = createFourthWallAgentResponse({
         async run(next) {
@@ -58,9 +57,8 @@ test('disabling Assistant Prefill keeps the former prefill in the final user mes
     });
     await generate({
         config: {},
-        builtPrompt: { msg1: '', msg2: '', msg3: 'question', msg4: 'format cue' },
+        builtPrompt: { protocol: 'rules', msg1: '', msg2: '', msg3: 'question', msg4: 'format cue' },
         stream: false,
-        disableAssistantPrefill: true,
         signal: new AbortController().signal,
     });
 

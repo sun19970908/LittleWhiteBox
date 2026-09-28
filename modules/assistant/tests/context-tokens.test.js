@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { resolveConversationTokens, estimateConversationTokens } from '../../agent-core/runtime/context-tokens.js';
+import { buildTokenCounterPayload } from '../../agent-core/runtime/context-tokens.js';
 import { OpenAICompatibleAdapter } from '../../agent-core/adapters/openai-compatible.js';
 import { SillyTavernOpenAICompatibleAdapter } from '../../agent-core/adapters/sillytavern-openai-compatible.js';
 import { setHostChatCompletionsRequestHeadersProvider, buildHostChatCompletionGenerateRequest } from '../../../shared/host-llm/chat-completions/client.js';
@@ -9,6 +10,20 @@ import { setHostChatCompletionsRequestHeadersProvider, buildHostChatCompletionGe
 const messages = [{ role: 'system', content: '规则' }, { role: 'user', content: '请求' }];
 const tools = [{ function: { name: 'Read', parameters: { type: 'object' } } }];
 const encoded = count => ({ count, ids: Array(count).fill(1) });
+
+test('native provider replay includes hidden signatures and complete model contents once', () => {
+    const googleContents = [{ role: 'model', parts: [{ text: 'thought', thought: true, thoughtSignature: 'signature' }] },
+        { role: 'model', parts: [{ functionCall: { name: 'Read', args: {} } }] }];
+    for (const [provider, payload, expected] of [
+        ['google', { googleContents, googleContent: googleContents.at(-1) }, googleContents],
+        ['anthropic', { anthropicContent: [{ type: 'thinking', thinking: 'internal', signature: 'signed' }] }, [{ type: 'thinking', thinking: 'internal', signature: 'signed' }]],
+        ['openai-responses', { openAIResponseOutput: [{ type: 'reasoning', encrypted_content: 'opaque' }] }, [{ type: 'reasoning', encrypted_content: 'opaque' }]],
+    ]) {
+        const payloads = buildTokenCounterPayload([{ role: 'assistant', content: 'visible-only', providerPayload: payload }], [], { provider });
+        assert.deepEqual(JSON.parse(payloads[0].content), expected);
+        assert.equal(payloads.length, 1);
+    }
+});
 
 test('tokenizer and fallback count only reasoning replayed by the native adapter, including earlier text-only replies', async t => {
     const calls = [{ id: 'call', type: 'function', function: { name: 'Read', arguments: '{}' } }];

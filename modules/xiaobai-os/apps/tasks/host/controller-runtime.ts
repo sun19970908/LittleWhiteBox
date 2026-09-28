@@ -23,6 +23,7 @@ interface TaskActivation {
 }
 
 type TaskControllerService = Pick<TasksService,
+    | 'ensureReady'
     | 'readCurrent'
     | 'refreshCurrent'
     | 'createActionId'
@@ -30,6 +31,8 @@ type TaskControllerService = Pick<TasksService,
     | 'publish'
     | 'assignCandidate'
     | 'cancel'
+    | 'cancelCommission'
+    | 'readCommission'
     | 'getWriteState'
 > & {
     confirmPending(): Promise<{ status: string }>;
@@ -171,7 +174,7 @@ export function createTaskControllerRuntime({
             maintenanceStatus: maintenance.getStatus('tasks', chatIdentity),
         });
         if (state.status === 'unconfirmed' || state.status === 'conflict') {return state;}
-        if (!preparation || preparation.activation !== activation || economy.isOpen()) {return state;}
+        if (!preparation || preparation.activation !== activation || state.status === 'ready') {return state;}
         if (preparation.error) {return { ...state, status: 'blocked', message: preparation.error };}
         return { ...state, status: 'loading', message: '' };
     }
@@ -197,7 +200,7 @@ export function createTaskControllerRuntime({
         preparation = pending;
         schedule(() => {
             if (preparation !== pending || activation !== current || currentChatIdentity() !== current.chatIdentity) {return;}
-            void economy.ensureOpen().then(() => {
+            void tasks.ensureReady(undefined, current.chatIdentity).then(() => economy.ensureOpen()).then(() => {
                 if (preparation !== pending || activation !== current || currentChatIdentity() !== current.chatIdentity) {return;}
                 preparation = null;
                 emitState(current);
@@ -255,7 +258,7 @@ export function createTaskControllerRuntime({
         if (!chatIdentity) {throw new Error('tasks_chat_unavailable');}
         const current = { chatIdentity, post: context.post };
         activation = current;
-        if (!economy.isOpen()) {schedulePreparation(current);}
+        schedulePreparation(current);
         return buildState(chatIdentity);
     }
 
@@ -277,7 +280,15 @@ export function createTaskControllerRuntime({
             return emitState(current);
         }
         if (message.type === 'tasks/detail/read') {
-            return presentTaskDetail(serviceView(), requireId(payload.taskId, 'tasks_request_invalid'));
+            const taskId = requireId(payload.taskId, 'tasks_request_invalid');
+            if (typeof payload.scopeId === 'string' && payload.scopeId !== tasks.readCurrent().currentScopeId) {
+                const scopeId = requireId(payload.scopeId, 'tasks_request_invalid');
+                const commission = tasks.readCommission(scopeId, taskId);
+                return { ...presentTaskDetail({ ...serviceView(), domain: commission.domain,
+                    records: [commission.record] }, taskId), originScopeId: scopeId,
+                    sourceLabel: commission.domain.storyLabel || '旧聊天' };
+            }
+            return presentTaskDetail(serviceView(), taskId);
         }
         if (message.type === 'tasks/history/load-more') {
             const cursor = requireId(payload.cursor, 'tasks_history_cursor_invalid');
@@ -323,6 +334,23 @@ export function createTaskControllerRuntime({
                 () => commitGuard(current),
             ));
         }
+        if (message.type === 'tasks/commission/cancel') {
+            if (localWriteBusy || tasks.getWriteState() !== 'ready' || !economy.isOpen()) {
+                throw new Error('tasks_write_blocked');
+            }
+            const scopeId = requireId(payload.scopeId, 'tasks_request_invalid');
+            const cas = requireTaskCas(payload);
+            localWriteBusy = true;
+            try {
+                const result = await tasks.cancelCommission({ actionId: tasks.createActionId(),
+                    ...cas, scopeId });
+                return { result, state: activation === current ? emitState(current) : null };
+            } catch (error) {
+                report(error);
+                if (activation === current) {emitCurrentState();}
+                throw publicError(error);
+            } finally {localWriteBusy = false;}
+        }
         if (message.type === 'tasks/settings/update') {
             if (typeof payload.autoMaintenance !== 'boolean') {throw new Error('tasks_request_invalid');}
             await settings.setTasksAutoMaintenance(payload.autoMaintenance);
@@ -341,6 +369,7 @@ export function createTaskControllerRuntime({
         if (message.type === 'tasks/save/confirm') {
             const confirmation = await tasks.confirmPending();
             assertSameActivation(current, payload);
+            if (confirmation.status === 'confirmed' || confirmation.status === 'none') {schedulePreparation(current);}
             return { confirmation: confirmation.status, state: emitState(current) };
         }
         if (message.type === 'tasks/read') {

@@ -9,7 +9,8 @@ import { prepareActionCheck } from '../apps/dice/application/prepare-action-chec
 import { parseDiceRecords, MAX_ACTION_CHECKS } from '../apps/dice/domain/check-records.ts';
 import { parseActionCheck } from '../apps/dice/protocol/request.ts';
 import { COC7_EXAMPLE, coc7CapabilityProjection } from '../apps/dice/protocol/coc7-contract.ts';
-import { buildActionCheckPrompt, projectActionCheckResults, serializeActionCheckResults } from '../apps/dice/protocol/prompt.ts';
+import { buildActionCheckContinuation, buildActionCheckRules, projectActionCheckResults, serializeActionCheckResults } from '../apps/dice/protocol/prompt.ts';
+import { readDicePromptResults } from './helpers/dice-prompt.js';
 
 const skill = { action: 'Climb the wet wall', stat: 'athletics', difficulty: 'hard' };
 const tagged = request => '<xb_action_check>' + JSON.stringify(request) + '</xb_action_check>';
@@ -46,7 +47,7 @@ test('manual point allocation needs no randomization, cannot overspend and keeps
     const empty = emptyCoc7Draft();
     assert.equal(readCoc7Sheet(empty).kind, 'ready');
     assert.ok(Object.values(empty.attributes).every(n => n === 20));
-    assert.ok(Object.values(empty.skills).every(n => n === 10));
+    assert.ok(Object.values(empty.skills).every(n => n === 20));
     let draft = empty;
     for (const [ids, target] of [[COC7_ATTRIBUTE_IDS, 50], [COC7_SKILL_IDS, 40]]) {
         for (const id of ids) while (coc7StatValue(draft, id) < target) draft = adjustCoc7Stat(draft, id, 1);
@@ -78,12 +79,12 @@ test('unspent points persist and execute checks, including the skill minimum at 
     const saved = parseCoc7Sheet(JSON.parse(JSON.stringify(draft)));
     assert.deepEqual(saved, draft);
     assert.equal(coc7RemainingPoints(saved, 'attributes'), 115);
-    assert.equal(coc7RemainingPoints(saved, 'skills'), 360);
-    for (const [units, level, verdict] of [[1, 'critical', 'achieved'], [2, 'extreme', 'achieved'], [3, 'hard', 'not_achieved']]) {
+    assert.equal(coc7RemainingPoints(saved, 'skills'), 240);
+    for (const [units, level, verdict] of [[1, 'critical', 'achieved'], [4, 'extreme', 'achieved'], [5, 'hard', 'not_achieved']]) {
         const candidate = prepare({ ...skill, stat: 'intimacy', difficulty: 'extreme' }, { coc7Sheet: saved, random: sequence(units, 0) });
         assert.equal(candidate.kind, 'candidate');
         const result = candidate.records.checks[0].result;
-        assert.deepEqual([result.value, result.threshold, result.level, result.verdict], [10, 2, level, verdict]);
+        assert.deepEqual([result.value, result.threshold, result.level, result.verdict], [20, 4, level, verdict]);
     }
 });
 
@@ -103,7 +104,7 @@ test('invalid points, pools and shapes are rejected without changing their input
         ...[100, 10, 49, '50', NaN, Infinity].map(body => ({ ...valid, attributes: { ...valid.attributes, body } })),
         { ...valid, attributes: { ...valid.attributes, body: 55 } },
         { ...valid, attributes: { ...valid.attributes, body: 45 }, skills: { ...valid.skills, athletics: 65 } },
-        ...[5, 11, 85].map(intimacy => ({ ...valid, skills: { ...valid.skills, intimacy } })),
+        ...[5, 10, 11, 15, 85].map(intimacy => ({ ...valid, skills: { ...valid.skills, intimacy } })),
         { ...valid, skills: { ...valid.skills, athletics: 65 } },
         { ...valid, skills: Object.fromEntries(COC7_SKILL_IDS.map(id => [id, 80])) }];
     for (const invalid of invalidSheets) {
@@ -135,6 +136,27 @@ test('single-check thresholds, degree and achievement remain distinct; stored fa
     const historical = JSON.parse(JSON.stringify(prepared.records));
     historical.checks[0].result.verdict = 'achieved';
     assert.deepEqual(parseDiceRecords(historical), historical);
+});
+
+test('easy checks raise the ceiling up to 95 without changing other success degrees or special rolls', () => {
+    for (const [value, roll, threshold, level, verdict] of [
+        [20, 21, 40, 'easy', 'achieved'], [40, 50, 60, 'easy', 'achieved'],
+        [40, 61, 60, 'failure', 'not_achieved'], [80, 95, 95, 'easy', 'achieved'],
+        [80, 96, 95, 'failure', 'not_achieved'], [80, 100, 95, 'fumble', 'not_achieved'],
+        [80, 1, 95, 'critical', 'achieved'],
+    ]) {
+        const result = rollCoc7(value, 'easy', sequence(roll % 10, Math.floor(roll / 10) % 10));
+        assert.deepEqual([result.threshold, result.level, result.verdict], [threshold, level, verdict]);
+    }
+    const request = { ...skill, difficulty: 'easy' };
+    assert.deepEqual(parseCoc7Request(request), request);
+    const candidate = prepare(request, { coc7Sheet: emptyCoc7Draft(), random: sequence(1, 2) });
+    assert.equal(candidate.kind, 'candidate');
+    assert.deepEqual([candidate.records.checks[0].result.value, candidate.records.checks[0].result.threshold], [20, 40]);
+    assert.deepEqual(parseDiceRecords(JSON.parse(JSON.stringify(candidate.records))), candidate.records);
+    const untrained = prepare({ ...request, stat: '火系魔法' }, { random: sequence(0, 5) }).records.checks[0];
+    assert.deepEqual([untrained.result.value, untrained.result.threshold, untrained.result.level, untrained.result.verdict],
+        [40, 60, 'easy', 'achieved']);
 });
 
 test('malformed requests and unavailable sheets are rejected before sampling', () => {
@@ -263,15 +285,15 @@ test('model capabilities include both independent attributes and skills, never v
         assert.equal(prepared.kind, 'candidate');
         assert.equal(prepared.records.checks[0].result.value, coc7StatValue(sheet(), item.id));
     }
-    const prompt = buildActionCheckPrompt('', [], 'standard', 'coc7', true);
-    assert.equal(prepareActionCheck({ body: prompt, rule: 'coc7', coc7Sheet: sheet(), generatedFrom: 0, id: 'example' }).kind, 'candidate');
+    const prompt = buildActionCheckRules('standard', 'coc7', true);
+    assert.ok(prompt.length > 0);
     assert.equal(prepareActionCheck({ body: COC7_EXAMPLE, rule: 'coc7', coc7Sheet: sheet(), generatedFrom: 0, id: 'example' }).kind, 'candidate');
-    assert.equal(buildActionCheckPrompt('', [], 'standard', 'coc7'), '');
-    assert.equal(buildActionCheckPrompt('', [], 'active', 'coc7', true), prompt, 'D20 frequency never changes CoC instructions');
+    assert.equal(buildActionCheckRules('standard', 'coc7', false), '');
+    assert.equal(buildActionCheckRules('active', 'coc7', true), prompt, 'D20 frequency never changes CoC instructions');
     const prepared = prepare();
-    const recovery = buildActionCheckPrompt(prepared.body, prepared.records.checks, 'standard', 'coc7');
-    assert.deepEqual(JSON.parse(recovery.split('\n').at(-1)), projectActionCheckResults(prepared.records.checks));
-    const { level, verdict } = JSON.parse(recovery.split('\n').at(-1))[0].result;
+    const recovery = buildActionCheckContinuation(prepared.body, prepared.records.checks, false);
+    assert.deepEqual(readDicePromptResults(recovery), projectActionCheckResults(prepared.records.checks));
+    const { level, verdict } = readDicePromptResults(recovery)[0].result;
     assert.deepEqual({ level, verdict }, { level: 'regular', verdict: 'not_achieved' });
     assert.equal(parseActionCheck(recovery, 0, 'coc7').kind, 'none');
 });
@@ -287,8 +309,8 @@ test('mixed history shares its existing limit; result serialization preserves da
     assert.deepEqual(prepare(skill, { records, random: () => assert.fail('limit sampled') }), { kind: 'invalid', error: 'dice_check_limit' });
     const body = records.checks.map(record => `[dice:${record.id}]`).join('\n');
     for (const rule of ['d20', 'coc7']) {
-        const prompt = buildActionCheckPrompt(body, records.checks, 'active', rule, true);
-        assert.deepEqual(JSON.parse(prompt.split('\n').at(-1)), projectActionCheckResults(records.checks));
+        const prompt = buildActionCheckContinuation(body, records.checks, true);
+        assert.deepEqual(readDicePromptResults(prompt), projectActionCheckResults(records.checks));
         assert.equal(parseActionCheck(prompt, 0, rule).kind, 'none', 'exhausted replies offer no executable request example');
     }
     const prepared = prepare({ ...skill, action: 'Say "{{setvar::secret::value}}" and {{char}}' });

@@ -32,7 +32,9 @@ Scene_Description_Requirements:
 
 export const DEFAULT_CONFIRM = '好的，我已阅读设置要求，准备查看历史并进入角色。';
 
-export const DEFAULT_BOTTOM = `我将根据你的回应: {{USER_INPUT}}|按照<meta_protocol>内要求，进行<thinking>和<msg>互动，开始内省:`;
+// Compatibility: stored default from the assistant-prefill format; remove when those settings are migrated out.
+const PRE_USER_BOTTOM = `我将根据你的回应: {{USER_INPUT}}|按照<meta_protocol>内要求，进行<thinking>和<msg>互动，开始内省:`;
+export const DEFAULT_BOTTOM = `请回应我的消息：{{USER_INPUT}}。按照<meta_protocol>的格式回复。`;
 
 export const DEFAULT_META_PROTOCOL = `
 阅读以上内容后，看本次任务具体要求:
@@ -136,7 +138,9 @@ export function normalizeFourthWallGlobalSettings(value: unknown): FourthWallGlo
             metaProtocol: templates.metaProtocol === PRE_MEMORY_META_PROTOCOL
                 ? defaults.promptTemplates.metaProtocol
                 : stringOr(templates.metaProtocol, defaults.promptTemplates.metaProtocol),
-            bottom: stringOr(templates.bottom, defaults.promptTemplates.bottom),
+            bottom: templates.bottom === PRE_USER_BOTTOM
+                ? defaults.promptTemplates.bottom
+                : stringOr(templates.bottom, defaults.promptTemplates.bottom),
         },
     };
 }
@@ -146,7 +150,6 @@ export function createDefaultFourthWallChatState(createdAt = Date.now()): Fourth
         settings: {
             maxChatLayers: MAIN_CHAT_DEFAULT,
             stream: true,
-            disableAssistantPrefill: false,
         },
         sessions: [
             {

@@ -1,3 +1,7 @@
+import { chat_metadata } from './script.js';
+
+let persistedMetadata = {};
+export const __getPersistedMetadata = () => persistedMetadata;
 let replayContext = {
     chatId: null,
     chat: [],
@@ -8,6 +12,7 @@ let replayContext = {
     saveMetadata: async () => {
         __saveMetadataCallCount += 1;
         __immediateMetadataSaveCallCount += 1;
+        persistedMetadata = structuredClone(chat_metadata);
     },
 };
 
@@ -30,6 +35,13 @@ export function __setReplayContext(nextContext) {
         ...replayContext,
         ...(nextContext || {}),
     };
+    if (nextContext?.saveMetadata) {
+        const save = nextContext.saveMetadata;
+        replayContext.saveMetadata = async () => {
+            await save();
+            persistedMetadata = structuredClone(chat_metadata);
+        };
+    }
 }
 
 export function __setExtensionSettings(nextSettings) {

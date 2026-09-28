@@ -12,6 +12,7 @@ import type { MessagesMedia } from './media-adapter.js';
 import { syncCurrentMessages, type createMessagesRuntime } from './runtime.js';
 import type { MessagesClientState, MessagesSettings, ThreadPage } from '../types.js';
 import { messagesRevision, type MessagesModifications } from '../application/modifications.js';
+import { messageSyncCopy } from '../sync-copy.js';
 
 export interface MessagesControllerDependencies {
     service: MessagesService; timeline: MessagesTimeline; context: MessagesContext; media: MessagesMedia;
@@ -29,8 +30,10 @@ export function createMessagesController(deps: MessagesControllerDependencies): 
     const { service, timeline, context, media, runtime, modifications } = deps;
     let activation: XiaobaiOsAppActivationContext | null = null;
     let pageIdentity = '';
-    let localBusy = false;
+    const localBusy = new Set<string>();
     let localError = '';
+    let syncError = '';
+    let recoveryBlocked = false;
     let chatBoundary = 0;
     let viewBoundary = 0;
     let cleanups: (() => void)[] = [];
@@ -38,6 +41,7 @@ export function createMessagesController(deps: MessagesControllerDependencies): 
         const domain = service.current();
         const assessment = modifications.inspect(domain);
         const latest = new Map(domain.messages.map(message => [message.contactId, message]));
+        const missing = unsyncedIds(domain);
         return {
             chatIdentity: deps.identity(),
             settings: deps.getSettings(),
@@ -49,11 +53,13 @@ export function createMessagesController(deps: MessagesControllerDependencies): 
             }).sort((left, right) => right.lastSeq - left.lastSeq || left.createdAt - right.createdAt),
             knownPeople: context.knownPeople().map(({ name, aliases }) => ({ name, aliases })),
             fileState: service.fileState(), pendingSave: service.pending(),
+            recoveryBlocked, operationPending: localBusy.has(deps.identity()),
             pendingModification: !!domain.pendingMutation, revision: messagesRevision(domain),
             boundary: viewBoundary,
             busy: runtime.active?.identity === deps.identity() ? { contactId: runtime.active.contactId, messageId: runtime.active.messageId, stage: runtime.active.stage } : null,
             outgoing: runtime.outgoing, sendFailure: runtime.failure,
-            generationActive: deps.isGenerating(), unsynced: unsyncedIds(domain).length,
+            generationActive: deps.isGenerating(),
+            syncNotice: { messageIds: missing, error: syncError || runtime.syncError },
             error: localError || runtime.error, media: media.capabilities(),
         };
     }
@@ -74,30 +80,40 @@ export function createMessagesController(deps: MessagesControllerDependencies): 
             revision: messagesRevision(domain), permissions: modifications.permissions(domain, contactId, messages),
             retryMessageId: last?.sender === 'user' ? last.id : null };
     }
-    async function exclusive(task: () => Promise<unknown>) {
-        if (localBusy || runtime.active) {throw new Error('messages_busy');}
-        localBusy = true; localError = '';
+    async function exclusive<T>(task: () => Promise<T>): Promise<T> {
+        const identity = deps.identity();
+        if (localBusy.has(identity) || runtime.active?.identity === identity) {throw new Error('messages_busy');}
+        localBusy.add(identity); localError = '';
         try {return await task();}
-        finally {localBusy = false; emit();}
+        finally {localBusy.delete(identity); emit();}
+    }
+    async function exclusiveState(task: () => Promise<void>): Promise<MessagesClientState> {
+        await exclusive(task);
+        return state();
     }
     async function handleMessage(message: XiaobaiOsHostFrameMessage): Promise<unknown> {
         const payload = record(message.payload) ? message.payload : {};
         if (!activation?.isCurrent() || payload.chatIdentity !== deps.identity() || pageIdentity !== deps.identity()) {throw new Error('messages_chat_changed');}
         const guard = runtime.guard();
+        const requestIdentity = deps.identity(); const requestBoundary = chatBoundary;
+        const isCurrentRequest = () => requestIdentity === deps.identity() && requestBoundary === chatBoundary;
         const string = (key: string, max = 160) => messageString(payload[key], max).trim();
         try {
             switch (message.type) {
                 case 'messages/refresh':
                     await service.refresh(); return state();
                 case 'messages/settings':
-                    return await exclusive(async () => {
+                    {
                         const settings = payload.settings;
-                        if (!record(settings) || typeof settings.imagePrompt !== 'boolean' || typeof settings.voicePrompt !== 'boolean') {
+                        if (!record(settings) || typeof settings.imagePrompt !== 'boolean' || typeof settings.voicePrompt !== 'boolean'
+                            || typeof settings.syncNoticeEnabled !== 'boolean') {
                             throw new Error('messages_invalid_settings');
                         }
-                        await deps.saveSettings({ imagePrompt: settings.imagePrompt, voicePrompt: settings.voicePrompt });
+                        await deps.saveSettings({ imagePrompt: settings.imagePrompt, voicePrompt: settings.voicePrompt,
+                            syncNoticeEnabled: settings.syncNoticeEnabled });
+                        localError = '';
                         return state();
-                    });
+                    }
                 case 'messages/thread': {
                     const before = payload.before === undefined ? Infinity : Number(payload.before);
                     if (before !== Infinity && (!Number.isSafeInteger(before) || before < 1)) {throw new Error('messages_invalid_page');}
@@ -116,63 +132,79 @@ export function createMessagesController(deps: MessagesControllerDependencies): 
                     return { revision, boundary, stats };
                 }
                 case 'messages/contact/add':
-                    return await exclusive(async () => {
-                        const id = `contact:${string('actionId', 100)}`;
-                        const name = string('name', 120); const note = messageString(payload.note ?? '', 600, true).trim();
-                        await service.change(domain => addContact(domain, { id, name, note, createdAt: Date.now(), summary: null }), guard);
-                        return { contactId: id, state: state() };
-                    });
+                    {
+                        const contactId = await exclusive(async () => {
+                            const id = `contact:${string('actionId', 100)}`;
+                            const name = string('name', 120); const note = messageString(payload.note ?? '', 600, true).trim();
+                            await service.change(domain => addContact(domain, { id, name, note, createdAt: Date.now(), summary: null }), guard);
+                            return id;
+                        });
+                        return { contactId, state: state() };
+                    }
                 case 'messages/contact/note':
-                    return await exclusive(async () => {
+                    return await exclusiveState(async () => {
                         const contactId = string('contactId'); const note = messageString(payload.note, 600, true).trim();
                         await service.change(domain => {
                             const contact = domain.contacts.find(item => item.id === contactId);
                             if (!contact) {throw new Error('messages_contact_missing');} contact.note = note;
                         }, guard);
-                        return state();
                     });
                 case 'messages/contact/delete':
-                    return await exclusive(async () => {
+                    return await exclusiveState(async () => {
                         const contactId = string('contactId');
                         await modifications.commit({ contactId, revision: string('revision') }, 'delete-contact', guard);
-                        return state();
                     });
                 case 'messages/send':
-                    if (localBusy) {throw new Error('messages_busy');}
+                    if (localBusy.has(deps.identity())) {throw new Error('messages_busy');}
                     runtime.start(string('contactId'), `input:${string('actionId', 100)}`, parseOutgoingMessage(payload.payload));
                     return state();
                 case 'messages/message/delete':
-                    return await exclusive(async () => {
+                    return await exclusiveState(async () => {
                         const contactId = string('contactId'); const messageId = string('messageId');
                         await modifications.commit({ contactId, messageId, revision: string('revision') }, 'delete', guard);
                         media.stop();
                         runtime.clearError();
-                        return state();
                     });
                 case 'messages/regenerate':
-                    if (localBusy) {throw new Error('messages_busy');}
+                    if (localBusy.has(deps.identity())) {throw new Error('messages_busy');}
                     runtime.regenerate({ contactId: string('contactId'), messageId: string('messageId'), revision: string('revision') });
                     return state();
                 case 'messages/retry':
-                    if (localBusy) {throw new Error('messages_busy');}
+                    if (localBusy.has(deps.identity())) {throw new Error('messages_busy');}
                     runtime.start(string('contactId'), string('messageId'));
                     return state();
                 case 'messages/discard-send':
                     runtime.discard(string('messageId')); return state();
                 case 'messages/confirm':
-                    return await exclusive(async () => {await service.confirm(); await modifications.recover(guard); runtime.clearError(); return state();});
+                    return await exclusiveState(async () => {
+                        const result = await service.confirm();
+                        if (result.status !== 'none' && result.status !== 'confirmed') {
+                            const blocked = result.error?.code === 'commit_guard_rejected';
+                            if (isCurrentRequest()) {recoveryBlocked = blocked;}
+                            throw new Error(blocked ? messageSyncCopy.saveOutdated : messageSyncCopy.saveFailed);
+                        }
+                        if (isCurrentRequest()) {recoveryBlocked = false;}
+                        await modifications.recover(guard);
+                        runtime.clearError();
+                    });
                 case 'messages/adopt-server-state':
-                    return await exclusive(async () => {
+                    return await exclusiveState(async () => {
                         if (!guard()) {throw new Error('messages_chat_changed');}
                         const result = await service.adoptServerState();
                         if (!guard()) {throw new Error('messages_chat_changed');}
-                        if (result.status === 'adopted') {timeline.reset(); runtime.reset();}
-                        return state();
+                        if (result.status === 'adopted') {timeline.reset(); runtime.reset(); if (isCurrentRequest()) {recoveryBlocked = false;}}
                     });
                 case 'messages/sync':
-                    return await exclusive(async () => {await modifications.recover(guard); await syncCurrentMessages(service, timeline, guard); runtime.clearError(); return state();});
+                    syncError = '';
+                    await modifications.recover(guard);
+                    await syncCurrentMessages(service, timeline, guard);
+                    runtime.clearError(); return state();
                 case 'messages/recover':
-                    return await exclusive(async () => {await service.refresh(); await modifications.recover(guard); await timeline.recover(guard); runtime.clearError(); return state();});
+                    return await exclusiveState(async () => {syncError = ''; await service.refresh(); await modifications.recover(guard); await timeline.recover(guard); runtime.clearError();});
+                case 'messages/dismiss-sync-notice':
+                    await deps.saveSettings({ ...deps.getSettings(), syncNoticeEnabled: false });
+                    localError = '';
+                    return state();
                 case 'messages/image/cancel': media.cancelImage(string('mediaRequestId')); return {};
                 case 'messages/image/generate':
                 case 'messages/voice/play': {
@@ -210,14 +242,19 @@ export function createMessagesController(deps: MessagesControllerDependencies): 
                 throw new Error('媒体暂不可用，消息原文已保留。');
             }
             const code = cause instanceof Error ? cause.message : '';
+            if (message.type === 'messages/sync' || message.type === 'messages/recover') {
+                if (isCurrentRequest()) {syncError = code === 'messages_projection_closed' ? messageSyncCopy.closed : messageSyncCopy.failed;}
+                emit(); throw new Error(syncError);
+            }
             const userMessage = code && !code.startsWith('messages_') && /[\u3400-\u9fff]/u.test(code) ? code
                 : code === 'messages_contact_exists' ? '通讯录里已经有这个人了。'
                 : code === 'messages_busy' ? '上一项操作还没完成，请稍候。'
                     : code.startsWith('messages_invalid') ? '请检查输入内容和长度。'
-                        : code === 'messages_projection_closed' ? '原记录已被修改、删除，或故事已继续。可以展开下方说明，在当前位置补记。'
-                            : message.type === 'messages/settings' ? '还不确定设置是否保存成功，请重试。'
+                        : code === 'messages_projection_closed' ? messageSyncCopy.closed
+                            : message.type === 'messages/settings' || message.type === 'messages/dismiss-sync-notice' ? messageSyncCopy.settingsFailed
                                 : '操作未完成，已保存的消息会保留，请稍后重试。';
-            localError = userMessage; emit(); throw new Error(userMessage);
+            if (isCurrentRequest()) {localError = userMessage; emit();}
+            throw new Error(userMessage);
         }
     }
     function deactivate() {activation = null; pageIdentity = ''; media.cancelAll();}
@@ -230,7 +267,7 @@ export function createMessagesController(deps: MessagesControllerDependencies): 
         },
         deactivate, cancelForeground: deactivate, handleWindowClosed: deactivate,
         cancelAll() {chatBoundary++; runtime.cancel(); deactivate();},
-        handleChatChanged() {chatBoundary++; runtime.reset(); timeline.reset(); localError = ''; deactivate();},
+        handleChatChanged() {chatBoundary++; runtime.reset(); timeline.reset(); localError = ''; syncError = ''; recoveryBlocked = false; deactivate();},
         startBackground() {
             if (cleanups.length) {return;}
             cleanups = [service.subscribe(emit), service.subscribeFile(emit), deps.subscribeSettings(emit),

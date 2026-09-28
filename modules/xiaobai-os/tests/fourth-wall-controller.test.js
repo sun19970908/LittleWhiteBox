@@ -281,11 +281,11 @@ test('memory edits reject stale source documents even when history has not chang
     assert.equal(h.state.chat.sessions[0].memory, 'edited in another tab');
 });
 
-test('concurrent Prefill changes cannot make counted and generated requests diverge', async () => {
+test('concurrent chat setting changes cannot make counted and generated requests diverge', async () => {
     const h = createHarness();
     await h.controller.activate({post: (type, payload) => h.posts.push({type, payload})});
     const accepted = h.controller.handleMessage({type:'fourth-wall/send',payload:{...binding,content:'preserve input'}});
-    h.state.chat.settings.disableAssistantPrefill = true;
+    h.state.chat.settings.maxChatLayers = 33;
     await accepted;
     await flushAsyncWork();
     assert.equal(h.requests.length, 0);
@@ -655,7 +655,6 @@ test('an abort-shaped provider failure settles the generation instead of leaving
         requestId: 'request-abort',
         builtPrompt: { msg1: '', msg2: '', msg3: '', msg4: '' },
         stream: false,
-        disableAssistantPrefill: false,
         onCancelled: reason => cancelled.push(reason),
     });
 

@@ -4,7 +4,6 @@ export interface FourthWallGenerateOptions {
     config: unknown;
     builtPrompt: FourthWallBuiltPrompt;
     stream: boolean;
-    disableAssistantPrefill: boolean;
     signal: AbortSignal;
     onStreamProgress?: (snapshot: FourthWallGenerationResult) => void;
 }
@@ -15,7 +14,6 @@ export interface FourthWallGenerationStartOptions {
     requestId: string;
     builtPrompt: FourthWallBuiltPrompt;
     stream: boolean;
-    disableAssistantPrefill: boolean;
     initialize?: (signal: AbortSignal) => Promise<void>;
     prepare?: (config: unknown, signal: AbortSignal) => Promise<FourthWallBuiltPrompt>;
     prepareOnly?: boolean;
@@ -124,7 +122,6 @@ export function createFourthWallGenerationRuntime({
                     config,
                     builtPrompt,
                     stream: options.stream === true,
-                    disableAssistantPrefill: options.disableAssistantPrefill === true,
                     signal: run.controller.signal,
                     onStreamProgress(snapshot: FourthWallGenerationResult) {
                         if (isCurrent(run)) {

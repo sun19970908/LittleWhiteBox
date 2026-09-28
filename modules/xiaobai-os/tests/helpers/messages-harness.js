@@ -38,7 +38,8 @@ export async function harness(seed) {
     });
     const service = createMessagesService(coordinator.createScopedStore(MESSAGES_PARTITION), coordinator);
     const preferences = {};
-    const settings = createSettingsRepository({ getExtensionSettings: () => preferences, saveSettings() {} });
+    const settings = createSettingsRepository({ getExtensionSettings: () => preferences,
+        saveSettings() {if (h.failSettingsSave) {throw new Error('offline');}} });
     await settings.prepare();
     const chat = {
         identity: () => h.identity, messages: () => h.messages,
@@ -74,7 +75,7 @@ export async function harness(seed) {
             chronology: projectCommunicationChronology(service.current().segments, h.messages, history, incoming) }) },
         countTokens: async options => ({ tokens: estimateConversationTokens(options), source: 'tokenizer' }),
         getSettings: () => settings.read().apps.messages,
-        async saveSettings(value) {await settings.setMessagesCapabilities(value);}, subscribeSettings: settings.subscribe,
+        async saveSettings(value) {await settings.setMessagesSettings(value);}, subscribeSettings: settings.subscribe,
         agent: { loadConfig: async () => ({}), openSession: async () => ({ providerConfig: { model: 'fixture' }, run: async request => {
             h.requests.push(request);
             h.apiCalls++; if (h.response) {return h.response();}
@@ -85,7 +86,7 @@ export async function harness(seed) {
         for (const name of ['甲', '乙']) {addContact(state, { id: name, name, note: '', createdAt: 0, summary: null });}
     });}
     const send = (contactId, messageId, payload = { type: 'text', text: '来吗？' }) => sendPrivateMessage(deps, { contactId, messageId, payload, guard: () => true, signal: new AbortController().signal, stage: () => undefined });
-    return Object.assign(h, { service, deps, send, chat, coordinator, get timeline() {return timeline;}, restart() {timeline = createMessagesTimeline(service, chat, id); deps.timeline = timeline;} });
+    return Object.assign(h, { service, settings, preferences, deps, send, chat, coordinator, get timeline() {return timeline;}, restart() {timeline = createMessagesTimeline(service, chat, id); deps.timeline = timeline;} });
 }
 
 export const photo = parseOutgoingMessage({ type: 'image', description: '', upload: {
@@ -95,12 +96,13 @@ export const photo = parseOutgoingMessage({ type: 'image', description: '', uplo
 export async function controllerHarness(h) {
     const waiters = [];
     const runtime = createMessagesRuntime({ ...h.deps, identity: () => h.identity, isGenerating: () => false,
-        changed() {if (!runtime.active) {waiters.splice(0).forEach(resolve => resolve());}} });
+        changed() {for (const waiter of [...waiters]) {if (waiter.ready()) {waiters.splice(waiters.indexOf(waiter), 1); waiter.resolve();}}} });
     const controller = createMessagesController({ ...h.deps, runtime, identity: () => h.identity,
         context: { ...h.deps.context, knownPeople: () => [] }, media: { capabilities: () => ({ image: false, voice: false }), stop() {}, cancelAll() {} },
         isGenerating: () => false, subscribeGeneration: () => () => {}, subscribeChat: () => () => {} });
     const activate = () => controller.activate({ isCurrent: () => true, post() {} });
     const command = (type, payload = {}) => controller.handleMessage({ type: `messages/${type}`, payload: { chatIdentity: h.identity, ...payload } });
     activate(); await command('refresh');
-    return { controller, runtime, activate, command, idle: () => runtime.active ? new Promise(resolve => waiters.push(resolve)) : Promise.resolve() };
+    const waitFor = ready => ready() ? Promise.resolve() : new Promise(resolve => waiters.push({ ready, resolve }));
+    return { controller, runtime, activate, command, idle: () => waitFor(() => !runtime.active), waitFor };
 }

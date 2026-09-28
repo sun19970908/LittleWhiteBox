@@ -86,12 +86,25 @@ export function clearNewDiceSwipe(message: DiceHostMessage): void {
     if (info) { writeRecords(info, undefined); }
 }
 
+function ownedCheckIds(value: unknown): Set<string> {
+    try { return new Set(parseDiceRecords(value).checks.map(record => record.id)); }
+    catch { return new Set<string>(); }
+}
+
+/** Read-only collection: deletion must not remove the only identifiers needed to clear overrides. */
+export function collectDiceCheckIds(messages: DiceHostMessage[]): Set<string> {
+    const checkIds = new Set<string>();
+    for (const message of messages) {
+        for (const id of ownedCheckIds(readDiceRecords(message))) { checkIds.add(id); }
+        for (const info of message.swipe_info ?? []) {
+            for (const id of ownedCheckIds(info?.extra?.[DICE_MESSAGE_KEY])) { checkIds.add(id); }
+        }
+    }
+    return checkIds;
+}
+
 export function clearDiceMessageData(messages: DiceHostMessage[]): Set<DiceHostMessage> {
     const changed = new Set<DiceHostMessage>();
-    const ownedIds = (value: unknown) => {
-        try { return new Set(parseDiceRecords(value).checks.map(record => record.id)); }
-        catch { return new Set<string>(); }
-    };
     const clearDisplay = (extra: Record<string, unknown> | undefined, ids: ReadonlySet<string>): boolean => {
         if (typeof extra?.display_text !== 'string') { return false; }
         const text = stripCheckMarkers(extra.display_text, ids);
@@ -100,18 +113,18 @@ export function clearDiceMessageData(messages: DiceHostMessage[]): Set<DiceHostM
         return true;
     };
     for (const message of messages) {
-        const currentIds = ownedIds(readDiceRecords(message));
+        const currentIds = ownedCheckIds(readDiceRecords(message));
         const body = stripCheckMarkers(message.mes, currentIds);
         if (body !== message.mes) { message.mes = body; changed.add(message); }
         if (clearDisplay(message.extra, currentIds)) { changed.add(message); }
         if (message.swipes) {
             message.swipes = message.swipes.map((text, index) => stripCheckMarkers(text,
-                index === (message.swipe_id ?? 0) ? currentIds : ownedIds(message.swipe_info?.[index]?.extra?.[DICE_MESSAGE_KEY])));
+                index === (message.swipe_id ?? 0) ? currentIds : ownedCheckIds(message.swipe_info?.[index]?.extra?.[DICE_MESSAGE_KEY])));
         }
         writeRecords(message, undefined);
         for (const [index, info] of (message.swipe_info ?? []).entries()) {
             if (!info) { continue; }
-            clearDisplay(info.extra, index === (message.swipe_id ?? 0) ? currentIds : ownedIds(info.extra?.[DICE_MESSAGE_KEY]));
+            clearDisplay(info.extra, index === (message.swipe_id ?? 0) ? currentIds : ownedCheckIds(info.extra?.[DICE_MESSAGE_KEY]));
             writeRecords(info, undefined);
         }
     }

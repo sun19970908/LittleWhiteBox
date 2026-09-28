@@ -37,7 +37,10 @@ function status(
 ): { status: BankClientStatus; statusLabel: string; message: string } {
     let next: BankClientStatus = 'ready';
     let message = '';
-    if (view.writeState === 'loading') {
+    if (view.turnConfirmationAbandoned) {
+        next = 'conflict';
+        message = '上次计期的保存结果仍无法确认；为避免重复记账，本次不能重试。请重新进入酒馆核对银行记录。';
+    } else if (view.writeState === 'loading') {
         next = 'loading';
     } else if (view.writeState === 'failed') {
         next = 'blocked';
@@ -51,6 +54,9 @@ function status(
     } else if (view.writeState === 'saving') {
         next = 'saving';
         message = '正在保存银行记录和账目…';
+    } else if (view.unsavedTurns > 0) {
+        next = 'blocked';
+        message = `有 ${view.unsavedTurns} 回合未保存到银行，请重试计期后再交易。`;
     }
     return { status: next, statusLabel: STATUS_LABELS[next], message };
 }
@@ -67,6 +73,7 @@ function activityView(
         : `到期收益 ${bpsLabel(detail.resolvedReturnBps)}`;
     return {
         id: activity.id,
+        ...(activity.sourceStoryId ? { sourceStoryId: activity.sourceStoryId } : {}),
         kind: detail.kind,
         kindLabel: detail.kind === 'deposit' ? '定期存单' : '浮动理财',
         productName,
@@ -144,6 +151,8 @@ export function presentBankState({
         balance: serviceView.balance,
         lockedAmount: serviceView.lockedAmount,
         currentTurn: serviceView.currentTurn,
+        unsavedTurns: serviceView.unsavedTurns,
+        turnConfirmationAbandoned: serviceView.turnConfirmationAbandoned,
         revision: serviceView.revision,
         eventId: serviceView.eventId,
         ...status(serviceView),

@@ -4,7 +4,7 @@ import { Buffer } from 'node:buffer';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 
-// Exercise the real subscription boundary; only host events, dispatcher and prompt sink are fixtures.
+// Exercise the real subscription boundary; only host events and dispatcher are fixtures.
 const compiled = await build({
     stdin: { contents: `export * from '../host/sillytavern-runtime-adapters.ts'; export { host } from 'prompt-test-host';`,
         resolveDir: fileURLToPath(new URL('.', import.meta.url)) },
@@ -14,20 +14,18 @@ const compiled = await build({
             () => ({ path: 'host', namespace: 'fixture' }));
         builder.onLoad({ filter: /.*/, namespace: 'fixture' }, () => ({ contents: `
             const listeners = new Map();
-            export const host = { interceptors: new Map(), prompts: new Map(),
+            export const host = { interceptors: new Map(),
                 emit(name, ...args) { for (const callback of listeners.get(name) ?? []) callback(...args); },
                 get listenerCount() { return [...listeners.values()].reduce((sum, set) => sum + set.size, 0); } };
             export const event_types = Object.fromEntries(['GENERATION_STARTED','GENERATE_AFTER_DATA','GENERATION_ENDED',
-                'GENERATION_STOPPED','MESSAGE_RECEIVED'].map(name => [name,name]));
+                'GENERATION_STOPPED','MESSAGE_RECEIVED','STREAM_TOKEN_RECEIVED'].map(name => [name,name]));
             export function createModuleEvents() { const owned = []; return {
                 on(name, callback) { if (!listeners.has(name)) listeners.set(name,new Set()); listeners.get(name).add(callback); owned.push([name,callback]); },
                 cleanup() { for (const [name,callback] of owned) listeners.get(name).delete(callback); } }; }
             export const GENERATE_INTERCEPTOR_ORDER = {};
             export const registerGenerateInterceptor = (key, callback) => host.interceptors.set(key,callback);
             export const unregisterGenerateInterceptor = key => host.interceptors.delete(key);
-            export const extension_prompt_roles = { SYSTEM: 0 };
-            export const extension_prompt_types = { IN_CHAT: 1 };
-            export const setExtensionPrompt = (key, value, ...options) => host.prompts.set(key,{value,options});
+            export const isStreamingEnabled = () => false;
         ` }));
     } }],
 });
@@ -38,16 +36,17 @@ test('token-count dry runs cannot clear a real request injection; real completio
     const { host } = adapter;
     for (const subscribe of [adapter.subscribeShopPromptEvents, adapter.subscribeMapPromptEvents,
         adapter.subscribeTaskPromptEvents, adapter.subscribeWorldPromptEvents]) {
-        const clear = () => adapter.setSillyTavernPrompt('fixture', '');
+        let content = '';
+        const clear = () => { content = ''; };
         const dispose = subscribe({ generationStarted: clear, requestBuilt: clear, generationEnded: clear,
-            generationStopped: clear, messageReceived() {}, intercept: () => adapter.setSillyTavernPrompt('fixture', 'context') });
+            generationStopped: clear, messageReceived() {}, intercept: () => { content = 'context'; } });
         host.emit('GENERATION_STARTED', 'continue', {}, false);
         [...host.interceptors.values()][0]([], 0, () => {}, 'continue');
         host.emit('GENERATION_STARTED', 'quiet', {}, true);
         host.emit('GENERATE_AFTER_DATA', {}, true);
-        assert.deepEqual(host.prompts.get('fixture'), { value: 'context', options: [1, 1, false, 0] });
+        assert.equal(content, 'context');
         host.emit('GENERATE_AFTER_DATA', {}, false);
-        assert.equal(host.prompts.get('fixture').value, '');
+        assert.equal(content, '');
         dispose();
         assert.equal(host.listenerCount, 0);
         assert.equal(host.interceptors.size, 0);

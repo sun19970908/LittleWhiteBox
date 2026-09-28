@@ -9,6 +9,7 @@ import type {
     XiaobaiOsFileControls,
     XiaobaiOsFileState,
 } from '../../../kernel/contracts.js';
+import type { UserTransactions } from '../../../kernel/user-transactions.js';
 import { bankRandomSource } from '../../../domains/bank/random.js';
 import { appendBankEvent, replayBankEvents } from '../../../domains/bank/timeline.js';
 import {
@@ -31,6 +32,7 @@ import {
     type BankCommandInput,
 } from './action-policy.js';
 import { createBankCommands } from './commands.js';
+import { upgradeBankUserFile } from './upgrade.js';
 import {
     buildBankEconomyLegs,
     validateBankEconomyConsistency,
@@ -39,6 +41,8 @@ import {
 export interface BankServiceView extends BankClientView {
     balance: number;
     writeState: XiaobaiOsFileState;
+    unsavedTurns: number;
+    turnConfirmationAbandoned: boolean;
 }
 
 export type BankReadOptions = Pick<CreateBankViewInput, 'activityOffset' | 'activityLimit'>;
@@ -64,6 +68,8 @@ export interface BankOpenFundCommand extends BankServiceCommand {
 export type BankSettleDueCommand = BankServiceCommand;
 
 export interface BankService {
+    ensureReady(): Promise<void>;
+    advanceTurns(count: number): Promise<void>;
     readCurrent(options?: BankReadOptions): BankServiceView;
     refreshCurrent(options?: BankReadOptions): Promise<BankServiceView>;
     openDeposit(input: BankOpenDepositCommand): Promise<BankServiceView>;
@@ -82,8 +88,7 @@ export interface BankServiceDependencies {
     createPositionId?: () => string;
     createActivityId?: () => string;
     random?: BankRandomSource;
-    getCurrentAssistantTurn?: () => number;
-    isMainGenerationActive?: () => boolean;
+    userTransactions?: UserTransactions;
 }
 
 export interface PreparedBankAction {
@@ -139,8 +144,7 @@ export function createBankService(
         createPositionId = () => defaultId('bank-position'),
         createActivityId = () => defaultId('bank-activity'),
         random = bankRandomSource,
-        getCurrentAssistantTurn = () => 0,
-        isMainGenerationActive = () => false,
+        userTransactions,
     }: BankServiceDependencies = {},
 ): BankService {
     const listeners = new Set<() => void>();
@@ -155,46 +159,119 @@ export function createBankService(
     const unsubscribeEconomy = economy.subscribe(publish);
     const unsubscribeFiles = files.subscribeFileState(publish);
     const currentDomain = (): BankDomainV1 | null => store.peekCurrent()?.value ?? null;
+    let upgraded = !userTransactions;
+    let queue: Promise<unknown> = Promise.resolve();
+    let unsavedTurns = 0;
+    let unsettled: { count: number; abandoned: boolean } | null = null;
+    const serialize = <T>(work: () => Promise<T>): Promise<T> => {
+        const pending = queue.then(work, work);
+        queue = pending.catch(() => undefined);
+        return pending;
+    };
+
+    async function ensureReady(): Promise<void> {
+        if (!upgraded && userTransactions) {
+            await upgradeBankUserFile(userTransactions);
+            upgraded = true;
+        }
+        if (!currentDomain()) {await store.read();}
+    }
+
+    async function persistTurns(count: number): Promise<void> {
+        try {
+            await ensureReady();
+            if (unsettled) {throw new Error('bank_turn_confirmation_unavailable');}
+            const batch = { count, abandoned: false };
+            unsettled = batch;
+            let result;
+            try {result = await store.transact(transaction => {
+                const domain = transaction.currentOrInitial();
+                if (!replayBankEvents(domain).openDeposits.length
+                    && !replayBankEvents(domain).openInvestments.length) {return;}
+                const next = { ...domain, currentTurn: domain.currentTurn + count };
+                if (!Number.isSafeInteger(next.currentTurn)) {throw new Error('bank_turn_overflow');}
+                transaction.replace(next);
+            }, { discardRejectedCandidate: true, onSettled: status => {
+                if (unsettled !== batch) {return;}
+                if (status === 'confirmed') {unsavedTurns -= count; unsettled = null;}
+                else if (status === 'rejected') {unsettled = null;}
+                else {batch.abandoned = true;}
+                publish();
+            } });}
+            catch (error) {
+                if (unsettled === batch && !files.hasPendingCommit('bank')) {unsettled = null;}
+                throw error;
+            }
+            if (result.status !== 'confirmed' && result.status !== 'unchanged') {
+                if (result.status !== 'unconfirmed' && unsettled === batch) {unsettled = null;}
+                throw transactionError(result);
+            }
+            if (result.status === 'confirmed' && unsettled === batch) {unsavedTurns -= count; unsettled = null;}
+            if (result.status === 'unchanged') {unsavedTurns -= count; unsettled = null;}
+        } finally {publish();}
+    }
+
+    async function advanceTurns(count: number): Promise<void> {
+        if (!Number.isSafeInteger(count) || count < 1) {throw new TypeError('Invalid bank turn increment');}
+        return serialize(async () => {
+            if (!Number.isSafeInteger(unsavedTurns + count)) {throw new Error('bank_turn_overflow');}
+            unsavedTurns += count;
+            if (unsavedTurns !== count) {publish(); return;}
+            await persistTurns(count);
+        });
+    }
+
+    async function confirmPending(): Promise<PendingCommitRecoveryResult> {
+        return serialize(async () => {
+            const result = await files.retryPending();
+            publish();
+            if (result.status === 'unconfirmed' || result.status === 'conflict' || result.status === 'failed') {
+                return result;
+            }
+            if (unsettled) {return { status: 'conflict' };}
+            if (unsavedTurns) {await persistTurns(unsavedTurns);}
+            return result;
+        });
+    }
 
     function buildView(
         domain: BankDomainV1 | null,
-        currentTurn: number,
         playerBalance: number,
         options: BankReadOptions = {},
     ): BankServiceView {
         return {
-            ...createBankView({ domain, currentTurn, ...options }),
+            ...createBankView({ domain, ...options }),
             balance: playerBalance,
             writeState: files.getFileState(),
+            unsavedTurns,
+            turnConfirmationAbandoned: unsettled?.abandoned === true,
         };
     }
 
     function readCurrent(options: BankReadOptions = {}): BankServiceView {
-        return buildView(currentDomain(), getCurrentAssistantTurn(), economy.getPlayerBalance(), options);
+        return buildView(currentDomain(), economy.getPlayerBalance(), options);
     }
 
     async function refreshCurrent(options: BankReadOptions = {}): Promise<BankServiceView> {
+        await ensureReady();
         await economy.refresh();
         await store.read();
         return readCurrent(options);
     }
 
-    const runAction: RunBankAction = async (kind, input, create) => {
-        let replayed = false;
-        const assertGenerationIdle = (): void => {
-            if (isMainGenerationActive()) { throw new Error('bank_main_generation_active'); }
-        };
+    const runAction: RunBankAction = (kind, input, create) => serialize(async () => {
+        if (unsavedTurns) {throw Object.assign(new Error('bank_turns_unsaved'), { code: 'bank_turns_unsaved' });}
+        await ensureReady();
         const result = await store.transact(transaction => {
             const transactionEconomy: EconomyTransactionCapability = transaction.useCapability(
                 ECONOMY_TRANSACTION_CAPABILITY,
             );
             const domain = transaction.currentOrInitial();
             validateBankEconomyConsistency(domain, transactionEconomy);
-            const assistantTurn = getCurrentAssistantTurn();
+            const assistantTurn = domain.currentTurn;
             const existing = domain.events.find(event => event.actionId === input.actionId);
             if (existing) {
                 if (!replayMatches(existing, kind, input)) { throwBankError('bank_action_conflict'); }
-                replayed = true;
                 return {
                     domain,
                     assistantTurn,
@@ -202,7 +279,6 @@ export function createBankService(
                 };
             }
 
-            assertGenerationIdle();
             assertActionId(input.actionId);
             assertCas(domain, input);
             const prepared: PreparedBankAction = {
@@ -230,19 +306,14 @@ export function createBankService(
                 assistantTurn,
                 playerBalance: transactionEconomy.getPlayerBalance(),
             };
-        }, {
-            commitGuard() {
-                if (!replayed) { assertGenerationIdle(); }
-                return true;
-            },
         });
 
         if (result.status === 'failed' || result.status === 'unconfirmed' || result.status === 'conflict') {
             throw transactionError(result);
         }
         const prepared: PreparedResult = result.result;
-        return buildView(prepared.domain, prepared.assistantTurn, prepared.playerBalance);
-    };
+        return buildView(prepared.domain, prepared.playerBalance);
+    });
 
     const commands = createBankCommands({
         createActivityId,
@@ -253,10 +324,12 @@ export function createBankService(
     });
 
     return Object.freeze({
+        ensureReady,
+        advanceTurns,
         readCurrent,
         refreshCurrent,
         ...commands,
-        confirmPending: files.retryPending,
+        confirmPending,
         getWriteState: files.getFileState,
         subscribe(listener: () => void) {
             listeners.add(listener);

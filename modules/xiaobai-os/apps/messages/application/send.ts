@@ -29,7 +29,7 @@ export class MessageSendError extends Error {
 /** Owns ordering, not lifetime: the host supplies the captured chat/run guard. */
 export async function sendPrivateMessage(deps: SendDependencies, input: {
     contactId: string; messageId: string; payload?: OutgoingMessage;
-    guard: () => boolean; signal: AbortSignal; stage: (stage: string) => void;
+    guard: () => boolean; recoverInput?: () => boolean; signal: AbortSignal; stage: (stage: string) => void;
 }): Promise<void> {
     const { service, timeline } = deps;
     const assertCurrent = () => {if (!input.guard() || input.signal.aborted) {throw new Error('messages_cancelled');}};
@@ -56,7 +56,7 @@ export async function sendPrivateMessage(deps: SendDependencies, input: {
         }
         input.stage('saving');
         await service.change(state => appendMessages(state, { segmentId, contactId: input.contactId,
-            playerName: deps.playerName(), replyTo: null, entries: [{ id: input.messageId, payload: payload! }], createdAt: Date.now() }), input.guard);
+            playerName: deps.playerName(), replyTo: null, entries: [{ id: input.messageId, payload: payload! }], createdAt: Date.now() }), input.guard, input.recoverInput);
         incoming = service.current().messages.find(message => message.id === input.messageId)!;
     }
     assertCurrent();

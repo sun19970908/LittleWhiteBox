@@ -1,4 +1,5 @@
 import type { AcceptedTurnSource } from './accepted-turn-source.js';
+import type { MaintenanceRootWriteGate } from './root-write-gate.js';
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -33,16 +34,21 @@ export interface MaintenanceSession {
     /** Defaults to preserving valid staging; complete-run requires a finished loop without unresolved tool failures for this domain. */
     readonly commitPolicy?: 'staged' | 'complete-run';
     executeTool: (name: string, args: unknown) => unknown | Promise<unknown>;
-    canCommit: () => boolean | Promise<boolean>;
+    canCommit: (run: { completed: boolean }) => boolean | Promise<boolean>;
     /** Reports domain-owned semantic tool failures as well as staged changes. */
     getResult: () => MaintenanceParticipantResult;
-    commit: (beforeCommit: MaintenanceCommitGuard) => unknown | Promise<unknown>;
+    commit: (beforeCommit: MaintenanceCommitGuard, run: { completed: boolean }) => unknown | Promise<unknown>;
     invalidate?: (reason: string) => void;
 }
 
 export interface MaintenanceParticipant {
     readonly id: string;
     isEnabled: (mode: MaintenanceMode) => boolean;
+    /** Capture event-time eligibility before an automatic job waits in the queue. */
+    prepareSession?: (source: AcceptedTurnSource, mode: MaintenanceMode) =>
+        () => MaintenanceSession | null | Promise<MaintenanceSession | null>;
+    /** The file that this participant writes; chat-file gate remains owned by the runner. */
+    readonly writeGate?: MaintenanceRootWriteGate;
     createSession: (
         source: AcceptedTurnSource,
         mode: MaintenanceMode,

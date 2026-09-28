@@ -70,6 +70,7 @@ function createHarness({ economyOpened = true, writeState = 'ready', activityCou
         revision: 0,
         eventId: '',
         currentTurn: 4,
+        unsavedTurns: 0,
         lockedAmount: 500,
         products: products(),
         deposits: [{
@@ -130,6 +131,8 @@ function createHarness({ economyOpened = true, writeState = 'ready', activityCou
 
     const bank = {
         readCurrent,
+        ensureReady: async () => undefined,
+        refreshCurrent: async () => readCurrent(),
         subscribe: () => () => undefined,
         openDeposit: input => mutate('deposit-open', input),
         withdrawDeposit: input => mutate('deposit-withdraw', input),
@@ -189,7 +192,7 @@ async function activate(harness, { waitForPreparation = true } = {}) {
 
 function payload(harness, state, intent = {}) {
     return {
-        chatIdentity: harness.host.identity.key,
+        chatIdentity: 'user',
         expectedRevision: state.revision,
         expectedEventId: state.eventId,
         actionId: `ui-action-${state.revision + 1}`,
@@ -218,11 +221,11 @@ test('activation prepares a missing Economy only and projects safe locked-fund f
 
     const existing = createHarness();
     const ready = await activate(existing, { waitForPreparation: false });
-    assert.equal(ready.status, 'ready');
+    assert.equal(ready.status, 'loading');
     assert.equal(existing.ensureCalls, 0);
     await nextTask();
     assert.equal(existing.ensureCalls, 0);
-    assert.equal(existing.host.posts.length, 0);
+    assert.equal(existing.host.posts.at(-1).payload.state.status, 'ready');
 });
 
 test('write protocols forward only identity-bound intent, CAS, and action fields', async () => {
@@ -292,7 +295,7 @@ test('records use service-backed offset pagination and preserve settlement amoun
 
     const page = await harness.controller.handleMessage({
         type: 'bank/records/load-more',
-        payload: { chatIdentity: harness.host.identity.key, offset: 50, payout: 100_000 },
+        payload: { chatIdentity: 'user', offset: 50, payout: 100_000 },
     });
     assert.equal(page.activities.length, 25);
     assert.equal(page.activityPage.offset, 50);
@@ -300,7 +303,7 @@ test('records use service-backed offset pagination and preserve settlement amoun
     assert.deepEqual(harness.reads.at(-1), { activityOffset: 50, activityLimit: 50 });
 });
 
-test('controller serializes every write and rejects a late result after chat identity changes', async () => {
+test('a bank transaction finishes without a false failure after changing chat', async () => {
     const harness = createHarness();
     const initial = await activate(harness);
     const pending = deferred();
@@ -310,13 +313,13 @@ test('controller serializes every write and rejects a late result after chat ide
 
     await assert.rejects(harness.controller.handleMessage({
         type: 'bank/confirm-save',
-        payload: { chatIdentity: harness.host.identity.key },
+        payload: { chatIdentity: 'user' },
     }));
 
     harness.host.identity = { key: 'character:2:other-chat', chatId: 'other-chat' };
-    pending.resolve(harness.bank.readCurrent());
-    await assert.rejects(first);
     harness.controller.handleChatChanged();
+    pending.resolve(harness.bank.readCurrent());
+    assert.equal((await first).chatIdentity, 'user');
     await assert.rejects(harness.controller.handleMessage({
         type: 'bank/refresh',
         payload: { chatIdentity: commandPayload.chatIdentity },
@@ -331,10 +334,10 @@ test('a stale first-time Economy preparation cannot update a page after the chat
     await nextTask();
     const postCount = harness.host.posts.length;
     harness.host.identity = { key: 'character:2:other-chat', chatId: 'other-chat' };
+    harness.controller.handleChatChanged();
     gate.resolve();
     await nextTask();
     assert.equal(harness.host.posts.length, postCount);
-    harness.controller.handleChatChanged();
     await assert.rejects(harness.controller.handleMessage({
         type: 'bank/refresh',
         payload: { chatIdentity: 'character:1:bank-chat' },
@@ -348,20 +351,22 @@ test('unconfirmed status recovers through the shared save confirmation', async (
 
     const result = await harness.controller.handleMessage({
         type: 'bank/confirm-save',
-        payload: { chatIdentity: harness.host.identity.key, payout: 100_000 },
+        payload: { chatIdentity: 'user', payout: 100_000 },
     });
     assert.equal(result.confirmation, 'confirmed');
     assert.equal(result.state.status, 'ready');
 });
 
-test('generation changes push a fresh first page without writing Bank data', async () => {
+test('story generation does not disable or rewrite a global bank page', async () => {
     const harness = createHarness({ activityCount: 75 });
     await activate(harness);
+    const previousPosts = harness.host.posts.length;
     harness.setGeneration(true);
-    assert.equal(harness.host.posts.at(-1).payload.state.generationActive, true);
+    assert.equal(harness.host.posts.length, previousPosts);
 
     const pushed = harness.host.posts.at(-1).payload.state;
     assert.equal(pushed.status, 'ready');
+    assert.equal(pushed.generationActive, false);
     assert.equal(pushed.activities.length, 50);
     assert.equal(harness.commands.length, 0);
 });

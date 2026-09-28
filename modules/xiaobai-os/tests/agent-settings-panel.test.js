@@ -5,6 +5,55 @@ import { parseHTML } from 'linkedom';
 import { normalizeAgentConfig } from '../../agent-core/config.js';
 import { createAgentSettingsPanel } from '../../agent-core/ui/settings-panel.js';
 import { buildAgentSettingsPanelMarkup } from '../../agent-core/ui/settings-markup.js';
+import { loadSharedAgentSettings, saveSharedAgentSettings } from '../../agent-core/settings-repository.js';
+import { resolveActiveProviderConfig } from '../../agent-core/provider-resolution.js';
+
+test('shared main and delegate forms can clear stored keys and reload without restoring them', async () => {
+    const dom = installDom();
+    const root = dom.document.querySelector('#root');
+    const preset = { provider: 'openai-compatible', modelConfigs: { 'openai-compatible': { apiKey: 'old-key' } } };
+    let persisted = normalizeAgentConfig({ currentPresetName: 'test', presets: { test: preset, other: preset }, delegateConfig: preset, delegateConfigured: true });
+    const storage = { getStrict: async () => structuredClone(persisted),
+        async setAndSave(_key, value) { persisted = structuredClone(value); return true; } };
+    const state = createPanelState(persisted);
+    const { document } = parseHTML(`<html><body>${buildAgentSettingsPanelMarkup()}</body></html>`);
+    root.replaceChildren(...document.body.childNodes);
+    let saving;
+    const panel = createAgentSettingsPanel({ state,
+        saveConfig: request => { saving = saveSharedAgentSettings(request.payload, { storage }); },
+    });
+    try {
+        panel.syncConfigToForm(root);
+        panel.bindSettingsPanelEvents(root);
+        for (const id of ['#xb-assistant-api-key', '#xb-assistant-delegate-api-key']) {
+            assert.equal(root.querySelector(id).value, 'old-key');
+            root.querySelector(id).value = '';
+        }
+        root.querySelector('#xb-assistant-save').click();
+        assert.equal((await saving).ok, true);
+        const loaded = await loadSharedAgentSettings({ storage });
+        assert.equal(loaded.presets.other.modelConfigs['openai-compatible'].apiKey, 'old-key');
+        for (const role of ['main', 'delegate']) assert.equal(resolveActiveProviderConfig(loaded, { role }).apiKey, '');
+        state.config = normalizeAgentConfig(loaded);
+        state.configDraft = null;
+        state.configFormSyncPending = true;
+        panel.syncConfigToForm(root);
+        assert.equal(root.querySelector('#xb-assistant-api-key').value, '');
+        assert.equal(root.querySelector('#xb-assistant-delegate-api-key').value, '');
+        for (const [selectId, inputId] of [
+            ['#xb-assistant-preset-select', '#xb-assistant-api-key'],
+            ['#xb-assistant-delegate-preset-select', '#xb-assistant-delegate-api-key'],
+        ]) {
+            for (const [name, expectedKey] of [['other', 'old-key'], ['test', '']]) {
+                const select = root.querySelector(selectId);
+                select.value = name;
+                select.dispatchEvent(new dom.document.defaultView.Event('change'));
+                panel.syncConfigToForm(root);
+                assert.equal(root.querySelector(inputId).value, expectedKey, `${selectId}: ${name}`);
+            }
+        }
+    } finally { dom.restore(); }
+});
 
 function createPanelState(config) {
     return {

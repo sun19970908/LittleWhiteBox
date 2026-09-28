@@ -377,7 +377,6 @@ export async function callDrawScenePlannerAgentRuntime(options = {}) {
     let adapter;
     try {
         adapter = agentCore.createAgentAdapter(providerConfig, {
-            missingApiKeyMessage: '请先在共享 Agent API 配置中填写当前主预设的 API Key。',
             ...(Object.hasOwn(options, 'hostClient') ? { hostClient: options.hostClient } : {}),
         });
     } catch (rawError) {

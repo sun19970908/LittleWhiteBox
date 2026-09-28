@@ -21,6 +21,7 @@ import {
     AGENT_REQUEST_TIMEOUT_MS,
     TOOL_MODE_OPTIONS,
     getProviderLabel,
+    isSillyTavernProvider,
     normalizeTemperature,
     shouldSendTemperature,
 } from '../provider-resolution.js';
@@ -34,6 +35,7 @@ import {
     normalizeReasoningConfig,
 } from '../reasoning-config.js';
 import { DEFAULT_TAVILY_BASE_URL, normalizeTavilyBaseUrl } from '../tavily-search.js';
+import { resolveAgentAuth } from '../provider-auth.js';
 
 const MODEL_FILTERS = {
     chat: {
@@ -127,12 +129,6 @@ function normalizeBaseUrl(rawBaseUrl) {
     return String(rawBaseUrl || '').trim().replace(/\/+$/, '');
 }
 
-function isSillyTavernProvider(provider = '') {
-    return provider === 'sillytavern-openai-compatible'
-        || provider === 'sillytavern-claude'
-        || provider === 'sillytavern-google';
-}
-
 function isToolModeProvider(provider = '') {
     return provider === 'openai-compatible' || provider === 'sillytavern-openai-compatible';
 }
@@ -189,12 +185,13 @@ function buildGoogleCandidateUrls(baseUrl, apiKey) {
     const normalized = normalizeBaseUrl(baseUrl);
     if (!normalized) return [];
     const root = normalized.endsWith('/v1beta') ? normalized.slice(0, -7) : normalized;
+    const keyQuery = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
     return uniqueUrls([
-        `${normalized}/models?key=${encodeURIComponent(apiKey)}`,
+        `${normalized}/models${keyQuery}`,
         `${normalized}/models`,
-        `${root}/v1beta/models?key=${encodeURIComponent(apiKey)}`,
+        `${root}/v1beta/models${keyQuery}`,
         `${root}/v1beta/models`,
-        `${root}/models?key=${encodeURIComponent(apiKey)}`,
+        `${root}/models${keyQuery}`,
         `${root}/models`,
     ]);
 }
@@ -254,11 +251,12 @@ function extractGoogleModels(data) {
 async function tryCandidateFetches({ urls, requestOptionsList, extractModels, providerLabel }) {
     let lastFailure = null;
 
-    for (const url of urls) {
+    candidates: for (const url of urls) {
         for (const requestOptions of requestOptionsList) {
             const result = await fetchJsonWithDiagnostics(url, requestOptions);
             if (!result.ok) {
                 lastFailure = result;
+                if (result.status === 401 || result.status === 403) break candidates;
                 continue;
             }
             if (result.parseError) {
@@ -289,19 +287,19 @@ async function tryCandidateFetches({ urls, requestOptionsList, extractModels, pr
 }
 
 async function pullSillyTavernClaudeModels(providerConfig, options = {}) {
-    const apiKey = String(providerConfig.apiKey || '').trim();
+    const auth = resolveAgentAuth('anthropic', providerConfig.apiKey);
     const customBaseUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
     const baseUrl = normalizeBaseUrl(
         customBaseUrl || HOST_CHAT_COMPLETIONS_DEFAULT_REVERSE_PROXY[HOST_CHAT_COMPLETIONS_SOURCE_CLAUDE],
     );
 
-    if (apiKey && baseUrl) {
+    if (baseUrl && (auth.apiKey || customBaseUrl)) {
         try {
             return await tryCandidateFetches({
                 urls: buildAnthropicCandidateUrls(baseUrl),
                 requestOptionsList: [{
                     headers: {
-                        'x-api-key': apiKey,
+                        ...auth.headers,
                         'anthropic-version': '2023-06-01',
                         Accept: 'application/json',
                     },
@@ -325,7 +323,8 @@ async function pullSillyTavernClaudeModels(providerConfig, options = {}) {
 export async function pullModelsForProvider(providerConfig, options = {}) {
     const provider = providerConfig.provider;
     const baseUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
-    const apiKey = String(providerConfig.apiKey || '').trim();
+    const auth = resolveAgentAuth(provider, providerConfig.apiKey);
+    const { apiKey } = auth;
 
     if (provider === 'sillytavern-claude') {
         return filterModels(await pullSillyTavernClaudeModels(providerConfig, options));
@@ -339,9 +338,6 @@ export async function pullModelsForProvider(providerConfig, options = {}) {
         ));
     }
 
-    if (!apiKey) {
-        throw new Error('请先填写 API Key。');
-    }
     if (!baseUrl) {
         throw new Error('请先填写 Base URL。');
     }
@@ -353,23 +349,17 @@ export async function pullModelsForProvider(providerConfig, options = {}) {
                 {
                     headers: {
                         Accept: 'application/json',
-                        'x-goog-api-key': apiKey,
+                        ...auth.headers,
                     },
                     signal: options.signal,
                 },
-                {
+                ...(apiKey ? [{
                     headers: {
                         Accept: 'application/json',
-                        Authorization: `Bearer ${apiKey}`,
+                        ...resolveAgentAuth('openai-compatible', apiKey).headers,
                     },
                     signal: options.signal,
-                },
-                {
-                    headers: {
-                        Accept: 'application/json',
-                    },
-                    signal: options.signal,
-                },
+                }] : []),
             ],
             extractModels: extractGoogleModels,
             providerLabel: 'Google AI',
@@ -381,7 +371,7 @@ export async function pullModelsForProvider(providerConfig, options = {}) {
             urls: buildAnthropicCandidateUrls(baseUrl),
             requestOptionsList: [{
                 headers: {
-                    'x-api-key': apiKey,
+                    ...auth.headers,
                     'anthropic-version': '2023-06-01',
                     Accept: 'application/json',
                 },
@@ -396,7 +386,7 @@ export async function pullModelsForProvider(providerConfig, options = {}) {
         urls: buildOpenAICandidateUrls(baseUrl),
         requestOptionsList: [{
             headers: {
-                Authorization: `Bearer ${apiKey}`,
+                ...auth.headers,
                 Accept: 'application/json',
             },
             signal: options.signal,

@@ -13,6 +13,8 @@ import { convertUpstreamFourthWall } from '../apps/fourth-wall/upgrade/upstream-
 
 // Frozen V1 output: upstream sessions fixture passed through the actual state serializer at 834c191.
 const v1Fixture = JSON.parse(readFileSync(new URL('./fixtures/fourth-wall-partition-v1.json', import.meta.url), 'utf8'));
+// Frozen upstream/main schema-2 format (1dee0b80): assistant prefill setting, sessions and their memories.
+const v2Fixture = JSON.parse(readFileSync(new URL('./fixtures/fourth-wall-partition-v2.json', import.meta.url), 'utf8'));
 
 const bindings = {
     a: { kind: 'character', ownerLocator: 'avatar.png', chatId: 'chat-a' },
@@ -70,7 +72,7 @@ function createHarness({ upgradeSource } = {}) {
         createId: () => `fw_generated_${++id}`,
     });
     const store = coordinator.createScopedStore(FOURTH_WALL_PARTITION);
-    const repository = createFourthWallRepository(store, { now: () => 1000, upgradeSource });
+    const repository = createFourthWallRepository(store, coordinator, { now: () => 1000, upgradeSource });
     return { captures, coordinator, repository, state };
 }
 
@@ -92,7 +94,7 @@ test('the first Fourth Wall open and mutation project upstream history before a 
     const upgradeSource = {
         readCurrentPartition: () => ({
             identityKey: 'character:avatar.png:chat-a',
-            partition: { schemaVersion: 2, state: structuredClone(upstream) },
+            partition: { schemaVersion: 3, state: structuredClone(upstream) },
         }),
     };
     const openedHarness = createHarness({ upgradeSource });
@@ -122,7 +124,7 @@ test('the first Fourth Wall mutation writes only its partition and then installs
     assert.equal(harness.state.writes.length, 1);
     assert.equal(harness.state.installs, 1);
     assert.deepEqual(Object.keys(harness.state.writes[0].candidate.partitions), ['fourthWall']);
-    assert.equal(harness.state.writes[0].candidate.partitions.fourthWall.schemaVersion, 2);
+    assert.equal(harness.state.writes[0].candidate.partitions.fourthWall.schemaVersion, 3);
 });
 
 test('Fourth Wall preserves unrelated opaque partitions and isolates chats by sidecar identity', async () => {
@@ -217,12 +219,61 @@ test('opening a V1 sidecar upgrades once, retains history and unrelated data, an
         assert.deepEqual(upgraded.sessions.map(s => s.history), old.state.sessions.map(s => s.history));
         assert.ok(upgraded.sessions.every(s => s.memory === '' && s.archivedCount === 0));
         assert.equal(h.state.writes.length, 1);
-        assert.equal(h.state.files.get('v1_fixture').partitions.fourthWall.schemaVersion, 2);
+        assert.equal(h.state.files.get('v1_fixture').partitions.fourthWall.schemaVersion, 3);
         assert.deepEqual(h.state.files.get('v1_fixture').partitions.unrelated, { keep: [1, 2] });
         await h.repository.prepareCurrentChatFourthWall();
         assert.equal(h.state.writes.length, 1);
         await h.repository.mutateCurrentChatFourthWall(state => { state.settings.maxChatLayers = 9999; return state; });
         assert.equal((await h.repository.prepareCurrentChatFourthWall()).settings.maxChatLayers, 9999);
+    }
+});
+
+test('upstream V2 sidecar upgrades exactly once and keeps every session, memory and unrelated partition', async () => {
+    const h = createHarness();
+    h.captures.a.reference = { formatVersion: 1, osId: 'v2_fixture' };
+    h.state.files.set('v2_fixture', { formatVersion: 1, osId: 'v2_fixture', binding: bindings.a,
+        revision: 0, commitId: 'upstream-v2', partitions: { fourthWall: structuredClone(v2Fixture), unrelated: { keep: true } } });
+    assert.equal(h.repository.readCurrentChatFourthWall(), null);
+    const upgraded = await h.repository.prepareCurrentChatFourthWall();
+    assert.equal(upgraded.settings.maxChatLayers, v2Fixture.state.settings.maxChatLayers);
+    assert.equal(Object.hasOwn(upgraded.settings, 'disableAssistantPrefill'), false);
+    assert.deepEqual(upgraded.sessions, v2Fixture.state.sessions);
+    assert.equal(upgraded.activeSessionId, v2Fixture.state.activeSessionId);
+    assert.equal(h.state.writes.length, 1);
+    assert.equal(h.state.files.get('v2_fixture').partitions.fourthWall.schemaVersion, 3);
+    assert.deepEqual(h.state.files.get('v2_fixture').partitions.unrelated, { keep: true });
+    assert.deepEqual(await h.repository.prepareCurrentChatFourthWall(), upgraded);
+    assert.equal(h.state.writes.length, 1);
+});
+
+test('an unconfirmed V2 upgrade does not expose a speculative projection or alter the stored file', async () => {
+    const h = createHarness();
+    h.captures.a.reference = { formatVersion: 1, osId: 'pending_v2' };
+    h.state.files.set('pending_v2', { formatVersion: 1, osId: 'pending_v2', binding: bindings.a,
+        revision: 0, commitId: 'upstream-v2', partitions: { fourthWall: structuredClone(v2Fixture) } });
+    h.state.replaceImpl = async input => ({ status: 'unconfirmed', observed: structuredClone(h.state.files.get(input.candidate.osId)) });
+    await assert.rejects(h.repository.prepareCurrentChatFourthWall(), error => error.code === 'storage_unconfirmed');
+    assert.equal(h.repository.readCurrentChatFourthWall(), null);
+    assert.deepEqual(h.state.files.get('pending_v2').partitions.fourthWall, v2Fixture);
+});
+
+test('reopening after an unconfirmed V2 upgrade recovers the original transaction', async () => {
+    for (const committed of [false, true]) {
+        const h = createHarness();
+        h.captures.a.reference = { formatVersion: 1, osId: 'upgrade_v2' };
+        h.state.files.set('upgrade_v2', { formatVersion: 1, osId: 'upgrade_v2', binding: bindings.a,
+            revision: 0, commitId: 'upstream-v2', partitions: { fourthWall: structuredClone(v2Fixture) } });
+        h.state.replaceImpl = async ({ candidate }) => {
+            if (committed) { h.state.files.set(candidate.osId, structuredClone(candidate)); }
+            return { status: 'unconfirmed', observed: null };
+        };
+        await assert.rejects(h.repository.prepareCurrentChatFourthWall(), error => error.code === 'storage_unconfirmed');
+        h.state.replaceImpl = null;
+        const opened = await h.repository.prepareCurrentChatFourthWall();
+        assert.deepEqual(opened.sessions, v2Fixture.state.sessions);
+        assert.equal(h.state.files.get('upgrade_v2').partitions.fourthWall.schemaVersion, 3);
+        assert.equal(h.state.writes.length, committed ? 1 : 2);
+        assert.equal(h.coordinator.hasPendingCommit('fourthWall'), false);
     }
 });
 

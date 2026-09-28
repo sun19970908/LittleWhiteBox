@@ -382,7 +382,6 @@ export function createFourthWallController({
             requestId,
             builtPrompt,
             stream: chatState.settings.stream,
-            disableAssistantPrefill: chatState.settings.disableAssistantPrefill,
             prepareOnly: manual,
             async initialize(signal) {
                 taskSignal = signal;
@@ -402,7 +401,6 @@ export function createFourthWallController({
                 taskSignal = signal;
                 const prepared = await contextService.prepare({
                     session: session!, buildPrompt, config, signal, manual,
-                    disableAssistantPrefill: chatState.settings.disableAssistantPrefill,
                     onPhase(phase) {
                         if (isRunCurrent(run)) { post('fourth-wall/generation', { requestId, sessionId, status: 'started', manual, phase }); }
                     },
@@ -563,7 +561,6 @@ export function createFourthWallController({
                   const config = await loadAgentConfig();
                   const builtPrompt = await contextService.prepare({
                       session, buildPrompt, config, signal,
-                      disableAssistantPrefill: source.settings.disableAssistantPrefill,
                       async commit(memory, archivedCount) {
                           await commitMemory(source, session, memory, archivedCount, signal,
                               () => !activation && identityKey(getChatIdentity()) === captured.chatIdentity);
@@ -575,7 +572,6 @@ export function createFourthWallController({
                       config,
                       builtPrompt,
                       stream: false,
-                      disableAssistantPrefill: captured.chatState.settings.disableAssistantPrefill,
                       signal,
                   });
                   return projectGenerationResult(result).text;

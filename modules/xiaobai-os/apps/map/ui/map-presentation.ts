@@ -10,6 +10,7 @@ import type {
 import { isAreaElement, sceneElementBounds } from './scene-geometry.js';
 import { materialPaint } from './scene-materials.js';
 import type { MapObjectIcon } from '../../../domains/map/semantics.js';
+import { MAP_BROWSE_COPY } from './map-copy.js';
 
 const OBJECT_FALLBACKS: Readonly<Record<MapObjectIcon, string>> = {
     chair: '椅', stool: '凳', bench: '长凳', sofa: '沙发', bed: '床', table: '桌', counter: '台', shelf: '架', cabinet: '柜', chest: '箱', barrel: '桶',
@@ -205,9 +206,9 @@ export const MAP_MOOD_RECIPES: Readonly<Record<MapSceneMood, MapMoodRecipe>> = O
 
 export const MAP_SCALE_LABELS: Readonly<Record<MapLocationScale, string>> = Object.freeze({
     world: '世界',
-    region: '区域',
+    region: MAP_BROWSE_COPY.world.unit,
     city: '城市',
-    district: '区域',
+    district: '街区',
     building: '建筑',
     floor: '楼层',
     room: '房间',

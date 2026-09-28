@@ -5,7 +5,6 @@ import { OpenAIResponsesAdapter } from './adapters/openai-responses.js';
 import { SillyTavernClaudeAdapter } from './adapters/sillytavern-claude.js';
 import { SillyTavernGoogleAdapter } from './adapters/sillytavern-google.js';
 import { SillyTavernOpenAICompatibleAdapter } from './adapters/sillytavern-openai-compatible.js';
-import { isSillyTavernProvider } from './provider-resolution.js';
 import { assertRuntimeReasoning } from './reasoning-capabilities.js';
 import { assertHostChatCompletionsClient } from '../../shared/host-llm/chat-completions/client.js';
 
@@ -22,9 +21,6 @@ function createSillyTavernAdapter(Adapter, providerConfig, options) {
 }
 
 export function createAgentAdapter(providerConfig = {}, options = {}) {
-    if (!providerConfig.apiKey && !isSillyTavernProvider(providerConfig.provider)) {
-        throw new Error(options.missingApiKeyMessage || '请先填写当前模型配置的 API Key。');
-    }
     assertRuntimeReasoning(providerConfig.reasoning || {});
     switch (providerConfig.provider) {
         case 'sillytavern-openai-compatible':

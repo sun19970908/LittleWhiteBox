@@ -13,9 +13,10 @@ import { sceneAssetKind } from '../apps/map/ui/three/scene3d-asset-fit.js';
 import { SCENE_MATERIAL_COLORS } from '../apps/map/ui/scene-materials.js';
 import { compileSceneIntent } from '../apps/map/tools/scene-intent-compiler.js';
 import { createEmptyMapDomain } from '../domains/map/state.js';
+import { mapAtlasFixture } from './fixtures/map-atlas.js';
 import { sceneMapInputs } from './fixtures/scene-maps.js';
 
-const domain = input => compileSceneIntent(createEmptyMapDomain(), input, { actorKey: 'player', displayName: '小白' }).domain;
+const domain = input => compileSceneIntent(mapAtlasFixture([{ key: input.scene }]), input, { actorKey: 'player', displayName: '小白' }).domain;
 const rectangle = (icon, shape = 'rect') => ({ id: icon, category: 'furniture', shape, icon, geometry: shape === 'rect' ? { x: 30, y: 50, width: 100, height: 60 } : { x: 60, y: 80, radius: 20 } });
 
 test('opening chooses only the player-owned active scene and never another recorded scene', () => {
@@ -26,9 +27,9 @@ test('opening chooses only the player-owned active scene and never another recor
     const cases = [
         d => {d.atlas.actors = [];},
         d => {d.atlas.actors[0].locationKey = 'missing';},
-        d => {delete d.atlas.locations[0].sceneKey;},
+        d => {delete d.atlas.locations.find(location => location.key === 'tavern').sceneKey;},
         d => {d.scenes.tavern.status = 'uninitialized';},
-        d => {d.atlas.locations[0].sceneKey = 'missing';},
+        d => {d.atlas.locations.find(location => location.key === 'tavern').sceneKey = 'missing';},
     ];
     for (const mutate of cases) {const copy = structuredClone(map); mutate(copy); assert.equal(resolveInitialMapView(copy), 'world');}
 });

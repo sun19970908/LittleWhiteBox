@@ -33,10 +33,10 @@ export function waitForMaintenanceWriteReady(options: {
         signal.addEventListener('abort', aborted, { once: true });
         if (signal.aborted) { finish(false); return; }
         const registered = gate.subscribe(() => {
-            if (gate.getState() === 'ready') { finish(!signal.aborted && guard()); }
+            if (gate.getState() === 'ready' || !guard()) { finish(!signal.aborted && guard() && gate.getState() === 'ready'); }
         });
         unsubscribe = registered;
         if (unsubscribeAfterRegistration) { registered(); }
-        if (gate.getState() === 'ready') { finish(!signal.aborted && guard()); }
+        if (gate.getState() === 'ready' || !guard()) { finish(!signal.aborted && guard() && gate.getState() === 'ready'); }
     });
 }

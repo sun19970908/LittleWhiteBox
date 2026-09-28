@@ -1,4 +1,4 @@
-export type DiceHostBlocker = 'generation';
+export type DiceHostBlocker = 'generation' | 'finalization' | 'save';
 
 /** A transient observation of the host, not a prediction of its completion time. */
 export interface DiceHostWait {
@@ -12,11 +12,4 @@ export type DiceContinuationStage = 'preparing' | 'requesting' | 'responding';
 export interface DiceContinuationProgress {
     stage: DiceContinuationStage;
     elapsedSeconds: number;
-}
-
-export class DiceHostWaitTimeout extends Error {
-    constructor(readonly wait: DiceHostWait) {
-        super('dice_host_wait_timeout');
-        this.name = 'DiceHostWaitTimeout';
-    }
 }

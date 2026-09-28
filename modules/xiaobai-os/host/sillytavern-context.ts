@@ -3,6 +3,7 @@ import { saveSettings as saveSettingsNow } from '../../../../../../../script.js'
 import { EXT_ID } from '../../../core/constants.js';
 import type { XiaobaiOsChatIdentity } from '../types.js';
 import { countAssistantTurns } from './assistant-turn-count.js';
+import { captureStoryIdentity } from './story-identity.js';
 import type { XiaobaiOsSettingsAdapter } from './settings-repository.js';
 
 type UnknownRecord = Record<string, unknown>;
@@ -48,21 +49,7 @@ function getSillyTavernContext(): SillyTavernContext {
 }
 
 function captureIdentity(context: SillyTavernContext = getSillyTavernContext()): XiaobaiOsChatIdentity | null {
-    const chatId = typeof context?.chatId === 'string' ? context.chatId : '';
-    if (!chatId) {
-        return null;
-    }
-    const groupId = context.groupId === null || context.groupId === undefined ? '' : String(context.groupId);
-    const characterId =
-        context.characterId === null || context.characterId === undefined ? '' : String(context.characterId);
-    const kind = groupId ? 'group' : 'character';
-    const ownerId = groupId || characterId;
-    return Object.freeze({
-        key: `${kind}:${ownerId}:${chatId}`,
-        kind,
-        ownerId,
-        chatId,
-    });
+    return captureStoryIdentity(context);
 }
 
 function resolveCharacterAvatar(context: SillyTavernContext): string {

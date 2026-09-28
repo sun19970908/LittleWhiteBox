@@ -1,4 +1,5 @@
 import { getContext } from '../../../../../../extensions.js';
+import { hasPreviewImage, PreviewStatus, DRAW_SLOT_ERRORS } from './image-record.js';
 import { getRequestHeaders } from '../../../../../../../script.js';
 import { createModuleEvents, event_types } from '../../../core/event-manager.js';
 import {
@@ -27,7 +28,8 @@ import { executeImageJobReattachEntry } from './image-job-recovery-executor.js';
 import { planImageJobReattach, ReattachAction } from './image-job-reattach.js';
 import { readPageFarewells } from './page-farewell.js';
 import { getPendingImageJob, listPendingImageJobs, PendingJobState } from './pending-image-jobs.js';
-import { commitSceneSlotDelivery, removeSceneSlotPlaceholders } from './scene-placement.js';
+import { removeSceneSlotPlaceholders } from './scene-placement.js';
+import { deliverPreparedImage } from './prepared-image-delivery.js';
 import {
     classifyError,
     ErrorType,
@@ -69,7 +71,7 @@ function handleRecoveryVisibilityChange() {
 function drawRunActivityTarget(record) {
     const slots = record?.delivery?.mode === 'slots';
     const located = slots
-        ? record.items?.map(item => recordTarget(record, item))
+        ? record.items?.filter(item => !item.discarded).map(item => recordTarget(record, item))
             .find(target => target.state === ImageJobDeliveryTargetState.ALIVE)
         : null;
     const locatedSwipe = Number.isInteger(located?.swipe)
@@ -80,7 +82,7 @@ function drawRunActivityTarget(record) {
     return {
         provider: record?.provider,
         chatId: String(record?.chatTarget?.chatId || record?.delivery?.chatId || record?.gallery?.chatId || ''),
-        messageId: located ? located.messageId : Number(slots ? record?.delivery?.messageId : record?.gallery?.messageId),
+        messageId: located ? located.messageId : slots ? -1 : Number(record?.gallery?.messageId),
         swipeIndex: locatedSwipe ?? Number(slots ? record?.delivery?.swipeIndex : record?.gallery?.swipeIndex),
         runId: record?.originRunId,
     };
@@ -102,6 +104,10 @@ function recordTarget(record, item = null) {
 
 function requireAvailableTarget(record, item = null) {
     if (record.delivery?.mode !== 'slots') return null;
+    if (record.delivery.retainWithoutSlot) {
+        const target = recordTarget(record, item);
+        return target.state === ImageJobDeliveryTargetState.ALIVE ? target : null;
+    }
     const ctx = getContext();
     return requireImageJobDeliveryTarget({
         currentChatId: ctx?.chatId,
@@ -150,7 +156,6 @@ function describeMissingJob(record) {
 function createDeliveryAdapter() {
     return {
         onStateChange(record, state, data) {
-            if (!record.originRunId) return;
             reportImageBackendJobState((stage, progress = {}) => {
                 publishDrawRunActivity({
                     ...drawRunActivityTarget(record),
@@ -174,30 +179,33 @@ function createDeliveryAdapter() {
                 await storePreview({ ...previewOptions(record, item, null), base64 });
                 return;
             }
-            const committed = await commitSceneSlotDelivery({
-                committedEarly: true,
+            const committed = await deliverPreparedImage({
+                retainWithoutSlot: record.delivery?.retainWithoutSlot,
+                isDiscarded: current => current?.items.some(entry => entry.imgId === item.imgId && entry.discarded),
                 resolveTarget: () => requireAvailableTarget(record, item),
                 guard,
                 persist: target => storePreview({ ...previewOptions(record, item, target), base64 }),
-                rollbackPersisted: () => deletePreview(item.imgId),
+                remove: () => deletePreview(item.imgId),
                 select: () => setSlotSelection(item.slotId, item.imgId),
-                rollbackSelection: () => clearSlotSelection(item.slotId),
+                clearSelection: () => clearSlotSelection(item.slotId),
             });
             if (committed) {
                 await renderRecord(record);
             } else {
-                // 用户在结果到达前删除了这个槽位：尊重正文，但已付费的图片仍必须落进画廊。
+                // The slot was removed while delivery was in flight. Do not
+                // recreate records that the slot's deletion already cleaned up.
                 await guard();
-                await storePreview({ ...previewOptions(record, item, null), base64 });
+                await deletePreview(item.imgId);
             }
         },
         async failItem(record, item, error, guard) {
             // gallery-only 没有正文槽位，也不伪造一张失败卡；后端失败项本身就是终态。
             if (record.delivery?.mode === 'gallery') return;
             const errorType = error?.label ? error : classifyError(error);
-            const failedImgId = `failed-${item.imgId}`;
-            const committed = await commitSceneSlotDelivery({
-                committedEarly: true,
+            const failedImgId = item.imgId;
+            const committed = await deliverPreparedImage({
+                retainWithoutSlot: record.delivery?.retainWithoutSlot,
+                isDiscarded: current => current?.items.some(entry => entry.imgId === item.imgId && entry.discarded),
                 resolveTarget: () => requireAvailableTarget(record, item),
                 guard,
                 persist: target => storeFailedPlaceholder({
@@ -206,11 +214,12 @@ function createDeliveryAdapter() {
                     errorType: errorType.label,
                     errorMessage: errorType.desc,
                 }),
-                rollbackPersisted: () => deletePreview(failedImgId),
+                remove: () => deletePreview(failedImgId),
                 select: () => setSlotSelection(item.slotId, failedImgId),
-                rollbackSelection: () => clearSlotSelection(item.slotId),
+                clearSelection: () => clearSlotSelection(item.slotId),
             });
             if (committed) await renderRecord(record);
+            else { await guard(); await deletePreview(item.imgId); }
         },
         async settle(record, settlement, _details, guard) {
             if (record.delivery?.mode === 'gallery') {
@@ -220,13 +229,20 @@ function createDeliveryAdapter() {
             const slotsToRemove = [];
             if (settlement.mode === 'discard') {
                 for (const item of record.items) {
+                    // Released upstream 3.1.5 used a separate failed-* record.
+                    // Retain its read path while those recoverable journals exist.
                     const [delivered, failed] = await Promise.all([
-                        getPreview(item.imgId).catch(() => null),
-                        getPreview(`failed-${item.imgId}`).catch(() => null),
+                        getPreview(item.imgId),
+                        getPreview(`failed-${item.imgId}`),
                     ]);
                     await guard();
+                    if (hasPreviewImage(delivered) || delivered?.status === PreviewStatus.FAILED || failed) continue;
+                    if (record.delivery.preserveSlotsOnCancel) {
+                        await this.failItem(record, item, DRAW_SLOT_ERRORS.interrupted, guard);
+                        continue;
+                    }
                     const target = requireAvailableTarget(record, item);
-                    if (!delivered && !failed && target) slotsToRemove.push(item.slotId);
+                    if (target) slotsToRemove.push(item.slotId);
                 }
             } else if (settlement.mode === 'fail') {
                 const errorType = settlement.errorType?.label ? settlement.errorType : describeMissingJob(record);
@@ -236,7 +252,7 @@ function createDeliveryAdapter() {
                         getPreview(`failed-${item.imgId}`).catch(() => null),
                     ]);
                     await guard();
-                    if (delivered || failed) continue;
+                    if (hasPreviewImage(delivered) || delivered?.status === PreviewStatus.FAILED || failed) continue;
                     await this.failItem(record, item, errorType, guard);
                 }
             }
@@ -311,6 +327,10 @@ function createDeliveryAdapter() {
                 });
             }
             await guard();
+            for (const slotId of slotsToRemove) {
+                const item = record.items.find(item => item.slotId === slotId);
+                if (item) await deletePreview(item.imgId);
+            }
             await renderRecord(record);
             const removedMessageIds = new Set(removedTargets
                 .filter(target => target.isActiveSwipe)
@@ -336,7 +356,7 @@ function createDeliveryAdapter() {
         },
         async afterForget(record, settlement = { mode: 'complete' }) {
             const delivered = await Promise.all(record.items.map(item => getPreview(item.imgId).catch(() => null)));
-            const success = delivered.filter(Boolean).length;
+            const success = delivered.filter(hasPreviewImage).length;
             publishDrawRunActivity({
                 ...drawRunActivityTarget(record),
                 phase: 'completed',
@@ -409,7 +429,7 @@ async function runRecoveryPass() {
     }
     const records = allRecords.filter(record => (
         record.state !== PendingJobState.ADOPTING
-        && (record.delivery?.mode === 'gallery' || record.delivery?.chatId === chatId)
+        && (record.delivery?.mode === 'gallery' || record.delivery?.retainWithoutSlot || record.delivery?.chatId === chatId)
     ));
     if (records.length === 0) return;
 

@@ -22,9 +22,26 @@ export const GENERATE_INTERCEPTOR_ORDER = Object.freeze({
 });
 
 const handlers = new Map();
+const observers = new Set();
 let installedEntry = null;
 let nextSequence = 0;
 let activeDispatch = null;
+
+function notifyObservers(phase, id, type, run, detail = null) {
+    for (const observe of observers) {
+        try {
+            observe({ phase, id, type, run, detail });
+        } catch (error) {
+            xbLog.warn(MODULE_ID, 'interceptor observer failed', error);
+        }
+    }
+}
+
+// Read-only lifecycle signal. Observers cannot change handler order or results.
+export function observeGenerateInterceptors(observe) {
+    observers.add(observe);
+    return () => observers.delete(observe);
+}
 
 async function dispatch(chat, contextSize, abort, type) {
     activeDispatch?.abort(true);
@@ -37,29 +54,35 @@ async function dispatch(chat, contextSize, abort, type) {
         controller.abort();
         abort(immediately);
     };
+    const dispatchRun = { abort: wrappedAbort, signal: controller.signal };
     const runContext = Object.freeze({
         abort: wrappedAbort,
         results: new Map(),
         signal: controller.signal,
+        reportProgress: detail => notifyObservers('handler-progress', null, type, dispatchRun, detail),
     });
-    const dispatchRun = { abort: wrappedAbort };
     activeDispatch = dispatchRun;
 
     try {
+        notifyObservers('dispatch-start', null, type, dispatchRun);
         const orderedHandlers = [...handlers.entries()].sort(([, a], [, b]) => (
             a.order - b.order || a.sequence - b.sequence
         ));
         for (const [id, entry] of orderedHandlers) {
             if (handlers.get(id) !== entry) continue;
+            notifyObservers('handler-start', id, type, dispatchRun);
             try {
                 const result = await entry.handler(chat, contextSize, wrappedAbort, type, runContext);
                 runContext.results.set(id, result);
             } catch (error) {
                 xbLog.warn(MODULE_ID, `interceptor handler failed: ${id}`, error);
+            } finally {
+                notifyObservers('handler-end', id, type, dispatchRun);
             }
             if (aborted) break;
         }
     } finally {
+        notifyObservers('dispatch-end', null, type, dispatchRun);
         if (activeDispatch === dispatchRun) activeDispatch = null;
     }
 }

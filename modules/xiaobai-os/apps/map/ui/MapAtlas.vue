@@ -3,12 +3,14 @@ import { computed, useId } from 'vue';
 import type { MapAtlas } from '../../../domains/map/types.js';
 import MapViewport from './MapViewport.vue';
 import MapIcon from './MapIcon.vue';
-import { layoutWorldMap, locationInRegion } from './world-map.js';
+import { layoutWorldMap, locationInScope } from './world-map.js';
+import type { MapBrowseScope } from './map-browse.js';
+import { MAP_VISIT_LABELS } from './map-copy.js';
 
-const props = defineProps<{ atlas: MapAtlas; region: string; currentLocationKey: string; selectedLocationKey: string; focusKey: string; focusSequence: number }>();
+const props = defineProps<{ atlas: MapAtlas; scope: MapBrowseScope; label: string; currentLocationKey: string; selectedLocationKey: string; focusKey: string; focusSequence: number }>();
 defineEmits<{ select: [key: string] }>();
-const layout = computed(() => layoutWorldMap(props.atlas, props.region));
-const current = computed(() => locationInRegion(props.atlas, props.currentLocationKey, props.region));
+const layout = computed(() => layoutWorldMap(props.atlas, props.scope));
+const current = computed(() => locationInScope(props.atlas, props.currentLocationKey, props.scope.locations));
 const focus = computed(() => layout.value.nodes.find(node => node.location.key === props.focusKey));
 const arrow = 'map-arrow-' + useId();
 function icon(terrain: string | undefined, scale: string): string {
@@ -16,7 +18,7 @@ function icon(terrain: string | undefined, scale: string): string {
 }
 </script>
 <template>
-    <MapViewport v-slot="{ unitScale }" :view-box="layout.viewBox" :reset-key="region" label="世界地图" :focus-point="focus ? [focus.x, focus.y] : undefined" :focus-sequence="focusSequence">
+    <MapViewport v-slot="{ unitScale }" :view-box="layout.viewBox" :reset-key="`${scope.kind}:${scope.region?.key || ''}`" :label="label" :focus-point="focus ? [focus.x, focus.y] : undefined" :focus-sequence="focusSequence">
         <defs><marker :id="arrow" viewBox="0 0 10 10" refX="16" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M1 1l8 4-8 4z" fill="var(--map-road-ink)" /></marker></defs>
         <g class="map-landscapes" aria-hidden="true">
             <g v-for="node in layout.nodes" :key="node.location.key" :transform="`translate(${node.x} ${node.y})`" :class="`is-${node.location.terrain || 'urban'}`">
@@ -35,7 +37,7 @@ function icon(terrain: string | undefined, scale: string): string {
             <g transform="translate(-14 -20)"><MapIcon :name="icon(node.location.terrain, node.location.scale)" width="28" height="28" /></g>
             <text y="64" class="map-place-name">{{ node.location.name.length > 14 ? node.location.name.slice(0, 13) + '…' : node.location.name }}</text>
             <text v-if="node.location.key === current" y="89" class="map-place-status">你在这里</text>
-            <text v-else-if="node.location.status !== 'visited'" y="89" class="map-place-status">未到访</text>
+            <text v-else-if="node.location.status !== 'visited'" y="89" class="map-place-status">{{ MAP_VISIT_LABELS.unvisited }}</text>
             <title>{{ node.location.name }}{{ node.location.brief ? ' · ' + node.location.brief : '' }}</title>
         </g>
     </MapViewport>
