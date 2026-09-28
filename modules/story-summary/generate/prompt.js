@@ -90,17 +90,17 @@ export function getPromptBudgets() {
         return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;
     };
     return {
-        CONSTRAINT_MAX: clamp(raw.constraintMax, CONSTRAINT_MAX, 100, 100000),
-        ARCS_MAX: clamp(raw.arcsMax, ARCS_MAX, 100, 100000),
-        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, EVENT_BUDGET_MAX, 100, 100000),
-        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, RELATED_EVENT_MAX, 10, 10000),
-        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, UNSUMMARIZED_EVIDENCE_MAX, 100, 50000),
-        TOP_N_STAR: clamp(raw.topNStar, TOP_N_STAR, 1, 20),
-        EVENT_EVIDENCE_MAX: clamp(raw.eventEvidenceMax, EVENT_EVIDENCE_MAX, 100, 100000),
+        CONSTRAINT_MAX: clamp(raw.constraintMax, CONSTRAINT_MAX, 0, 100000),
+        ARCS_MAX: clamp(raw.arcsMax, ARCS_MAX, 0, 100000),
+        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, EVENT_BUDGET_MAX, 0, 100000),
+        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, RELATED_EVENT_MAX, 0, 10000),
+        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, UNSUMMARIZED_EVIDENCE_MAX, 0, 50000),
+        TOP_N_STAR: clamp(raw.topNStar, TOP_N_STAR, 0, 20),
+        EVENT_EVIDENCE_MAX: clamp(raw.eventEvidenceMax, EVENT_EVIDENCE_MAX, 0, 100000),
         DISTANT_EVIDENCE_MAX: clamp(raw.distantEvidenceMax, DISTANT_EVIDENCE_MAX, 0, 100000),
-        RERANK_TOP_N: clamp(raw.rerankTopN, CAPACITY_DEFAULTS.rerankTopN, 1, 200),
-        FUSION_CAP: clamp(raw.fusionCap, CAPACITY_DEFAULTS.fusionCap, 10, 500),
-        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, CAPACITY_DEFAULTS.eventSelectMax, 1, 500),
+        RERANK_TOP_N: clamp(raw.rerankTopN, CAPACITY_DEFAULTS.rerankTopN, 0, 200),
+        FUSION_CAP: clamp(raw.fusionCap, CAPACITY_DEFAULTS.fusionCap, 0, 500),
+        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, CAPACITY_DEFAULTS.eventSelectMax, 0, 500),
     };
 }
 
