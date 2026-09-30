@@ -3758,7 +3758,7 @@ async function autoGenerateForLastAI() {
 }
 
 
-async function buildComfyScenePlannerOptions({
+export async function buildComfyScenePlannerOptions({
     message,
     signal,
     useWorldbook = true,
@@ -4417,7 +4417,7 @@ function cleanupImageDelegation() {
 
 let preparedImageDispose = null;
 
-async function runPreparedComfySlots(input) {
+export async function runPreparedComfySlots(input) {
     const { ctx, message, messageId, sourceText, tasks, onStateChange } = input;
     const job = input.job || createGenerationJob(messageId);
     try {
