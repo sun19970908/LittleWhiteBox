@@ -22,6 +22,7 @@ import { getRequestHeaders, syncMesToSwipe } from "../../../../../../../../scrip
 import { extensionFolderPath } from "../../../../core/constants.js";
 import { createModuleEvents, event_types } from "../../../../core/event-manager.js";
 import { ComfyDrawStorage } from "../../../../core/server-storage.js";
+import { postToIframe, isTrustedMessage } from "../../../../core/iframe-messaging.js";
 import { generateAndParseScenePlan, prepareScenePlannerInput } from "../../shared/scene-planner.js";
 import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
 import { stripDrawImageSlots } from "../../shared/image-marker-syntax.js";
@@ -1318,6 +1319,7 @@ async function createOverlay() {
             bindOverlayEvents();
             fillForm(getSettings());
             ensureAgentSettingsSurface();
+            postCharFrameInit();
             resolve(overlayElement);
         }, { once: true });
         overlayFrame?.addEventListener('error', () => {
@@ -1349,6 +1351,50 @@ function querySettings(selector) {
 function querySettingsAll(selector) {
     return Array.from(getSettingsDocument()?.querySelectorAll(selector) || []);
 }
+
+// ═══ 角色标签页（自 novel-draw 搬运）：iframe 内联脚本的消息接口 ═══
+const CHAR_FRAME_SOURCE = 'NovelDraw-Frame';
+const CHAR_FRAME_HOST_SOURCE = 'LittleWhiteBox-NovelDraw';
+
+function postCharFrameInit() {
+    const shared = getSharedDrawSettings();
+    postToIframe(overlayFrame, {
+        type: 'INIT_DATA',
+        settings: {
+            characterTags: shared.characterTags || [],
+            danbooruLocalDB: shared.danbooruLocalDB === true,
+        },
+    }, CHAR_FRAME_HOST_SOURCE);
+}
+
+window.addEventListener('message', async (event) => {
+    if (!isTrustedMessage(event, overlayFrame, CHAR_FRAME_SOURCE)) return;
+    const data = event.data || {};
+    switch (data.type) {
+        case 'SAVE_CHARACTER_TAGS': {
+            if (!Array.isArray(data.characterTags)) return;
+            await updateSharedDrawSettingsPersistent((settings) => {
+                settings.characterTags = data.characterTags;
+            }, '角色标签已保存', { notify: true, silent: false });
+            return;
+        }
+        case 'SAVE_DANBOORU_LOCAL_DB': {
+            await setComfyDanbooruLocalEnabled(!!data.enabled);
+            postCharFrameInit();
+            return;
+        }
+        case 'DANBOORU_LOCAL_SEARCH': {
+            const results = searchLocalDanbooru(data.query || '', 10);
+            postToIframe(overlayFrame, {
+                type: 'DANBOORU_LOCAL_SEARCH_RESULTS',
+                query: data.query,
+                charId: data.charId,
+                results,
+            }, CHAR_FRAME_HOST_SOURCE);
+            return;
+        }
+    }
+});
 
 function bindOverlayEvents() {
     if (!overlayElement || eventsBound || !getSettingsDocument()) return;
@@ -3148,11 +3194,10 @@ function fillSharedDrawForm() {
 }
 
 async function saveSharedDrawSettings({ notify = false } = {}) {
-    const characterTags = getSharedCharacterTagsFromForm();
+    // 角色标签改由角色标签页独立保存（SAVE_CHARACTER_TAGS 消息），通用保存不再从 DOM 收集，避免误清空
     return await updateSharedDrawSettingsPersistent((settings) => {
         settings.useWorldInfo = getChecked('comfy-shared-use-worldinfo');
         settings.messageFilterRules = collectFilterRules();
-        settings.characterTags = characterTags;
         settings.worldbooks = {
             ...(settings.worldbooks || {}),
             enabled: getChecked('comfy-wb-enabled'),
