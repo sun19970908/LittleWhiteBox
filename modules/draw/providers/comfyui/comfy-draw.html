@@ -594,6 +594,16 @@ select.input { cursor: pointer; }
 .danbooru-char-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .danbooru-char-name { font-weight: 500; }
 .danbooru-char-series { font-size: 10px; color: var(--text-muted); font-style: italic; }
+/* ── 角色标签页响应式（自 novel-draw 搬运；须位于上方无条件规则之后才能正确折叠） ── */
+@media (max-width: 768px) {
+    .char-management-layout { grid-template-columns: 1fr; }
+    .char-management-sidebar { position: static; }
+    .char-filter-row { grid-template-columns: 1fr; }
+    .char-list-card-header { flex-direction: column; }
+}
+@media (hover: none) and (pointer: coarse) {
+    .char-action-button { width: 44px; height: 44px; }
+}
 </style>
 </head>
 <body>
@@ -1150,7 +1160,7 @@ select.input { cursor: pointer; }
                 </div>
             </section>
 
-            <section class="view wide" data-comfy-view-panel="characters">
+            <section class="view" data-comfy-view-panel="characters">
                 <div class="view-header">
                     <h2 class="view-title">角色标签</h2>
                     <p class="view-desc">集中管理角色固定外貌、服装与动态外貌，Danbooru 资源库，PC 端支持双栏管理</p>
