@@ -200,6 +200,36 @@ export function setL1FilterUser(enabled) {
     return isL1FilterUserEnabled();
 }
 
+// ── 弧光人物屏蔽（渲染层，独立名单）──────────────────
+// arcBlockedCharacters（数组，默认空 = 不屏蔽，与上游一致）。
+// 屏蔽对象是弧光的主体 arc.name，精确匹配（NFKC + 小写 + 去零宽）；
+// moments/trajectory 里出现的人物名不参与判定。
+// 只影响注入：弧光数据照常生成、存储、推进，面板显示不变。
+const ARC_BLOCKED_CHARACTERS_KEY = "arcBlockedCharacters";
+
+export function getArcBlockedCharacters() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[ARC_BLOCKED_CHARACTERS_KEY];
+    if (!Array.isArray(v)) return [];
+    return [...new Set(v.map(s => String(s || '').trim()).filter(Boolean))];
+}
+
+export function setArcBlockedCharacters(list) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[ARC_BLOCKED_CHARACTERS_KEY] = Array.isArray(list)
+        ? [...new Set(list.map(s => String(s || '').trim()).filter(Boolean))]
+        : [];
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return getArcBlockedCharacters();
+}
+
+function filterArcsForInjection(arcs) {
+    const list = getArcBlockedCharacters();
+    if (!list.length) return arcs || [];
+    const blocked = new Set(list.map(normalize));
+    return (arcs || []).filter(a => !blocked.has(normalize(a?.name)));
+}
+
 // ── L2 下方 L0 渲染 开关 ───────────────────────────────
 // 默认关闭：事件下方照常渲染 L0 行（与上游一致）。
 // 打开后：事件下方不渲染 L0 行（L0 与事件摘要同源派生，是其子集，属冗余呈现）。
@@ -986,8 +1016,9 @@ function buildNonVectorPrompt(store) {
     }
 
     // [Arcs]
-    if (data.arcs?.length) {
-        const lines = data.arcs.map(formatArcLine);
+    const arcsForInjection = filterArcsForInjection(data.arcs);
+    if (arcsForInjection.length) {
+        const lines = arcsForInjection.map(formatArcLine);
         sections.push(`[人物弧光]\n${lines.join("\n")}`);
     }
 
@@ -1288,7 +1319,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
                 .filter(Boolean)
         );
 
-        const filteredArcs = (data.arcs || []).filter(a => {
+        const filteredArcs = filterArcsForInjection(data.arcs).filter(a => {
             const n = String(a?.name || "").trim();
             return n && relevant.has(n);
         });
