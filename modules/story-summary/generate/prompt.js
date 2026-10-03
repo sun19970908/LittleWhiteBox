@@ -1717,6 +1717,12 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
     }
     const aliasTable = formatCharacterAliasTableForAI(store.json, recallResult?.focusTerms);
     if (aliasTable) sections.push(`[角色别名]\n${aliasTable}`);
+    // [二改标记·勿删] 焦点人物名单（剧情总结.txt §二十）：外部发送端过滤脚本读取此节
+    // 实现 §十二 忠实过滤，读取后默认从 prompt 中删除；脚本未启用时模型会看到这行名单，无副作用。
+    const focusList = [...new Set((focusCharacters || []).map(s => String(s || '').trim()).filter(Boolean))];
+    if (focusList.length) {
+        sections.push(`[焦点人物]\n${focusList.join('、')}`);
+    }
     if (assembled.directEvents.lines.length) {
         sections.push(`[印象深的事] 记得很清楚\n\n${assembled.directEvents.lines.join("\n\n")}`);
     }
