@@ -28,7 +28,7 @@ import { getMeta } from "../vector/storage/chunk-store.js";
 import { getStateAtoms } from "../vector/storage/state-store.js";
 import { getEngineFingerprint } from "../vector/utils/embedder.js";
 import { buildTrustedCharacters } from "../vector/retrieval/entity-lexicon.js";
-import { filterConstraintsByRelevance, isBlockWorldEnabled, isBlockPeopleEnabled } from "./constraint-filter.js";
+import { filterConstraintsByRelevance } from "./constraint-filter.js";
 import {
     getTemporalProtectionLimit,
     parseEventRange,
@@ -144,112 +144,6 @@ export function setPromptBudgets(patch) {
     return applyPromptBudgets();
 }
 
-// ── L1 渲染过滤（并集：关键词 / 楼层 / 用户侧，任一命中即弃）──────
-// 关键词、楼层：数组直接写进 settings，空数组 = 不过滤，不加开关。
-// 用户侧：布尔开关，默认 false = 不过滤（与上游一致）。
-// 关键词：L1 chunk 文本包含任一关键词（大小写不敏感）即整条丢弃。
-// 楼层：L1 chunk.floor 在列表内即整条丢弃。
-// 用户侧：isUser === true 的 chunk 整条丢弃。判定只认 is_user，
-//   不受隐藏楼层影响（hide-state 只翻 is_system，不动 is_user）。
-const L1_KEYWORDS_KEY = "l1FilterKeywords";
-const L1_BLOCKED_FLOORS_KEY = "l1BlockedFloors";
-const L1_FILTER_USER_KEY = "l1FilterUser";
-
-export function getL1FilterKeywords() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[L1_KEYWORDS_KEY];
-    if (!Array.isArray(v)) return [];
-    return v.map(s => String(s || '').trim()).filter(Boolean);
-}
-
-export function getL1BlockedFloors() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[L1_BLOCKED_FLOORS_KEY];
-    if (!Array.isArray(v)) return [];
-    return v.map(f => Number(f)).filter(Number.isInteger);
-}
-
-export function setL1FilterKeywords(list) {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    root.storySummary[L1_KEYWORDS_KEY] = Array.isArray(list)
-        ? list.map(s => String(s || '').trim()).filter(Boolean)
-        : [];
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return getL1FilterKeywords();
-}
-
-export function setL1BlockedFloors(list) {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    root.storySummary[L1_BLOCKED_FLOORS_KEY] = Array.isArray(list)
-        ? list.map(f => Number(f)).filter(Number.isInteger)
-        : [];
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return getL1BlockedFloors();
-}
-
-export function isL1FilterUserEnabled() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[L1_FILTER_USER_KEY];
-    return v === undefined ? false : v === true;
-}
-
-export function setL1FilterUser(enabled) {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    root.storySummary[L1_FILTER_USER_KEY] = enabled === true;
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return isL1FilterUserEnabled();
-}
-
-// ── 弧光人物屏蔽（渲染层，独立名单）──────────────────
-// arcBlockedCharacters（数组，默认空 = 不屏蔽，与上游一致）。
-// 屏蔽对象是弧光的主体 arc.name，精确匹配（NFKC + 小写 + 去零宽）；
-// moments/trajectory 里出现的人物名不参与判定。
-// 只影响注入：弧光数据照常生成、存储、推进，面板显示不变。
-const ARC_BLOCKED_CHARACTERS_KEY = "arcBlockedCharacters";
-
-export function getArcBlockedCharacters() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[ARC_BLOCKED_CHARACTERS_KEY];
-    if (!Array.isArray(v)) return [];
-    return [...new Set(v.map(s => String(s || '').trim()).filter(Boolean))];
-}
-
-export function setArcBlockedCharacters(list) {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    root.storySummary[ARC_BLOCKED_CHARACTERS_KEY] = Array.isArray(list)
-        ? [...new Set(list.map(s => String(s || '').trim()).filter(Boolean))]
-        : [];
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return getArcBlockedCharacters();
-}
-
-function filterArcsForInjection(arcs) {
-    const list = getArcBlockedCharacters();
-    if (!list.length) return arcs || [];
-    const blocked = new Set(list.map(normalize));
-    return (arcs || []).filter(a => !blocked.has(normalize(a?.name)));
-}
-
-// ── L2 下方 L0 渲染 开关 ───────────────────────────────
-// 默认关闭：事件下方照常渲染 L0 行（与上游一致）。
-// 打开后：事件下方不渲染 L0 行（L0 与事件摘要同源派生，是其子集，属冗余呈现）。
-// 仅影响事件挂靠路径；零散/新鲜记忆路径的 L0 不受此开关控制。
-// 由循环任务 toggleHideL0UnderEvents() 切换。
-const HIDE_L0_UNDER_EVENTS_KEY = "hideL0UnderEvents";
-
-export function isHideL0UnderEventsEnabled() {
-    const v = extension_settings?.[EXT_ID]?.storySummary?.[HIDE_L0_UNDER_EVENTS_KEY];
-    return v === undefined ? false : v === true;
-}
-
-export function toggleHideL0UnderEvents() {
-    const root = (extension_settings[EXT_ID] ??= {});
-    root.storySummary ??= {};
-    const next = !isHideL0UnderEventsEnabled();
-    root.storySummary[HIDE_L0_UNDER_EVENTS_KEY] = next;
-    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
-    return next;
-}
 
 // L0 显示文本：分号拼接 vs 多行模式的阈值
 const L0_JOINED_MAX_LENGTH = 120;
@@ -450,19 +344,14 @@ function buildConstraintPeopleDict(recallResult, focusCharacters = []) {
 function groupConstraintsForDisplay(facts, peopleDict) {
     const people = new Map();
     const world = [];
-    // 约束过滤开关（与 constraint-filter.js 的 BLOCK_WORLD / BLOCK_PEOPLE 同源）
-    const dropWorld = isBlockWorldEnabled();
-    const dropPeople = isBlockPeopleEnabled();
 
     for (const f of (facts || [])) {
         const subjectNorm = normalize(f?.s);
         const displayName = peopleDict.get(subjectNorm);
         if (displayName) {
-            if (!dropPeople) {
-                if (!people.has(displayName)) people.set(displayName, []);
-                people.get(displayName).push(f);
-            }
-        } else if (!dropWorld) {
+            if (!people.has(displayName)) people.set(displayName, []);
+            people.get(displayName).push(f);
+        } else {
             world.push(f);
         }
     }
@@ -594,17 +483,12 @@ function buildL0DisplayText(l0) {
  * 格式化 L1 chunk 行
  * @param {object} chunk - L1 chunk 对象
  * @param {boolean} isUser - 是否为 USER 侧
- * @returns {string} 格式化后的行（命中过滤则返回空串）
+ * @returns {string} 格式化后的行
  */
 function formatL1Line(chunk, isUser) {
-    // L1 渲染过滤（并集）：用户侧开关 / 关键词 / 楼层，任一命中即整条丢弃
-    if (isUser && isL1FilterUserEnabled()) return "";
-    const text = String(chunk?.text || "").trim();
-    if (text && getL1FilterKeywords().some(kw => text.toLowerCase().includes(kw.toLowerCase()))) return "";
-    if (Number.isInteger(chunk?.floor) && getL1BlockedFloors().includes(chunk.floor)) return "";
-
     const { name1, name2 } = getContext();
-    const speaker = isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色");
+    const speaker = chunk.isUser ? (name1 || "用户") : (chunk.speaker || name2 || "角色");
+    const text = String(chunk.text || "").trim();
     const symbol = isUser ? "┌" : "›";
     return `    ${symbol} #${chunk.floor + 1} [${speaker}] ${text}`;
 }
@@ -738,17 +622,10 @@ function buildRecentEvidenceGroup(floor, l0AtomsForFloor) {
  *     › #500 [角色] ...
  *
  * @param {EvidenceGroup} group - 证据组
- * @param {object} [options]
- * @param {boolean} [options.includeL0=true] - 事件挂靠路径传 false：L0 与事件摘要
- *   同源派生（同一批楼层文本），语义上是其子集，L2 下方不渲染 📌 行；
- *   零散/新鲜记忆路径保持 true（那里没有事件头，L0 是唯一呈现）。
  * @returns {string[]} 文本行数组
  */
-function formatEvidenceGroup(group, options = {}) {
-    const includeL0 = options.includeL0 !== false;
-    const displayTexts = includeL0
-        ? group.l0Atoms.map(l0 => buildL0DisplayText(l0))
-        : [];
+function formatEvidenceGroup(group) {
+    const displayTexts = group.l0Atoms.map(l0 => buildL0DisplayText(l0));
 
     const lines = [];
 
@@ -766,8 +643,7 @@ function formatEvidenceGroup(group, options = {}) {
     }
 
     for (const chunk of group.l1Chunks || []) {
-        const line = formatL1Line(chunk, chunk.isUser === true);
-        if (line) lines.push(line);
+        lines.push(formatL1Line(chunk, chunk.isUser === true));
     }
 
     return lines;
@@ -957,10 +833,9 @@ function formatEventWithEvidence(eventItem, idx, evidenceGroups, causalLines = [
 
     lines.push(...causalLines);
 
-    // EvidenceGroup 证据（事件下方是否渲染 L0 由开关 hideL0UnderEvents 控制，默认不渲染）
-    const includeL0UnderEvents = !isHideL0UnderEventsEnabled();
+    // EvidenceGroup 证据
     for (const group of evidenceGroups) {
-        lines.push(...formatEvidenceGroup(group, { includeL0: includeL0UnderEvents }));
+        lines.push(...formatEvidenceGroup(group));
     }
 
     return lines.join("\n");
@@ -1016,9 +891,8 @@ function buildNonVectorPrompt(store) {
     }
 
     // [Arcs]
-    const arcsForInjection = filterArcsForInjection(data.arcs);
-    if (arcsForInjection.length) {
-        const lines = arcsForInjection.map(formatArcLine);
+    if (data.arcs?.length) {
+        const lines = data.arcs.map(formatArcLine);
         sections.push(`[人物弧光]\n${lines.join("\n")}`);
     }
 
@@ -1319,7 +1193,7 @@ async function buildVectorPrompt(store, recallResult, causalById, focusCharacter
                 .filter(Boolean)
         );
 
-        const filteredArcs = filterArcsForInjection(data.arcs).filter(a => {
+        const filteredArcs = (data.arcs || []).filter(a => {
             const n = String(a?.name || "").trim();
             return n && relevant.has(n);
         });
