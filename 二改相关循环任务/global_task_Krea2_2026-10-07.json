@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-10-07T17:58:04.994Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-10-07T17:48:58.022Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1791395338022_mz7nl01",
+            "interval": 0,
+            "name": "Krea2",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/comfyui/krea2-plan.js');\n    const on = mod.toggleKrea2Enabled();\n    window.toastr?.success('✅ Krea2 画图: ' + (on ? 'ON' : 'OFF'));\n})();\n<</taskjs>>"
+        }
+    ]
+}

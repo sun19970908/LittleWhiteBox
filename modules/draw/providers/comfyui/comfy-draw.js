@@ -91,6 +91,8 @@ import {
     isDanbooruDBLoaded,
 } from "../../shared/danbooru-local-db.js";
 import { renderScenePlannerChain } from "../../shared/scene-planner-chain-view.js";
+// [K2] Krea2 方案总开关（持久化）。krea2-plan.js 也从这里取，保证单一数据源。
+import { isKrea2Enabled } from "./krea2/setting.js";
 import {
     COMFY_PLANNER_PROFILE,
     DEFAULT_PROMPT_CONFIG,
@@ -232,6 +234,62 @@ const BUILTIN_WORKFLOWS = [
     },
 ];
 const saveBtnStates = new WeakMap();
+
+// Krea2 方案劫持缝：任务源接管钩子。krea2-plan.js 经 registerDrawTaskSource 挂载，
+// 【开关打开 = 强制 Krea2】
+// 钩子契约：入参 context {message, messageId, signal, onStateChange, useWorldbook, stripImageMarkers}，
+// 返回 {tasks, sceneSource} = 接管场景规划（原生规划器跳过）；返回 null = 未接管（空消息/无插图点等，
+// 原生规划器会跑并可能抛出它自己的 NO_INSERT_POINTS / EMPTY_MESSAGE）。
+// 【开关打开 = 强制 Krea2】：模块加载失败、钩子抛错一律向上抛，不回退原生规划——
+// 宁可出图失败并报错，也不要静默变成原生 tag 方案还出成功。关掉开关才是回退的唯一方式。
+// 编译/执行/交付对接管来源无感知：任务形状与原生 buildTasksFromMessage 的返回完全一致。
+// 开关（持久化在 extension_settings.LittleWhiteBox.draw.krea2Enabled，见 krea2/setting.js）每次出图实时读取。
+const taskSourceHooks = new Set();
+let krea2ModuleLoadPromise = null;
+let krea2ModuleLoadError = null;
+
+function isDrawTaskSourceEnabled() {
+    return isKrea2Enabled();
+}
+
+function ensureKrea2SourceModule() {
+    krea2ModuleLoadPromise ||= import('./krea2-plan.js').catch((error) => {
+        krea2ModuleLoadError = error;
+        console.warn('[ComfyDraw] Krea2 方案模块加载失败:', error);
+        return null;
+    });
+    return krea2ModuleLoadPromise;
+}
+
+async function applyDrawTaskSourceOverride(context) {
+    if (!isDrawTaskSourceEnabled()) return null;
+    if (!taskSourceHooks.size) {
+        const loaded = await ensureKrea2SourceModule();
+        // 开关打开时不回退：模块起不来等同于本次出图失败，把原始 ImportError 原因带出去。
+        if (!loaded) {
+            throw new Error(`[ComfyDraw] Krea2 方案模块加载失败，未接管出图（不回退原生规划）${krea2ModuleLoadError?.message ? `：${krea2ModuleLoadError.message}` : ''}。修复后刷新页面重试。`);
+        }
+    }
+    for (const hook of taskSourceHooks) {
+        try {
+            const result = await hook(context);
+            if (result && Array.isArray(result.tasks) && result.tasks.length) return result;
+        } catch (error) {
+            console.error('[ComfyDraw] Krea2 任务源钩子执行失败（不回退原生规划）:', error);
+            throw error;
+        }
+    }
+    return null;
+}
+
+export function registerDrawTaskSource(hook) {
+    if (typeof hook === 'function') taskSourceHooks.add(hook);
+    return () => unregisterDrawTaskSource(hook);
+}
+
+export function unregisterDrawTaskSource(hook) {
+    taskSourceHooks.delete(hook);
+}
 
 function createDefaultPreset() {
     return {
@@ -3813,6 +3871,9 @@ async function buildTasksFromMessage({ message, messageId, signal, promptOverrid
             sceneSource: null,
         };
     }
+
+    const override = await applyDrawTaskSourceOverride({ message, messageId, signal, onStateChange, useWorldbook, stripImageMarkers });
+    if (override) return override;
 
     const { sceneSource, plannerOptions } = await buildComfyScenePlannerOptions({
         message,
