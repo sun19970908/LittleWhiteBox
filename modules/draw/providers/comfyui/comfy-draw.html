@@ -1954,9 +1954,10 @@ $('nd_char_import').addEventListener('change', async e => {
                 type: char.type || 'girl',
                 appearance: char.appearance || char.tags || '',
             };
-            const existing = importedId
-                ? state.characterTags.find(item => String(item.id || '') === importedId)
-                : null;
+            // 重名直接覆盖，不追加重复条目
+            const existing = state.characterTags.find(item =>
+                String(item.name || '').trim() === String(imported.name).trim()
+            );
             if (existing) Object.assign(existing, imported, { id: existing.id });
             else state.characterTags.push(imported);
         }
