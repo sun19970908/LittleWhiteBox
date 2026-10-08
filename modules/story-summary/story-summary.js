@@ -221,11 +221,6 @@ async function sendMemoryMaintenanceResults(offset = 0) {
     }
 }
 const messageButtonOwnership = createMessageButtonOwnership();
-// 持久化恢复：用户在循环任务里切换 off/on 会写到 extension_settings[EXT_ID].storySummary.hideStateDisabled
-// 这里在模块加载时把它映射回 window 标志位，让控制器 getState() 在第一次 reconcile 前就读到正确值
-if (extension_settings?.[EXT_ID]?.storySummary?.hideStateDisabled === true) {
-    window.__xb_hideStateDisabled = true;
-}
 let saveChatSummaryState = context => context.saveMetadata();
 const iframePath = `${extensionFolderPath}/modules/story-summary/story-summary.html`;
 const VALID_SECTIONS = ["keywords", "events", "characters", "arcs", "facts"];
@@ -2782,8 +2777,7 @@ const hideState = createHideStateController({
             chat: context.chat,
             saveChat: context.saveChat,
             enabled: !!events && window.isXiaobaixEnabled !== false
-                && isStorySummaryConsumableForCurrentChat() && ui.hideSummarized
-                && !window.__xb_hideStateDisabled,
+                && isStorySummaryConsumableForCurrentChat() && ui.hideSummarized,
             summaryBoundary: store?.lastSummarizedMesId ?? -1,
             useVectorBoundary: !!getVectorConfig()?.enabled && ui.useVectorBoundary,
             keepVisibleCount: ui.keepVisibleCount,
