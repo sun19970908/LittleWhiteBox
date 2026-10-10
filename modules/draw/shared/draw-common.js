@@ -4,7 +4,6 @@ import {
     getDisplayPreviewForSlot,
     getPreviewsBySlot,
     getPreviewDisplayUrl,
-    storePreview,
     subscribeGalleryCacheChanges,
     warmSlotPreviewNeighbors,
     getPreview,
