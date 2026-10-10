@@ -14,3 +14,5 @@ export function __setChatMetadata(nextMetadata) {
 export function getRequestHeaders() {
     return {};
 }
+
+export function saveSettingsDebounced() {}

@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-07T13:40:41.537Z",
+    "tasks": [
+        {
+            "id": "task_1788785756825_ztjn6g4",
+            "name": "NovelAI 指定楼层生图",
+            "interval": 0,
+            "floorType": "all",
+            "triggerTiming": "after_ai",
+            "disabled": false,
+            "buttonActivated": true,
+            "createdAt": "2026-09-07T12:55:56.826Z",
+            "commands": "<<taskjs>>\n(async () => {\n    const FLOOR0 = 4440;\n    const FLOOR = FLOOR0 + 1;\n\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/novel-draw.js');\n    const { getContext } = await import('/scripts/extensions.js');\n\n    const ctx = getContext();\n    const chat = ctx.chat || [];\n    if (!chat.length) { window.toastr?.error('当前没有聊天记录'); return; }\n\n    const messageId = FLOOR - 1;\n    const msg = chat[messageId];\n    if (!msg) { window.toastr?.error(`楼层 ${FLOOR0} 不存在`); return; }\n    if (!String(msg.mes || '').trim()) {\n        window.toastr?.error(`楼层 ${FLOOR0} 内容为空`);\n        return;\n    }\n\n    window.toastr?.info(`开始为楼层 ${FLOOR0} 生图...`);\n\n    try {\n        const result = await mod.generateAndInsertImages({\n            messageId,\n            onStateChange: (state, data) => {\n                console.log(`[DrawFloor] ${state}`, data || {});\n            },\n        });\n        console.log('[DrawFloor] 完成:', result);\n        window.toastr?.success(`✅ 楼层 ${FLOOR0} 生图完成`);\n    } catch (e) {\n        console.error('[DrawFloor] 完整错误:', e);\n        console.error('[DrawFloor] code:', e?.code, 'status:', e?.status);\n        console.error('[DrawFloor] errorType:', e?.errorType);\n        window.toastr?.error(`楼层 ${FLOOR0} 生图失败: ${e?.message || e}`);\n    }\n})();\n<</taskjs>>"
+        }
+    ]
+}

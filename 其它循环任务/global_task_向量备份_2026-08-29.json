@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-08-29T11:26:33.614Z",
+    "tasks": [
+        {
+            "buttonActivated": false,
+            "createdAt": "2026-05-23T05:00:42.802Z",
+            "disabled": true,
+            "floorType": "llm",
+            "id": "task_1779512442802_4ehjtyx",
+            "interval": 5,
+            "name": "向量备份",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\nconst MIN_INTERVAL = 1 * 1000; // 10分钟\nconst BACKUP_DELAY  = 70 * 1000;     // 向量生成完再备份\nconst KEY = '__lwb_last_backup';\n\nconst now = Date.now();\nconst last = window[KEY] || 0;\nif (now - last < MIN_INTERVAL) return; // 还没到10分钟\n\nsetTimeoutSafe(async () => {\n  const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/storage/vector-io.js');\n  const result = await mod.backupToServer(() => {});\n  window[KEY] = Date.now();\n  console.log('[自动备份] ✅', result.size);\n}, BACKUP_DELAY);\n<</taskjs>>"
+        }
+    ]
+}

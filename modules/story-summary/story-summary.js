@@ -8,7 +8,7 @@
 // 4) Prompt 注入：extension_prompts + IN_CHAT + depth（动态计算，最小为2）
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { getContext } from "../../../../../extensions.js";
+import { getContext, extension_settings } from "../../../../../extensions.js";
 import {
     event_types,
     extension_prompts,
@@ -16,6 +16,7 @@ import {
     extension_prompt_roles,
     getRequestHeaders,
     chat_metadata,
+    saveSettingsDebounced,
 } from "../../../../../../script.js";
 import { EXT_ID, extensionFolderPath } from "../../core/constants.js";
 import { xbLog, CacheRegistry } from "../../core/debug-core.js";
@@ -149,6 +150,8 @@ import {
     syncOnMessageDeleted,
     syncOnMessageSwiped,
 } from "./vector/pipeline/chunk-builder.js";
+// 本地扩展：加载时 textHash 对账（仅检测不重建；上游无此检测，勿在合并时删掉）
+import { findStaleTextHashFloors } from "./vector/pipeline/text-hash-reconcile.js";
 import { runVectorMaintenance } from "./vector/pipeline/vector-workflow.js";
 import { isL0FloorDeferred } from './vector/pipeline/l0-eligibility.js';
 import { createVectorMaintenanceScheduler } from './vector/pipeline/maintenance-scheduler.js';
@@ -298,6 +301,28 @@ export function isStorySummaryConsumableForCurrentChat() {
         getSummaryStore(),
         Array.isArray(context?.chat) ? context.chat.length : 0,
     );
+}
+
+// ── textHash drift 检查 开关 ─────────────────────────────
+// 默认 OFF（opt-in）：新装用户不开启对账，避免每次切聊天被 toast 打扰；
+// 想要多设备漂移检测的用户通过循环任务（向量漂移检查开关）一键开启。
+const DRIFT_CHECK_KEY = "driftCheckEnabled";
+
+export function isDriftCheckEnabled() {
+    const v = extension_settings?.[EXT_ID]?.storySummary?.[DRIFT_CHECK_KEY];
+    return v === undefined ? false : v === true;
+}
+
+export function setDriftCheckEnabled(flag) {
+    const root = (extension_settings[EXT_ID] ??= {});
+    root.storySummary ??= {};
+    root.storySummary[DRIFT_CHECK_KEY] = flag === true;
+    if (typeof saveSettingsDebounced === 'function') saveSettingsDebounced();
+    return isDriftCheckEnabled();
+}
+
+export function toggleDriftCheckEnabled() {
+    return setDriftCheckEnabled(!isDriftCheckEnabled());
 }
 
 function notifyStorySummaryChatState() {
@@ -2750,6 +2775,11 @@ function openPanelForMessage(mesId) {
     sendVectorStatsToFrame();
 }
 
+export function openPanel() {
+    const { chat } = getContext();
+    openPanelForMessage(chat ? chat.length - 1 : 0);
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // Hide/Unhide
 // - 非向量：boundary = lastSummarizedMesId
@@ -3740,6 +3770,52 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
         notifyStorySummaryChatState();
         reportMemorySaveFailure({ code: rollback.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
         return;
+    }
+
+    // textHash 对账（仅检测，不重建）。覆盖多设备编辑漂移：Device B 拿到新聊天
+    // 文件但 ST 不会逐条重发 MESSAGE_EDITED，本机 chunks 跟正文漂移但向量仍有效。
+    // L1 textHash 一致即说明源文本未变，L0 atom 派生自同源文本，无需重复对账。
+    // 重建中跳过（重建产物自然带正确 hash），失败也只 toast，不影响主流程。
+    if (
+        isDriftCheckEnabled()
+        && !isChatStale(scheduledChatId)
+        && !guard.isAnyRunning('summary', 'vector', 'anchor')
+    ) {
+        try {
+            const driftMeta = await getMeta(scheduledChatId);
+            const driftLastFloor = driftMeta?.lastChunkFloor ?? -1;
+            if (driftLastFloor >= 0 && Array.isArray(chat) && chat.length > 0) {
+                const driftFloors = await findStaleTextHashFloors(
+                    scheduledChatId,
+                    chat,
+                    driftLastFloor,
+                );
+                if (driftFloors.length > 0 && !isChatStale(scheduledChatId)) {
+                    const firstFloor = driftFloors[0];
+                    const driftMsg = `检测到聊天正文与向量缓存不一致（从下标 ${firstFloor} 起，共 ${driftFloors.length} 处）。可能由多设备编辑、文本过滤规则变更、LWB 插图替换 scene 占位符等原因引起。请打开剧情总结面板运行"完整重建"或向量维护任务。`;
+                    // 常驻 toast：timeOut=0 + extendedTimeOut=0 让 toastr 不自动消失，用户手动关闭
+                    if (typeof toastr !== "undefined") {
+                        toastr.warning(driftMsg, "向量漂移", {
+                            timeOut: 0,
+                            extendedTimeOut: 0,
+                            closeButton: true,
+                            preventDuplicates: true,
+                        });
+                    } else {
+                        await executeSlashCommand(`/echo severity=warning ${driftMsg}`);
+                    }
+                    console.info(
+                        `[story-summary] textHash 对账失败：drift 下标（0-based）=[${driftFloors.join(', ')}]，共 ${driftFloors.length} 处`,
+                    );
+                } else if (!isChatStale(scheduledChatId)) {
+                    console.info(
+                        `[story-summary] textHash 对账通过：扫了下标 0..${driftLastFloor}，未发现漂移`,
+                    );
+                }
+            }
+        } catch (e) {
+            console.warn('[story-summary] textHash 对账失败（已跳过）', e);
+        }
     }
 
     const store = getSummaryStore();

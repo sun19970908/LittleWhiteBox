@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-19T09:17:54.052Z",
+    "tasks": [
+        {
+            "id": "task_1789809440434_ku006dw",
+            "name": "恢复剧情总结",
+            "interval": 0,
+            "floorType": "all",
+            "triggerTiming": "after_ai",
+            "disabled": false,
+            "buttonActivated": true,
+            "createdAt": "2026-09-19T09:17:20.434Z",
+            "commands": "<<taskjs>>\n(async () => {\n    const file = await new Promise((resolve, reject) => {\n        const input = document.createElement('input');\n        input.type = 'file';\n        input.accept = '.json';\n        input.style.position = 'fixed';\n        input.style.top = '-1000px';\n        document.body.appendChild(input);\n        let settled = false;\n        const done = (fn, val) => { if (!settled) { settled = true; input.remove(); fn(val); } };\n        input.addEventListener('change', () => done(resolve, input.files[0] || null));\n        input.addEventListener('cancel', () => done(reject, new Error('已取消')));\n        input.click();\n    }).catch(e => { window.toastr?.warning(e.message || '未选择文件'); return null; });\n    if (!file) return;\n\n    let backup;\n    try { backup = JSON.parse(await file.text()); } catch (e) { window.toastr?.error('JSON 解析失败'); return; }\n    if (backup.type !== 'LittleWhiteBoxStorySummaryFullBackup' || !backup.storySummary) {\n        window.toastr?.error('不是有效的剧情总结备份文件');\n        return;\n    }\n\n    const storeMod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/data/store.js');\n    const lexMod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/vector/retrieval/lexical-index.js');\n    const ctx = (window.SillyTavern?.getContext)?.() ?? (await import('/scripts/extensions.js')).getContext();\n    const chatId = ctx?.chatId;\n    if (!chatId) { window.toastr?.error('当前没有打开聊天'); return; }\n\n    const store = storeMod.getSummaryStore();\n    if (!store) { window.toastr?.error('无法读取总结存储'); return; }\n\n    window.__summaryPreRestore = structuredClone(store);\n    Object.assign(store, structuredClone(backup.storySummary));  // 整块覆盖\n    store.updatedAt = Date.now();\n    await storeMod.saveSummaryStoreImmediately(chatId);\n    lexMod.invalidateLexicalIndex();\n\n    console.log('[恢复] 完成 | 事件:', store.json?.events?.length ?? 0);\n    console.log('[恢复] 恢复前状态已存 window.__summaryPreRestore');\n    window.toastr?.success(`✅ 剧情总结已恢复（事件 ${store.json?.events?.length ?? 0} 条）| 建议跑向量补全`);\n})();\n<</taskjs>>"
+        }
+    ]
+}

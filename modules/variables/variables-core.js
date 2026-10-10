@@ -2645,16 +2645,35 @@ function bindEvents() {
             rulesClearCache();
             rulesLoadFromMeta();
 
-            const meta = getContext()?.chatMetadata || {};
-            meta[LWB_PLOT_APPLIED_KEY] = {};
-            getContext()?.saveMetadataDebounced?.();
+            // [NO-CLEAR-20260902] 进入聊天时不再清空幂等账本（连带上面的 save 也一并去掉）。
+            //
+            // 为什么清空的原动作可以去掉（2.0 模式下，当前正是 2.0 —— 见下方可达性说明）：
+            //  1) 账本是**内容寻址**的：appliedMap[floor] = signature，signature 由消息文本算出
+            //     （v1 用 computePlotSignatureFromText，v2 用 computeStateSignature，均纯文本派生）。
+            //     所以"账本里有这条" = "这个版本的文本已经被应用过"，与是不是同一个会话无关。
+            //     跨会话保留 → 重载后文本未变的楼层被正确跳过（其效果早已落在 meta.variables 里）。
+            //  2) LWB_PLOT_APPLIED_KEY 是 **v1 路径**的账本；2.0 模式下 applyVariablesForMessage
+            //     根本不会被调用（variables-core.js 在 mode==='2.0' 时走 state2 后直接 return），
+            //     因此这个键在 2.0 下**既不读也不写**，只有这里会清空它 —— 清空纯属制造无谓的 metadata 变更。
+            //  3) LWB_STATE_APPLIED_KEY（v2 账本）由 clearStateAppliedFrom(0) 清空。去掉后跨会话保留，
+            //     理由同 1)；且 rebuildVariablesFromScratch 在 2.0 下走 restoreStateV2ToFloor，
+            //     那是**从 WAL 日志重放**（log.floors[f].rules/ops），不查 appliedMap，因此不受影响。
+            //
+            // ⚠️ 唯一风险：若把 变量模式 切回 **1.0**，rebuildVariablesFromScratch 的 v1 分支是
+            //    「setVarDict({}) 清空变量 → 遍历全部楼层 applyVariablesForMessage(i) 重放」，
+            //    而 v1 路径**会**查 appliedMap；若账本跨会话留着，重放会被全部跳过 → 变量变空。
+            //    缓解：切回 1.0 时把下面两处恢复即可（或改用 LWB 自带的重建入口前先手动清账本）。
+            //
+            // const meta = getContext()?.chatMetadata || {};
+            // meta[LWB_PLOT_APPLIED_KEY] = {};
+            // getContext()?.saveMetadataDebounced?.();
 
-            if (getVariablesMode() === '2.0') {
-                try {
-                    const mod = await import('./state2/index.js');
-                    mod.clearStateAppliedFrom(0);
-                } catch {}
-            }
+            // if (getVariablesMode() === '2.0') {
+            //     try {
+            //         const mod = await import('./state2/index.js');
+            //         mod.clearStateAppliedFrom(0);
+            //     } catch {}
+            // }
         } catch {}
     });
 }

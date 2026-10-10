@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-19T09:17:51.482Z",
+    "tasks": [
+        {
+            "id": "task_1789809365516_qw8xohz",
+            "name": "提取剧情总结",
+            "interval": 0,
+            "floorType": "all",
+            "triggerTiming": "after_ai",
+            "disabled": false,
+            "buttonActivated": true,
+            "createdAt": "2026-09-19T09:16:05.516Z",
+            "commands": "<<taskjs>>\n(async () => {\n    const storeMod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/data/store.js');\n    const ctx = (window.SillyTavern?.getContext)?.() ?? (await import('/scripts/extensions.js')).getContext();\n    const chatId = ctx?.chatId;\n    if (!chatId) { window.toastr?.error('当前没有打开聊天'); return; }\n\n    const store = storeMod.getSummaryStore();\n    if (!store) { window.toastr?.error('无法读取总结存储'); return; }\n\n    const backup = {\n        type: 'LittleWhiteBoxStorySummaryFullBackup',\n        exportedAt: new Date().toISOString(),\n        chatId,\n        storySummary: structuredClone(store),  // 整个大字段\n    };\n\n    const fileName = `story-summary-${String(chatId).replace(/[^\\w\\-.]+/g, '_')}.json`;\n    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });\n    const url = URL.createObjectURL(blob);\n    const a = document.createElement('a');\n    a.href = url; a.download = fileName;\n    document.body.appendChild(a); a.click(); a.remove();\n    setTimeout(() => URL.revokeObjectURL(url), 1000);\n\n    console.log('[提取] 完成 | 事件:', store.json?.events?.length ?? 0, '| 文件:', fileName);\n    window.toastr?.success(`✅ 剧情总结已提取 → ${fileName}`);\n})();\n<</taskjs>>"
+        }
+    ]
+}

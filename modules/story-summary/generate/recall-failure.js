@@ -1,7 +1,7 @@
 import { SUMMARY_FEEDBACK_COPY } from '../feedback-copy.js';
 import { readEmbeddingFailure } from '../vector/llm/embedding-failure.js';
 
-export const RECALL_TIMEOUT_MS = 30_000;
+export const RECALL_TIMEOUT_MS = 300_000;
 export const RECALL_TIMEOUT_REASONS = Object.freeze({
     host: 'host-wait-timeout',
     compute: 'recall-timeout',

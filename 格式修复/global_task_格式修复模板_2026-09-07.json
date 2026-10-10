@@ -1,0 +1,17 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-07T23:27:56.456Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-31T15:55:16.491Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "task_1788191716491_ypy0bci",
+            "interval": 0,
+            "name": "格式修复模板",
+            "triggerTiming": "after_ai",
+            "commands": "<<taskjs>>\n// fmt-config - 模板\n// 复制本文件 → 改 '模板名' 为你的 preset 名 → 改 rules → 粘到 ST 任务面板运行一次即注册。\n//\n// ★ code 可以写 JS 函数（箭头 / function 表达式都行，写最自然的形式）。\n//   模板注册时自动归一成 string code 并写 localStorage 持久化\n//   （F5 刷新后核心启动 IIFE 会从 localStorage 恢复）。\n// ★ 当前生效哪个 preset 由 格式修复核心.js 顶部 ACTIVE_CONFIG 常量指定。\n// ★ 想加新 preset：复制本文件 → 改 '模板名' → 改 rules → 启用对应 task 即可。\n\nconst STORAGE_KEY = 'FmtFixConfigs_v1';\n\n// 函数表达式 → 函数体字符串（持久化前提，逻辑与生成.js 一致）\nfunction fnToStringCode(fn) {\n  const str = fn.toString();\n  const arrowIdx = str.indexOf('=>');\n  if (arrowIdx >= 0) {\n    const after = str.slice(arrowIdx + 2).trim();\n    if (after.startsWith('{')) {\n      return after.slice(1, after.lastIndexOf('}')).trim();\n    }\n    return 'return ' + after.replace(/;?\\s*$/, ';');\n  }\n  const open = str.indexOf('{');\n  const close = str.lastIndexOf('}');\n  if (open >= 0 && close > open) {\n    return str.slice(open + 1, close).trim();\n  }\n  throw new Error('无法从函数表达式提取函数体: ' + str);\n}\n\n// —— preset 配置（复制后改这里） ——————————————————————\nconst pending = {\n  '模板名': {\n    builtinRules: [\n      // 正则规则示例（按需解开注释）：\n      // { name: '示例正则', pattern: '源文', replacement: '替换', flags: 'g' },\n\n      // 代码规则示例（写函数，最自然的形式）：\n      { name: '示例代码', code: (text) => text.replace(/x/, 'y') },\n    ],\n  },\n};\n\n// —— 归一：function code → string code（持久化前提） ——————————\nfor (const cfg of Object.values(pending)) {\n  for (const rule of cfg.builtinRules) {\n    if (typeof rule.code === 'function') {\n      rule.code = fnToStringCode(rule.code);\n    }\n  }\n}\n\n// —— 写 window（运行时即时生效） ————————————————————————\nwindow.FmtFixConfigs = window.FmtFixConfigs || {};\nfor (const [name, cfg] of Object.entries(pending)) {\n  window.FmtFixConfigs[name] = cfg;\n}\n\n// —— 写 localStorage（页面刷新后还在） ——————————————————\ntry {\n  const existing = JSON.parse(localStorage.getItem(STORAGE_KEY) || '{}');\n  const merged = { ...existing, ...pending };\n  localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));\n} catch (err) {\n  console.warn('[fmt-config] 写 localStorage 失败：', err);\n}\n\nwindow.toastr?.success?.('已注册：模板名');\n<</taskjs>>"
+        }
+    ]
+}

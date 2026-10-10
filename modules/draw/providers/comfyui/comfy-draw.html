@@ -456,6 +456,154 @@ select.input { cursor: pointer; }
     .header-close { width: 44px; height: 44px; min-width: 44px; }
     .mobile-nav-item { min-height: 44px; }
 }
+
+/* ═══ 角色标签页（自 novel-draw 搬运） ═══ */
+.char-management-layout {
+    display: grid; grid-template-columns: minmax(280px, 320px) minmax(0, 1fr);
+    gap: 16px; align-items: start;
+}
+.char-management-sidebar {
+    display: flex; flex-direction: column; gap: 16px;
+    position: sticky; top: 0; align-self: start;
+}
+.char-summary-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.char-summary-item {
+    background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: 10px; padding: 14px 12px;
+}
+.char-summary-label { font-size: 11px; color: var(--text-secondary); }
+.char-summary-value { font-size: 24px; font-weight: 700; margin-top: 4px; color: var(--text-primary); }
+.char-summary-value.accent { color: var(--accent); }
+.char-filter-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.char-filter-summary {
+    margin-top: 12px; font-size: 12px; color: var(--text-secondary);
+    padding: 10px 12px; border-radius: 8px; background: var(--bg-input); border: 1px solid var(--border);
+}
+.char-list-card { min-height: 520px; }
+.char-list-card-header {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; margin-bottom: 16px;
+}
+.char-list-card-header .card-title { margin-bottom: 0; }
+.char-list-count {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 84px; padding: 8px 12px; border-radius: 999px;
+    background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600;
+}
+.char-list-body { display: flex; flex-direction: column; gap: 12px; }
+.char-grid { display: flex; flex-direction: column; gap: 0; }
+.char-grid:empty { display: none; }
+.char-empty.filtered {
+    background: var(--bg-tertiary); border: 1px dashed var(--border);
+    border-radius: 10px;
+}
+.char-empty strong { color: var(--text-primary); display: block; margin-bottom: 6px; font-size: 14px; }
+.char-empty p { font-size: 12px; margin-top: 6px; }
+.char-card {
+    display: block; padding: 6px 8px;
+    border-bottom: 1px solid rgba(255,255,255,.06); transition: background 0.15s;
+}
+.char-card:hover { background: rgba(255,255,255,.04); }
+.char-card-summary { display: flex; align-items: center; gap: 8px; min-height: 36px; }
+.char-identity { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.char-name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.char-type-badge {
+    font-size: 10px; padding: 1px 5px; border-radius: 3px;
+    background: rgba(255,255,255,.08); color: var(--text-secondary); white-space: nowrap;
+}
+.char-status { flex: 1; font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.char-actions { display: flex; align-items: center; gap: 4px; flex-shrink: 0; margin-left: auto; }
+.char-action-button {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 34px; height: 34px; padding: 0; box-sizing: border-box;
+    background: var(--bg-input); border: 1px solid var(--border); border-radius: 7px;
+    color: var(--text-secondary); cursor: pointer;
+}
+.char-action-button:hover { background: rgba(255,255,255,.08); color: var(--text-primary); border-color: var(--border-focus); }
+.char-action-button svg {
+    width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.8;
+    stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke;
+}
+.char-action-button.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+.char-card.disabled .char-identity,
+.char-card.disabled .char-status { opacity: .45; }
+.char-empty { text-align: center; padding: 40px 20px; color: var(--text-muted); }
+.char-empty i { font-size: 32px; margin-bottom: 12px; opacity: 0.5; display: block; }
+.char-edit-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+/* ── Inline edit mode ── */
+.char-card.editing {
+    padding: 12px;
+    background: var(--accent-soft); border: 1px solid var(--accent); border-radius: 10px;
+}
+.char-edit-form { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
+.char-edit-form .form-group { margin-bottom: 10px; }
+.char-edit-form .form-label { font-size: 11px; margin-bottom: 4px; }
+.char-edit-form .input { padding: 8px 10px; font-size: 12px; }
+.char-edit-form textarea.input { min-height: 60px; }
+.char-outfit-editor-list, .char-dynstate-editor-list { display: flex; flex-direction: column; gap: 10px; }
+.char-outfit-editor-empty, .char-dynstate-editor-empty {
+    padding: 10px 12px; border-radius: 8px; border: 1px dashed var(--border);
+    background: rgba(255,255,255,.02); color: var(--text-muted); font-size: 11px;
+}
+.char-outfit-editor-item, .char-dynstate-editor-item {
+    padding: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,.08);
+    background: rgba(255,255,255,.03);
+}
+.char-outfit-editor-header, .char-dynstate-editor-header {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 10px; margin-bottom: 10px;
+}
+.char-outfit-editor-title, .char-dynstate-editor-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.char-outfit-editor-item .form-group:last-child, .char-dynstate-editor-item .form-group:last-child { margin-bottom: 0; }
+.char-outfit-tags, .char-dynstate-tags { min-height: 72px; }
+/* ── Toggle switch ── */
+.toggle-switch { position: relative; display: inline-block; width: 36px; height: 20px; flex-shrink: 0; }
+.toggle-switch input { opacity: 0; width: 0; height: 0; }
+.toggle-slider {
+    position: absolute; inset: 0; background: var(--bg-tertiary); border: 1px solid var(--border);
+    border-radius: 10px; cursor: pointer; transition: all 0.2s;
+}
+.toggle-slider::before {
+    content: ''; position: absolute; width: 14px; height: 14px; left: 2px; bottom: 2px;
+    background: var(--text-secondary); border-radius: 50%; transition: all 0.2s;
+}
+.toggle-switch input:checked + .toggle-slider { background: var(--accent); border-color: var(--accent); }
+.toggle-switch input:checked + .toggle-slider::before { transform: translateX(16px); background: #000; }
+.auto-learn-toggle-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.auto-learn-sub { margin-left: 44px; margin-top: 6px; font-size: 12px; color: var(--text-secondary); }
+.auto-learn-sub label { display: flex; align-items: center; gap: 6px; cursor: pointer; }
+/* ── Danbooru 搜索面板 ── */
+.danbooru-panel {
+    margin-top: 8px; padding: 12px; background: var(--bg-input);
+    border: 1px solid var(--border); border-radius: 8px;
+}
+.danbooru-panel.hidden { display: none; }
+.danbooru-search-row {
+    display: flex; gap: 8px; margin-bottom: 8px;
+}
+.danbooru-search-row input { flex: 1; padding: 6px 10px; font-size: 12px; }
+.danbooru-search-row .btn { padding: 6px 12px; font-size: 12px; white-space: nowrap; }
+.danbooru-char-list { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+.danbooru-char-item {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 6px 10px; background: var(--bg-tertiary); border-radius: 6px;
+    cursor: pointer; font-size: 12px; transition: background 0.15s;
+}
+.danbooru-char-item:hover { background: var(--accent-soft); }
+.danbooru-char-item .char-count { color: var(--text-muted); font-size: 11px; white-space: nowrap; }
+.danbooru-char-info { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.danbooru-char-name { font-weight: 500; }
+.danbooru-char-series { font-size: 10px; color: var(--text-muted); font-style: italic; }
+/* ── 角色标签页响应式（自 novel-draw 搬运；须位于上方无条件规则之后才能正确折叠） ── */
+@media (max-width: 768px) {
+    .char-management-layout { grid-template-columns: 1fr; }
+    .char-management-sidebar { position: static; }
+    .char-filter-row { grid-template-columns: 1fr; }
+    .char-list-card-header { flex-direction: column; }
+}
+@media (hover: none) and (pointer: coarse) {
+    .char-action-button { width: 44px; height: 44px; }
+}
 </style>
 </head>
 <body>
@@ -1012,10 +1160,10 @@ select.input { cursor: pointer; }
                 </div>
             </section>
 
-            <section class="view wide" data-comfy-view-panel="characters">
+            <section class="view" data-comfy-view-panel="characters">
                 <div class="view-header">
                     <h2 class="view-title">角色标签</h2>
-                    <p class="view-desc">小白X共用角色库</p>
+                    <p class="view-desc">集中管理角色固定外貌、服装与动态外貌，Danbooru 资源库，PC 端支持双栏管理</p>
                 </div>
 
                 <div class="char-management-layout">
@@ -1025,47 +1173,102 @@ select.input { cursor: pointer; }
                             <div class="char-summary-grid">
                                 <div class="char-summary-item">
                                     <div class="char-summary-label">总角色数</div>
-                                    <div id="comfy-draw-summary-characters-side" class="char-summary-value accent">0</div>
+                                    <div class="char-summary-value accent" id="nd_char_stat_total">0</div>
                                 </div>
                                 <div class="char-summary-item">
-                                    <div class="char-summary-label">当前预设</div>
-                                    <div id="comfy-draw-summary-preset" class="char-summary-value">默认</div>
+                                    <div class="char-summary-label">已配置外貌</div>
+                                    <div class="char-summary-value" id="nd_char_stat_ready">0</div>
+                                </div>
+                                <div class="char-summary-item">
+                                    <div class="char-summary-label">待完善</div>
+                                    <div class="char-summary-value" id="nd_char_stat_missing">0</div>
+                                </div>
+                                <div class="char-summary-item">
+                                    <div class="char-summary-label">Danbooru 已绑定</div>
+                                    <div class="char-summary-value" id="nd_char_stat_danbooru">0</div>
                                 </div>
                             </div>
                         </div>
+
+                        <div class="card">
+                            <div class="card-title">🔎 搜索与筛选</div>
+                            <div class="form-group">
+                                <label class="form-label">关键词</label>
+                                <input id="nd_char_search" type="text" class="input" placeholder="搜索名称、别名、外貌、Danbooru 标签">
+                            </div>
+                            <div class="char-filter-row">
+                                <div class="form-group">
+                                    <label class="form-label">角色类型</label>
+                                    <select id="nd_char_filter_type" class="input">
+                                        <option value="all">全部类型</option>
+                                        <option value="girl">girl</option>
+                                        <option value="woman">woman</option>
+                                        <option value="boy">boy</option>
+                                        <option value="man">man</option>
+                                        <option value="other">other</option>
+                                        <option value="no_humans">no_humans</option>
+                                        <option value="custom">自定义类型</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label class="form-label">状态筛选</label>
+                                    <select id="nd_char_filter_status" class="input">
+                                        <option value="all">全部状态</option>
+                                        <option value="complete">已配置外貌</option>
+                                        <option value="incomplete">待完善外貌</option>
+                                        <option value="danbooru">已绑定 Danbooru</option>
+                                        <option value="negative">含负向标签</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="btn-group">
+                                <button id="nd_char_filter_reset" class="btn btn-sm"><i class="fa-solid fa-rotate-left"></i> 重置筛选</button>
+                            </div>
+                            <div id="nd_char_filter_summary" class="char-filter-summary">当前显示全部角色</div>
+                        </div>
+
                         <div class="card">
                             <div class="card-title">🧰 批量操作</div>
                             <div class="btn-group">
-                                <button id="comfy-shared-char-add" class="btn btn-primary btn-sm" type="button"><i class="fa-solid fa-plus"></i> 添加角色</button>
-                                <button id="comfy-shared-char-clear" class="btn btn-danger btn-sm" type="button"><i class="fa-solid fa-trash-can"></i> 清除全部</button>
-                                <button id="comfy-shared-char-export" class="btn btn-sm" type="button"><i class="fa-solid fa-upload"></i> 导出</button>
-                                <label class="btn btn-sm" style="cursor:pointer;"><i class="fa-solid fa-download"></i> 导入<input type="file" id="comfy-shared-char-import" accept=".json" style="display:none;"></label>
-                                <button class="btn btn-sm" type="button" data-comfy-save-shared><i class="fa-solid fa-floppy-disk"></i> 保存角色</button>
+                                <button id="nd_char_add" class="btn btn-primary btn-sm"><i class="fa-solid fa-plus"></i> 添加角色</button>
+                                <button id="nd_char_clear" class="btn btn-danger btn-sm"><i class="fa-solid fa-trash-can"></i> 清除全部</button>
+                                <button id="nd_char_export" class="btn btn-sm"><i class="fa-solid fa-upload"></i> 导出</button>
+                                <label class="btn btn-sm" style="cursor:pointer;"><i class="fa-solid fa-download"></i> 导入<input type="file" id="nd_char_import" accept=".json" style="display:none;"></label>
                             </div>
-                            <p class="form-hint" style="margin-top:10px;">角色名、别名、外观、服装参考、动态外貌、角色负向标签都会被画图流程直接使用。</p>
                         </div>
+
                         <div class="card">
                             <div class="card-title">🔎 Danbooru 资源库</div>
-                            <label class="check-row">
-                                <input type="checkbox" id="comfy-danbooru-local">
-                                <span>启用本地角色库</span>
-                            </label>
-                            <div id="comfy-danbooru-local-status" class="status-text">未加载</div>
-                            <p class="form-hint">启用后可离线搜索角色官方 tag，并自动填入固定外貌。</p>
+                            <div class="auto-learn-toggle-row">
+                                <label class="toggle-switch">
+                                    <input type="checkbox" id="nd_danbooru_local">
+                                    <span class="toggle-slider"></span>
+                                </label>
+                                <span>（测试）Danbooru 角色资源库</span>
+                            </div>
+                            <div id="nd_danbooru_local_sub" class="auto-learn-sub hidden">
+                                <span id="nd_danbooru_local_status" style="font-size:11px;color:var(--text-muted);">未加载</span>
+                            </div>
+                            <p class="form-hint" style="margin-left:44px;margin-top:4px;">启用后加载本地 Danbooru top 7000 角色库，支持离线搜索和自动修正 danbooruTag</p>
                         </div>
                     </aside>
 
                     <section class="char-management-main">
-                        <div class="card char-list-card">
+                        <div class="card char-list-card" id="nd_char_card">
                             <div class="char-list-card-header">
                                 <div>
                                     <div class="card-title">👥 角色列表</div>
-                                    <p class="form-hint" style="margin-top:6px;">角色底稿定好后，出图只需补当前动作、表情和互动</p>
+                                    <p class="form-hint" style="margin-top:6px;">预设角色外貌，LLM 只需补充动作和互动标签</p>
                                 </div>
-                                <div id="comfy-draw-character-result-count" class="char-list-count">0 / 0</div>
+                                <div class="char-list-count" id="nd_char_result_count">0 / 0</div>
                             </div>
                             <div class="char-list-body">
-                                <div id="comfy-shared-character-list" class="char-grid"></div>
+                                <div id="nd_char_list" class="char-grid"></div>
+                                <div id="nd_char_empty" class="char-empty">
+                                    <i class="fa-solid fa-user-plus"></i>
+                                    <strong>暂无角色配置</strong>
+                                    <p>点击左侧“添加角色”，开始建立你的角色标签库</p>
+                                </div>
                             </div>
                         </div>
                     </section>
@@ -1129,5 +1332,643 @@ select.input { cursor: pointer; }
         </div>
     </nav>
 </div>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════
+// 角色标签页（自 novel-draw 搬运；数据 = 小白X共享角色库，经宿主 comfy-draw.js 持久化）
+// ═══════════════════════════════════════════════════════════════════════════
+
+const CHARACTER_TYPES = [
+    { value: 'girl', label: 'girl (少女)' },
+    { value: 'woman', label: 'woman (成年女性)' },
+    { value: 'boy', label: 'boy (少年)' },
+    { value: 'man', label: 'man (成年男性)' },
+    { value: 'other', label: 'other (其他)' },
+    { value: 'no_humans', label: 'no_humans (非人主体)' },
+    { value: 'custom', label: '自定义...' }
+];
+
+let state = {
+    characterTags: [],
+    danbooruLocalDB: false,
+};
+let editingCharId = null;
+let charFilters = { query: '', type: 'all', status: 'all' };
+
+const $ = id => document.getElementById(id);
+
+const PARENT_ORIGIN = (() => {
+    try { return new URL(document.referrer).origin; } catch { return window.location.origin; }
+})();
+function postToParent(payload) {
+    window.parent.postMessage({ source: 'NovelDraw-Frame', ...payload }, PARENT_ORIGIN);
+}
+
+function escapeHtml(str) {
+    return String(str || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function normalizeCharType(type) {
+    const knownTypes = new Set(CHARACTER_TYPES.filter(t => t.value !== 'custom').map(t => t.value));
+    return knownTypes.has(type) ? type : 'custom';
+}
+
+function getFilteredCharacters(chars = []) {
+    const query = String(charFilters.query || '').trim().toLowerCase();
+    const typeFilter = charFilters.type || 'all';
+    const statusFilter = charFilters.status || 'all';
+
+    return chars.filter(char => {
+        if (query) {
+            const haystack = [
+                char.name,
+                ...(char.aliases || []),
+                char.type,
+                char.appearance,
+                char.negativeTags,
+                char.danbooruTag,
+                ...((char.outfits || []).flatMap(outfit => [outfit?.name, outfit?.tags])),
+                ...((char.dynamicStates || []).flatMap(item => [item?.name, item?.tags])),
+            ].filter(Boolean).join(' ').toLowerCase();
+
+            if (!haystack.includes(query)) return false;
+        }
+
+        if (typeFilter !== 'all' && normalizeCharType(char.type || 'girl') !== typeFilter) {
+            return false;
+        }
+
+        if (statusFilter === 'complete' && !char.appearance) return false;
+        if (statusFilter === 'incomplete' && !!char.appearance) return false;
+        if (statusFilter === 'danbooru' && !char.danbooruTag) return false;
+        if (statusFilter === 'negative' && !char.negativeTags) return false;
+
+        return true;
+    });
+}
+
+function updateCharacterPanelMeta(allChars, filteredChars) {
+    const readyCount = allChars.filter(char => !!char.appearance).length;
+    const missingCount = allChars.length - readyCount;
+    const danbooruCount = allChars.filter(char => !!char.danbooruTag).length;
+    const filtersActive = !!String(charFilters.query || '').trim() || charFilters.type !== 'all' || charFilters.status !== 'all';
+
+    $('nd_char_stat_total').textContent = String(allChars.length);
+    $('nd_char_stat_ready').textContent = String(readyCount);
+    $('nd_char_stat_missing').textContent = String(missingCount);
+    $('nd_char_stat_danbooru').textContent = String(danbooruCount);
+    $('nd_char_result_count').textContent = `${filteredChars.length} / ${allChars.length}`;
+    $('nd_char_filter_summary').textContent = filtersActive
+        ? `筛选结果：显示 ${filteredChars.length} / ${allChars.length} 个角色`
+        : `当前显示全部 ${allChars.length} 个角色`;
+}
+
+function resetCharacterFilters(render = true) {
+    charFilters = { query: '', type: 'all', status: 'all' };
+    if ($('nd_char_search')) $('nd_char_search').value = '';
+    if ($('nd_char_filter_type')) $('nd_char_filter_type').value = 'all';
+    if ($('nd_char_filter_status')) $('nd_char_filter_status').value = 'all';
+    if (render) renderCharList();
+}
+
+function normalizeNamedTagListForUI(list = []) {
+    return (Array.isArray(list) ? list : [])
+        .map(item => ({
+            name: String(item?.name || '').trim(),
+            tags: String(item?.tags || '').trim(),
+        }))
+        .filter(item => item.name || item.tags);
+}
+
+const NAMED_TAG_EDITOR_KINDS = {
+    outfit: {
+        classPrefix: 'char-outfit',
+        title: '服装',
+        nameLabel: '服装名称',
+        namePlaceholder: '如：常服、礼服、战斗服',
+        tagsLabel: '服装 TAG',
+        tagsPlaceholder: 'white shirt, black skirt, ribbon...',
+        removeAction: 'remove-outfit',
+    },
+    dynstate: {
+        classPrefix: 'char-dynstate',
+        title: '状态',
+        nameLabel: '状态名称',
+        namePlaceholder: '如：睡觉、淋雨、害羞',
+        tagsLabel: '状态 TAG',
+        tagsPlaceholder: 'closed eyes, sleeping...',
+        removeAction: 'remove-dynstate',
+    },
+};
+
+function renderNamedTagEditorItem(item = {}, index = 0, kind = 'outfit') {
+    const meta = NAMED_TAG_EDITOR_KINDS[kind] || NAMED_TAG_EDITOR_KINDS.outfit;
+    return `
+    <div class="${meta.classPrefix}-editor-item" data-index="${index}">
+        <div class="${meta.classPrefix}-editor-header">
+            <div class="${meta.classPrefix}-editor-title">${meta.title} ${index + 1}</div>
+            <button class="btn btn-danger btn-sm" type="button" data-action="${meta.removeAction}" data-index="${index}"><i class="fa-solid fa-trash"></i> 删除</button>
+        </div>
+        <div class="form-group">
+            <label class="form-label">${meta.nameLabel}</label>
+            <input type="text" class="input ${meta.classPrefix}-name" value="${escapeHtml(item.name || '')}" placeholder="${meta.namePlaceholder}">
+        </div>
+        <div class="form-group">
+            <label class="form-label">${meta.tagsLabel}</label>
+            <textarea class="input ${meta.classPrefix}-tags" placeholder="${meta.tagsPlaceholder}">${escapeHtml(item.tags || '')}</textarea>
+        </div>
+    </div>`;
+}
+
+function syncNamedTagEditorList(list, kind = 'outfit') {
+    if (!list) return;
+    const meta = NAMED_TAG_EDITOR_KINDS[kind] || NAMED_TAG_EDITOR_KINDS.outfit;
+    const rows = Array.from(list.querySelectorAll(`.${meta.classPrefix}-editor-item`));
+    const empty = list.querySelector(`.${meta.classPrefix}-editor-empty`);
+    if (empty) empty.style.display = rows.length ? 'none' : 'block';
+    rows.forEach((row, index) => {
+        row.dataset.index = String(index);
+        row.querySelector(`.${meta.classPrefix}-editor-title`).textContent = `${meta.title} ${index + 1}`;
+        const removeBtn = row.querySelector(`[data-action="${meta.removeAction}"]`);
+        if (removeBtn) removeBtn.dataset.index = String(index);
+    });
+}
+
+function collectNamedTagEditorValues(card, kind = 'outfit') {
+    const meta = NAMED_TAG_EDITOR_KINDS[kind] || NAMED_TAG_EDITOR_KINDS.outfit;
+    return Array.from(card.querySelectorAll(`.${meta.classPrefix}-editor-item`)).map(row => ({
+        name: row.querySelector(`.${meta.classPrefix}-name`)?.value?.trim() || '',
+        tags: row.querySelector(`.${meta.classPrefix}-tags`)?.value?.trim() || '',
+    })).filter(item => item.name || item.tags);
+}
+
+function renderCharacterActionIcon(name) {
+    const paths = {
+        enabled: '<rect x="3" y="3" width="18" height="18" rx="4" /><path d="m8 12 3 3 5-6" />',
+        disabled: '<rect x="3" y="3" width="18" height="18" rx="4" />',
+        edit: '<path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />',
+        delete: '<path d="M3 6h18" /><path d="M8 6V4h8v2" /><path d="M19 6l-1 14a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1L5 6" /><path d="M10 11v6" /><path d="M14 11v6" />',
+    };
+    return `<svg viewBox="0 0 24 24" aria-hidden="true">${paths[name] || ''}</svg>`;
+}
+
+function renderCharList() {
+    const list = $('nd_char_list');
+    const empty = $('nd_char_empty');
+    const chars = state.characterTags || [];
+    const filteredChars = getFilteredCharacters(chars);
+
+    updateCharacterPanelMeta(chars, filteredChars);
+
+    if (!chars.length) {
+        list.innerHTML = '';
+        list.style.display = 'none';
+        empty.classList.remove('filtered');
+        empty.innerHTML = `
+            <i class="fa-solid fa-user-plus"></i>
+            <strong>暂无角色配置</strong>
+            <p>点击左侧“添加角色”，开始建立你的角色标签库</p>
+        `;
+        empty.style.display = 'block';
+        return;
+    }
+
+    if (!filteredChars.length) {
+        list.innerHTML = '';
+        list.style.display = 'none';
+        empty.classList.add('filtered');
+        empty.innerHTML = `
+            <i class="fa-solid fa-filter-circle-xmark"></i>
+            <strong>没有匹配的角色</strong>
+            <p>试试调整搜索关键词或重置筛选条件</p>
+        `;
+        empty.style.display = 'block';
+        return;
+    }
+
+    list.style.display = 'flex';
+    empty.style.display = 'none';
+    empty.classList.remove('filtered');
+
+    list.innerHTML = filteredChars.map(c => {
+        const isEditing = editingCharId === c.id;
+        const isEnabled = c.enabled !== false;
+        const charId = escapeHtml(c.id);
+        const charName = escapeHtml(c.name || '新角色');
+        const typeLabel = CHARACTER_TYPES.find(t => t.value === c.type)?.label || c.type || 'girl';
+        const typeShort = typeLabel.split(' ')[0];
+        const appearance = c.appearance || '';
+        const outfits = normalizeNamedTagListForUI(c.outfits);
+        const dynamicStates = normalizeNamedTagListForUI(c.dynamicStates);
+        const statusParts = [];
+        if (!isEnabled) statusParts.push('停用');
+        if (appearance) statusParts.push('固定外貌');
+        if (c.negativeTags) statusParts.push('负向');
+        if (c.danbooruTag) statusParts.push('DB');
+        if (outfits.length) statusParts.push('服装');
+        if (dynamicStates.length) statusParts.push('动态外貌');
+        const toggleTitle = isEnabled ? '停用角色' : '启用角色';
+        const summary = `
+            <div class="char-card-summary">
+                <div class="char-identity">
+                    <span class="char-name">${charName}</span>
+                    <span class="char-type-badge">${escapeHtml(typeShort)}</span>
+                </div>
+                <span class="char-status">${statusParts.join(' · ')}</span>
+                <div class="char-actions" aria-label="角色操作">
+                    <button type="button" class="char-action-button char-enabled-control${isEnabled ? ' active' : ''}" data-action="toggle-enabled" data-id="${charId}" title="${toggleTitle}" aria-label="${toggleTitle} ${charName}" aria-pressed="${isEnabled}">${renderCharacterActionIcon(isEnabled ? 'enabled' : 'disabled')}</button>
+                    <button type="button" class="char-action-button${isEditing ? ' active' : ''}" data-action="edit" data-id="${charId}" title="编辑" aria-label="编辑 ${charName}">${renderCharacterActionIcon('edit')}</button>
+                    <button type="button" class="char-action-button" data-action="delete" data-id="${charId}" title="删除" aria-label="删除 ${charName}">${renderCharacterActionIcon('delete')}</button>
+                </div>
+            </div>`;
+
+        if (isEditing) {
+            const savedType = c.type || 'girl';
+            const selectedType = normalizeCharType(savedType);
+            const typeOptions = CHARACTER_TYPES.map(t =>
+                `<option value="${t.value}"${t.value === selectedType ? ' selected' : ''}>${t.label}</option>`
+            ).join('');
+
+            return `
+            <div class="char-card editing${isEnabled ? '' : ' disabled'}" data-id="${charId}">
+                ${summary}
+                <div class="char-edit-form">
+                    <div class="char-edit-row">
+                        <div class="form-group">
+                            <label class="form-label">角色名称</label>
+                            <input type="text" class="input char-edit-name" value="${escapeHtml(c.name)}" placeholder="角色名称">
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">类型</label>
+                            <select class="input char-edit-type">${typeOptions}</select>
+                            <input type="text" class="input char-edit-type-custom${selectedType === 'custom' ? '' : ' hidden'}" value="${selectedType === 'custom' ? escapeHtml(savedType) : ''}" placeholder="如: mature female" style="margin-top:4px;">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">别名（逗号分隔）</label>
+                        <input type="text" class="input char-edit-aliases" value="${escapeHtml((c.aliases || []).join(', '))}" placeholder="小名, 昵称, ...">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" style="display:flex;align-items:center;gap:8px;">
+                            固定外貌 (appearance)
+                            <button class="btn" data-action="search-danbooru" data-id="${charId}" style="padding:2px 8px;font-size:10px;"${!state.danbooruLocalDB ? ' disabled style="opacity:0.3"' : ''}>
+                                <i class="fa-solid fa-magnifying-glass"></i> Danbooru
+                            </button>
+                        </label>
+                        <textarea class="input char-edit-appearance" placeholder="long hair, blue eyes, white dress">${escapeHtml(appearance)}</textarea>
+                        ${c.danbooruTag ? `<div class="form-hint" style="font-size:10px;color:var(--text-muted);margin:2px 0;">Danbooru: ${escapeHtml(c.danbooruTag.replace(/_/g, ' '))}</div>` : ''}
+                        <div class="danbooru-panel hidden" data-char-id="${charId}"></div>
+                        <p class="form-hint">静态外貌描述，LLM 只需补充动作</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">负向标签（可选）</label>
+                        <textarea class="input char-edit-neg" placeholder="避免的特征...">${escapeHtml(c.negativeTags || '')}</textarea>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                            <span>服装列表（可选）</span>
+                            <button class="btn btn-sm" type="button" data-action="add-outfit" data-id="${charId}"><i class="fa-solid fa-plus"></i> 添加服装</button>
+                        </label>
+                        <div class="char-outfit-editor-list">
+                            <div class="char-outfit-editor-empty"${outfits.length ? ' style="display:none;"' : ''}>未配置服装时可留空；添加后会在生图规划时作为服装参考发送给 AI，由 AI 自行选择并按剧情改写当前服装 TAG。</div>
+                            ${outfits.map((outfit, index) => renderNamedTagEditorItem(outfit, index, 'outfit')).join('')}
+                        </div>
+                        <p class="form-hint">示例：常服 / white shirt, pleated skirt；礼服 / evening dress, lace gloves</p>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label" style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
+                            <span>动态外貌（可选）</span>
+                            <button class="btn btn-sm" type="button" data-action="add-dynstate" data-id="${charId}"><i class="fa-solid fa-plus"></i> 添加状态</button>
+                        </label>
+                        <div class="char-dynstate-editor-list">
+                            <div class="char-dynstate-editor-empty"${dynamicStates.length ? ' style="display:none;"' : ''}>同服装，会随剧情变化的外观状态（如眼睛颜色——闭眼时不应出现），供 AI 参考按场景选用。</div>
+                            ${dynamicStates.map((item, index) => renderNamedTagEditorItem(item, index, 'dynstate')).join('')}
+                        </div>
+                        <p class="form-hint">示例：睡觉 / closed eyes, sleeping；害羞 / blush, embarrassed, looking away</p>
+                    </div>
+                    <div class="btn-group" style="margin-top:12px;">
+                        <button class="btn btn-primary" data-action="save" data-id="${charId}"><i class="fa-solid fa-check"></i> 保存</button>
+                        <button class="btn" data-action="cancel" data-id="${charId}">取消</button>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        return `
+        <div class="char-card${isEnabled ? '' : ' disabled'}" data-id="${charId}">
+            ${summary}
+        </div>`;
+    }).join('');
+
+    list.querySelectorAll('.char-edit-type').forEach(sel => {
+        sel.addEventListener('change', function() {
+            const customInput = this.closest('.char-edit-form').querySelector('.char-edit-type-custom');
+            if (customInput) customInput.classList.toggle('hidden', this.value !== 'custom');
+        });
+    });
+
+    list.querySelectorAll('.char-outfit-editor-list').forEach(item => syncNamedTagEditorList(item, 'outfit'));
+    list.querySelectorAll('.char-dynstate-editor-list').forEach(item => syncNamedTagEditorList(item, 'dynstate'));
+}
+
+function handleCharAction(action, id, card, trigger) {
+    if (action === 'toggle-enabled') {
+        const char = state.characterTags.find(c => c.id === id);
+        if (!char) return;
+        char.enabled = char.enabled === false;
+        postToParent({ type: 'SAVE_CHARACTER_TAGS', characterTags: state.characterTags });
+        card?.classList.toggle('disabled', !char.enabled);
+        const status = card?.querySelector('.char-status');
+        if (status) {
+            const parts = status.textContent.split(' · ').filter(part => part && part !== '停用');
+            if (!char.enabled) parts.unshift('停用');
+            status.textContent = parts.join(' · ');
+        }
+        if (trigger) {
+            const toggleTitle = char.enabled ? '停用角色' : '启用角色';
+            trigger.classList.toggle('active', char.enabled);
+            trigger.title = toggleTitle;
+            trigger.setAttribute('aria-label', `${toggleTitle} ${char.name || '新角色'}`);
+            trigger.setAttribute('aria-pressed', String(char.enabled));
+            trigger.innerHTML = renderCharacterActionIcon(char.enabled ? 'enabled' : 'disabled');
+        }
+    } else if (action === 'add-outfit' || action === 'add-dynstate') {
+        const kind = action === 'add-outfit' ? 'outfit' : 'dynstate';
+        const meta = NAMED_TAG_EDITOR_KINDS[kind];
+        const list = card?.querySelector(`.${meta.classPrefix}-editor-list`);
+        if (!list) return;
+        list.insertAdjacentHTML('beforeend', renderNamedTagEditorItem({}, list.querySelectorAll(`.${meta.classPrefix}-editor-item`).length, kind));
+        syncNamedTagEditorList(list, kind);
+    } else if (action === 'remove-outfit' || action === 'remove-dynstate') {
+        const kind = action === 'add-outfit' ? 'outfit' : 'dynstate';
+        const meta = NAMED_TAG_EDITOR_KINDS[kind];
+        const row = trigger?.closest(`.${meta.classPrefix}-editor-item`);
+        const list = row?.closest(`.${meta.classPrefix}-editor-list`);
+        row?.remove();
+        syncNamedTagEditorList(list, kind);
+    } else if (action === 'search-danbooru') {
+        if (!state.danbooruLocalDB) { alert('请先启用 Danbooru 本地资源库'); return; }
+        showLocalDanbooruFix(id);
+    } else if (action === 'edit') {
+        if (editingCharId === id) return;
+        editingCharId = id;
+        renderCharList();
+    } else if (action === 'cancel') {
+        editingCharId = null;
+        renderCharList();
+    } else if (action === 'save') {
+        const char = state.characterTags.find(c => c.id === id);
+        if (!char) return;
+
+        const name = card.querySelector('.char-edit-name')?.value?.trim();
+        if (!name) { alert('请输入角色名称'); return; }
+
+        const typeSelect = card.querySelector('.char-edit-type');
+        const typeCustom = card.querySelector('.char-edit-type-custom');
+        let type = typeSelect?.value || 'girl';
+        if (type === 'custom' && typeCustom?.value?.trim()) type = typeCustom.value.trim();
+
+        char.name = name;
+        char.type = type;
+        char.aliases = (card.querySelector('.char-edit-aliases')?.value || '').split(/[,，]/).map(s => s.trim()).filter(Boolean);
+        char.appearance = card.querySelector('.char-edit-appearance')?.value?.trim() || '';
+        char.negativeTags = card.querySelector('.char-edit-neg')?.value?.trim() || '';
+        char.outfits = collectNamedTagEditorValues(card, 'outfit');
+        char.dynamicStates = collectNamedTagEditorValues(card, 'dynstate');
+
+        editingCharId = null;
+        postToParent({ type: 'SAVE_CHARACTER_TAGS', characterTags: state.characterTags });
+        renderCharList();
+    } else if (action === 'delete') {
+        const char = state.characterTags.find(c => c.id === id);
+        if (!confirm(`确定删除角色“${char?.name || '未命名角色'}”？此操作不可撤销。`)) return;
+        state.characterTags = state.characterTags.filter(c => c.id !== id);
+        postToParent({ type: 'SAVE_CHARACTER_TAGS', characterTags: state.characterTags });
+        renderCharList();
+    }
+}
+
+// ── Danbooru 搜索（本地 DB）─────────────────────────────────
+
+function showLocalDanbooruFix(charId) {
+    const panel = document.querySelector(`.danbooru-panel[data-char-id="${charId}"]`);
+    if (!panel) return;
+
+    const char = state.characterTags.find(c => c.id === charId);
+    const defaultQuery = char?.danbooruTag || char?.name || '';
+
+    panel.classList.remove('hidden');
+    panel.innerHTML = `
+        <div class="danbooru-search-row">
+            <input type="text" class="input danbooru-query" value="${escapeHtml(defaultQuery)}" placeholder="角色名搜索（本地库）">
+            <button class="btn btn-primary danbooru-search-btn"><i class="fa-solid fa-magnifying-glass"></i> 本地搜索</button>
+            <button class="btn danbooru-close-btn"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="danbooru-results"></div>
+    `;
+
+    const input = panel.querySelector('.danbooru-query');
+    const searchBtn = panel.querySelector('.danbooru-search-btn');
+    const closeBtn = panel.querySelector('.danbooru-close-btn');
+
+    const doSearch = () => {
+        const q = input.value.trim();
+        if (!q) return;
+        panel.querySelector('.danbooru-results').innerHTML =
+            '<div class="danbooru-status"><i class="fa-solid fa-spinner fa-spin"></i> 本地搜索中...</div>';
+        postToParent({ type: 'DANBOORU_LOCAL_SEARCH', query: q, charId });
+    };
+
+    searchBtn.addEventListener('click', doSearch);
+    input.addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+    closeBtn.addEventListener('click', () => {
+        panel.classList.add('hidden');
+        panel.innerHTML = '';
+    });
+
+    if (defaultQuery) doSearch();
+}
+
+function renderLocalDanbooruResults(query, results, charId) {
+    const panel = document.querySelector(`.danbooru-panel[data-char-id="${charId}"]`);
+    if (!panel) return;
+    const container = panel.querySelector('.danbooru-results');
+    if (!container) return;
+
+    if (!results?.length) {
+        container.innerHTML = '<div class="danbooru-status">本地库未找到匹配角色</div>';
+        return;
+    }
+
+    container.innerHTML = `
+        <div class="danbooru-char-list">
+            ${results.map(r => {
+                const parsed = parseDanbooruCharName(r.name);
+                const tagPreview = (r.tags || []).slice(0, 6).map(t => t.replace(/_/g, ' ')).join(', ');
+                return `
+                <div class="danbooru-char-item local-fix" data-tag="${escapeHtml(r.name)}" data-tags="${escapeHtml(JSON.stringify(r.tags || []))}">
+                    <div class="danbooru-char-info">
+                        <span class="danbooru-char-name">${escapeHtml(parsed.charName)}</span>
+                        ${parsed.series ? `<span class="danbooru-char-series">${escapeHtml(parsed.series)}</span>` : ''}
+                    </div>
+                    ${tagPreview ? `<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">${escapeHtml(tagPreview)}</div>` : ''}
+                </div>`;
+            }).join('')}
+        </div>
+    `;
+
+    container.querySelectorAll('.danbooru-char-item.local-fix').forEach(item => {
+        item.addEventListener('click', () => {
+            const tagName = item.dataset.tag;
+            let appearanceTags = [];
+            try { appearanceTags = JSON.parse(item.dataset.tags); } catch {}
+
+            const char = state.characterTags.find(c => c.id === charId);
+            if (!char) return;
+
+            char.danbooruTag = tagName;
+            // 用本地库的 tag 替换角色外貌
+            if (appearanceTags.length) {
+                char.appearance = appearanceTags.map(t => t.replace(/_/g, ' ')).join(', ');
+            }
+
+            postToParent({ type: 'SAVE_CHARACTER_TAGS', characterTags: state.characterTags });
+            panel.classList.add('hidden');
+            panel.innerHTML = '';
+            editingCharId = null;
+            renderCharList();
+        });
+    });
+}
+
+function parseDanbooruCharName(tagName) {
+    const match = tagName.match(/^(.+?)_\((.+)\)$/);
+    if (match) return { charName: match[1].replace(/_/g, ' '), series: match[2].replace(/_/g, ' ') };
+    return { charName: tagName.replace(/_/g, ' '), series: '' };
+}
+
+function applyCharStateToUI() {
+    if ($('nd_danbooru_local')) $('nd_danbooru_local').checked = !!state.danbooruLocalDB;
+    if ($('nd_danbooru_local_sub')) $('nd_danbooru_local_sub').classList.toggle('hidden', !state.danbooruLocalDB);
+    if ($('nd_danbooru_local_status')) $('nd_danbooru_local_status').textContent = state.danbooruLocalDB ? '已加载' : '未加载';
+    renderCharList();
+}
+
+window.addEventListener('message', event => {
+    if (event.origin !== PARENT_ORIGIN || event.source !== window.parent) return;
+    const data = event.data;
+    if (!data || data.source !== 'LittleWhiteBox-NovelDraw') return;
+
+    switch (data.type) {
+        case 'INIT_DATA':
+            state = { ...state, ...(data.settings || {}) };
+            applyCharStateToUI();
+            break;
+
+        case 'DANBOORU_LOCAL_SEARCH_RESULTS':
+            renderLocalDanbooruResults(data.query, data.results || [], data.charId);
+            break;
+    }
+});
+
+// ── 角色标签事件绑定 ──────────────────────────────────────
+$('nd_char_search').addEventListener('input', e => {
+    charFilters.query = e.target.value || '';
+    renderCharList();
+});
+
+$('nd_char_filter_type').addEventListener('change', e => {
+    charFilters.type = e.target.value || 'all';
+    renderCharList();
+});
+
+$('nd_char_filter_status').addEventListener('change', e => {
+    charFilters.status = e.target.value || 'all';
+    renderCharList();
+});
+
+$('nd_char_filter_reset').addEventListener('click', () => {
+    resetCharacterFilters();
+});
+
+$('nd_char_add').addEventListener('click', () => {
+    const nc = { id: `char-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, enabled: true, name: '', aliases: [], type: 'girl', appearance: '', negativeTags: '', outfits: [], dynamicStates: [] };
+    state.characterTags.push(nc);
+    editingCharId = nc.id;
+    resetCharacterFilters(false);
+    renderCharList();
+    setTimeout(() => document.querySelector('.char-edit-name')?.focus(), 50);
+});
+
+$('nd_char_list').addEventListener('click', e => {
+    const btn = e.target.closest('[data-action]');
+    if (!btn) return;
+    const card = btn.closest('.char-card');
+    const id = btn.dataset.id || card?.dataset.id;
+    if (id) handleCharAction(btn.dataset.action, id, card, btn);
+});
+
+$('nd_danbooru_local').addEventListener('change', () => {
+    const enabled = $('nd_danbooru_local').checked;
+    state.danbooruLocalDB = enabled; // 乐观更新，避免 toggle → 点击修正 之间的窗口期
+    $('nd_danbooru_local_sub').classList.toggle('hidden', !enabled);
+    if (enabled) $('nd_danbooru_local_status').textContent = '加载中...';
+    renderCharList(); // 立即刷新修正按钮状态
+    postToParent({ type: 'SAVE_DANBOORU_LOCAL_DB', enabled });
+});
+
+// clear all characters
+$('nd_char_clear').addEventListener('click', () => {
+    if (!state.characterTags?.length) { alert('没有角色可清除'); return; }
+    if (!confirm(`确定清除全部 ${state.characterTags.length} 个角色？此操作不可撤销。`)) return;
+    state.characterTags = [];
+    postToParent({ type: 'SAVE_CHARACTER_TAGS', characterTags: state.characterTags });
+    renderCharList();
+});
+
+$('nd_char_export').addEventListener('click', () => {
+    if (!state.characterTags?.length) { alert('没有可导出的角色'); return; }
+    const d = { type: 'novel-draw-characters', version: 3, characters: state.characterTags };
+    const blob = new Blob([JSON.stringify(d, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'character-tags.json';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+});
+
+$('nd_char_import').addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+        const text = await file.text();
+        const d = JSON.parse(text);
+        if (d.type !== 'novel-draw-characters' || !Array.isArray(d.characters)) throw new Error('无效文件');
+        for (const char of d.characters) {
+            if (!char.name) continue;
+            const importedId = String(char.id || '').trim();
+            const imported = {
+                ...char,
+                id: importedId || `char-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+                enabled: char.enabled !== false,
+                type: char.type || 'girl',
+                appearance: char.appearance || char.tags || '',
+            };
+            // 重名直接覆盖，不追加重复条目
+            const existing = state.characterTags.find(item =>
+                String(item.name || '').trim() === String(imported.name).trim()
+            );
+            if (existing) Object.assign(existing, imported, { id: existing.id });
+            else state.characterTags.push(imported);
+        }
+        postToParent({ type: 'SAVE_CHARACTER_TAGS', characterTags: state.characterTags });
+        renderCharList();
+        alert(`导入 ${d.characters.length} 个角色`);
+    } catch (err) {
+        alert('导入失败: ' + err.message);
+    }
+    e.target.value = '';
+});
+</script>
 </body>
 </html>

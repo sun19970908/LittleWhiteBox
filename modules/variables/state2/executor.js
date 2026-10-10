@@ -430,7 +430,13 @@ export function clearStateAppliedFrom(floorInclusive) {
         for (const k of Object.keys(map)) {
             if (Number(k) >= floorInclusive) delete map[k];
         }
-        getContext()?.saveMetadataDebounced?.();
+        // [NO-SAVE-20260902] 这里不再触发写盘：appliedMap（LWB_PLOT_APPLIED_KEY）在每次 CHAT_CHANGED
+        // 都会被 variables-core.js 无条件清空（meta[LWB_PLOT_APPLIED_KEY] = {}），磁盘上的旧值从未被
+        // 读取（全仓仅 CacheRegistry 统计调试读它），所以把清空结果落盘没有意义 —— 下次进入必被清空。
+        // 账本变更仍会搭"真实保存"的便车落盘，不影响幂等守卫。
+        // 注意：本函数还有另外两个调用方（executor.js 内 floor+1 / start 两处），同样不再触发写盘，
+        // 影响面一致且同样安全。
+        // getContext()?.saveMetadataDebounced?.();
     } catch {}
 }
 

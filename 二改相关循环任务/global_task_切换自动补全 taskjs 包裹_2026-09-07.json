@@ -1,0 +1,19 @@
+{
+    "type": "global",
+    "exportDate": "2026-09-07T14:09:46.216Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-09-07T00:00:00.000Z",
+            "disabled": false,
+            "floorType": "llm",
+            "id": "de2872a8-0a72-4299-a6ca-57900a8dd86a",
+            "importedAt": "2026-09-07T14:04:49.392Z",
+            "interval": 0,
+            "name": "切换自动补全 taskjs 包裹",
+            "triggerTiming": "after_ai",
+            "x": {},
+            "commands": "<<taskjs>>\n(async () => {\n    const mod = await import('/scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/scheduled-tasks.js');\n    const on = mod.toggleAutoWrapTaskJs();\n    window.toastr?.success('✅ 自动补全 taskjs 包裹: ' + (on ? 'ON（输入框无 <<taskjs>> 时自动包裹）' : 'OFF（按原样保存）'));\n})();\n<</taskjs>>"
+        }
+    ]
+}

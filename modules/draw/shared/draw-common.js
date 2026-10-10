@@ -4,6 +4,7 @@ import {
     getDisplayPreviewForSlot,
     getPreviewsBySlot,
     getPreviewDisplayUrl,
+    storePreview,
     subscribeGalleryCacheChanges,
     warmSlotPreviewNeighbors,
     getPreview,
@@ -291,7 +292,7 @@ export function ensureDrawImageStyles() {
 .xb-nd-edit-group{margin-bottom:8px}
 .xb-nd-edit-group:last-child{margin-bottom:0}
 .xb-nd-edit-group-label{font-size:11px;color:inherit;opacity:.8;margin-bottom:4px}
-.xb-nd-edit-input{box-sizing:border-box;width:100%;min-height:60px;background:rgba(127,127,127,0.1);border:1px solid rgba(127,127,127,0.4);border-radius:6px;color:inherit;font-size:12px;padding:8px;resize:vertical;font-family:monospace}
+.xb-nd-edit-input{box-sizing:border-box;width:100%;min-height:240px;background:rgba(127,127,127,0.1);border:1px solid rgba(127,127,127,0.4);border-radius:6px;color:inherit;font-size:12px;padding:8px;resize:vertical;font-family:monospace}
 .xb-nd-edit-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 .xb-nd-edit-actions button{min-height:36px;padding:6px 12px;border:1px solid rgba(127,127,127,.4);background:rgba(127,127,127,.1);border-radius:6px;color:inherit;cursor:pointer;white-space:nowrap}
 .xb-nd-edit-actions [data-action="save-tags"]{flex:1;background:rgba(212,165,116,.2)}
@@ -461,6 +462,8 @@ function normalizeDrawSavedEntry(slotId, data = {}) {
         savedUrl: data.savedUrl,
         tags: data.tags || '',
         positive: data.positive || '',
+        characterPrompts: Array.isArray(data.characterPrompts) ? data.characterPrompts : null,
+        negativePrompt: data.negativePrompt || '',
         updatedAt: Number.isFinite(data.updatedAt) ? data.updatedAt : Date.now(),
     };
 }
@@ -524,7 +527,9 @@ export async function setDrawSavedEntry(messageId, slotId, data) {
         previous.imgId === entry.imgId &&
         previous.savedUrl === entry.savedUrl &&
         previous.tags === entry.tags &&
-        previous.positive === entry.positive;
+        previous.positive === entry.positive &&
+        JSON.stringify(previous.characterPrompts || null) === JSON.stringify(entry.characterPrompts || null) &&
+        previous.negativePrompt === entry.negativePrompt;
     const legacyMap = getSavedMap(message, LEGACY_NOVEL_SAVED_EXTRA_KEY);
     const hasLegacyEntry = !!legacyMap?.[slotId];
     if (unchanged && !hasLegacyEntry) return true;
@@ -568,6 +573,8 @@ export async function syncDrawSavedFromPreview(messageId, preview, overrides = {
         savedUrl: overrides.savedUrl || preview?.savedUrl,
         tags: overrides.tags ?? preview?.tags ?? '',
         positive: overrides.positive ?? preview?.positive ?? '',
+        characterPrompts: overrides.characterPrompts ?? preview?.characterPrompts ?? null,
+        negativePrompt: overrides.negativePrompt ?? preview?.negativePrompt ?? '',
     });
 }
 
@@ -602,6 +609,24 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
         const selectedIndex = successPreviews.findIndex(p => p.imgId === savedEntry.imgId);
         const matchedPreview = selectedIndex >= 0 ? successPreviews[selectedIndex] : null;
 
+        // 换设备 / 清缓存后浏览器 IndexedDB 为空，但服务器聊天 extra 里还有这张已保存图的
+        // 完整元数据（含角色提示词）。这里把 extra 重建成本地记录，后续重绘 / 重试 / 画廊
+        // 都能从 IndexedDB 拿回完整提示词，而不是只有场景 tags。
+        if (!matchedPreview) {
+            await storePreview({
+                imgId: savedEntry.imgId || `saved-${slotId}`,
+                slotId,
+                messageId,
+                base64: null,
+                savedUrl: savedEntry.savedUrl,
+                tags: savedEntry.tags || '',
+                positive: savedEntry.positive || '',
+                characterPrompts: savedEntry.characterPrompts || null,
+                negativePrompt: savedEntry.negativePrompt || '',
+                status: 'success',
+            }).catch(() => {});
+        }
+
         return {
             preview: {
                 ...matchedPreview,
@@ -610,6 +635,8 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
                 savedUrl: savedEntry.savedUrl,
                 tags: savedEntry.tags ?? matchedPreview?.tags ?? '',
                 positive: savedEntry.positive ?? matchedPreview?.positive ?? '',
+                characterPrompts: savedEntry.characterPrompts ?? matchedPreview?.characterPrompts ?? null,
+                negativePrompt: savedEntry.negativePrompt ?? matchedPreview?.negativePrompt ?? '',
                 messageId,
             },
             historyCount: selectedIndex >= 0 ? successPreviews.length : 1,
