@@ -4097,8 +4097,7 @@ function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEff
     const charPositive = (Array.isArray(characterPrompts) ? characterPrompts : [])
         .map(item => item?.prompt)
         .filter(Boolean)
-        // [K2] 与 compiler.js 的角色 joiner（"\n,AND,\n"）保持一致，编辑重生成才不会退回纯逗号。
-        .join('\n,AND,\n');
+        .join(', ');
     const charNegative = (Array.isArray(characterPrompts) ? characterPrompts : [])
         .map(item => item?.uc)
         .filter(Boolean)

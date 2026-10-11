@@ -360,11 +360,7 @@ export function compileComfyPromptForTask(task, recipe = {}) {
             characterPrompts,
         };
     }
-    // [K2] 角色之间用 "\n,AND,\n" 作为显式边界：逗号保住 tag 列表的节奏，AND 给 Qwen3-VL
-    // 明确的实体分界信号，换行方便肉眼阅读（无 conditioning 组合语义，纯语言层分割）。
-    // 负向不跟（charNegative 保持 ', '）。画廊编辑重建的 joiner 在 comfy-draw.js 的
-    // buildEditedPromptData，两处必须一致。
-    const charPositive = characterPrompts.map(item => item.prompt).filter(Boolean).join('\n,AND,\n');
+    const charPositive = characterPrompts.map(item => item.prompt).filter(Boolean).join(', ');
     const charNegative = characterPrompts.map(item => item.uc).filter(Boolean).join(', ');
     return {
         positive: joinTags(recipe.positivePrefix, task?.scene, charPositive),
