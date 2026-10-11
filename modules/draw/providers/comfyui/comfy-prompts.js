@@ -1,5 +1,5 @@
 import { extensionFolderPath } from "../../../../core/constants.js";
-import { buildScenePlannerChainPreview } from '../../shared/scene-planner-frame.js';
+import { buildScenePlannerChainPreview, buildScenePlannerFrameText } from '../../shared/scene-planner-frame.js';
 import {
     fetchPromptTemplateFiles,
     SHARED_PROMPT_TEMPLATE_FILES,
@@ -19,12 +19,21 @@ export const COMFY_PLANNER_PROFILE = Object.freeze({
 });
 
 
+/**
+ * 「材料说明与输出去向」的默认文案 = 内置段在 ComfyUI 下的实际文本
+ * （${imageModelName} 已解析成 COMFY_PLANNER_PROFILE.imageModelName = 'ComfyUI'，不再留占位符）。
+ * 用生成函数取而不用字面量，上游改内置文案时默认值自动跟随。
+ */
+const COMFY_FRAME_TEXT = buildScenePlannerFrameText(COMFY_PLANNER_PROFILE);
+
 /** 用户可编辑的默认值；内置骨架由 scene-planner-frame.js 生成，不在此列。 */
 export const COMFY_SCENE_PROMPTS = {
     topSystem: '',
     topSystemPov: '',
     sceneRules: '',
     tagGuideContent: '',
+    // 材料说明与输出去向：默认给一份可见的默认文案（ComfyUI 版）；清空则回退到内置生成文本。
+    frameText: COMFY_FRAME_TEXT,
 };
 
 let tagGuideContent = '';

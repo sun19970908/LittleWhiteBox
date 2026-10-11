@@ -243,6 +243,7 @@ async function buildScenePlannerRequest(options = {}) {
 
         const systemTemplate = buildScenePlannerSystemPrompt({
             opening: promptConfig.topSystem,
+            frame: promptConfig.frameText,
             guide: tagGuide,
             sceneRules: promptConfig.sceneRules,
             profile,

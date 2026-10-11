@@ -40,13 +40,15 @@ export function buildScenePlannerFrameText(profile) {
 The app uses each image's scene and character fields, together with the character library and the user's generation settings, to build a request for ${imageModelName}. Field meanings and model-specific controls are described in submit_scene_plan.`;
 }
 
-export function buildScenePlannerSystemPrompt({ opening = '', guide = '', sceneRules = '', profile } = {}) {
+export function buildScenePlannerSystemPrompt({ opening = '', frame = '', guide = '', sceneRules = '', profile } = {}) {
     const effective = normalizeScenePlannerProfile(profile);
     const guideText = String(guide || '').trim();
     const rulesText = String(sceneRules || '').trim();
+    // 内置框架段可被用户覆写（promptConfig.frameText）；留空则仍用 buildScenePlannerFrameText 生成。
+    const frameText = String(frame || '').trim() || buildScenePlannerFrameText(effective);
     return joinBlocks([
         opening,
-        buildScenePlannerFrameText(effective),
+        frameText,
         guideText ? `## ${effective.imageModelName} Tag 指南\n\n${guideText}` : '',
         rulesText ? `## 场景规则\n\n${rulesText}` : '',
     ]);
@@ -97,7 +99,7 @@ export function buildScenePlannerChainPreview({ profile, hasTagGuide = true } = 
             summary: 'system：规划器的身份、材料说明、指南与规则',
             sections: [
                 { key: 'topSystem', editable: true, summary: '开场与视角' },
-                { key: 'frame', summary: '材料说明与输出去向（内置）', content: buildScenePlannerFrameText(effective) },
+                { key: 'frame', editable: true, summary: '材料说明与输出去向（内置）', content: buildScenePlannerFrameText(effective) },
                 {
                     key: 'tagGuide',
                     editable: true,

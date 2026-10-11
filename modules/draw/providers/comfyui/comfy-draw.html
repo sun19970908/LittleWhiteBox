@@ -1042,6 +1042,15 @@ select.input { cursor: pointer; }
 
                 <div class="card">
                     <div class="prompt-card-header">
+                        <div class="card-title">材料说明与输出去向</div>
+                        <button class="btn btn-sm" id="comfy-prompt-reset-frame" type="button"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>
+                    </div>
+                    <p class="form-hint">模型收到的材料是什么、它的输出会被怎么用。默认即内置文案（模型名已写死为 ComfyUI）；清空则回退到内置文案。</p>
+                    <textarea id="comfy-prompt-frame" class="prompt-textarea" rows="8"></textarea>
+                </div>
+
+                <div class="card">
+                    <div class="prompt-card-header">
                         <div class="card-title">模型 Tag 指南</div>
                         <button class="btn btn-sm" id="comfy-prompt-reset-guide" type="button"><i class="fa-solid fa-rotate-left"></i> 恢复默认</button>
                     </div>

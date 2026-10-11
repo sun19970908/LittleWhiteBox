@@ -360,12 +360,14 @@ function getPromptPresetDefaults(name) {
             topSystem: DEFAULT_PROMPT_CONFIG.topSystemPov || DEFAULT_PROMPT_CONFIG.topSystem,
             tagGuideContent: guide,
             sceneRules: DEFAULT_PROMPT_CONFIG.sceneRules,
+            frameText: DEFAULT_PROMPT_CONFIG.frameText,
         };
     }
     return {
         topSystem: DEFAULT_PROMPT_CONFIG.topSystem,
         tagGuideContent: guide,
         sceneRules: DEFAULT_PROMPT_CONFIG.sceneRules,
+        frameText: DEFAULT_PROMPT_CONFIG.frameText,
     };
 }
 
@@ -496,6 +498,7 @@ function normalizeSettings(raw = {}) {
         topSystem: activePromptPreset.topSystem,
         tagGuideContent: activePromptPreset.tagGuideContent,
         sceneRules: activePromptPreset.sceneRules,
+        frameText: activePromptPreset.frameText,
     };
 
     return merged;
@@ -1944,7 +1947,8 @@ function bindOverlayEvents() {
                     topSystem: active.topSystem,
                     tagGuideContent: active.tagGuideContent,
                     sceneRules: active.sceneRules,
-                };
+                    frameText: active.frameText,
+                    };
             }
         }, '提示词预设已切换', { notify: false, silent: false }));
         if (ok) fillForm(getSettings());
@@ -1963,6 +1967,7 @@ function bindOverlayEvents() {
                 topSystem: preset.topSystem,
                 tagGuideContent: preset.tagGuideContent,
                 sceneRules: preset.sceneRules,
+                frameText: preset.frameText,
             };
         }, '已创建提示词预设', { notify: false, silent: false }));
         if (ok) fillForm(getSettings());
@@ -1995,7 +2000,8 @@ function bindOverlayEvents() {
                     topSystem: active.topSystem,
                     tagGuideContent: active.tagGuideContent,
                     sceneRules: active.sceneRules,
-                };
+                    frameText: active.frameText,
+                    };
             }
         }, '提示词预设已删除', { notify: false, silent: false }));
         if (ok) fillForm(getSettings());
@@ -2011,6 +2017,7 @@ function bindOverlayEvents() {
                 topSystem: nextPreset.topSystem,
                 tagGuideContent: nextPreset.tagGuideContent,
                 sceneRules: nextPreset.sceneRules,
+                frameText: nextPreset.frameText,
             };
         }, '提示词预设已保存', { notify: false, silent: false }), {
             statusElementId: 'comfy-prompt-preset-status',
@@ -2031,6 +2038,7 @@ function bindOverlayEvents() {
                 topSystem: nextPreset.topSystem,
                 tagGuideContent: nextPreset.tagGuideContent,
                 sceneRules: nextPreset.sceneRules,
+                frameText: nextPreset.frameText,
             };
         }, '提示词预设已保存', { notify: false, silent: false }), {
             statusElementId: 'comfy-prompts-status',
@@ -2055,12 +2063,18 @@ function bindOverlayEvents() {
         setValue('comfy-prompt-format', defaults.sceneRules);
         renderPromptChainPreview();
     });
+    querySettings('#comfy-prompt-reset-frame')?.addEventListener('click', () => {
+        const defaults = getPromptPresetDefaults(getActivePromptPreset(getSettings()).name);
+        setValue('comfy-prompt-frame', defaults.frameText);
+        renderPromptChainPreview();
+    });
     querySettings('#comfy-prompts-reset-all')?.addEventListener('click', () => {
         if (!confirm('确认恢复当前提示词模板为默认值？')) return;
         const defaults = getPromptPresetDefaults(getActivePromptPreset(getSettings()).name);
         setValue('comfy-prompt-system', defaults.topSystem);
         setValue('comfy-prompt-guide', defaults.tagGuideContent);
         setValue('comfy-prompt-format', defaults.sceneRules);
+        setValue('comfy-prompt-frame', defaults.frameText);
         renderPromptChainPreview();
     });
     querySettings('#comfy-prompt-preset-export')?.addEventListener('click', () => {
@@ -2072,6 +2086,7 @@ function bindOverlayEvents() {
             topSystem: getValue('comfy-prompt-system'),
             tagGuideContent: getValue('comfy-prompt-guide'),
             sceneRules: getValue('comfy-prompt-format'),
+            frameText: getValue('comfy-prompt-frame'),
         };
         const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
         const url = URL.createObjectURL(blob);
@@ -2102,6 +2117,8 @@ function bindOverlayEvents() {
                 topSystem: payload.topSystem,
                 tagGuideContent: payload.tagGuideContent,
                 sceneRules: payload.sceneRules,
+                // _version 仍是 1：老导出的文件没有这一项，落到默认文案；新导出的带它
+                frameText: typeof payload.frameText === 'string' ? payload.frameText : (DEFAULT_PROMPT_CONFIG.frameText || ''),
             };
             const ok = await withSaveTimeout(updateSettingsPersistent((settings) => {
                 settings.promptPresets = [...settings.promptPresets, preset];
@@ -2117,7 +2134,7 @@ function bindOverlayEvents() {
     getSettingsElement('comfy-prompt-chain')?.closest('details')?.addEventListener('toggle', (event) => {
         if (event.currentTarget.open) schedulePromptChainPreview();
     });
-    ['comfy-prompt-system', 'comfy-prompt-guide', 'comfy-prompt-format'].forEach((id) => {
+    ['comfy-prompt-system', 'comfy-prompt-guide', 'comfy-prompt-format', 'comfy-prompt-frame'].forEach((id) => {
         querySettings(`#${id}`)?.addEventListener('input', () => {
             schedulePromptChainPreview();
         });
@@ -2353,6 +2370,8 @@ function applyPromptPresetToForm(settings = getSettings()) {
     setValue('comfy-prompt-system', promptPreset.topSystem || '');
     setValue('comfy-prompt-guide', promptPreset.tagGuideContent || '');
     setValue('comfy-prompt-format', promptPreset.sceneRules || '');
+    // 材料说明与输出去向：为空（老预设没有这个字段 / 被清空）时用默认文案顶上
+    setValue('comfy-prompt-frame', promptPreset.frameText || DEFAULT_PROMPT_CONFIG.frameText);
     renderPromptChainPreview(settings);
 }
 
@@ -2362,6 +2381,7 @@ function readPromptPresetFromForm(basePreset = getActivePromptPreset(getSettings
         topSystem: getValue('comfy-prompt-system'),
         tagGuideContent: getValue('comfy-prompt-guide'),
         sceneRules: getValue('comfy-prompt-format'),
+        frameText: getValue('comfy-prompt-frame'),
     };
 }
 
@@ -3587,6 +3607,7 @@ function renderPromptChainPreview(settings = getSettings()) {
         topSystem: 'comfy-prompt-system',
         tagGuide: 'comfy-prompt-guide',
         sceneRules: 'comfy-prompt-format',
+        frame: 'comfy-prompt-frame',
     };
     const guideInput = getSettingsElement(editableMap.tagGuide);
     const chain = getPromptChainPreview({
