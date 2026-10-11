@@ -44,7 +44,7 @@ test('every follower settles within talking reach instead of waiting just beyond
     for (let t = 0; t < 2000; t++) { tickPeople(c); }
     for (const id of Object.keys(c.people)) { assert.equal(canTalk(c, id), true, id); }
     assert.ok('stay' in narrativeActions(c, 'sanniang'));
-    assert.ok('receiving' in narrativeActions(c, 'laobai'));
+    assert.ok(!('receiving' in narrativeActions(c, 'laobai')));
 });
 
 test('chapter handoff stays available beside Sanniang at a camp appointment, without another model request', () => {
@@ -59,7 +59,7 @@ test('chapter handoff stays available beside Sanniang at a camp appointment, wit
     assert.ok(c.facts.includes('chapter_completed'));
 });
 
-test('captives cannot be walked out; solo appointments cannot route through a hostile scene', () => {
+test('locked captives cannot follow; solo appointments cannot route through a hostile scene', () => {
     const c = create();
     assert.ok(!('follow' in narrativeActions(c, 'kouzi'))); assert.throws(() => movePerson(c, 'kouzi', 'follow'));
     recordFact(c, 'briefed');
