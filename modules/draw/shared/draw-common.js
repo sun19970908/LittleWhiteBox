@@ -463,6 +463,8 @@ function normalizeDrawSavedEntry(slotId, data = {}) {
         positive: data.positive || '',
         characterPrompts: Array.isArray(data.characterPrompts) ? data.characterPrompts : null,
         negativePrompt: data.negativePrompt || '',
+        // 整图正向提示词的追加位（ComfyUI），随图位保存以便重载后仍能重建
+        postPrompt: data.postPrompt ?? null,
         updatedAt: Number.isFinite(data.updatedAt) ? data.updatedAt : Date.now(),
     };
 }
@@ -528,7 +530,8 @@ export async function setDrawSavedEntry(messageId, slotId, data) {
         previous.tags === entry.tags &&
         previous.positive === entry.positive &&
         JSON.stringify(previous.characterPrompts || null) === JSON.stringify(entry.characterPrompts || null) &&
-        previous.negativePrompt === entry.negativePrompt;
+        previous.negativePrompt === entry.negativePrompt &&
+        (previous.postPrompt ?? null) === (entry.postPrompt ?? null);
     const legacyMap = getSavedMap(message, LEGACY_NOVEL_SAVED_EXTRA_KEY);
     const hasLegacyEntry = !!legacyMap?.[slotId];
     if (unchanged && !hasLegacyEntry) return true;
@@ -574,6 +577,7 @@ export async function syncDrawSavedFromPreview(messageId, preview, overrides = {
         positive: overrides.positive ?? preview?.positive ?? '',
         characterPrompts: overrides.characterPrompts ?? preview?.characterPrompts ?? null,
         negativePrompt: overrides.negativePrompt ?? preview?.negativePrompt ?? '',
+        postPrompt: overrides.postPrompt ?? preview?.postPrompt ?? null,
     });
 }
 
@@ -622,6 +626,7 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
                 positive: savedEntry.positive || '',
                 characterPrompts: savedEntry.characterPrompts || null,
                 negativePrompt: savedEntry.negativePrompt || '',
+                postPrompt: savedEntry.postPrompt || null,
                 status: 'success',
             }).catch(() => {});
         }
@@ -636,6 +641,7 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
                 positive: savedEntry.positive ?? matchedPreview?.positive ?? '',
                 characterPrompts: savedEntry.characterPrompts ?? matchedPreview?.characterPrompts ?? null,
                 negativePrompt: savedEntry.negativePrompt ?? matchedPreview?.negativePrompt ?? '',
+                postPrompt: savedEntry.postPrompt ?? matchedPreview?.postPrompt ?? null,
                 messageId,
             },
             historyCount: selectedIndex >= 0 ? successPreviews.length : 1,

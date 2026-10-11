@@ -120,6 +120,13 @@ export function createSubmitScenePlanTool(options = {}) {
                     { minLength: 1 },
                 ),
                 characters: charactersSchema,
+                // 追加位（可选）：拼在所有角色之后、整条正向提示词的最末尾。
+                // 只有 profile.postPrompt === 'append' 的 provider 才暴露，避免教会模型一个编译器会丢的字段。
+                ...(profile.postPrompt === 'append' ? {
+                    post_prompt: stringSchema(
+                        '追加在整条正向提示词最末尾的英文 tag/短句：人物之间的交互、环境、光影、镜头等角色段不写的信息。不要写人物名字，要写类型和方位。没有要补充的内容时省略。',
+                    ),
+                } : {}),
             },
         },
     };

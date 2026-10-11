@@ -16,6 +16,8 @@ export const COMFY_PLANNER_PROFILE = Object.freeze({
     centerMode: 'none',
     interactSyntax: 'plain',
     ucScope: 'global',
+    // ComfyUI 编译器支持把 post_prompt 拼在正向提示词最后
+    postPrompt: 'append',
 });
 
 

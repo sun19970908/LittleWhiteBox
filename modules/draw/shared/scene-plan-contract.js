@@ -325,6 +325,9 @@ function normalizeImages(images, options = {}) {
             index: imageIndex + 1,
             scene: requireString(image.scene, `${path}.scene`),
             chars,
+            // 整图正向提示词的追加位：可选字段，编译器拼在所有角色之后（整条提示词最末尾）。
+            // 不进 REQUIRED_IMAGE_FIELDS、不影响 maxCharactersPerImage；未提交时为空串。
+            post_prompt: optionalString(image, 'post_prompt', path),
             placement: {
                 mode: 'source',
                 insertAfter,
