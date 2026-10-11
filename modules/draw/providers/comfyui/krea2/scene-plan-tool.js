@@ -1,7 +1,6 @@
-// [K2] fork 自 shared/scene-plan-tool.js：逐字副本，差异 = 图片项的字段
-// （scene/characters → prompt 一个字段；末尾追加可选 other；保留 index/insert_after 的形状、类型、必填语义不动）。
-// 角色相关常量与 getScenePlanCharacterProperties 是原件的一部分，照抄保留以便上游同步；K2 工具不使用它们。
-// 上游同步时重拷原件后重放 [K2] 标记的字段块即可。
+// [K2] fork 自 shared/scene-plan-tool.js：逐字副本，差异 = 图片项末尾追加可选 other，
+// 以及角色字段剔除 interact/uc（getScenePlanCharacterProperties 保持逐字，仅在组装
+// charactersSchema 时剔除，便于上游同步）。上游同步时重拷原件后重放 [K2] 标记块即可。
 import { SUBMIT_SCENE_PLAN_TOOL_NAME } from '../../../shared/scene-plan-contract.js';
 import { normalizeScenePlannerProfile } from '../../../shared/scene-planner-profile.js';
 
@@ -89,6 +88,23 @@ export function createSubmitScenePlanTool(options = {}) {
     const insertPointCount = normalizeLimit(options.insertPointCount);
     const profile = normalizeScenePlannerProfile(options.profile);
     const maxPlanItems = maxImages || maxPlanImages;
+    // [K2] 字段集 = 原件去掉角色级 interact/uc：Krea2 不走互动语法，角色级负向也不收
+    // （全局负向由用户预设负责）。getScenePlanCharacterProperties 保持逐字，仅在此处剔除这两个字段。
+    const characterProperties = { ...getScenePlanCharacterProperties(profile) };
+    delete characterProperties.interact;
+    delete characterProperties.uc;
+    const charactersSchema = {
+        type: 'array',
+        ...(maxCharactersPerImage ? { maxItems: maxCharactersPerImage } : {}),
+        // [K2] 拼接顺序描述去掉 interact（原件结尾为 "→ interact"）。
+        description: '画面中出现的角色，按重要度排序。纯风景、物件、建筑主体时为空数组。每项的字段按 danbooru → type → appear → costume → action 的顺序拼成该角色的提示词。',
+        items: {
+            type: 'object',
+            additionalProperties: false,
+            required: ['name', 'action'],
+            properties: characterProperties,
+        },
+    };
     const imagesSchema = {
         type: 'array',
         minItems: maxImages || 1,
@@ -97,8 +113,7 @@ export function createSubmitScenePlanTool(options = {}) {
         items: {
             type: 'object',
             additionalProperties: false,
-            // [K2] required: scene/characters 退场，prompt 一个字段代替整张图的描述。
-            required: ['index', 'insert_after', 'prompt'],
+            required: ['index', 'insert_after', 'scene', 'characters'],
             properties: {
                 index: { type: 'integer', minimum: 1, description: '本图序号，从 1 起。' },
                 insert_after: {
@@ -107,17 +122,16 @@ export function createSubmitScenePlanTool(options = {}) {
                     ...(insertPointCount ? { maximum: insertPointCount } : {}),
                     description: 'The number N of an existing `【插图点 N】` marker in <content>. Choose the nearest marker after the moment depicted. Images at the same marker appear in array order.',
                 },
-                // [K2] prompt ← 原件的 scene 字段：不再是"画面整体 + 角色由 characters 描述"，
-                // 而是整张图的完整正向提示词，角色外貌与服装也由模型直接写进来。
-                prompt: stringSchema(
-                    '本图完整正向提示词：一段连贯英文自然语言。',
+                scene: stringSchema(
+                    '画面整体：人数与关系、构图与视角、背景、光影、氛围，逗号分隔的英文 tag。角色个体的外貌与动作不写在这里。拼在正向提示词最前。',
                     { minLength: 1 },
                 ),
-                // [K2] other：追加位。原生管线里它排在 characters 之后；K2 的 prompt 已含角色，
-                // 所以对应"整条正向提示词的最后"。合同侧转成伪角色条目垫在 chars 末尾，
-                // 经 assembleCharacterPrompts + charPositive 按序拼入（见 krea2/scene-plan-contract.js）。
+                characters: charactersSchema,
+                // [K2] other：追加位，拼在所有角色之后（整条提示词最后）。合同侧转成伪角色条目
+                // 垫在 chars 末尾，经 assembleCharacterPrompts + charPositive 按序拼入
+                // （见 krea2/scene-plan-contract.js 的 [K2] 块）。
                 other: stringSchema(
-                    '可选。追加在正向提示词最末尾的英文 tag，逗号分隔：质量词、画风词、LoRA 触发词等不适合写进自然语言提示词、需要原样保留的内容。没有就省略。',
+                    '可选。追加在正向提示词最末尾（所有角色之后）的英文 tag，逗号分隔：质量词、画风词、LoRA 触发词等不适合写进 scene/characters 的内容。没有就省略。',
                 ),
             },
         },

@@ -1,5 +1,5 @@
 // [K2] fork 自 shared/scene-planner-frame.js：逐字副本，唯一差异 = buildScenePlannerFrameText 的
-// 框架文案改为自然语言改写导向（原件的 like-for-like 替换，签名/导出/其余逻辑一字未动）。
+// 框架文案按 K2 字段集描述输出去向（scene → characters 各字段 → other 垫底；签名/导出/其余逻辑一字未动）。
 // 上游同步时重拷原件后只重放这一处 [K2] 文案即可。
 import { createSubmitScenePlanTool } from './scene-plan-tool.js';
 import { normalizeScenePlannerProfile } from '../../../shared/scene-planner-profile.js';
@@ -35,12 +35,12 @@ function joinBlocks(blocks) {
 export function buildScenePlannerFrameText(profile) {
     const { imageModelName } = normalizeScenePlannerProfile(profile);
     return `## 你收到的材料
-- <worldInfo>：世界书。其中的 tag 组合、同人角色资料、姿势库是写提示词时的参考来源；未知角色的外貌优先参考其中的数据。
-- <content>：本次唯一的叙事来源。开头是【已录入角色】列表；正文里每个可插图的位置已标为【插图点 N】。
+- <worldInfo>：世界书。其中的 tag 组合、同人角色资料、姿势库是写 tag 时的参考来源；未知角色的外貌优先参考其中的数据。
+- <content>：本次唯一的叙事来源。开头是【已录入角色】列表，这些角色的身份与外貌由角色库注入，你只写他们在本图中的状态；正文里每个可插图的位置已标为【插图点 N】。
 - 消息末尾的数量约束：可用插图点数、images 数量、每图人数上限。
 
 ## 你的输出去哪
-The app uses each image's prompt field, together with the user's generation settings, to build a request for Krea2. Field meanings are described in submit_scene_plan.`;
+The app joins each image's scene field first, then each character's fields (danbooru → type → appear → costume → action), and appends the other field last, together with the character library and the user's generation settings, to build a request for Krea2. Field meanings are described in submit_scene_plan.`;
 }
 
 export function buildScenePlannerSystemPrompt({ opening = '', guide = '', sceneRules = '', profile } = {}) {

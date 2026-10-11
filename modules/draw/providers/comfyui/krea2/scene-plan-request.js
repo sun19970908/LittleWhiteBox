@@ -95,14 +95,16 @@ export async function buildKrea2Request(plannerOptions) {
         sceneRules: promptConfig.sceneRules,
         profile,
     });
-    // 数量措辞照抄原件 buildSessionLimitsLine（characters 那一条随 characters 字段一并退场）：
-    // maxImages 存在时是"恰好"，否则给 maxPlanImages 的"最多"——与 krea2/scene-plan-contract.js 的
-    // 校验语义一致（maxImages 时 images.length !== maxImages 即 failSchema），措辞错一半就白烧一轮纠错。
+    // 数量约束措辞照抄原件 buildSessionLimitsLine：maxImages 存在时是"恰好"，否则给 maxPlanImages
+    // 的"最多"；characters 条款随字段集回归而保留。与 krea2/scene-plan-contract.js 的校验语义一致
+    // （maxImages 时 images.length !== maxImages 即 failSchema），措辞错一半就白烧一轮纠错。
     const limitsClauses = [];
     if (insertPointCount > 0) limitsClauses.push(`本次正文共有 ${insertPointCount} 个可用插图点，编号范围为 1～${insertPointCount}`);
     const imageLimit = Number(plannerOptions.maxImages) > 0 ? Math.floor(Number(plannerOptions.maxImages)) : 0;
     if (imageLimit) limitsClauses.push(`images 必须恰好包含 ${imageLimit} 项`);
     else if (Number(plannerOptions.maxPlanImages) > 0) limitsClauses.push(`images 最多包含 ${plannerOptions.maxPlanImages} 项`);
+    const characterLimit = Number(maxCharactersPerImage) > 0 ? Math.floor(Number(maxCharactersPerImage)) : 0;
+    if (characterLimit) limitsClauses.push(`每项 characters 最多 ${characterLimit} 人`);
     const limitsLine = limitsClauses.length ? `本次提交数量约束：${limitsClauses.join('；')}。` : '';
     const userTaskTemplate = buildScenePlannerUserTask({
         worldInfoSlot: slots.worldInfo,
