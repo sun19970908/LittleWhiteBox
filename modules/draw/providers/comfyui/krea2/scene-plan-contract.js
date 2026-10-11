@@ -1,6 +1,7 @@
 // [K2] fork 自 shared/scene-plan-contract.js：校验逻辑与原始一致，仅字段不同——
 // REQUIRED_IMAGE_FIELDS = ['index', 'insert_after', 'prompt']（scene/characters 及角色规范化删除，
-// 模型的 prompt 经 requireString 校验后作为 task.scene 进正向提示词）。
+// 模型的 prompt 经 requireString 校验后作为 task.scene 进正向提示词；可选 other 转成伪角色条目
+// 垫在 chars 末尾，见 normalizeImages 的 [K2] 块——经 assembleCharacterPrompts 产出追加在提示词最后的 tag）。
 // ScenePlannerError / 工具名 / 错误分类 / 纠错语义沿用原件——instanceof 一致性是
 // draw-agent-runtime 纠错循环工作的前提。上游同步时重拷原件后重放 [K2] 标记块。
 import { repairScenePlanArguments } from '../../../shared/scene-plan-arguments.js';
@@ -93,10 +94,15 @@ function normalizeImages(images, options = {}) {
                 },
             );
         }
+        // [K2] other（可选）→ 伪角色条目垫在 chars 末尾：空名短路 findEnabledCharacterByName，
+        // 不会撞已知角色库；assembleCharacterPrompts 对未知角色取 appear 产出 prompt，compiler 的
+        // charPositive 按序拼接 → other 落在所有角色之后（整条提示词最后）。未提交 other 时
+        // chars 为空数组，与改动前行为逐字节一致。
+        const other = typeof image.other === 'string' ? image.other.trim() : '';
         return {
             index: imageIndex + 1,
             scene: requireString(image.prompt, `${path}.prompt`),
-            chars: [],
+            chars: other ? [{ name: '', appear: other }] : [],
             placement: {
                 mode: 'source',
                 insertAfter,

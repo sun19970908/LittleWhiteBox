@@ -1,7 +1,7 @@
-// [K2] fork 自 shared/scene-plan-tool.js：逐字副本，唯一差异 = 图片项的字段
-// （scene/characters → prompt 一个字段；保留 index/insert_after 的形状、类型、必填语义不动）。
+// [K2] fork 自 shared/scene-plan-tool.js：逐字副本，差异 = 图片项的字段
+// （scene/characters → prompt 一个字段；末尾追加可选 other；保留 index/insert_after 的形状、类型、必填语义不动）。
 // 角色相关常量与 getScenePlanCharacterProperties 是原件的一部分，照抄保留以便上游同步；K2 工具不使用它们。
-// 上游同步时重拷原件后重放这一处 [K2] 字段块即可。
+// 上游同步时重拷原件后重放 [K2] 标记的字段块即可。
 import { SUBMIT_SCENE_PLAN_TOOL_NAME } from '../../../shared/scene-plan-contract.js';
 import { normalizeScenePlannerProfile } from '../../../shared/scene-planner-profile.js';
 
@@ -112,6 +112,12 @@ export function createSubmitScenePlanTool(options = {}) {
                 prompt: stringSchema(
                     '本图完整正向提示词：一段连贯英文自然语言。',
                     { minLength: 1 },
+                ),
+                // [K2] other：追加位。原生管线里它排在 characters 之后；K2 的 prompt 已含角色，
+                // 所以对应"整条正向提示词的最后"。合同侧转成伪角色条目垫在 chars 末尾，
+                // 经 assembleCharacterPrompts + charPositive 按序拼入（见 krea2/scene-plan-contract.js）。
+                other: stringSchema(
+                    '可选。追加在正向提示词最末尾的英文 tag，逗号分隔：质量词、画风词、LoRA 触发词等不适合写进自然语言提示词、需要原样保留的内容。没有就省略。',
                 ),
             },
         },

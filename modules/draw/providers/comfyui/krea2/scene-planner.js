@@ -31,7 +31,10 @@ export async function planKrea2Scene(options = {}) {
         }),
     });
 
-    const tasks = (response.parsed?.tasks || []).map((task) => ({ ...task, characterPrompts: [] }));
+    // [K2] 不再置空 characterPrompts：compiler 只在 task 无该字段时才从 chars 组装角色提示词
+    // （compileComfyPromptForTask 的三元分支），other 伪条目必须走 chars → assembleCharacterPrompts
+    // 通道才能进 charPositive 拼到提示词最后；chars 为空时组装结果同为 []，与原置空写法等价。
+    const tasks = response.parsed?.tasks || [];
     // 开关打开 = 强制 Krea2：拿不到任务就硬失败，不返回 null 让原生规划器顶上。
     if (!tasks.length) {
         throw new ScenePlannerError('Krea2 场景规划没有产出任何图片任务。', 'NO_IMAGE_TASKS');
