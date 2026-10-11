@@ -599,6 +599,8 @@ test('failure classification distinguishes actual deadlines, API failures, error
         assert.equal(recallFailureNotice(null, { code }).issueCode, 'recall_embedding_failed');
     }
     assert.equal(recallFailureNotice(null, new Error('internal failure')).issueCode, 'recall_failed');
+    assert.equal(recallFailureNotice(null, { code: 'MEMORY_SOURCE_CHANGED' }).issueCode, 'recall_source_changed');
+    assert.equal(recallFailureNotice(null, { code: 'MEMORY_SOURCE_UNSAFE' }).issueCode, 'recall_source_unsafe');
     assert.equal(recallFailureNotice(null, new DOMException('request aborted', 'AbortError')).issueCode, 'recall_failed');
     assert.equal(recallFailureNotice('generation-stopped', new Error('late failure')), null);
 });

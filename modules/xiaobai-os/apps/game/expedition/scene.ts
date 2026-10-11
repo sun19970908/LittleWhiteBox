@@ -1,6 +1,6 @@
 import { Color, DirectionalLight, Fog, Group, HemisphereLight, NeutralToneMapping, OrthographicCamera, PCFSoftShadowMap, Scene,
     SRGBColorSpace, Vector3, WebGLRenderer } from 'three';
-import type { Battle, Weapon, Outfit } from './types.js';
+import type { Battle, Weapon, Outfit, Point } from './types.js';
 import { createSceneKit } from './scene-kit.js';
 import { buildWorld } from './scene-world.js';
 import { createEnemyActor, createHero } from './scene-actors.js';
@@ -61,6 +61,11 @@ export function createExpeditionScene(host: HTMLElement, onError: () => void, op
         floaters.push({ element, position: new Vector3(x, 2, z), born: tick });
     }
     function clearActors() { for (const entry of enemies.values()) { actors.remove(entry.actor.root); entry.marker.remove(); } enemies.clear(); floaters.splice(0).forEach(f => f.element.remove()); }
+    function inView(point: Point) {
+        if (!cameraReady) { return true; }
+        projection.set(point.x, 1, point.y).project(camera);
+        return Math.abs(projection.x) < 1.15 && Math.abs(projection.y) < 1.15;
+    }
     return {
         draw(battle: Battle | null, loadout: { weapon: Weapon; outfit: Outfit }, zone: number, mode: SceneMode = 'battle', now = 0, world?: ExplorationFrame) {
             if (disposed || failed) { return; }
@@ -90,7 +95,7 @@ export function createExpeditionScene(host: HTMLElement, onError: () => void, op
                 clearActors(); lastHp = b?.player.hp ?? 0;
             }
             const portrait = !world && mode !== 'battle', mobile = width < 600, compact = mobile || height < 400, aspect = width / height;
-            const horizontal = world ? mobile ? WORLD_CAMERA.mobileWidth : Math.max(WORLD_CAMERA.minimumWidth, aspect * (height < 400 ? WORLD_CAMERA.shortSpan : WORLD_CAMERA.tallSpan))
+            const horizontal = world ? (mobile ? WORLD_CAMERA.mobileWidth : Math.max(WORLD_CAMERA.minimumWidth, aspect * (height < 400 ? WORLD_CAMERA.shortSpan : WORLD_CAMERA.tallSpan))) * (world.definition.safe && !b ? WORLD_CAMERA.settlementScale : 1)
                 : portrait ? mobile ? 13 : 28 : mobile ? 18.5 : Math.max(27, aspect * (height < 400 ? 14 : 23));
             const pan = Math.max(0, RULES.arena - horizontal / 2 + .5);
             const desiredX = world ? world.location.position.x : b ? compact ? b.player.x * .62 : Math.max(-pan, Math.min(pan, b.player.x * .62)) : mobile ? 0 : 5.5;
@@ -98,7 +103,7 @@ export function createExpeditionScene(host: HTMLElement, onError: () => void, op
             if (world && Math.hypot(worldX - world.location.position.x, worldY - world.location.position.y) > 8) { cameraReady = false; }
             const cameraSettled = Math.abs(target.x - desiredX) + Math.abs(target.z - desiredZ) < .015;
             const peopleMoved = world && worldScenery?.setPeople(world.people, now);
-            const npcChanged = world && worldScenery?.animate(world.location.position, now, reduced.matches);
+            const npcChanged = world && worldScenery?.animate(world.location.position, now, reduced.matches, inView);
             if (world && !dirty && cameraReady && cameraSettled && appearance === lastAppearance && b === lastBattle && !tickChanged
                 && worldX === world.location.position.x && worldY === world.location.position.y
                 && worldFacing === world.location.facing && drawnFacts === world.facts && !npcChanged && !peopleMoved) { return; }

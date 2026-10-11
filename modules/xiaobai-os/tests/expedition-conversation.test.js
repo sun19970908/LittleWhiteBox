@@ -141,7 +141,10 @@ test('history replays the actual action and only the current participant with ch
     const prompt = buildConversationPrompt(c, 'sanniang', 'remember?', await loadCanon('sanniang', signal()));
     assert.equal(inspectHistoryMessage(prompt.messages[1]).input, 'question');
     assert.equal(decodeNarrativeReply(prompt.messages[2].content).controls.action, 'briefing');
-    assert.equal(buildConversationPrompt(c, 'laobai', 'hello', await loadCanon('laobai', signal())).messages.length, 2);
+    const first = buildConversationPrompt(c, 'laobai', 'hello', await loadCanon('laobai', signal()));
+    assert.deepEqual(first.messages.map(message => message.role), ['user', 'assistant', 'user']);
+    assert.ok(decodeNarrativeReply(first.messages[1].content).reply);
+    assert.equal(decodeNarrativeReply(first.messages[1].content).controls.action, null);
     assert.ok(!conversationContext(c, 'sanniang').actions.includes('briefing'));
 });
 

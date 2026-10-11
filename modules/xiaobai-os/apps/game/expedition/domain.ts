@@ -3,6 +3,7 @@ import { BOSSES, BOSS_SPECS, OATHS, RULES, WEAPONS } from './content.js';
 import { OUTFITS, ownsOutfit, canChangeOutfit } from './outfits.js';
 import { fault } from './random.js';
 import { createCampaign, advanceCampaign } from './campaign/rules.js';
+import { pendingEnding } from './campaign/reply-checkpoint.js';
 import type { Command, ExpeditionData, Weapon } from './types.js';
 
 export function emptyExpedition(): ExpeditionData {
@@ -20,6 +21,7 @@ export function advanceExpedition(current: ExpeditionData, command: Command, act
         return current;
     }
     const data = structuredClone(current);
+    // A world action or a first greeting to another person accepts the previous reply.
     if (command.type === 'purchase') {
         const spec = OUTFITS[command.id];
         if (ownsOutfit(data, command.id) || spec.price <= 0 || spec.achievement !== null) { fault('locked'); }
@@ -47,6 +49,7 @@ export function advanceExpedition(current: ExpeditionData, command: Command, act
             }
         }
     }
+    if (data.active && !pendingEnding(data.active)) { delete data.active.lastReply; }
     data.revision++; data.last = { id: actionId, command: structuredClone(command) }; return data;
 }
 // Monetary receipts outlive the test campaign that earned them; these keys remain ledger identities.

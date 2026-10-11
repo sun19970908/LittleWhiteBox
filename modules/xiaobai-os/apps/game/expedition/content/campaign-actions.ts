@@ -18,7 +18,7 @@ export const CAMPAIGN_ACTIONS = {
     receiving: { atHome: false, people: ['laobai'], requires: [], fact: 'receiving_arranged',
         meaning: '玩家请求或接受担架接应，老白答应安排时提交。担架队在小门接应；牢门和小门打开后，玩家回到檐下才完成接回。' },
     finish: { atHome: false, people: ['sanniang'], requires: ['captives_arrived', 'supplies_secured', 'warden_defeated'], fact: 'chapter_completed',
-        meaning: '与玩家核对回来的两个人和药材后提交，完成这一章的收尾。第二章尚未开放。' },
+        meaning: '与玩家核对回来的两个人和药材后提交收尾。玩家读完并继续后结算这一章。第二章尚未开放。' },
     clinic: { atHome: true, people: ['sanniang'], requires: ['captives_arrived', 'supplies_secured'], fact: 'clinic_helped',
         meaning: '玩家帮三娘归置归还的药材、你在对白中回应这次协助时提交。记录共同经历，好感和态度由你另行判断。' },
 } satisfies Record<string, CampaignAction>;

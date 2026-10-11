@@ -12,12 +12,13 @@ export function witnessedEvents(facts: readonly CourtyardFact[]) {
 export function replayTurns(turns: readonly ConversationTurn[]) {
     const known = new Set<CourtyardFact>();
     let previousScene: ConversationTurn['scene'] | undefined;
-    return turns.filter(turn => turn.kind === 'dialogue').flatMap(turn => {
+    return turns.filter(turn => turn.kind !== 'receipt').flatMap(turn => {
         const newEvents = turn.facts.filter(id => !known.has(id));
         const scene = { ...(turn.scene === previousScene ? {} : { place: WORLD_COPY.scenes[turn.scene] }),
             ...(newEvents.length ? { newEvents } : {}) };
         turn.facts.forEach(id => known.add(id)); previousScene = turn.scene;
         const annotation = Object.keys(scene).length ? `<scene>\n${JSON.stringify(scene)}\n</scene>\n` : '';
+        if (turn.kind === 'greeting') { return [{ role: 'assistant', content: encodeNarrativeReply(turn) }]; }
         return [
             { role: 'user', content: annotation + turn.player },
             { role: 'assistant', content: encodeNarrativeReply(turn) },
@@ -30,6 +31,6 @@ export function memoryBoundary(turns: readonly ConversationTurn[], memory: Conve
 }
 
 export function historyForSummary(turns: readonly ConversationTurn[]) {
-    const facts = [...new Set(turns.filter(turn => turn.kind === 'dialogue').flatMap(turn => turn.facts))];
+    const facts = [...new Set(turns.filter(turn => turn.kind !== 'receipt').flatMap(turn => turn.facts))];
     return { events: witnessedEvents(facts), conversation: replayTurns(turns) };
 }

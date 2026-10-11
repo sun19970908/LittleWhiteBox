@@ -15,6 +15,8 @@ import { CAMPAIGN_COPY } from '../apps/game/expedition/content/campaign-copy.ts'
 import { JOURNEY_COPY } from '../apps/game/expedition/content/journey-copy.ts';
 import { COURTYARD } from '../apps/game/expedition/content/courtyard.ts';
 import { startWorld } from '../apps/game/expedition/world/exploration.ts';
+import { applyReply } from '../apps/game/expedition/narrative/apply-reply.ts';
+import { rewindReply } from '../apps/game/expedition/campaign/reply-checkpoint.ts';
 
 // Production entry, dialogue and maps. Visual-only renderers are replaced; the composer
 // supplies draft edits here and is exercised with real sizing/keyboard APIs in the browser.
@@ -39,8 +41,14 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
             b.onResolve({ filter: /\.webp\?url&no-inline$/ }, args => ({ path: args.path, namespace: 'image-url' }));
             b.onLoad({ filter: /.*/, namespace: 'image-url' }, args => ({ contents: `export default ${JSON.stringify(args.path)};`, loader: 'js' }));
             b.onLoad({ filter: /\.vue$/ }, args => {
+                if (args.path.endsWith('DialogueComposer.vue')) return { contents: `import {h} from 'vue'; export default {
+                    props:['modelValue','blocked','talking','canRegenerate','retrying','conclusion'],emits:['update:modelValue','send','regenerate','continue','cancel'],
+                    setup(p,{emit}){return()=>h('form',{onSubmit:e=>{e.preventDefault();emit('send')}},[
+                        h('button',{type:'button','data-regenerate':'',disabled:p.blocked||!p.canRegenerate,onClick:()=>emit('regenerate')}),
+                        p.conclusion ? h('button',{type:'button',disabled:p.blocked,onClick:()=>emit('continue')},p.conclusion==='fight'?${JSON.stringify(DIALOGUE_COPY.fight)}:${JSON.stringify(DIALOGUE_COPY.continue)})
+                        : h('textarea',{value:p.modelValue,onInput:e=>emit('update:modelValue',e.target.value)}),
+                        h('button',{type:'submit','data-send':'',disabled:p.blocked})])}}`, loader: 'js' };
                 if (args.path.endsWith('ExplorationField.vue')) return { contents: `import {h} from 'vue'; export default {emits:['interact','input'],setup(_,ctx){ctx.expose({focus(){}});return()=>h('div',[...['sanniang','laobai'].map(id=>h('button',{'data-interact':id,onClick:()=>ctx.emit('interact',id)})),h('button',{'data-step':'',onClick:()=>ctx.emit('input',{move:1,dash:false,skill:false})})])}}`, loader: 'js' };
-                if (args.path.endsWith('DialogueComposer.vue')) return { contents: `import {h} from 'vue'; export default {props:['modelValue'],emits:['update:modelValue'],setup(props,ctx){return()=>h('textarea',{value:props.modelValue,onInput:e=>ctx.emit('update:modelValue',e.target.value)})}}`, loader: 'js' };
                 if (['ExpeditionWardrobe.vue', 'WorldFrontispiece.vue', 'ExpeditionIcon.vue', 'DialogueActor.vue'].some(name => args.path.endsWith(name))) return { contents: 'export default {render(){return null}}', loader: 'js' };
                 const { descriptor } = parse(readFileSync(args.path, 'utf8'), { filename: args.path });
                 return { contents: compileScript(descriptor, { id: args.path, inlineTemplate: true }).content, loader: 'ts' };
@@ -59,9 +67,15 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
     const campaign = createCampaign('fixture', 7, 'blade', 'traveler', traveler); campaign.location.position = { ...campaign.people.sanniang.position };
     campaign.people.laobai.position = { ...campaign.location.position };
     const state = { data: { ...emptyExpedition(), active: campaign }, balance: 0, ready: true, pending: false, writeState: 'ready', conversation: null, replyFailure: null };
-    let notify, beforeAct = async () => {};
+    let notify, beforeAct = async () => {}, beforeTalk = async () => {};
     const bridge = { subscribe(listener) { notify = listener; return () => {}; }, async request(type, payload) {
         if (type === 'game/expedition/act') { await beforeAct(payload); state.data = advanceExpedition(state.data, payload.command, payload.actionId, 7); }
+        if (type === 'game/expedition/talk' || type === 'game/expedition/regenerate') {
+            await beforeTalk(payload);
+            if (payload.turnId) state.data.active = rewindReply(state.data.active, payload.person, payload.turnId);
+            applyReply(state.data.active, { ...payload, regenerate: payload.turnId }, { kind: 'dialogue', reply: payload.actionId, action: null, affection: 'up' });
+            state.data.revision++;
+        }
         return { result: structuredClone(state) };
     } };
     app = createApp(Room, { bridge, chatIdentity: 'fixture', generationActive: false });
@@ -105,6 +119,33 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
     assert.equal(root.querySelector('[role=status]'), null);
     assert.ok(root.querySelector('.ember-meter-popover dl'));
     assert.equal(root.querySelector('textarea').value, 'I will ask Sanniang about her work.');
+
+    await t.test('sending moves text into the log immediately; replacement never duplicates the player turn or erases the next draft', async () => {
+        let release;
+        beforeTalk = () => new Promise(resolve => { release = resolve; });
+        editDraft('one sent message'); await settle();
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        assert.equal(root.querySelector('textarea').value, '');
+        assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
+        assert.equal(root.querySelector('.ember-player-line').getAttribute('aria-busy'), 'true');
+        editDraft('next draft'); await settle(); release(); await settle();
+        assert.equal(root.querySelector('textarea').value, 'next draft');
+        assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
+        const original = state.data.active.conversations.sanniang.at(-1).id;
+        root.querySelector('[data-regenerate]').click(); await settle();
+        assert.equal(state.data.active.conversations.sanniang.at(-1).id, original);
+        assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
+        release(); await settle();
+        assert.notEqual(state.data.active.conversations.sanniang.at(-1).id, original);
+        assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
+        assert.equal(root.querySelector('textarea').value, 'next draft');
+        beforeTalk = async () => { throw Object.assign(new Error('fixture'), { code: 'expedition_agent_failed' }); };
+        root.querySelector('[data-regenerate]').click(); await settle();
+        assert.ok(root.querySelector('[role=alertdialog]')); root.querySelector('[role=alertdialog] button').click(); await settle();
+        assert.equal(root.querySelector('textarea').value, 'next draft');
+        assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
+        beforeTalk = async () => {};
+    });
 
     await t.test('a slow save cannot flash the old panel or reopen one that was closed', async () => {
         await leave();

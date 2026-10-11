@@ -19,7 +19,10 @@ export interface ConversationOptions {
     received: (response: Record<string, unknown>) => void;
 }
 
-type ConversationResult = Pick<ConversationTurn, 'reply' | 'action' | 'issue' | 'performance'> & { kind: 'dialogue' | 'receipt'; affection: AffectionDirection };
+export type ConversationResult = Pick<ConversationTurn, 'reply' | 'action' | 'performance'> & (
+    { kind: 'dialogue'; affection: AffectionDirection; issue?: ConversationTurn['issue'] }
+    | { kind: 'receipt'; affection: null; issue: 'reply_invalid' | 'reply_incomplete' }
+);
 function receipt(text: unknown, issue: 'reply_invalid' | 'reply_incomplete'): ConversationResult {
     if (typeof text !== 'string' || !text.trim()) { fault(issue); }
     return { kind: 'receipt', reply: text, action: null, affection: null, issue };

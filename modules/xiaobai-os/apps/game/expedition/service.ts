@@ -6,18 +6,17 @@ import { EXPEDITION_PARTITION, expeditionId, parseCommand, boundedText } from '.
 import { fault } from './random.js';
 import type { Command, ExpeditionData } from './types.js';
 import type { AgentCapability } from '../../../capabilities/agent/index.js';
-import { isPerson, type Participant } from './content/participants.js';
-import { canTalk, CAMPAIGN_RULES, recordFact } from './campaign/rules.js';
-import { settleAffection } from './campaign/relationships.js';
-import { secretFact, type MovementAction } from './narrative/actions.js';
-import { movePerson } from './world/people.js';
-import { CAMPAIGN_CHOICES, type CampaignChoice } from './content/campaign-actions.js';
+import type { Participant } from './content/participants.js';
+import { canTalk, CAMPAIGN_RULES } from './campaign/rules.js';
+import { rewindReply } from './campaign/reply-checkpoint.js';
+import type { ConversationMemory } from './campaign/types.js';
+import { applyReply } from './narrative/apply-reply.js';
 import { generateConversation, type ConversationOptions } from './narrative/conversation.js';
 
 export interface ExpeditionView {
     data: ExpeditionData & ReturnType<typeof expeditionProgress>; balance: number; ready: boolean; pending: boolean; writeState: XiaobaiOsFileState;
-    conversation: { actionId: string; person: Participant } | null;
-    replyFailure: { actionId: string; person: Participant; text: string | null; code: string } | null;
+    conversation: { actionId: string; person: Participant; text: string; regenerating: boolean } | null;
+    replyFailure: { actionId: string; person: Participant; playerText: string; regenerating: boolean; text: string | null; code: string } | null;
 }
 export interface ExpeditionRequest { actionId: string; revision: number; command: Command }
 export function createExpeditionService(store: PartitionStore<ExpeditionData>, files: XiaobaiOsFileControls, economy: EconomyReadCapability,
@@ -56,25 +55,32 @@ export function createExpeditionService(store: PartitionStore<ExpeditionData>, f
             postExpeditionMoney(data, next, money); validateEconomy(next, money); transaction.replace(next); accepted = true;
         }, { retainFailedCandidate: true, commitGuard: () => (accepted || guard()) && (dependencies.idle?.() ?? true) });
         if (result.status !== 'confirmed' && result.status !== 'unchanged') { throw Object.assign(new Error(`expedition_save_${result.status}`), { code: `expedition_save_${result.status}` }); }
+        if (command.type === 'start' || command.type === 'restart') { replyFailure = null; }
         return view();
     }
-    async function converse(input: { actionId: string; revision: number; person: Participant; text: string }, guard: () => boolean, signal: AbortSignal) {
+    async function converse(input: { actionId: string; revision: number; person: Participant; text: string; regenerate?: string }, guard: () => boolean, signal: AbortSignal) {
         expeditionId(input.actionId); boundedText(input.text, CAMPAIGN_RULES.playerTextLimit);
+        if (input.regenerate !== undefined) { expeditionId(input.regenerate); }
         const allowed = () => guard() && !signal.aborted;
-        const current = view().data, campaign = current.active;
-        if (!allowed() || conversation || !(dependencies.idle?.() ?? true) || !campaign) { fault('unavailable'); }
-        const previous = campaign.conversations[input.person].find(t => t.id === input.actionId);
-        if (previous) { if (previous.player !== input.text) { fault('identity'); } return view(); }
-        if (!canTalk(campaign, input.person)) { fault('unavailable'); }
+        const current = view().data, saved = current.active;
+        if (!allowed() || conversation || !(dependencies.idle?.() ?? true) || !saved) { fault('unavailable'); }
+        const previous = saved.conversations[input.person].find(t => t.id === input.actionId);
+        if (previous) { if (previous.player !== input.text || previous.regeneratedFrom !== input.regenerate) { fault('identity'); } return view(); }
         if (current.revision !== input.revision) { fault('stale'); }
+        const campaign = input.regenerate ? rewindReply(saved, input.person, input.regenerate) : saved;
+        if (input.regenerate && saved.conversations[input.person].at(-1)?.player !== input.text) { fault('identity'); }
+        if (!canTalk(campaign, input.person)) { fault('unavailable'); }
         if (!dependencies.agent) { fault('agent_not_configured'); }
         let revision = input.revision, received: Record<string, unknown> | null = null;
-        conversation = { actionId: input.actionId, person: input.person };
+        let replacementMemory: ConversationMemory | null = campaign.memories[input.person];
+        conversation = { actionId: input.actionId, person: input.person, text: input.text, regenerating: !!input.regenerate };
+        replyFailure = null;
         try {
         const response = await generateConversation(dependencies.agent, campaign, input.person, input.text, signal, {
             loadCanon: dependencies.loadCanon, countTokens: dependencies.countTokens,
             received: result => { received = result; },
             async saveMemory(memory) {
+                if (input.regenerate) { replacementMemory = memory; return; }
                 let accepted = false;
                 const result = await store.transact(transaction => {
                     if (!allowed()) { fault('cancelled'); }
@@ -88,41 +94,32 @@ export function createExpeditionService(store: PartitionStore<ExpeditionData>, f
             },
         });
         if (!allowed()) { fault('unavailable'); }
+        if (input.regenerate && response.kind === 'receipt') { fault(response.issue); }
         let accepted = false;
         const result = await store.transact(transaction => {
             if (!allowed()) { fault('unavailable'); }
             const data = transaction.current;
-            if (!data || data.revision !== revision || !data.active || data.active.id !== campaign.id || !canTalk(data.active, input.person)) { fault('stale'); }
-            const spoken = structuredClone(data);
-            const affectionDelta = response.kind === 'dialogue' && isPerson(input.person) ? settleAffection(spoken.active!, input.person, response.affection) : undefined;
-            spoken.active!.conversations[input.person].push({ id: input.actionId, kind: response.kind, player: input.text,
-                reply: response.reply, action: response.action, ...(response.issue ? { issue: response.issue } : {}),
-                ...(response.performance ? { performance: response.performance } : {}),
-                ...(affectionDelta === undefined ? {} : { affectionDelta }), scene: data.active.location.scene, facts: [...data.active.knowledge[input.person]] });
-            if (response.action === 'share_secret' && isPerson(input.person)) {
-                const fact = secretFact(input.person); if (!fact) { fault('invalid'); }
-                recordFact(spoken.active!, fact, [input.person]);
+            if (!data || data.revision !== revision || !data.active || data.active.id !== campaign.id) { fault('stale'); }
+            const next = structuredClone(data);
+            if (input.regenerate) {
+                next.active = rewindReply(data.active, input.person, input.regenerate);
+                next.active.memories[input.person] = replacementMemory;
             }
-            const choice = response.action && CAMPAIGN_CHOICES.includes(response.action as CampaignChoice) ? response.action as CampaignChoice : null;
-            if (!isPerson(input.person) && (response.action === 'pass' || response.action === 'attack')) {
-                spoken.active!.pendingParley = { enemy: input.person, decision: response.action };
-            } else if (isPerson(input.person) && response.action && response.action !== 'share_secret' && !choice) {
-                movePerson(spoken.active!, input.person, response.action as MovementAction);
-            }
-            const next = choice && isPerson(input.person) ? advanceExpedition(spoken, { type: 'choice', id: choice, person: input.person }, input.actionId, 0) : spoken;
-            if (!choice) { next.revision++; }
+            if (!canTalk(next.active!, input.person)) { fault('stale'); }
+            applyReply(next.active!, input, response);
+            next.revision++;
             next.last = { id: input.actionId, command: { type: 'conversation', person: input.person, text: input.text } };
             const money = transaction.useCapability(ECONOMY_TRANSACTION_CAPABILITY);
             validateEconomy(data, money); postExpeditionMoney(data, next, money); validateEconomy(next, money);
             transaction.replace(next); accepted = true;
         }, { retainFailedCandidate: true, commitGuard: () => accepted || allowed() });
         if (result.status !== 'confirmed' && result.status !== 'unchanged') { throw Object.assign(new Error(`expedition_save_${result.status}`), { code: `expedition_save_${result.status}` }); }
-        replyFailure = response.issue ? { actionId: input.actionId, person: input.person, text: null, code: `expedition_${response.issue}` } : null;
+        replyFailure = response.issue ? { actionId: input.actionId, person: input.person, playerText: input.text, regenerating: !!input.regenerate, text: null, code: `expedition_${response.issue}` } : null;
         } catch (error) {
             const result = received as Record<string, unknown> | null;
             const code = error && typeof error === 'object' && 'code' in error ? String(error.code) : 'expedition_agent_failed';
             if (guard() && code !== 'expedition_cancelled') {
-                replyFailure = { actionId: input.actionId, person: input.person, text: typeof result?.text === 'string' ? result.text : null, code };
+                replyFailure = { actionId: input.actionId, person: input.person, playerText: input.text, regenerating: !!input.regenerate, text: typeof result?.text === 'string' ? result.text : null, code };
             }
             throw error;
         } finally { conversation = null; }

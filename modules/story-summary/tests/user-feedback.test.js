@@ -1,27 +1,24 @@
 import assert from 'node:assert/strict';
 import { after, beforeEach, test } from 'node:test';
 import {
-    clearEmbeddingFailureNotice, clearRecallFailureNotice, notifyRecallFailure, notifyEmbeddingWarmupFailure,
+    clearEmbeddingFailureNotice, clearRecallFailureNotice, notifyRecallFailure,
     notifySummaryStartupFailure, notifyUnconfirmedMemory, runClearWithFeedback,
     createRecallRetryNotice,
 } from '../user-feedback.js';
 import { recallFailureNotice } from '../generate/recall-failure.js';
 import { createRecallPrefetchCoordinator } from '../generate/recall-prefetch.js';
 import { runRequiredRecall } from '../generate/required-recall.js';
-import { clearWarningCooldowns } from '../vector/runtime/maintenance-coordinator.js';
 
 // Only the host toast/console boundary is replaced. Exercise the real policy,
 // including replacement of blocked-send notices and loaded-memory ownership.
 const originalToastr = globalThis.toastr;
 const originalError = console.error;
 let shown, visible, errors;
-const probe = () => notifyEmbeddingWarmupFailure(120000);
 const recall = () => notifyRecallFailure(recallFailureNotice(null, { code: 'RECALL_EMBEDDING_FAILED' }));
 
 beforeEach(() => {
     clearEmbeddingFailureNotice();
     clearRecallFailureNotice();
-    clearWarningCooldowns();
     shown = []; visible = new Set(); errors = [];
     const show = level => (_message, _title, options) => {
         const toast = { level, options, finish() { visible.delete(toast); } };
@@ -55,7 +52,7 @@ test('only an unconfirmed save warns, once per loaded memory even after repeated
     assert.equal(shown.length, 0);
     assert.equal(notifyUnconfirmedMemory('unconfirmed', owner), true);
     assert.equal(notifyUnconfirmedMemory('unconfirmed', owner), true);
-    clearWarningCooldowns(); // Reopening/toggling is not a new save or memory load.
+    clearRecallFailureNotice(); // Reopening/toggling is not a new save or memory load.
     notifyUnconfirmedMemory('unconfirmed', owner);
     assert.equal(shown.length, 1);
     assert.equal(shown[0].level, 'error');
@@ -68,6 +65,7 @@ test('a recall retry notice is shown once, survives waiting, and clears only its
     const first = createRecallRetryNotice();
     first.show(); first.show();
     assert.equal(shown.length, 2);
+    assert.equal(shown[1].level, 'info');
     assert.equal(shown[1].options.timeOut, 0);
     assert.equal(shown[1].options.extendedTimeOut, 0);
     const second = createRecallRetryNotice();
@@ -80,46 +78,9 @@ test('a recall retry notice is shown once, survives waiting, and clears only its
     assert.deepEqual([...visible], [unrelated]);
 });
 
-test('a real recall failure replaces the probe warning and renews its display duration', () => {
-    probe(); probe();
-    assert.equal(shown.length, 1);
-    const first = shown[0];
-    recall();
-    assert.equal(shown.length, 2);
-    assert.deepEqual([...visible], [shown[1]]);
-    assert.equal(shown[1].options.timeOut, first.options.timeOut);
-    probe(); recall();
-    assert.equal(shown.length, 3);
-    recall(); // A second immediate blocked send must not be hidden.
-    assert.equal(shown.length, 4);
-    assert.equal(visible.size, 1);
-});
-
-test('a late probe cannot downgrade a real recall failure', () => {
-    recall(); probe();
-    assert.equal(shown.length, 1);
-    assert.equal(visible.size, 1);
-});
-
-test('a recall failure renews probe suppression across the previous cooldown boundary', t => {
-    let now = 1000000;
-    t.mock.method(Date, 'now', () => now);
-    probe();
-    now += 119000;
-    recall();
-    const recallToast = shown[1];
-    now += 2000;
-    probe();
-    assert.equal(shown.length, 2);
-    assert.deepEqual([...visible], [recallToast]);
-    now += 118000;
-    probe();
-    assert.equal(shown.length, 3);
-});
-
-test('replacing an expired probe and cleaning up never remove unrelated notices', () => {
+test('replacing an expired failure and cleaning up never remove unrelated notices', () => {
     const unrelated = toastr.info('unrelated');
-    probe();
+    recall();
     visible.delete(shown[1]); // The native timeout already removed it.
     recall();
     assert.equal(visible.size, 2);

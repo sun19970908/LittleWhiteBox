@@ -44,6 +44,7 @@ export function parseCommand(value: unknown): Command {
         case 'purchase': case 'equip': return { type: v.type, id: outfit(v.id) };
         case 'interact': return { type: 'interact', id: expeditionId(v.id) };
         case 'choice': return { type: 'choice', id: member(v.id, CAMPAIGN_CHOICES), person: member(v.person, PERSON_IDS) };
+        case 'greet': return { type: 'greet', person: member(v.person, PARTICIPANT_IDS) };
         case 'loadout': return { type: 'loadout', equipped: unique(list(v.equipped, RULES.relicSlots, relic)) };
         case 'input': {
             const spans: InputSpan[] = list(v.spans, RULES.maxInputTicks, raw => {
@@ -54,7 +55,7 @@ export function parseCommand(value: unknown): Command {
             return { type: 'input', spans };
         }
         case 'relic': return { type: 'relic', id: relic(v.id) };
-        case 'leave': case 'retry': case 'retreat': case 'resolve_parley': return { type: v.type };
+        case 'leave': case 'retry': case 'retreat': case 'resolve_parley': case 'accept_reply': return { type: v.type };
         default: return fault('invalid');
     }
 }
@@ -105,11 +106,15 @@ function validateCampaign(raw: unknown, data: ExpeditionData) {
         integer(relation.highestBand, relationshipBand(affection), RELATIONSHIP_RULES.bands.length - 1);
         }
         const entries = list(conversations[person], Number.MAX_SAFE_INTEGER, raw => {
-            const t = object(raw); const id = boundedText(t.id, 150); boundedText(t.player, CAMPAIGN_RULES.playerTextLimit);
-            member(t.kind, ['dialogue', 'receipt']); scene(t.scene);
+            const t = object(raw); const id = boundedText(t.id, 150);
+            member(t.kind, ['greeting', 'dialogue', 'receipt']); scene(t.scene);
+            if (t.kind === 'greeting') {
+                if (t.player !== '' || t.action !== null || t.affectionDelta !== undefined || t.issue !== undefined || t.regeneratedFrom !== undefined) { fault('invalid'); }
+            } else { boundedText(t.player, CAMPAIGN_RULES.playerTextLimit); }
+            if (t.regeneratedFrom !== undefined) { expeditionId(t.regeneratedFrom); }
             if (t.action !== null) { member(t.action, isPerson(person) ? [...CAMPAIGN_CHOICES, 'share_secret', 'follow', 'stay', ...Object.keys(DESTINATIONS).map(id => `go:${id}`)] : ['pass', 'attack']); }
             if (t.affectionDelta !== undefined) { integer(t.affectionDelta, -RELATIONSHIP_RULES.changeMax, RELATIONSHIP_RULES.changeMax); }
-            if (t.performance !== undefined && (t.kind !== 'dialogue' || !readPerformance(person, t.performance))) { fault('invalid'); }
+            if (t.performance !== undefined && (t.kind === 'receipt' || !readPerformance(person, t.performance))) { fault('invalid'); }
             if (t.kind === 'receipt') {
                 member(t.issue, ['reply_invalid', 'reply_incomplete']);
                 if (t.action !== null || t.affectionDelta !== undefined) { fault('invalid'); }
@@ -123,11 +128,28 @@ function validateCampaign(raw: unknown, data: ExpeditionData) {
             if (facts(t.facts).some(f => !knownFacts.includes(f))) { fault('invalid'); } return id;
         });
         unique(entries);
+        const turns = conversations[person] as { kind: string }[];
+        if (turns.slice(1).some(turn => turn.kind === 'greeting')) { fault('invalid'); }
         if (facts(knowledge[person]).some(f => !knownFacts.includes(f))) { fault('invalid'); }
         if (memories[person] !== null) {
             const memory = object(memories[person]); boundedText(memory.text, Number.MAX_SAFE_INTEGER);
             if (!entries.includes(boundedText(memory.throughId, 150))) { fault('invalid'); }
         }
+    }
+    if (r.lastReply !== undefined) {
+        const checkpoint = object(r.lastReply), person = member(checkpoint.person, PARTICIPANT_IDS);
+        const turnId = expeditionId(checkpoint.turnId), turns = conversations[person] as { id: string; kind: string; action: string | null }[];
+        const turn = turns.at(-1), before = object(checkpoint.before);
+        const fields = ['seed', 'facts', 'knowledge', 'relationships', 'people', 'pendingParley'];
+        if (phase !== 'exploration' || !turn || turn.kind === 'greeting' || turn.id !== turnId
+            || Object.keys(before).length !== fields.length || fields.some(key => !Object.hasOwn(before, key))
+            || facts(before.facts).some(f => !knownFacts.includes(f)) || before.pendingParley !== null
+            || turn.action === 'finish' && (person !== 'sanniang' || knownFacts.includes('chapter_completed'))) { fault('invalid'); }
+        // Validate the bounded pre-reply state without recursively copying or walking old transcripts.
+        const restored: Record<string, unknown> = { ...r, ...before,
+            conversations: Object.fromEntries(PARTICIPANT_IDS.map(id => [id, []])), memories: Object.fromEntries(PARTICIPANT_IDS.map(id => [id, null])) };
+        delete restored.lastReply;
+        validateCampaign(restored, data);
     }
 }
 export function validateExpedition(value: unknown): asserts value is ExpeditionData {

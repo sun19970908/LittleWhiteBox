@@ -2,6 +2,7 @@ export const DIALOGUE_COPY = Object.freeze({
     affection: '好感', context: '上下文', close: '关闭', loading: '正在读取人物资料',
     retry: '重新读取', rawReply: '查看回复原文',
     reloadArtwork: '重新加载人物画面',
+    regenerate: '重新生成', retrySend: '重试发送', sendFailed: '未完成回复，原消息已保留。', continue: '继续',
     issues: {
         action_rejected: '对白已保存，附带行动不成立，未执行。',
         performance_rejected: '对白已保存，附带表演未能呈现。',

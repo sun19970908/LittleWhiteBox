@@ -93,6 +93,7 @@ function maintainL1(options = {}) {
 // Exact saved inputs, independent of later chat/cleaning changes. Tests use
 // real digests and storage, not source-code or wording assertions.
 async function seedStoredChunkInputs(floor, texts) {
+    const meta = await mod.store.getMeta(fixture.chatId);
     await mod.store.deleteChunksAtFloor(fixture.chatId, floor);
     const chunks = texts.map((text, chunkIdx) => ({
         chunkId: mod.store.makeChunkId(floor, chunkIdx), floor, chunkIdx,
@@ -102,6 +103,7 @@ async function seedStoredChunkInputs(floor, texts) {
     await mod.store.saveChunkVectors(fixture.chatId, chunks.map(chunk => ({
         chunkId: chunk.chunkId, vector: [0, 1], sourceHash: mod.inputDigest('chunk', chunk.text),
     })), fixture.fingerprint);
+    await db.meta.put(meta);
 }
 
 for (const prose of ['First.\n\nSecond.', 'First  word\t next.', 'First.\r\n\r\nSecond.']) {
@@ -253,12 +255,12 @@ for (const currentText of ['她走进屋内。[inventory:sword]'.repeat(100), '[
     });
 }
 
-test('saved-source checks still reject unproven or mixed vector inputs', async () => {
+test('daily checks distinguish absent proof from contradicted or mixed vector inputs', async () => {
     host.context.chat[0].mes = 'red door';
     await seedCache();
     await seedStoredChunkInputs(0, ['red door[image:slot-1]']);
     await db.chunkVectors.toCollection().modify(row => { delete row.sourceHash; });
-    assert.equal((await mod.checkVectorCacheConsistency()).status, 'inconsistent');
+    assert.equal((await mod.checkVectorCacheConsistency()).status, 'consistent');
     await seedStoredChunkInputs(0, ['red door[image:slot-1]']);
     await db.stateVectors.toCollection().modify(row => { row.fingerprint = 'another-model'; });
     assert.equal((await mod.checkVectorCacheConsistency()).status, 'inconsistent');
@@ -396,13 +398,14 @@ for (const [reason, mutate] of [
         const before = await cacheSnapshot();
         const result = await mod.checkVectorCacheConsistency();
         const recoverable = reason === 'l1_count_mismatch';
-        assert.equal(result.status, recoverable ? 'incomplete' : 'inconsistent');
+        const absentProof = ['missing_source_hash', 'missing_relation_hash'].includes(reason);
+        assert.equal(result.status, absentProof ? 'consistent' : recoverable ? 'incomplete' : 'inconsistent');
         if (recoverable) assert.deepEqual(result.missingChunkFloors, [0]);
         else if (reason === 'l1_content_mismatch') assert.equal(result.diagnostic.code, 'source_mismatch');
-        else assert.equal(result.diagnostic.details.reason, reason);
+        else if (!absentProof) assert.equal(result.diagnostic.details.reason, reason);
         assert.equal(result.diagnostic.action, 'automatic');
         const issues = mod.buildVectorIntegrityIssues({ cacheInconsistent: result.status === 'inconsistent' });
-        assert.deepEqual(issues.map(({ code, action }) => ({ code, action })), recoverable ? [] : [{ code: 'cache_inconsistent', action: 'rebuild' }]);
+        assert.deepEqual(issues.map(({ code, action }) => ({ code, action })), recoverable || absentProof ? [] : [{ code: 'cache_inconsistent', action: 'rebuild' }]);
         assert.deepEqual(await cacheSnapshot(), before);
         assert.equal(host.metadataWrites, 0);
         assert.equal(host.embeddingInputs.length, 0);

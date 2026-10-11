@@ -533,6 +533,10 @@ var l = Object.freeze({
   retry: "重新读取",
   rawReply: "查看回复原文",
   reloadArtwork: "重新加载人物画面",
+  regenerate: "重新生成",
+  retrySend: "重试发送",
+  sendFailed: "未完成回复，原消息已保留。",
+  continue: "继续",
   issues: {
     action_rejected: "对白已保存，附带行动不成立，未执行。",
     performance_rejected: "对白已保存，附带表演未能呈现。",
@@ -829,7 +833,7 @@ var l = Object.freeze({
   leviathan: "沉潮巨兽",
   archivist: "无页典守",
   voidknight: "折光骑士"
-}, D = {
+}, F = {
   skirmish: {
     name: "肃清",
     detail: "击败全部守军"
@@ -854,7 +858,7 @@ var l = Object.freeze({
     name: "交叉火线",
     detail: "穿越交错射线，击败守军"
   }
-}, F = {
+}, D = {
   "storm-step": {
     name: "踏雷靴",
     detail: "闪避起点留下雷场，每次命中造成雷击。",
@@ -1171,7 +1175,7 @@ export {
   d as f,
   A as g,
   E as h,
-  F as i,
+  D as i,
   n as l,
   $ as m,
   j as n,

@@ -140,6 +140,13 @@ export async function deleteStateVectorsFromFloor(chatId, floor) {
     return deleted;
 }
 
+export async function deleteStateVectorsAtFloors(chatId, floors) {
+    if (!chatId || !floors.length) return 0;
+    const deleted = await stateVectorsTable.where('[chatId+floor]').anyOf(floors.map(floor => [chatId, floor])).delete();
+    if (deleted) applyRecallRuntimeMutationBestEffort(chatId, { type: 'deleteStateVectorsAtFloors', floors });
+    return deleted;
+}
+
 /**
  * 清空所有 StateVectors
  */

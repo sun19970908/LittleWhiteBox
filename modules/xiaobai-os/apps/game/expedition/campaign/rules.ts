@@ -17,6 +17,8 @@ import { PARLEY_ENEMIES, PARLEY_IDS } from '../content/parley.js';
 import { canParley } from './parley.js';
 import { parseTraveler, type Traveler } from './traveler.js';
 import { FIRST_CHAPTER } from '../content/chapters.js';
+import { greet } from '../content/greetings.js';
+import { pendingEnding } from './reply-checkpoint.js';
 
 export const CAMPAIGN_RULES = Object.freeze({ encounterReach: 14, alarmTicks: 900, explorationSpeed: 1.65, playerTextLimit: 2000, replyTextLimit: 8000 });
 export function campaignLoadout(campaign: Campaign): Loadout {
@@ -53,6 +55,7 @@ export function campaignField(campaign: Campaign) {
         campaign.facts.includes('alarm_raised') && !campaign.facts.includes('alarm_silenced'))?.field;
 }
 export function canTalk(campaign: Campaign, person: Participant) {
+    if (pendingEnding(campaign)) { return false; }
     if (!isPerson(person)) { return canParley(campaign, person); }
     if (campaign.pendingParley) { return false; }
     return campaign.phase === 'exploration' && reachablePeople(campaign)
@@ -81,7 +84,7 @@ function battleReward(campaign: Campaign) {
 }
 /** The same fixed-step reducer is used for prediction and authoritative replay. */
 export function tickCampaign(campaign: Campaign, input: InputFrame) {
-    if (campaign.pendingParley) { return; }
+    if (campaign.pendingParley || pendingEnding(campaign)) { return; }
     if (campaign.phase === 'battle' && campaign.battle) {
         const field = campaignField(campaign);
         if (!field) { fault('invalid'); }
@@ -111,8 +114,18 @@ export function tickCampaign(campaign: Campaign, input: InputFrame) {
 }
 export function advanceCampaign(campaign: Campaign, command: Exclude<Command, { type: 'start' | 'restart' | 'purchase' | 'equip' }>) {
     if (campaign.pendingParley && command.type !== 'resolve_parley') { fault('unavailable'); }
+    if (pendingEnding(campaign) && command.type !== 'accept_reply') { fault('unavailable'); }
     const facts = new Set(campaign.facts);
     switch (command.type) {
+        case 'greet':
+            if (!canTalk(campaign, command.person)) { fault('unavailable'); }
+            greet(campaign, command.person); break;
+        case 'accept_reply': {
+            const person = pendingEnding(campaign);
+            if (person !== 'sanniang') { fault('unavailable'); }
+            delete campaign.lastReply;
+            advanceCampaign(campaign, { type: 'choice', id: 'finish', person }); break;
+        }
         case 'resolve_parley': {
             const pending = campaign.pendingParley;
             if (!pending || campaign.phase !== 'exploration') { fault('unavailable'); }

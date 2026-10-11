@@ -130,7 +130,7 @@ function warningMap(channel) {
     return map;
 }
 
-function enqueueVectorWrite({ chatId = '', kind = 'vector-write', scope, operationId = '' }, task) {
+function enqueueVectorWrite({ chatId = '', kind = 'vector-write', scope, operationId = '', ready }, task) {
     const cancelSources = SCOPE_CANCEL_SOURCES[scope];
     const operationController = new AbortController();
     const link = linkAbortSignals([
@@ -147,12 +147,15 @@ function enqueueVectorWrite({ chatId = '', kind = 'vector-write', scope, operati
     };
 
     registerOperation(descriptor.operationId, operationController);
-    pendingWrites += 1;
-    epoch += 1;
-    publishWriteState();
+    // Readiness runs outside the writer (source consistency may itself use the
+    // queue). Cancellation ownership starts now, before its first async wait.
+    const enqueue = () => {
+        if (!acceptingWrites || link.signal.aborted) return undefined;
+        pendingWrites += 1;
+        epoch += 1;
+        publishWriteState();
 
-    const run = writeTail
-        .then(async () => {
+        const run = writeTail.then(async () => {
             pendingWrites -= 1;
             if (!acceptingWrites || link.signal.aborted) {
                 epoch += 1;
@@ -171,14 +174,16 @@ function enqueueVectorWrite({ chatId = '', kind = 'vector-write', scope, operati
                 epoch += 1;
                 publishWriteState();
             }
-        })
-        .finally(() => {
-            unregisterOperation(descriptor.operationId, operationController);
-            link.dispose();
         });
 
-    writeTail = run.catch(() => {});
-    return run;
+        writeTail = run.catch(() => {});
+        return run;
+    };
+    const run = ready ? Promise.resolve(ready).then(enqueue) : Promise.resolve(enqueue());
+    return run.finally(() => {
+        unregisterOperation(descriptor.operationId, operationController);
+        link.dispose();
+    });
 }
 
 export function runVectorWriteTask(options = {}, task) {
@@ -186,7 +191,7 @@ export function runVectorWriteTask(options = {}, task) {
     if (!SCOPE_CANCEL_SOURCES[options.scope]) {
         throw new TypeError(`Vector write task requires a known scope, got: ${String(options.scope)}`);
     }
-    if (!acceptingWrites) return Promise.resolve(undefined);
+    if (!acceptingWrites) return Promise.resolve(options.ready).then(() => undefined);
     return enqueueVectorWrite(options, task);
 }
 

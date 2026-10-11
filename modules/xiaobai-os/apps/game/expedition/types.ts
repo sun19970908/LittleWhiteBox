@@ -4,6 +4,7 @@ import type { Traveler } from './campaign/traveler.js';
 import type { ChapterId } from './content/chapters.js';
 import type { CampaignChoice } from './content/campaign-actions.js';
 import type { CourtyardPerson } from './content/world-types.js';
+import type { Participant } from './content/participants.js';
 export type Weapon = typeof WEAPON_IDS[number];
 export type Oath = typeof OATH_IDS[number];
 export type Relic = typeof RELIC_IDS[number];
@@ -65,6 +66,8 @@ export type Command =
     | { type: 'purchase'; id: Outfit } | { type: 'equip'; id: Outfit }
     | { type: 'choice'; id: CampaignChoice; person: CourtyardPerson }
     | { type: 'resolve_parley' }
+    | { type: 'greet'; person: Participant }
+    | { type: 'accept_reply' }
     | { type: 'retry' } | { type: 'retreat' } | { type: 'leave' };
 export interface ExpeditionData {
     formatVersion: typeof EXPEDITION_FORMAT_VERSION; revision: number; last: { id: string; command: Command | { type: 'conversation'; person: string; text: string } | { type: 'rebuild' } } | null; active: Campaign | null;

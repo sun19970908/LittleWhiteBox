@@ -1,10 +1,8 @@
 import { MEMORY_DATA_COPY } from './data/memory-copy.js';
-import { claimWarningCooldown } from './vector/runtime/maintenance-coordinator.js';
 import { xbLog } from '../../core/debug-core.js';
 import { SUMMARY_FEEDBACK_COPY } from './feedback-copy.js';
 
 const MODULE_ID = 'story-summary-feedback';
-const EMBEDDING_CHANNEL = 'embedding-connection';
 const NOTICE_OPTIONS = Object.freeze({ timeOut: 12000, extendedTimeOut: 3000, closeButton: true, escapeHtml: true });
 // The loaded memory object owns this lifetime. Reloading releases the old owner;
 // toggling the feature or reopening its panel must not repeat the same warning.
@@ -21,7 +19,7 @@ export function createRecallRetryNotice() {
         show() {
             if (shown) return;
             shown = true;
-            toast = toastr.warning(SUMMARY_FEEDBACK_COPY.recallRetrying, SUMMARY_FEEDBACK_COPY.title,
+            toast = toastr.info(SUMMARY_FEEDBACK_COPY.recallRetrying, SUMMARY_FEEDBACK_COPY.title,
                 { ...NOTICE_OPTIONS, timeOut: 0, extendedTimeOut: 0 });
         },
         clear() {
@@ -50,23 +48,11 @@ export function notifySummaryStartupFailure(error, shouldNotify = true) {
 
 export function clearEmbeddingFailureNotice() {
     if (!embeddingToast) return;
-    // Clear only our toast. Finishing the native hide animation avoids stacking
-    // an upgraded recall failure over the old probe warning, and renews its timer.
+    // Clear only our toast. Finish its hide animation before showing another
+    // blocked-send receipt; never dismiss another feature's notification.
     toastr.clear(embeddingToast, { force: true });
     embeddingToast.finish();
     embeddingToast = null;
-}
-
-function showEmbeddingFailure(message) {
-    clearEmbeddingFailureNotice();
-    embeddingToast = toastr.warning(message, SUMMARY_FEEDBACK_COPY.embeddingTitle, NOTICE_OPTIONS);
-}
-
-export function notifyEmbeddingWarmupFailure(cooldownMs, stage = 'embedding') {
-    if (!claimWarningCooldown(EMBEDDING_CHANNEL, '', 'failed', cooldownMs)) return;
-    showEmbeddingFailure(stage === 'embedding'
-        ? SUMMARY_FEEDBACK_COPY.embeddingWarmup
-        : SUMMARY_FEEDBACK_COPY.vectorInitialization[stage]);
 }
 
 export function clearRecallFailureNotice() {
@@ -82,8 +68,6 @@ export function notifyRecallFailure({ issueCode, notice }) {
     clearRecallFailureNotice();
     const options = { ...NOTICE_OPTIONS, preventDuplicates: false };
     if (embedding) {
-        // Preserve probe suppression, but never suppress an actual blocked send.
-        claimWarningCooldown(EMBEDDING_CHANNEL, '', 'failed', 0);
         embeddingToast = toastr.warning(notice, SUMMARY_FEEDBACK_COPY.embeddingTitle, options);
     } else {
         recallFailureToast = toastr.warning(notice, SUMMARY_FEEDBACK_COPY.title, options);

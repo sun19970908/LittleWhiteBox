@@ -42,6 +42,7 @@ import { getDefaultApiPrefix, resolveApiBaseUrl } from "../../shared/common/open
 import {
     commitIfSignalActive,
     mergeAbortSignals,
+    throwIfSignalAborted,
 } from "../../shared/common/abort-utils.js";
 import {
     GENERATE_INTERCEPTOR_ORDER,
@@ -124,6 +125,7 @@ import { testRerankService } from "./vector/llm/reranker.js";
 import { isRetryableEmbeddingFailure } from "./vector/llm/embedding-failure.js";
 import { buildVectorIntegrityIssues } from "./vector/integrity-policy.js";
 import { createEmbeddingConnection } from './vector/embedding-connection.js';
+import { createServiceTests } from './vector/service-tests.js';
 
 // tokenizer
 import { preload as preloadTokenizer, injectEntities, isReady as isTokenizerReady } from "./vector/utils/tokenizer.js";
@@ -148,7 +150,6 @@ import {
 import {
     getChunkBuildStatus,
     syncOnMessageDeleted,
-    syncOnMessageSwiped,
 } from "./vector/pipeline/chunk-builder.js";
 // 本地扩展：加载时 textHash 对账（仅检测不重建；上游无此检测，勿在合并时删掉）
 import { findStaleTextHashFloors } from "./vector/pipeline/text-hash-reconcile.js";
@@ -204,22 +205,30 @@ import {
     waitForVectorWrites,
 } from "./vector/runtime/maintenance-coordinator.js";
 
-import { invalidateLexicalIndex, warmupIndex, removeDocumentsByFloor, addEventDocuments, addChunkDocuments, clearChunkDocuments, removeEventDocuments } from "./vector/retrieval/lexical-index.js";
+import { invalidateLexicalIndex, warmupIndex, addEventDocuments, addChunkDocuments, clearChunkDocuments, removeEventDocuments } from "./vector/retrieval/lexical-index.js";
 import { trackVectorActivity } from './vector/runtime/vector-activity.js';
 import { checkVectorCacheConsistency, recordVectorCacheDiagnostic } from './vector/storage/package/service.js';
+import { createMessageSourceTracker } from './data/message-sources.js';
+import { retainSourceChange, synchronizeSourceCaches } from './data/source-sync.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
 // ═══════════════════════════════════════════════════════════════════════════
 
 const MODULE_ID = "storySummary";
+const messageSources = createMessageSourceTracker();
 const embeddingConnection = createEmbeddingConnection({
     synchronizeConfig: synchronizeSavedSummaryConfig,
     prepareRuntime: warmupActiveVectorCache,
     getVectorConfig,
+    onStatus: state => postToFrame({ type: 'VECTOR_ONLINE_STATUS', target: 'embedding', ...state }),
+});
+const serviceTests = createServiceTests({
+    probes: { l0: testL0Service, rerank: testRerankService },
+    onStatus: (target, state) => postToFrame({ type: 'VECTOR_ONLINE_STATUS', target, ...state }),
 });
 const memoryMaintenance = createMemoryMaintenanceHost({
-    canRun: () => isStorySummaryConsumableForCurrentChat(),
+    canRun: () => isStorySummaryConsumableForCurrentChat() && !messageSources.inspect(getContext()),
     invalidateRecall: () => {
         recallReuse.invalidate();
         recallPrefetch.invalidate();
@@ -619,7 +628,6 @@ function stopVectorMaintenanceAfterFailure(chatId, { allowEventRepair = true, al
     scheduleVectorIntegrityCheck(0, { allowEventRepair, allowChunkRepair });
 }
 
-const VECTOR_WARNING_COOLDOWN_MS = 120000; // 2分钟内不重复提醒
 let backupDeleteSupported = true;
 let backupDeleteUnsupportedReason = '';
 let backupManagerCleanup = null;
@@ -803,7 +811,7 @@ function sendVectorConfigToFrame() {
 
 async function sendVectorStatsToFrame() {
     const { chatId, chat } = getContext();
-    if (!chatId) return;
+    if (!chatId) { publishVectorIntegrity('idle'); return; }
 
     const store = getSummaryStore();
     const eventCount = store?.json?.events?.length || 0;
@@ -812,14 +820,7 @@ async function sendVectorStatsToFrame() {
     const totalMessages = chat?.length || 0;
     const stateVectorsCount = await getStateVectorsCount(chatId);
 
-    const cfg = getVectorConfig();
-    let mismatch = false;
-    if (cfg?.enabled && (stats.eventVectors > 0 || stats.chunks > 0)) {
-        const fingerprint = getEngineFingerprint(cfg);
-        const meta = await getMeta(chatId);
-        mismatch = meta.fingerprint && meta.fingerprint !== fingerprint;
-    }
-
+    if (getContext()?.chatId !== chatId) return;
     postToFrame({
         type: "VECTOR_STATS",
         stats: {
@@ -832,12 +833,21 @@ async function sendVectorStatsToFrame() {
             stateVectors: stateVectorsCount,
             recallRuntime: getCurrentRecallRuntimeStat(chatId),
         },
-        mismatch,
     });
+    if (frameReady && getContext()?.chatId === chatId) {
+        postToFrame({ type: 'VECTOR_ONLINE_STATUS', target: 'embedding', ...embeddingConnection.getStatus() });
+        for (const target of ['l0', 'rerank']) {
+            postToFrame({ type: 'VECTOR_ONLINE_STATUS', target, ...serviceTests.getStatus(target) });
+        }
+        // Opening/refreshing the panel only inspects; it does not buy repairs.
+        await refreshVectorIntegrity();
+    }
 }
 
 async function sendAnchorStatsToFrame() {
+    const chatId = getContext()?.chatId;
     const stats = await getAnchorStats();
+    if (isChatStale(chatId)) return;
     const atomsCount = getStateAtomsCount();
     postToFrame({ type: "ANCHOR_STATS", stats: { ...stats, atomsCount } });
 }
@@ -898,15 +908,20 @@ async function handleAnchorGenerate() {
     if (!release) return;
     const targetChatId = getContext()?.chatId || '';
     try {
+        const ready = ensureCurrentSources();
         return await runVectorWriteTask(
             {
                 chatId: targetChatId,
                 kind: 'manual-anchor-generation',
                 scope: VECTOR_WRITE_SCOPES.EMBEDDING,
                 operationId: ANCHOR_GENERATION_OPERATION,
+                ready,
             },
             (writeSession) => handleAnchorGenerateNow(targetChatId, writeSession),
         );
+    } catch (error) {
+        if (!isChatStale(targetChatId)) reportMemorySaveFailure(error);
+        xbLog.error(MODULE_ID, 'Anchor source synchronization failed', error);
     } finally {
         release();
         postToFrame({ type: "ANCHOR_GEN_PROGRESS", current: -1, total: 0 });
@@ -942,29 +957,21 @@ function handleAnchorCancel() {
 }
 
 async function handleTestOnlineService(config, target = "embedding") {
+    const chatId = getContext()?.chatId;
     try {
-        postToFrame({ type: "VECTOR_ONLINE_STATUS", target, status: "downloading", message: "连接中..." });
-        let result;
-        if (target === "l0") result = await testL0Service(config);
-        else if (target === "rerank") result = await testRerankService(config);
-        else {
-            const chatId = getContext()?.chatId;
-            result = await embeddingConnection.test({
+        if (target === 'embedding') {
+            await embeddingConnection.test({
                 apiConfig: config,
                 isCurrent: () => !!events && getContext()?.chatId === chatId,
             });
+            return; // The connection owner publishes both manual and automatic state.
         }
-        postToFrame({
-            type: "VECTOR_ONLINE_STATUS",
-            target,
-            status: "success",
-            message: target === "embedding"
-                ? `连接成功 (${result.dims}维)`
-                : (result.message || "连接成功"),
+        await serviceTests.test(target, config, {
+            isCurrent: () => !!events && getContext()?.chatId === chatId,
         });
     } catch (e) {
-        postToFrame({ type: "VECTOR_ONLINE_STATUS", target, status: "error",
-            message: e.name === 'AbortError' ? SUMMARY_FEEDBACK_COPY.connectionCancelled : e.message });
+        // The owning test publishes its terminal state; cancellation has no toast.
+        if (e.name !== 'AbortError') xbLog.warn(MODULE_ID, e.message, e);
     }
 }
 
@@ -1259,12 +1266,14 @@ async function handleGenerateVectors(mode = 'rebuild') {
     if (!release) return;
     const targetChatId = getContext()?.chatId || '';
     try {
+        const ready = ensureCurrentSources();
         return await runVectorWriteTask(
             {
                 chatId: targetChatId,
                 kind: mode === 'repair' ? 'missing-vector-repair' : 'full-vector-generation',
                 scope: VECTOR_WRITE_SCOPES.EMBEDDING,
                 operationId: VECTOR_GENERATION_OPERATION,
+                ready,
             },
             (writeSession) => {
                 const currentConfig = getVectorConfig();
@@ -1346,6 +1355,7 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
     let stats;
     let l0VectorStatus;
     try {
+        await ensureCurrentSources();
         stats = await getAnchorStats();
         l0VectorStatus = await getL0VectorBuildStatus(chatId);
     } catch (e) {
@@ -1494,8 +1504,6 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
             refreshEntityLexiconAndWarmup();
         }
 
-        await sendAnchorStatsToFrame();
-        await sendVectorStatsToFrame();
         const l0Failed = Number(l0Result?.llmFailed ?? l0Result?.failed ?? 0);
         const l0VectorFailed = Boolean(l0VectorResult && !l0VectorResult.success);
         const l2Failed = eventResult?.success === false;
@@ -1537,6 +1545,15 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
         stopVectorMaintenanceAfterFailure(chatId, { allowEventRepair: !eventRepairAttempted, allowChunkRepair: !chunkRepairAttempted });
     } finally {
         release();
+        if (!isChatStale(chatId)) {
+            try {
+                await sendAnchorStatsToFrame();
+                if (!isChatStale(chatId)) await sendVectorStatsToFrame();
+            } catch (error) {
+                xbLog.warn(MODULE_ID, SUMMARY_FEEDBACK_COPY.statsRefreshFailed, error);
+                if (!isChatStale(chatId)) publishVectorIntegrity('unavailable');
+            }
+        }
     }
 }
 
@@ -1570,6 +1587,7 @@ async function finishVectorConfigTransition(previousConfig, nextConfig, reason, 
     const configChanged = JSON.stringify(previousConfig || {}) !== JSON.stringify(nextConfig || {});
     if (!configChanged) return false;
 
+    serviceTests.cancel();
     clearEmbeddingFailureNotice();
 
     logRecallRuntimeCheckpoint('vectorConfig:shutdown-runtime', `reason=${reason} enabled=${nextEnabled ? 1 : 0}`);
@@ -1590,7 +1608,10 @@ async function changePanelConfig(reason, applyChange, vectorChanged = true) {
         reason: `summary-config:${reason}`,
         vectorChanged,
         applyChange,
-        invalidateRecall: () => cancelRecallAndClearPrompt('vector-config-changed'),
+        invalidateRecall: () => {
+            serviceTests.cancel();
+            cancelRecallAndClearPrompt('vector-config-changed');
+        },
         afterVectorChange: (previous, next, session) => finishVectorConfigTransition(previous, next, reason, session),
     });
 }
@@ -1979,29 +2000,62 @@ async function repairMissingChunksForCurrentChat(targetChatId) {
     }
 }
 
-async function checkVectorIntegrityAndWarn({ allowEventRepair = true, allowChunkRepair = true } = {}) {
+let integrityReadVersion = 0;
+function publishVectorIntegrity(status, issues = []) {
+    const copy = SUMMARY_FEEDBACK_COPY.vectorIntegrity;
+    postToFrame({ type: 'VECTOR_INTEGRITY', status,
+        message: status === 'issues' ? copy.status(issues) : copy[status] || '' });
+}
+
+async function refreshVectorIntegrity() {
+    const version = ++integrityReadVersion;
+    const chatId = getContext()?.chatId;
+    const requestCurrent = () => version === integrityReadVersion && chatId === getContext()?.chatId;
+    try {
+        await checkVectorIntegrity({ allowEventRepair: false, allowChunkRepair: false, readOnly: true, requestCurrent });
+    } catch (error) {
+        xbLog.warn(MODULE_ID, SUMMARY_FEEDBACK_COPY.statsRefreshFailed, error);
+        if (requestCurrent()) publishVectorIntegrity('unavailable');
+    }
+}
+
+async function checkVectorIntegrity({ allowEventRepair = true, allowChunkRepair = true, readOnly = false, requestCurrent = () => true } = {}) {
+    if (!requestCurrent()) return;
     const vectorCfg = getVectorConfig();
-    if (!vectorCfg?.enabled) return;
-    if (guard.isAnyRunning('summary', 'vector', 'anchor')) {
-        scheduleVectorIntegrityCheck(BACKGROUND_VISIBLE_GRACE_MS, { allowEventRepair, allowChunkRepair });
+    const { chat, chatId } = getContext();
+    if (!vectorCfg?.enabled || !chatId || !chat?.length) {
+        publishVectorIntegrity('idle');
         return;
     }
-
-    const { chat, chatId } = getContext();
-    if (!chatId || !chat?.length) return;
-    if (deferVectorIntegrityUntilMaintenance(chatId)) return;
+    const reschedule = () => {
+        if (!requestCurrent() || getContext()?.chatId !== chatId) return;
+        publishVectorIntegrity('pending');
+        if (!readOnly && isBackgroundWorkLive(chatId)) {
+            scheduleVectorIntegrityCheck(BACKGROUND_VISIBLE_GRACE_MS, { allowEventRepair, allowChunkRepair });
+        }
+    };
+    if (guard.isAnyRunning('summary', 'vector', 'anchor')) {
+        reschedule();
+        return;
+    }
+    if (!readOnly) {
+        await ensureCurrentSources();
+        if (getContext()?.chatId !== chatId) return;
+    }
+    if (readOnly ? pendingVectorMaintenanceByChat.has(chatId) : deferVectorIntegrityUntilMaintenance(chatId)) {
+        publishVectorIntegrity('pending');
+        return;
+    }
 
     const snapshot = captureMaintenanceSnapshot(chatId);
     if (!snapshot) {
-        scheduleVectorIntegrityCheck(BACKGROUND_VISIBLE_GRACE_MS, { allowEventRepair, allowChunkRepair });
+        reschedule();
         return;
     }
 
-    const isCurrent = () => getContext()?.chatId === chatId
+    const isCurrent = () => requestCurrent() && getContext()?.chatId === chatId
         && isMaintenanceSnapshotCurrent(snapshot);
-    const reschedule = () => {
-        if (isBackgroundWorkLive(chatId)) scheduleVectorIntegrityCheck(BACKGROUND_VISIBLE_GRACE_MS, { allowEventRepair, allowChunkRepair });
-    };
+    publishVectorIntegrity('checking');
     const store = getSummaryStore();
     const anchorStats = await getAnchorStats();
     const sourceEvents = (store?.json?.events || []).map(event => ({
@@ -2035,7 +2089,7 @@ async function checkVectorIntegrityAndWarn({ allowEventRepair = true, allowChunk
     if (allowEventRepair && missingEventPairs.length > 0) {
         await repairMissingEventVectorsForCurrentChat();
         if (getContext()?.chatId !== chatId) return;
-        await checkVectorIntegrityAndWarn({ allowEventRepair: false, allowChunkRepair });
+        await checkVectorIntegrity({ allowEventRepair: false, allowChunkRepair });
         return;
     }
 
@@ -2056,7 +2110,7 @@ async function checkVectorIntegrityAndWarn({ allowEventRepair = true, allowChunk
             reschedule();
             return;
         }
-        await checkVectorIntegrityAndWarn({ allowEventRepair, allowChunkRepair: false });
+        await checkVectorIntegrity({ allowEventRepair, allowChunkRepair: false });
         return;
     }
     const issues = buildVectorIntegrityIssues({
@@ -2068,21 +2122,17 @@ async function checkVectorIntegrityAndWarn({ allowEventRepair = true, allowChunk
         missingEventVectorCount: missingEventPairs.length,
     });
 
-    if (issues.length > 0) {
-        if (deferVectorIntegrityUntilMaintenance(chatId)) return;
-        if (!isCurrent()) {
-            reschedule();
-            return;
-        }
-        const eligible = issues.filter(issue => claimWarningCooldown(
-            'integrity',
-            chatId,
-            issue.code,
-            VECTOR_WARNING_COOLDOWN_MS,
-        ));
-        if (!eligible.length) return;
-        await executeSlashCommand(`/echo severity=warning ${SUMMARY_FEEDBACK_COPY.vectorIntegrity.warning(eligible)}`);
+    if (readOnly ? pendingVectorMaintenanceByChat.has(chatId) : deferVectorIntegrityUntilMaintenance(chatId)) {
+        if (requestCurrent() && getContext()?.chatId === chatId) publishVectorIntegrity('pending');
+        return;
     }
+    if (!isCurrent()) {
+        reschedule();
+        return;
+    }
+    // Background health is a panel state, not a failed user operation. The
+    // underlying scan keeps its diagnostic receipt, including real corruption.
+    publishVectorIntegrity(issues.length ? 'issues' : 'ready', issues);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2221,6 +2271,7 @@ async function synchronizeSavedSummaryConfig(assertCurrent = () => {}) {
         chatId: getContext()?.chatId || '',
         assertCurrent,
         beforeApply: (previous, next) => {
+            if (JSON.stringify(previous.vector) !== JSON.stringify(next.vector)) serviceTests.cancel();
             if (recallConfigKey(previous) !== recallConfigKey(next)) cancelRecallAndClearPrompt('recall-config-reloaded');
         },
         afterVectorChange: (previous, next, session) => finishVectorConfigTransition(previous, next, 'server-reload', session),
@@ -2638,6 +2689,7 @@ async function importSummaryMemoryPackage(rawText, targetChatId = '') {
     }
     const previous = readSummaryMemory();
     const next = prepareImportedSummary(previous, importedJson, (chat?.length || 0) - 1);
+    const sourceBasis = messageSources.capture(getContext());
     await commitSummaryMemory(chatId, next, { previous, resolvesSourceInvalidity: true, validate: assertImportActive, invalidate: async () => {
         await updateMeta(chatId, { lastChunkFloor: -1, fingerprint: null });
         await clearAllChunks(chatId);
@@ -2646,6 +2698,7 @@ async function importSummaryMemoryPackage(rawText, targetChatId = '') {
         invalidateLexicalIndex();
     } });
     assertImportActive();
+    messageSources.resolveRollback(sourceBasis, getContext());
 
     refreshEntityLexiconAndWarmup();
     scheduleLexicalWarmup();
@@ -2886,11 +2939,12 @@ function scheduleVectorIntegrityCheck(delayMs = 2000, { allowEventRepair = true,
             scheduleVectorIntegrityCheck(quietWait, { allowEventRepair, allowChunkRepair });
             return;
         }
-        checkVectorIntegrityAndWarn({ allowEventRepair, allowChunkRepair }).then(() => {
+        checkVectorIntegrity({ allowEventRepair, allowChunkRepair }).then(() => {
             vectorIntegrityRetryDelayMs = 0;
         }, (error) => {
             xbLog.warn(MODULE_ID, '向量完整性检查失败', error);
             if (isBackgroundWorkLive(scheduledChatId)) {
+                publishVectorIntegrity('unavailable');
                 vectorIntegrityRetryDelayMs = nextBackoffDelayMs(vectorIntegrityRetryDelayMs);
                 scheduleVectorIntegrityCheck(vectorIntegrityRetryDelayMs, { allowEventRepair, allowChunkRepair });
             }
@@ -2899,6 +2953,8 @@ function scheduleVectorIntegrityCheck(delayMs = 2000, { allowEventRepair = true,
 }
 
 function clearDeferredBackgroundTasks() {
+    integrityReadVersion++;
+    publishVectorIntegrity('idle');
     clearTimeout(lexicalWarmupTimer);
     lexicalWarmupTimer = null;
     vectorMaintenanceScheduler.clear();
@@ -2954,6 +3010,7 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
                 postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: '已停止' });
                 return;
             }
+            await ensureCurrentSources(execution.controller.signal);
             const result = await runSummaryGeneration(targetMesId, configForRun, {
                 onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: `自动总结 ${attempt}/3：${text}` }),
                 onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: `自动总结 ${attempt}/3：${msg}` }),
@@ -3142,6 +3199,11 @@ async function handleFrameMessage(event) {
 
         case "VECTOR_TEST_ONLINE":
             handleTestOnlineService(data.config, data.target || "embedding");
+            break;
+
+        case 'VECTOR_CANCEL_TEST':
+            if (data.target === 'embedding') embeddingConnection.cancel();
+            else serviceTests.cancel(data.target);
             break;
 
         case "VECTOR_REPAIR":
@@ -3412,7 +3474,9 @@ async function handleFrameMessage(event) {
                     { chatId, kind: 'summary-clear', scope: VECTOR_WRITE_SCOPES.IO },
                     () => changeRecallData(chatId, async () => {
                         if (getContext()?.chatId !== chatId) return false;
+                        const sourceBasis = messageSources.capture(getContext());
                         await clearSummaryData(chatId);
+                        messageSources.resolveRollback(sourceBasis, getContext());
                         return true;
                     }),
                 );
@@ -3670,6 +3734,7 @@ async function handleManualGenerate(mesId, config) {
     notifySummaryState();
 
     try {
+        await ensureCurrentSources(execution.controller.signal);
         const result = await runSummaryGeneration(mesId, config, {
             onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: text }),
             onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: msg }),
@@ -3840,7 +3905,6 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '') {
     // Automatic initialization uses the same saved-config/runtime/probe path as testing.
     void embeddingConnection.warmup({
         isCurrent: () => !!events && !isChatStale(scheduledChatId) && isStorySummaryConsumableForCurrentChat(),
-        warningCooldownMs: VECTOR_WARNING_COOLDOWN_MS,
     });
     logRecallRuntimeCheckpoint("chatChanged:after-warm-request", `chat=${activeChatId || "-"}`);
 
@@ -3884,80 +3948,55 @@ async function reconcileVectorFloorsOnLoad(chatId, chatLength) {
     return true;
 }
 
-async function handleMessageDeletedNow(scheduledChatId) {
-    if (!isStorySummaryEnabledForCurrentChat()) return null;
-    if (isChatStale(scheduledChatId)) return null;
-    const { chat, chatId } = getContext();
-    const newLength = chat?.length || 0;
+function handleMessageDeleted(chatId) { return synchronizeCurrentSources(chatId, 'delete'); }
+function handleMessageSwiped(chatId, floor) { return synchronizeCurrentSources(chatId, 'swipe', Number(floor)); }
+function handleMessageUpdated(chatId, floor) { return synchronizeCurrentSources(chatId, 'edit', Number(floor)); }
 
-    // 产品边界：只保证“删除末尾”或“从某层向后删除”的一致性。ST 编辑器中的
-    // 单条中间删除会重排后续 mesId，但 MESSAGE_DELETED 只提供新长度；该低频操作不在支持范围。
-    const rollback = await rollbackSummaryIfNeeded();
-    invalidateLexicalIndex();
-    // 回滚失败也要裁掉越界派生数据，否则 L0/L1 会一直指向已删楼层。
-    await syncOnMessageDeleted(chatId, newLength);
-
-    scheduleLexicalWarmup();
-    return rollback;
+function sourceSafetyError(code = 'MEMORY_SOURCE_CHANGED') {
+    return Object.assign(new Error(code === 'MEMORY_SOURCE_UNSAFE'
+        ? SUMMARY_FEEDBACK_COPY.recallSourceUnsafe : SUMMARY_FEEDBACK_COPY.recallInterrupted.edited), { code });
 }
 
-async function handleMessageDeleted(scheduledChatId) {
-    const rollback = await runVectorWriteTask(
-        {
-            chatId: scheduledChatId,
-            kind: 'message-delete-sync',
-            scope: VECTOR_WRITE_SCOPES.CONSISTENCY,
-        },
-        () => handleMessageDeletedNow(scheduledChatId),
+async function synchronizeCurrentSources(chatId, kind = 'observed', floor = null) {
+    if (isChatStale(chatId) || !isStorySummaryEnabledForCurrentChat()) return { status: 'stale' };
+    const change = retainSourceChange(messageSources, getContext(), { kind, floor });
+    if (!change) return { status: 'unchanged' };
+    // Reply replacement/continuation preserves an adopted round; historical edits do not.
+    if (kind === 'edit') recallReuse.invalidate();
+    else recallReuse.historyChanged(getContext(), change.fromFloor ?? Math.min(...change.editedFloors));
+    const outcome = await runVectorWriteTask(
+        { chatId, kind: 'source-sync', scope: VECTOR_WRITE_SCOPES.CONSISTENCY },
+        () => synchronizeSourceCaches(messageSources, getContext(), {
+            kind, floor, getCurrentContext: getContext,
+            isCurrent: () => !isChatStale(chatId) && isStorySummaryEnabledForCurrentChat(),
+        }),
     );
-    await finishSummaryContentChange(rollback);
-}
-
-async function finishSummaryContentChange(rollback) {
-    if (!rollback) return;
-    // deactivate 内部会 waitForVectorWrites，必须留在写任务之外，否则自等死锁。
-    if (rollback.status === 'failed') {
-        await deactivateCurrentChatStorySummary();
-        notifyStorySummaryChatState();
-        reportMemorySaveFailure({ code: rollback.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
-        return;
+    if (isChatStale(chatId)) return { status: 'stale' };
+    if (!outcome || !['synced', 'unchanged'].includes(outcome.status)) {
+        await clearHideState();
+        throw sourceSafetyError('MEMORY_SOURCE_UNSAFE');
     }
-    // 删除或 swipe 的事件返回后，宿主就可能开始组装请求，必须等待恢复完成。
-    // 即使 L2 无需回滚，原文变更也可能缩小 L1 隐藏边界。
-    await applyHideState();
-    notifyStorySummaryChatState();
-    await sendAnchorStatsToFrame();
-    await sendVectorStatsToFrame();
-}
-
-async function handleMessageSwipedNow(scheduledChatId, messageId) {
-    if (!isStorySummaryEnabledForCurrentChat()) return null;
-    if (isChatStale(scheduledChatId)) return null;
-    const { chat, chatId } = getContext();
-    if (!Number.isInteger(messageId) || messageId < 0 || messageId >= (chat?.length || 0)) return null;
-
-    const rollback = await rollbackSummaryIfNeeded({ changedFromFloor: messageId });
-    if (rollback.status === 'rolled_back') invalidateLexicalIndex();
-    else removeDocumentsByFloor(messageId);
-
-    await syncOnMessageSwiped(chatId, messageId);
-    // L0 同步：清理 swipe 前该楼及之后依赖旧正文的派生数据。
-
+    if (outcome.status === 'unchanged') return outcome;
+    invalidateLexicalIndex();
     scheduleLexicalWarmup();
-    return rollback;
+    for (const changedFloor of outcome.change.anchorFloors) rememberVectorMaintenance(chatId, changedFloor, 'source_changed');
+    scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, chatId);
+    await applyHideState({ full: outcome.change.fromFloor !== null || outcome.change.editedFloors.length !== 1,
+        messageId: outcome.change.editedFloors[0] });
+    if (!isChatStale(chatId)) notifyStorySummaryChatState();
+    return outcome;
 }
 
-async function handleMessageSwiped(scheduledChatId, messageId) {
-    const rollback = await runVectorWriteTask(
-        {
-            chatId: scheduledChatId,
-            kind: 'message-swipe-sync',
-            scope: VECTOR_WRITE_SCOPES.CONSISTENCY,
-        },
-        () => handleMessageSwipedNow(scheduledChatId, messageId),
-    );
-    initButtonsForAll();
-    await finishSummaryContentChange(rollback);
+async function ensureCurrentSources(signal) {
+    throwIfSignalAborted(signal);
+    const chatId = getContext().chatId;
+    if (messageSources.inspect(getContext())) cancelEmbeddingWriteTasks('Source synchronization');
+    await synchronizeCurrentSources(chatId);
+    await waitForVectorWrites();
+    throwIfSignalAborted(signal);
+    if (isChatStale(chatId) || messageSources.inspect(getContext()) || !isStorySummaryConsumableForCurrentChat()) {
+        throw sourceSafetyError('MEMORY_SOURCE_UNSAFE');
+    }
 }
 
 async function handleMessageReceived(scheduledChatId, targetMesId = null) {
@@ -3984,57 +4023,6 @@ function handleMessageSent(scheduledChatId) {
     if (!isStorySummaryConsumableForCurrentChat()) return;
     scheduleAutoSummary("before_user");
     if (getVectorConfig()?.enabled) scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, scheduledChatId);
-}
-
-/**
- * 正文被编辑。产品上将已总结楼层的编辑视为局部修正，不按 editedFloor 自动回滚 L2；
- * 若是改写剧情，由用户显式回滚总结后重新生成。rollbackSummaryIfNeeded 只处理先前已存在的长度越界。
- * 精确依赖原文的派生数据仍必须作废：
- * L0/L1 都是按旧文本算的，而等长编辑既不触发长度对账，L1 缺口不足告警阈值时
- * 完整性检查也发现不了 —— 不主动失效就会永久用着错文本的向量。
- * 失效范围只能到"受影响楼层"这个粒度：L1 靠 lastChunkFloor 单调推进，无法只补中间一层。
- */
-async function handleMessageUpdated(scheduledChatId, messageId) {
-    if (!isStorySummaryEnabledForCurrentChat()) return;
-    if (isChatStale(scheduledChatId)) return;
-    const parsedFloor = Number(messageId);
-    const editedFloor = Number.isInteger(parsedFloor) && parsedFloor >= 0 ? parsedFloor : null;
-    if (editedFloor === null) {
-        xbLog.warn(MODULE_ID, `正文编辑事件缺少可用楼层号(${messageId})，跳过派生数据失效`);
-    }
-    const rollback = await runVectorWriteTask(
-        {
-            chatId: scheduledChatId,
-            kind: 'message-update-rollback',
-            scope: VECTOR_WRITE_SCOPES.CONSISTENCY,
-        },
-        async () => {
-            if (isChatStale(scheduledChatId)) return { status: 'stale' };
-            const result = await rollbackSummaryIfNeeded({ invalidateFromFloor: editedFloor });
-            // 回滚成功与否都要作废：旧文本的向量留着比缺失更糟。
-            if (editedFloor !== null && !isChatStale(scheduledChatId)) {
-                await syncOnMessageDeleted(scheduledChatId, editedFloor);
-            }
-            return result;
-        },
-    );
-    if (isChatStale(scheduledChatId)) return;
-    if (!rollback) return;
-    if (rollback.status === 'failed') {
-        await deactivateCurrentChatStorySummary();
-        notifyStorySummaryChatState();
-        reportMemorySaveFailure({ code: rollback.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
-        return;
-    }
-    if (editedFloor !== null) {
-        invalidateLexicalIndex();
-        scheduleLexicalWarmup();
-        rememberVectorMaintenance(scheduledChatId, editedFloor, 'message_edited');
-        scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, scheduledChatId);
-        addSummaryBtnToMessage(editedFloor);
-    }
-    await applyHideState({ full: false, messageId: editedFloor });
-    notifyStorySummaryChatState();
 }
 
 function handleMessageRendered(data) {
@@ -4130,6 +4118,7 @@ async function prepareMemoryPrompt(type, signal, diagnostics = createRecallDiagn
     const T0 = performance.now();
     let preparedChatId = null;
     let reuseTicket = null;
+    let sourceBasis = null;
     const timing = {
         tokenizer: 0,
         boundary: 0,
@@ -4154,6 +4143,7 @@ async function prepareMemoryPrompt(type, signal, diagnostics = createRecallDiagn
             role: null,
             boundary: -1,
             reuseTicket,
+            sourceBasis,
             timing: { ...timing, total },
             skipReason: reason,
             ...result,
@@ -4162,7 +4152,10 @@ async function prepareMemoryPrompt(type, signal, diagnostics = createRecallDiagn
 
     if (signal?.aborted) return finish('aborted_before_prepare');
 
+    await ensureCurrentSources(signal);
+
     const context = getContext();
+    sourceBasis = messageSources.capture(context);
     const { chat, chatId } = context;
     preparedChatId = chatId || null;
     const chatLen = Array.isArray(chat) ? chat.length : 0;
@@ -4272,6 +4265,16 @@ async function prepareMemoryPrompt(type, signal, diagnostics = createRecallDiagn
  * prefetched run can never write a Prompt or warning before it is joined.
  */
 async function commitMemoryPrompt(prepared, signal) {
+    const assertSource = () => {
+        throwIfSignalAborted(signal);
+        if (prepared?.chatId !== getContext()?.chatId) throw sourceSafetyError();
+        if (!messageSources.isCurrent(prepared?.sourceBasis, getContext()) || !isStorySummaryConsumableForCurrentChat()) {
+            recallReuse.invalidate();
+            clearExtensionPrompt();
+            throw sourceSafetyError();
+        }
+    };
+    assertSource();
     const isCurrent = () => {
         const currentChatId = getContext()?.chatId;
         return !!prepared
@@ -4280,7 +4283,7 @@ async function commitMemoryPrompt(prepared, signal) {
             && (!prepared.reuseTicket || recallReuse.isCurrent(prepared.reuseTicket, getContext()))
             && isStorySummaryConsumableForCurrentChat();
     };
-    if (!isCurrent()) return;
+    if (!isCurrent()) throw sourceSafetyError();
 
     const { chatId } = getContext();
     if (
@@ -4299,7 +4302,8 @@ async function commitMemoryPrompt(prepared, signal) {
         }
     }
 
-    if (!isCurrent()) return;
+    assertSource();
+    if (!isCurrent()) throw sourceSafetyError();
 
     const T_WritePrompt = performance.now();
     const committedPrompt = commitIfSignalActive(signal, () => {
@@ -4342,6 +4346,12 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
     // 旧 Prompt 只在宿主真正走到 Prompt 组装前清理；提前召回不碰它。
     clearExtensionPrompt();
     if (!isStorySummaryConsumableForCurrentChat()) {
+        if (isStorySummaryEnabledForCurrentChat()) {
+            clearExtensionPrompt();
+            notifyRecallFailure(recallFailureNotice(null, sourceSafetyError('MEMORY_SOURCE_UNSAFE')));
+            abort(true);
+            return;
+        }
         cancelRecallAndClearPrompt('disabled');
         return;
     }
@@ -4449,13 +4459,17 @@ function scheduleWithChatGuard(fn, delay = 0, ...args) {
  * 重排，不会丢活。
  */
 function runContentChangeSync(handler, ...args) {
-    memoryMaintenance.cancel();
-    const chatId = getContext()?.chatId || null;
+    const context = getContext();
+    const chatId = context?.chatId || null;
     if (!chatId || !isStorySummaryEnabledForCurrentChat()) return undefined;
+    const change = messageSources.inspect(context);
+    // A save-without-edit must not cancel recall, stop maintenance or touch DB.
+    if (!change) return undefined;
+    memoryMaintenance.cancel();
     if (handler === handleMessageUpdated) {
         cancelRecallAndClearPrompt('message-edited');
     } else {
-        recallReuse.historyChanged(getContext(), handler === handleMessageSwiped ? Number(args[0]) : null);
+        recallReuse.historyChanged(context, change.fromFloor ?? Math.min(...change.editedFloors));
         if (!recallReuse.getStats().count) {
             cancelActiveRecall('history-changed');
             clearExtensionPrompt();
@@ -4466,7 +4480,10 @@ function runContentChangeSync(handler, ...args) {
     return handler(chatId, ...args).catch(async (error) => {
         // 派生数据同步失败时边界不可信。所有正文变更统一恢复原文，
         // 且异步失败绝不能落到已经切换的新聊天上。
-        if (!isChatStale(chatId)) await clearHideState();
+        if (!isChatStale(chatId)) {
+            await clearHideState();
+            reportMemorySaveFailure(error);
+        }
         xbLog.error(MODULE_ID, "正文变更同步失败", error);
     });
 }
@@ -4489,6 +4506,10 @@ function notifyStorySummaryAfterAi(data, source) {
 
     const message = chat[messageId];
     if (!message || message.is_user) return;
+
+    if (source !== 'character_message_rendered') {
+        if (!messageSources.observeCompletion({ chatId, chat }, messageId)) return;
+    }
 
     // A continuation changes the same floor while send_date stays unchanged.
     // Schedule directly from completion signals, not the after-AI gate's deduped
@@ -4532,6 +4553,7 @@ async function registerEvents() {
     events = createModuleEvents(MODULE_ID);
     memoryMaintenance.start();
     activeChatId = getContext().chatId || null;
+    messageSources.reset(getContext());
     registerAfterAiGateHandler();
 
     CacheRegistry.register(MODULE_ID, {
@@ -4577,7 +4599,9 @@ async function registerEvents() {
     initButtonsForAll();
 
     events.on(event_types.CHAT_CHANGED, () => {
+        messageSources.switchChat(getContext());
         embeddingConnection.cancel();
+        serviceTests.cancel();
         memoryMaintenance.cancel();
         cancelRecallAndClearPrompt('chat-changed');
         cancelActiveSummaryExecution();
@@ -4589,8 +4613,15 @@ async function registerEvents() {
     });
     events.on(event_types.MESSAGE_DELETED, () => runContentChangeSync(handleMessageDeleted));
     events.on(event_types.MESSAGE_RECEIVED, (data) => notifyStorySummaryAfterAi(data, "message_received"));
-    events.on(event_types.MESSAGE_SENT, () => scheduleWithChatGuard(handleMessageSent, 150));
+    events.on(event_types.MESSAGE_SENT, () => {
+        scheduleWithChatGuard(handleMessageSent, 150);
+    });
     events.on(event_types.MESSAGE_SWIPED, (messageId) => runContentChangeSync(handleMessageSwiped, messageId));
+    events.on(event_types.MESSAGE_SWIPE_DELETED, (data) => {
+        if (!isStorySummaryEnabledForCurrentChat()) return;
+        messageSources.observeSwipeDeleted(getContext(), data);
+        return runContentChangeSync(synchronizeCurrentSources);
+    });
     // 只绑 MESSAGE_EDITED。宿主真实编辑（script.js messageEditDone、/messageupdate 等）
     // 一定先发 MESSAGE_EDITED 再发 MESSAGE_UPDATED；而"打开编辑器又取消"只发 MESSAGE_UPDATED
     // （script.js closeMessageEditor）。绑 MESSAGE_UPDATED 会让取消编辑也裁掉后续 L0/L1。
@@ -4650,7 +4681,9 @@ async function unregisterEvents() {
 }
 
 async function runStorySummaryTeardown() {
+    messageSources.reset();
     embeddingConnection.cancel();
+    serviceTests.cancel();
     memoryMaintenance.stop();
     // The master switch invokes this cleanup directly (without awaiting it).
     // Restore flags synchronously, before waiting for any background writer.
@@ -4698,6 +4731,7 @@ async function runStorySummaryTeardown() {
 
 async function deactivateCurrentChatStorySummary() {
     embeddingConnection.cancel();
+    serviceTests.cancel();
     const hideCleanup = clearHideState();
     clearDeferredBackgroundTasks();
     cancelPendingHide();
@@ -4724,6 +4758,7 @@ async function handleChatDeleted(chatId) {
     // generation is disabled and the write coordinator has been shut down.
     await waitForVectorWrites();
     await clearChatData(chatId);
+    messageSources.forget(chatId);
     try {
         const filename = getBackupFilename(chatId);
         await deleteServerBackup(filename, null);

@@ -69,6 +69,12 @@ export function recallFailureNotice(cancelReason, error, timeoutMs = RECALL_TIME
         };
     }
     if (cancelReason) return null;
+    if (error?.code === 'MEMORY_SOURCE_UNSAFE') {
+        return { issueCode: 'recall_source_unsafe', notice: SUMMARY_FEEDBACK_COPY.recallSourceUnsafe };
+    }
+    if (error?.code === 'MEMORY_SOURCE_CHANGED') {
+        return { issueCode: 'recall_source_changed', notice: SUMMARY_FEEDBACK_COPY.recallInterrupted.edited };
+    }
     if (error?.code === 'RECALL_EMBEDDING_FAILED' || error?.code === 'RECALL_EMBEDDING_INVALID_RESPONSE') {
         return embeddingFailureNotice(error);
     }

@@ -14,10 +14,11 @@ import { PERSON_PLACES } from '../content/people-places.js';
 import { COURTYARD } from '../content/courtyard.js';
 import { PARLEY_ENEMIES, PARLEY_IDS } from '../content/parley.js';
 import { parleyActor } from './world-parley.js';
+import { buildLocalLife } from './local-people.js';
 
 export interface ExplorableScenery extends LandscapeScenery {
     setFacts(facts: ReadonlySet<CourtyardFact>): void; setEncounterActive(active: boolean): void;
-    animate(player: Point, now: number, reduced: boolean): boolean;
+    animate(player: Point, now: number, reduced: boolean, inView: (point: Point) => boolean): boolean;
     people: ReturnType<typeof person>[];
     setPeople(people: PeopleLocations, now: number): boolean;
     parleyPeople: ReturnType<typeof parleyActor>[];
@@ -27,6 +28,7 @@ export interface ExplorableScenery extends LandscapeScenery {
 export function buildExplorableWorld(k: SceneKit, root: Group, definition: SceneDefinition, facts: ReadonlySet<CourtyardFact>): ExplorableScenery {
     const scenery = buildLandscape(k, root, definition.landscape), objects = k.group(root), residents = k.group(root);
     const sentries = buildSentries(k, root, definition, facts);
+    const localLife = buildLocalLife(k, residents, definition.id);
     const people: ReturnType<typeof person>[] = [];
     const parleyPeople = PARLEY_IDS.filter(id => PARLEY_ENEMIES[id].scene === definition.id).map(id => parleyActor(k, residents, id, facts));
     let animatedAt = -1;
@@ -133,17 +135,18 @@ export function buildExplorableWorld(k: SceneKit, root: Group, definition: Scene
             }
             return changed;
         }, setEncounterActive(active) { sentries.setEncounterActive(active); parleyPeople.forEach(person => { person.root.visible = !active; }); }, update: scenery.update,
-        animate(player, now, reduced) {
+        animate(player, now, reduced, inView) {
             const frame = Math.floor(now / 80);
             if (frame === animatedAt) { return false; } animatedAt = frame;
             let changed = sentries.animate(reduced);
+            changed = localLife.animate(player, now, reduced, inView) || changed;
             for (const enemy of parleyPeople) { changed = enemy.update(player, reduced) || changed; }
             for (const person of people) {
                 if (Math.hypot(person.position.x - player.x, person.position.y - player.y) < 22) {
-                    person.update(player, now, reduced); changed = !reduced;
+                    person.update(player, now, reduced); changed = !reduced || changed;
                 } else { person.ring.visible = false; }
             }
             return changed;
         },
-        dispose() { people.splice(0).forEach(person => person.dispose()); parleyPeople.forEach(person => person.dispose()); residents.removeFromParent(); disposeObjects?.(); sentries.dispose(); scenery.dispose(); } };
+        dispose() { localLife.dispose(); people.splice(0).forEach(person => person.dispose()); parleyPeople.forEach(person => person.dispose()); residents.removeFromParent(); disposeObjects?.(); sentries.dispose(); scenery.dispose(); } };
 }

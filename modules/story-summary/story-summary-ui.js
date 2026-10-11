@@ -946,10 +946,6 @@ const UNANNOTATED_LABEL = '未标注';
         $('vector-event-count').textContent = stats.eventVectors || 0;
     }
 
-    function showVectorMismatchWarning(show) {
-        $('vector-mismatch-warning').classList.toggle('hidden', !show);
-    }
-
     // ═══════════════════════════════════════════════════════════════════════════
     // 记忆锚点（L0）UI
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1103,11 +1099,17 @@ const UNANNOTATED_LABEL = '未标注';
             };
 
             $(`${prefix}-btn-connect`).onclick = () => fetchVectorModels(prefix);
+            for (const field of ['provider', 'url', 'key', 'model-text', 'model-select']) {
+                $(`${prefix}-api-${field}`).addEventListener(field === 'provider' || field === 'model-select' ? 'change' : 'input', () => {
+                    postMsg('VECTOR_CANCEL_TEST', { target: prefix });
+                    updateVectorOnlineStatus(prefix, 'idle', '');
+                });
+            }
             $(`${prefix}-btn-save`).onclick = () => saveVectorApiSection(prefix);
             $(`${prefix}-btn-test`).onclick = () => {
                 const btn = $(`${prefix}-btn-test`);
                 if (btn) btn.disabled = true;
-                setStatusText($(`${prefix}-api-connect-status`), '测试中...', 'loading');
+                setStatusText($(`${prefix}-api-connect-status`), SUMMARY_FEEDBACK_COPY.connectionChecking, 'loading');
                 const cfg = getVectorConfig();
                 postMsg('VECTOR_TEST_ONLINE', {
                     target: prefix,
@@ -2700,7 +2702,10 @@ const UNANNOTATED_LABEL = '未标注';
 
             case 'VECTOR_STATS':
                 updateVectorStats(d.stats);
-                if (d.mismatch !== undefined) showVectorMismatchWarning(d.mismatch);
+                break;
+
+            case 'VECTOR_INTEGRITY':
+                $('vector-integrity-status').textContent = d.message || '';
                 break;
 
             case 'ANCHOR_STATS':

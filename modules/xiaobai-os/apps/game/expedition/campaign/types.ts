@@ -11,13 +11,16 @@ import type { ChapterId } from '../content/chapters.js';
 import type { Performance } from '../performance/catalog.js';
 
 export interface ConversationTurn {
-    id: string; kind: 'dialogue' | 'receipt'; player: string; reply: string;
+    id: string; kind: 'greeting' | 'dialogue' | 'receipt'; player: string; reply: string;
     action: NarrativeAction | null; facts: CourtyardFact[]; scene: CourtyardScene;
     affectionDelta?: number;
     performance?: Performance;
+    regeneratedFrom?: string;
     issue?: 'action_rejected' | 'performance_rejected' | 'metadata_invalid' | 'reply_invalid' | 'reply_incomplete';
 }
 export interface ConversationMemory { throughId: string; text: string }
+export type DialogueEffects = Pick<Campaign, 'seed' | 'facts' | 'knowledge' | 'relationships' | 'people' | 'pendingParley'>;
+export interface ReplyCheckpoint { person: Participant; turnId: string; before: DialogueEffects }
 export interface Campaign {
     id: string;
     traveler: Traveler;
@@ -38,6 +41,7 @@ export interface Campaign {
     relationships: Record<CourtyardPerson, Relationship>;
     people: PeopleLocations;
     pendingParley: PendingParley | null;
+    lastReply?: ReplyCheckpoint;
     evidence: { dispatchNoteSeen: boolean };
     conversations: Record<Participant, ConversationTurn[]>;
     memories: Record<Participant, ConversationMemory | null>;

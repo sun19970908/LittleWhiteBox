@@ -36,10 +36,11 @@ export function withExpeditionRuntime(primary: XiaobaiOsAppRuntime, service: Exp
                 if (message.type === 'game/expedition/read') { return await service.refresh(); }
                 if (message.type === 'game/expedition/confirm') { return await service.confirm(guard); }
                 if (message.type === 'game/expedition/rebuild') { return await service.rebuild(expeditionId(payload.actionId), guard); }
-                if (message.type === 'game/expedition/talk') {
+                if (message.type === 'game/expedition/talk' || message.type === 'game/expedition/regenerate') {
                     const controller = new AbortController(); conversation = controller;
                     try { return await service.converse({ actionId: expeditionId(payload.actionId), revision: payload.revision as number,
-                        person: member(payload.person, PARTICIPANT_IDS), text: payload.text as string }, guard, controller.signal); }
+                        person: member(payload.person, PARTICIPANT_IDS), text: payload.text as string,
+                        ...(message.type === 'game/expedition/regenerate' ? { regenerate: expeditionId(payload.turnId) } : {}) }, guard, controller.signal); }
                     finally { if (conversation === controller) { conversation = null; } }
                 }
                 if (message.type !== 'game/expedition/act') { fault('invalid'); }

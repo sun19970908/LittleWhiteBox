@@ -10,6 +10,11 @@ export const COURTYARD_WATERWAY = defineLandscapeScene({
     ], objects: [{ id: 'sluice', anchor: 'sluice', kind: 'switch', fact: 'sluice_opened' }],
     landscape: {
         vista: 'interior', surface: 'wet', bounds: { x: 0, z: 0, width: 64, depth: 88 },
+        suspended: [
+            { kind: 'pipe', from: [-28.5, 4.3, -41], to: [-28.5, 4.3, 16] },
+            { kind: 'pipe', from: [-28.5, 4.3, -18], to: [29, 4.3, -18] },
+            { kind: 'pipe', from: [29, 4.3, -18], to: [29, 4.3, 41] },
+        ],
         gates: [{ id: 'sluice', footprint: { x: 0, z: 16, width: 12, depth: 4 }, condition: { all: ['sluice_opened'] } }],
         roads: [{ points: [[-21, -35], [-10, -32], [-10, -12], [3, 0], [0, 16], [14, 28], [20, 35]], width: 5 }],
         features: [
@@ -78,7 +83,7 @@ export const COURTYARD_CELLS = defineLandscapeScene({
             f('east-bunk', 'bunk', 26, -24, 4, 8),
             f('west-cell-bench', 'bench', -8, -30, 2, 4),
             f('east-cell-bench', 'bench', 8, -30, 2, 4),
-            f('guard-desk', 'supplies', 3, 12, 4, 4),
+            f('guard-desk', 'ledger', 3, 12, 4, 4),
             f('hall-pier-west', 'column', -7, -4, 2, 2, { height: 7 }),
             f('hall-pier-east', 'column', 7, -4, 2, 2, { height: 7 }),
         ],

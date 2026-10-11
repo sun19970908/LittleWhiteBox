@@ -10,6 +10,7 @@ import { performanceOptions } from '../performance/catalog.js';
 import { responseInstruction } from './response.js';
 import { memoryBoundary, replayTurns, witnessedEvents } from './history.js';
 import { conversationScene } from './scene.js';
+import { greetingTurn } from '../content/greetings.js';
 
 export function conversationContext(campaign: Campaign, person: Participant, stages: readonly RelationshipStage[] = []) {
     const actionMeanings = narrativeActions(campaign, person, stages), actions = Object.keys(actionMeanings);
@@ -33,7 +34,7 @@ export function buildConversationPrompt(campaign: Campaign, person: Participant,
     const { actions: _actions, actionMeanings, events, ...situation } = context;
     const operations = { actions: actionMeanings, performance };
     const story = { memory: memory?.text ?? null, events, ...situation,
-        opening: campaign.conversations[person].some(t => t.kind !== 'receipt') || !isPerson(person) && campaign.facts.includes(PARLEY_ENEMIES[person].complete)
+        opening: campaign.conversations[person].some(t => t.kind === 'dialogue') || !isPerson(person) && campaign.facts.includes(PARLEY_ENEMIES[person].complete)
             ? null : context.rescued ? canon.opening.returned : canon.opening.initial,
         stage };
     return {
@@ -43,7 +44,7 @@ export function buildConversationPrompt(campaign: Campaign, person: Participant,
             block('NPCs', `${canon.npcs}\n\n${canon.character.trim()}`)].join('\n\n'),
         messages: [
             { role: 'user', content: `${block('meta_protocol', `${canon.protocol.trim()}\n\n${block('operations', JSON.stringify(operations, null, 2))}`)}\n\n<story>\n${JSON.stringify(story, null, 2)}` },
-            ...replayTurns(campaign.conversations[person].slice(memoryBoundary(campaign.conversations[person], memory))),
+            ...replayTurns(campaign.conversations[person].length ? campaign.conversations[person].slice(memoryBoundary(campaign.conversations[person], memory)) : [greetingTurn(campaign, person)]),
             { role: 'user', content: `${text}\n</story>\n\n${responseInstruction(context.person)}` },
         ],
     };

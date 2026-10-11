@@ -34,7 +34,7 @@ export const COURTYARD_HALL = defineLandscapeScene({
             f('east-gallery', 'planter', 32, 4, 6, 28),
             f('west-gallery-bench', 'bench', -28, 28, 2, 6),
             f('east-gallery-bench', 'bench', 28, 28, 2, 6),
-            f('crown-console', 'supplies', 0, -41, 6, 4),
+            f('crown-console', 'ledger', 0, -41, 6, 4),
             f('northern-west-pillar', 'column', -29, -35, 4, 4, { height: 14 }),
             f('northern-east-pillar', 'column', 29, -35, 4, 4, { height: 14 }),
         ],
@@ -47,6 +47,10 @@ export const COURTYARD_ROOTS = defineLandscapeScene({
     exits: [{ id: 'crossroads', anchor: 'crossroads', to: 'crossroads', arrival: 'roots' }], objects: [],
     landscape: {
         vista: 'garden', surface: 'grass', bounds: { x: 0, z: 0, width: 80, depth: 84 }, gates: [],
+        suspended: [
+            { kind: 'pipe', from: [-38, 3.2, -29], to: [-3, 3.2, -29] },
+            { kind: 'pipe', from: [3, 2.8, -29], to: [38, 2.8, -29] },
+        ],
         roads: [
             { points: [[0, 35], [0, 23], [-9, 11], [-12, -7], [0, -19]], width: 5 },
             { points: [[0, 23], [11, 12], [13, -5], [0, -19]], width: 4 },

@@ -12,6 +12,7 @@ export function createExpeditionClient(bridge: XiaobaiOsFrameBridge, chatIdentit
     const view = shallowRef<ExpeditionView | null>(null), busy = ref(false), error = ref('');
     const failed = shallowRef<ExpeditionRequest | null>(null);
     const requestingTalk = ref(false), uncertainTalk = ref(false);
+    const submission = shallowRef<(NonNullable<ExpeditionView['conversation']> & { status: 'sending' | 'failed' }) | null>(null);
     const dismissedFailure = ref<string | null>(null);
     const conversationFailure = computed(() => view.value?.replyFailure?.actionId === dismissedFailure.value ? null : view.value?.replyFailure ?? null);
     const talking = computed(() => requestingTalk.value || !!view.value?.conversation);
@@ -19,7 +20,19 @@ export function createExpeditionClient(bridge: XiaobaiOsFrameBridge, chatIdentit
     const dataInvalid = ref(false);
     let disposed = false, pushed: ExpeditionView | null = null;
     const blocked = computed(() => busy.value || talking.value || uncertainTalk.value || !!failed.value || !view.value?.ready || view.value.writeState !== 'ready' || view.value.pending);
-    function apply(next: ExpeditionView) { if (!disposed && (!view.value || next.data.revision >= view.value.data.revision)) { view.value = next; } }
+    function apply(next: ExpeditionView) {
+        if (disposed || view.value && next.data.revision < view.value.data.revision) { return; }
+        const pending = submission.value;
+        if (view.value?.data.active?.id !== next.data.active?.id || pending && next.data.active?.conversations[pending.person].some(turn => turn.id === pending.actionId)) { submission.value = null; }
+        view.value = next;
+    }
+    const outgoing = computed(() => {
+        if (submission.value) { return submission.value; }
+        if (view.value?.conversation) { return { ...view.value.conversation, status: 'sending' as const }; }
+        const failure = view.value?.replyFailure;
+        if (!failure || failure.regenerating || view.value?.data.active?.conversations[failure.person].some(turn => turn.id === failure.actionId)) { return null; }
+        return { actionId: failure.actionId, person: failure.person, text: failure.playerText, regenerating: false, status: 'failed' as const };
+    });
     async function request(type: 'read' | 'act' | 'confirm' | 'rebuild', input?: ExpeditionRequest): Promise<boolean> {
         if (disposed || busy.value) { return false; }
         busy.value = true; pushed = null; error.value = '';
@@ -59,12 +72,14 @@ export function createExpeditionClient(bridge: XiaobaiOsFrameBridge, chatIdentit
         if (retry && view.value.data.revision === retry.revision) { return request('act', retry); }
         failed.value = null; uncertainTalk.value = false; return true;
     }
-    async function talk(person: Participant, text: string) {
+    async function talk(person: Participant, text: string, turnId?: string) {
         if (blocked.value || disposed) { return false; }
         const actionId = newId();
+        submission.value = { actionId, person, text, regenerating: !!turnId, status: 'sending' };
         requestingTalk.value = true; busy.value = true; error.value = ''; pushed = null;
         try {
-            const reply = await bridge.request('game/expedition/talk', { chatIdentity, actionId, revision: view.value!.data.revision, person, text }, 180000) as { result: ExpeditionView };
+            const reply = await bridge.request(turnId ? 'game/expedition/regenerate' : 'game/expedition/talk',
+                { chatIdentity, actionId, revision: view.value!.data.revision, person, text, ...(turnId ? { turnId } : {}) }, 180000) as { result: ExpeditionView };
             const latest = pushed as ExpeditionView | null;
             apply(latest && latest.data.revision >= reply.result.data.revision ? latest : reply.result); return true;
         } catch (cause) {
@@ -76,7 +91,15 @@ export function createExpeditionClient(bridge: XiaobaiOsFrameBridge, chatIdentit
                 error.value = uncertainTalk.value ? CAMPAIGN_COPY.aiUnknown : view.value?.replyFailure?.actionId === actionId ? '' : errorText(cause);
             }
             return false;
-        } finally { requestingTalk.value = false; if (!disposed) { busy.value = false; } }
+        } finally {
+            requestingTalk.value = false;
+            if (!disposed) {
+                busy.value = false;
+                if (submission.value?.actionId === actionId) {
+                    submission.value = turnId ? null : { ...submission.value, status: 'failed' };
+                }
+            }
+        }
     }
     async function cancelTalk() {
         if (!talking.value) { return; }
@@ -84,7 +107,7 @@ export function createExpeditionClient(bridge: XiaobaiOsFrameBridge, chatIdentit
         catch (cause) { if (!disposed) { error.value = errorText(cause); } }
     }
     const recoveryRequired = computed(() => readNeeded.value || !!failed.value || uncertainTalk.value || !view.value || view.value.pending || view.value.writeState !== 'ready');
-    return { view, busy, error, blocked, failed, talking, uncertainTalk, talk, cancelTalk, recoveryRequired, dataInvalid, conversationFailure,
+    return { view, busy, error, blocked, failed, talking, uncertainTalk, talk, outgoing, cancelTalk, recoveryRequired, dataInvalid, conversationFailure,
         dismissConversationFailure() { dismissedFailure.value = view.value?.replyFailure?.actionId ?? null; },
         rebuild: () => request('rebuild'),
         dismissError() { if (!recoveryRequired.value) { error.value = ''; } },
