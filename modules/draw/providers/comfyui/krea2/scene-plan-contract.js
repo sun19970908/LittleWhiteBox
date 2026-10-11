@@ -116,7 +116,10 @@ function normalizeCharacter(value, path, knownNameLookup, centerMode) {
     return {
         name: canonicalName || returnedName,
         danbooru: optionalString(value, 'danbooru', path),
-        type: canonicalName ? '' : type,
+        // [K2] 已录入角色保留场景 type：type 承载画面方位等随图变化的信息（角色库是静态的），
+        // 组装层（character-prompts.js）会让非空场景 type 打头并顶替库 type。
+        // 原生合同仍清空场景 type，原生组装自动回落库 type，行为不变。
+        type,
         appear: canonicalName ? '' : appear,
         costume: optionalString(value, 'costume', path),
         action: optionalString(value, 'action', path),

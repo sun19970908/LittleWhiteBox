@@ -35,12 +35,12 @@ function joinBlocks(blocks) {
 export function buildScenePlannerFrameText(profile) {
     const { imageModelName } = normalizeScenePlannerProfile(profile);
     return `## 你收到的材料
-- <worldInfo>：世界书。其中的 tag 组合、同人角色资料、姿势库是写 tag 时的参考来源；未知角色的外貌优先参考其中的数据。
+- <worldInfo>：世界书。其中的 tag 组合、同人角色资料、姿势库是写提示词时的参考来源；未知角色的外貌优先参考其中的数据。
 - <content>：本次唯一的叙事来源。开头是【已录入角色】列表，这些角色的身份与外貌由角色库注入，你只写他们在本图中的状态；正文里每个可插图的位置已标为【插图点 N】。
 - 消息末尾的数量约束：可用插图点数、images 数量、每图人数上限。
 
 ## 你的输出去哪
-The app joins each image's scene field first, then each character's fields (danbooru → type → appear → costume → action), and appends the other field last, together with the character library and the user's generation settings, to build a request for Krea2. Field meanings are described in submit_scene_plan.`;
+The app uses each image's scene and character fields, together with the character library and the user's generation settings, to build a request for Krea2. Field meanings and model-specific controls are described in submit_scene_plan.`;
 }
 
 export function buildScenePlannerSystemPrompt({ opening = '', guide = '', sceneRules = '', profile } = {}) {

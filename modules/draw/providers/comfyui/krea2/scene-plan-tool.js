@@ -63,16 +63,16 @@ export function getScenePlanCharacterProperties(profile) {
             '该角色的 Danbooru 身份 tag，下划线格式：同人角色 `character_name_(series)`，原创角色 `中文名_(original)`。仅在确定时提交；已录入角色省略。',
         ),
         type: stringSchema(
-            `Character category: ${CHARACTER_TYPES.join(' / ')}. Use \`no_humans\` for non-humanoid subjects such as animals or monsters. Fill this for every unregistered character; omit for registered characters, whose category comes from the character library.`,
+            `人物类型和方位，比如A girl on the left,`,
         ),
         appear: stringSchema(
             'Stable appearance visible in this composition, such as hair, eyes or build. Every unregistered character needs a non-empty appearance description. Omit for registered characters, whose appearance comes from the character library.',
         ),
         costume: stringSchema(
-            '本图实际穿着与状态：款式、颜色、细节、穿着状态（敞开、破损、湿透、滑落）。已录入角色有服装参考时，选一套或其变体并按画面状态改写，不把多套拼在一起。没有服装事实时省略。',
+            '本图实际穿着与状态：款式、颜色、细节、穿着状态（敞开、破损、湿透、滑落）。已录入角色有服装参考时，选一套或其变体并严格按画面状态改写，禁止省略任何镜头里出现的信息，不把多套拼在一起。没有服装事实时省略。优先用tag，难以描述的用自然语言',
         ),
         action: stringSchema(
-            '本图该角色的姿态、动作、视线、面向、表情。',
+            '用英文自然语言描述本图该角色的姿态、动作、视线、面向、表情等外貌参考之外的信息，外貌参考之内的不要写。交互动作在此不是必要的',
             { minLength: 1 },
         ),
         interact: stringSchema(INTERACT_DESCRIPTIONS[effective.interactSyntax]),
@@ -97,7 +97,7 @@ export function createSubmitScenePlanTool(options = {}) {
         type: 'array',
         ...(maxCharactersPerImage ? { maxItems: maxCharactersPerImage } : {}),
         // [K2] 拼接顺序描述去掉 interact（原件结尾为 "→ interact"）。
-        description: '画面中出现的角色，按重要度排序。纯风景、物件、建筑主体时为空数组。每项的字段按 danbooru → type → appear → costume → action 的顺序拼成该角色的提示词。',
+        description: '画面中出现的角色，按重要度排序。纯风景、物件、建筑主体时为空数组。每项的字段按 type → danbooru → appear → costume → action 的顺序拼成该角色的提示词。',
         items: {
             type: 'object',
             additionalProperties: false,
@@ -123,7 +123,7 @@ export function createSubmitScenePlanTool(options = {}) {
                     description: 'The number N of an existing `【插图点 N】` marker in <content>. Choose the nearest marker after the moment depicted. Images at the same marker appear in array order.',
                 },
                 scene: stringSchema(
-                    '画面整体：人数与关系、构图与视角、背景、光影、氛围，逗号分隔的英文 tag。角色个体的外貌与动作不写在这里。拼在正向提示词最前。',
+                    '用一句英文短句简述此画面，不要写人物名字',
                     { minLength: 1 },
                 ),
                 characters: charactersSchema,
@@ -131,7 +131,7 @@ export function createSubmitScenePlanTool(options = {}) {
                 // 垫在 chars 末尾，经 assembleCharacterPrompts + charPositive 按序拼入
                 // （见 krea2/scene-plan-contract.js 的 [K2] 块）。
                 other: stringSchema(
-                    '可选。追加在正向提示词最末尾（所有角色之后）的英文 tag，逗号分隔：质量词、画风词、LoRA 触发词等不适合写进 scene/characters 的内容。没有就省略。',
+                    '用英文自然语言描写人物之间的交互动作，环境信息，以及光影，镜头等信息。交互时不要写人物名字，要写类型和方位比如the girl on the left。环境信息不能有遗漏',
                 ),
             },
         },
