@@ -1,5 +1,6 @@
 import { getContext } from '../../../../../../extensions.js';
-import { getCardPreview, getPreviewsBySlot, deletePreview, clearSlotSelection, setSlotSelection } from './gallery-cache.js';
+import { getPreviewsBySlot, deletePreview, clearSlotSelection, setSlotSelection } from './gallery-cache.js';
+import { captureImageCardTarget, readImageCardTarget } from './image-card-target.js';
 import { generatePreparedChatImages } from './prepared-chat-images.js';
 import { getSlotActivity } from './slot-activity.js';
 import { getPendingImageJobSlots, discardPendingImageSlot } from './pending-image-jobs.js';
@@ -47,18 +48,16 @@ export function redrawImageCard(provider, container) {
 }
 
 async function redraw(provider, container) {
-    const slotId = container.dataset.slotId;
-    const messageId = Number(container.dataset.mesid);
-    const ctx = getContext();
-    const message = ctx.chat[messageId];
+    const target = captureImageCardTarget(container);
+    const { slotId, messageId, ctx, message, swipeIndex } = target;
     if (!message || !isSceneSlotAlive(message.mes, slotId)) throw new Error(DRAW_SLOT_COPY.sourceChanged);
     const sourceText = message.mes;
-    const swipeIndex = message.swipe_id ?? 0;
     try {
         // A refresh drops runtime activity, not the submitted backend job. Do
         // not turn a journal read failure into permission for a paid resubmit.
         if ((await getPendingImageJobSlots()).has(slotId)) return;
-        const record = await getCardPreview({ slotId, imgId: container.dataset.imgId });
+        const record = await readImageCardTarget(target);
+        target.assertCurrent();
         const tags = record?.tags ?? container.dataset.tags;
         if (!tags?.trim()) throw new Error(DRAW_SLOT_COPY.emptyTags);
         return await generatePreparedChatImages(provider, { ctx, message, messageId, sourceText, swipeIndex,

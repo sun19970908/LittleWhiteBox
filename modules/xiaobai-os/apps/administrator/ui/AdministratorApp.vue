@@ -10,7 +10,9 @@ import { createAdministratorId } from '../application/identity.js';
 import { ADMINISTRATOR_COPY as C, administratorError } from './copy.js';
 import AdministratorContext from './AdministratorContext.vue';
 import AdministratorMessage from './AdministratorMessage.vue';
+import AdministratorStatus from './AdministratorStatus.vue';
 import AdministratorDetails from './AdministratorDetails.vue';
+import { shouldSendOnEnter } from '../../../shell/app-src/input/composer-keyboard.js';
 import './administrator.css';
 
 const props = defineProps<XiaobaiOsAppProps>();
@@ -124,6 +126,12 @@ async function action(type: string, payload: object = {}) {
     catch (cause) { error.value = administratorError(cause); }
     finally { pending.value = ''; }
 }
+async function editMessage(row: AdministratorRow, text: string) {
+    if (disabled.value) { throw new Error('administrator_busy'); }
+    pending.value = 'edit'; error.value = '';
+    try { apply(await request<AdministratorState>('edit', { turnId: row.turnId, revision: row.revision, text })); }
+    finally { pending.value = ''; }
+}
 async function chooseImage(event: Event) {
     const input = event.target as HTMLInputElement, selected = input.files?.[0]; input.value = '';
     if (!selected) { return; }
@@ -136,7 +144,9 @@ async function chooseImage(event: Event) {
     } catch { error.value = C.invalidImage; }
 }
 function keydown(event: KeyboardEvent) {
-    if (event.key === 'Enter' && !event.shiftKey && !composing.value && !event.isComposing) { event.preventDefault(); if (!busy.value) { void send(); } }
+    if (!shouldSendOnEnter(event, composing.value)) { return; }
+    event.preventDefault();
+    if (!busy.value) { void send(); }
 }
 function scrolled() { if (list.value) { atBottom.value = list.value.scrollHeight - list.value.scrollTop - list.value.clientHeight < 48; } }
 watch([draft, image], () => {
@@ -157,7 +167,7 @@ onBeforeUnmount(() => { windowRequest++; unsubscribe(); if (tokenTimer) { clearT
 </script>
 
 <template>
-    <div class="administrator-app">
+    <div class="administrator-app" :class="{ 'has-details': !!details }">
         <header class="admin-header"><h1>{{ C.title }}</h1><AdministratorContext :usage="state.context" :draft-tokens="state.live ? 0 : draftTokens" /><button type="button" class="admin-icon-button" :title="C.clear" :aria-label="C.clear" :disabled="busy || state.unsaved" @click="clearOpen = true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13M10 10v7m4-7v7" /></svg></button></header>
         <div v-if="state.corrupted" class="admin-notice" role="alert">{{ C.corrupted }}<button type="button" :disabled="busy" @click="clearOpen = true">{{ C.clear }}</button></div>
         <div ref="list" class="admin-conversation" @scroll.passive="scrolled">
@@ -166,10 +176,11 @@ onBeforeUnmount(() => { windowRequest++; unsubscribe(); if (tokenTimer) { clearT
             <AdministratorMessage
                 v-for="row in rows" :key="row.id" :row="row" :live="row.role === 'assistant' && row.turnId === state.live?.turnId ? state.live : null" :bridge="bridge" :chat-identity="state.chatIdentity" :disabled="disabled"
                 :unsaved-process="row.role === 'assistant' && row.turnId === state.unsavedProcess?.turnId ? state.unsavedProcess.rounds : null"
+                :save-edit="editMessage"
                 @delete="deleteRow = $event" @regenerate="action('regenerate', { turnId: $event.turnId })" @details="details = $event.turnId"
             />
             <div v-if="phase && latest && !liveInRows" class="admin-live">
-                <div class="admin-live-status" role="status" aria-live="polite"><span class="admin-working-dot" />{{ C.phases[phase] }}</div>
+                <AdministratorStatus :phase="phase" :started-at="state.live?.startedAt" />
             </div>
             <button v-if="!latest" type="button" class="admin-history-button" :disabled="paging" @click="loadPage(start + rows.length, 'later')">{{ C.later }}</button>
         </div>
@@ -184,7 +195,7 @@ onBeforeUnmount(() => { windowRequest++; unsubscribe(); if (tokenTimer) { clearT
         <form class="admin-composer" @submit.prevent="send">
             <input ref="file" type="file" :accept="ADMINISTRATOR_IMAGE_TYPES.join(',')" hidden @change="chooseImage">
             <button type="button" class="admin-icon-button" :disabled="disabled" :aria-label="C.attach" :title="C.attach" @click="file?.click()"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="3" /><circle cx="8" cy="8" r="1.5" /><path d="m3 17 5-5 4 4 4-7 5 8" /></svg></button>
-            <textarea ref="composer" v-model="draft" rows="1" maxlength="16000" :placeholder="C.placeholder" :aria-label="C.placeholder" :disabled="state.corrupted || busy" @keydown="keydown" @compositionstart="composing = true" @compositionend="composing = false" />
+            <textarea ref="composer" v-model="draft" rows="1" :maxlength="POLICY.maxInputChars" enterkeyhint="enter" :placeholder="C.placeholder" :aria-label="C.placeholder" :disabled="state.corrupted || busy" @keydown="keydown" @compositionstart="composing = true" @compositionend="composing = false" />
             <button v-if="phase" type="button" class="admin-send" :disabled="phase === 'stopping'" :aria-label="C.stop" :title="C.stop" @click="props.bridge.post('administrator/stop', binding())"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" /></svg></button>
             <button v-else type="submit" class="admin-send" :disabled="disabled || !draft.trim() && !image" :aria-label="C.send" :title="C.send"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6" /></svg></button>
         </form>

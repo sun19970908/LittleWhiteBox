@@ -60,8 +60,22 @@ test('backend handoff is not completion and stays in the aggregate until its del
     assert.equal(h.jobs.size, 0);
 });
 
-test('an occupied floor rejects manual redraw without releasing or resetting the active batch', async () => {
+test('an existing-slot redraw joins an occupied floor without releasing its active batch', async () => {
+    const h = setup(async input => {
+        assert.equal(getFloorImageJobs(h.jobs, h.input.ctx, 1).length, 2);
+        input.onStateChange('success', { success: 1, total: 1 });
+    });
+    const active = h.options.createJob(1);
+    h.observe(active)('gen', { current: 1, total: 2 });
+    await h.run();
+    assert.equal(getFloorImageJob(h.jobs, h.input.ctx, 1), active);
+    assert.equal(h.states.at(-1).data.total, 3);
+    assert.equal(h.states.at(-1).state, 'gen');
+});
+
+test('structural placement still rejects an occupied floor without disturbing its batch', async () => {
     const h = setup(() => assert.fail('must not submit'));
+    h.input.tasks[0].placement = { mode: 'append' };
     const active = h.options.createJob(1);
     await assert.rejects(h.run());
     assert.equal(getFloorImageJob(h.jobs, h.input.ctx, 1), active);

@@ -12,7 +12,11 @@ export function createImageCardRedrawProvider({ execute, createJob, releaseJob,
             || (message.swipe_id ?? 0) !== (input.swipeIndex ?? message.swipe_id ?? 0)) {
             throw new Error(DRAW_SLOT_COPY.sourceChanged);
         }
-        const job = createJob(messageId, { join: input.nativeMessage === true });
+        // Existing slots have per-card admission; a sibling job is not a
+        // duplicate request. Structural planning keeps the floor exclusion.
+        const existingSlots = input.tasks.length > 0
+            && input.tasks.every(task => task.placement?.mode === 'existing');
+        const job = createJob(messageId, { join: input.nativeMessage === true || existingSlots });
         job.total = input.tasks.length;
         const onStateChange = observeFloorImageJob(job, { getCurrentContext, classifyError,
             onStateChange: (state, data, id) => {

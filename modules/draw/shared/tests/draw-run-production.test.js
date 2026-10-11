@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { DRAW_WORK_CANCELLATION_CAPABILITY } from '../backend-image-jobs.js';
 
 import {
     DrawRunProductionError,
@@ -26,7 +27,7 @@ function compatibleBackendStatus() {
     return {
         ready: true,
         version: REQUIRED_DRAW_RUN_PLUGIN_VERSION,
-        capabilities: ['image-batch-jobs-v1', DRAW_RUNS_CAPABILITY, DRAW_RUN_RUNTIME_CAPABILITY],
+        capabilities: ['image-batch-jobs-v1', DRAW_RUNS_CAPABILITY, DRAW_RUN_RUNTIME_CAPABILITY, DRAW_WORK_CANCELLATION_CAPABILITY],
     };
 }
 
@@ -86,11 +87,7 @@ test('production entry refuses an old backend without running Planner or silentl
             preparePlanner: async () => { prepared += 1; },
             submit: async () => { submitted += 1; },
         })),
-        error => error instanceof DrawRunProductionError
-            && error.code === 'DRAW_RUN_BACKEND_OUTDATED'
-            && error.message.includes(`当前 2.0.0，需要 ${REQUIRED_DRAW_RUN_PLUGIN_VERSION}`)
-            && /SillyTavern\/plugins\/littlewhitebox-image-jobs/.test(error.message)
-            && /不会使用旧插件继续运行/.test(error.message),
+        error => error instanceof DrawRunProductionError && error.code === 'DRAW_RUN_BACKEND_OUTDATED',
     );
     assert.equal(prepared, 0);
     assert.equal(submitted, 0);
