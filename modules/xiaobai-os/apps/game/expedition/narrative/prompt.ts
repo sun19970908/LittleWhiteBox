@@ -14,6 +14,8 @@ import { greetingTurn } from '../content/greetings.js';
 import { CLOTHING_SLOTS } from '../content/clothing.js';
 import { currentClothing } from '../clothing.js';
 import { travelerContext } from './traveler.js';
+import { hasReturned } from '../campaign/rescue.js';
+import { routeContext } from './navigation.js';
 
 export function conversationContext(campaign: Campaign, person: Participant, stages: readonly RelationshipStage[] = []) {
     const actionMeanings = narrativeActions(campaign, person, stages), actions = Object.keys(actionMeanings);
@@ -24,8 +26,8 @@ export function conversationContext(campaign: Campaign, person: Participant, sta
         const spec = PARLEY_ENEMIES[person];
         return { ...shared, rescued: false, resolved: campaign.facts.includes(spec.complete) };
     }
-    return { ...shared, map: personMap(campaign, person),
-        rescued: campaign.knowledge[person].includes('captives_arrived'),
+    return { ...shared, map: personMap(campaign, person).map(place => ({ ...place, route: routeContext(campaign.people[person].scene, place.route) })),
+        rescued: hasReturned(campaign.facts, person),
         affection: campaign.relationships[person].affection };
 }
 function block(tag: string, content: string) { return `<${tag}>\n${content}\n</${tag}>`; }

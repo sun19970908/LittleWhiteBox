@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 import { createCampaign, recordFact } from '../apps/game/expedition/campaign/rules.ts';
 import { buildConversationPrompt, conversationContext } from '../apps/game/expedition/narrative/prompt.ts';
 import { generateConversation } from '../apps/game/expedition/narrative/conversation.ts';
+import { applyReply } from '../apps/game/expedition/narrative/apply-reply.ts';
 import { loadNarrativeCanon } from '../apps/game/expedition/narrative/canon.ts';
 import { narrativeOptions, conversationMemory, loadCanon, narrativeReply, inspectNarrativePrompt, inspectHistoryMessage, promptBlock } from './fixtures/expedition-narrative.js';
 import { PARTICIPANT_IDS, isPerson } from '../apps/game/expedition/content/participants.ts';
@@ -41,21 +42,21 @@ test('both residents and guards receive the saved traveler rather than a host pe
 test('current equipment and movement reach the request without becoming player identity or persisted state', async () => {
     const c = campaign(), canon = await loadCanon('sanniang', signal());
     const context = () => inspectNarrativePrompt(buildConversationPrompt(c, 'sanniang', 'hello', canon));
-    assert.deepEqual(context().story.movement, { mode: 'idle', destination: null });
+    assert.deepEqual(context().story.movement, { mode: 'idle', destination: null, leader: null });
     movePerson(c, 'sanniang', 'follow');
-    assert.deepEqual(context().story.movement, { mode: 'follow', destination: null });
+    assert.deepEqual(context().story.movement, { mode: 'follow', destination: null, leader: c.traveler.name });
     movePerson(c, 'sanniang', 'go:clinic_back');
-    assert.deepEqual(context().story.movement, { mode: 'travel', destination: DESTINATIONS.clinic_back.name });
+    assert.deepEqual(context().story.movement, { mode: 'travel', destination: DESTINATIONS.clinic_back.name, leader: null });
     const beforeTravel = structuredClone(c.people.sanniang.position);
     for (let i = 0; i < 3; i++) {
         assert.equal(context().story.map.find(place => place.id === 'clinic_back').personHere, false);
         assert.deepEqual(c.people.sanniang.position, beforeTravel);
     }
     for (let i = 0; i < 1000 && c.people.sanniang.mode === 'travel'; i++) tickPeople(c);
-    assert.deepEqual(context().story.movement, { mode: 'idle', destination: null });
+    assert.deepEqual(context().story.movement, { mode: 'idle', destination: null, leader: null });
     assert.equal(context().story.map.find(place => place.id === 'clinic_back').personHere, true);
     movePerson(c, 'sanniang', 'stay');
-    assert.deepEqual(context().story.movement, { mode: 'idle', destination: null });
+    assert.deepEqual(context().story.movement, { mode: 'idle', destination: null, leader: null });
     c.weapon = 'bow'; c.outfit = 'ranger';
     const before = structuredClone(c), data = context();
     assert.deepEqual(data.player, { ...c.traveler, adult: true, appearanceAge: TRAVELER_AGES[c.traveler.appearanceAge],
@@ -184,6 +185,23 @@ test('responses without a usable body remain raw receipts and never manufacture 
         assert.equal(result.issue, response.truncated ? 'reply_incomplete' : 'reply_invalid');
         assert.deepEqual(received, response); assert.deepEqual(c.facts, []);
     }
+});
+
+test('surrounded operations pass validation and update movement, clothing, affection and performance once', async () => {
+    const c = campaign();
+    const text = '前言。\n```php-template\n<dialogue>我脱下外套，跟你走。</dialogue>\n补充说明。\n```json\n'
+        + JSON.stringify({ action: 'follow', clothing: { outer: null }, affection: 'up', performance: { expression: 'serious', gesture: 'gesture' } })
+        + '\n```\n收尾。\n```';
+    let calls = 0;
+    const result = await generateConversation(agentFor(async () => { calls++; return { text }; }), c, 'sanniang', '走吧', signal(), narrativeOptions);
+    assert.equal(result.issue, undefined);
+    applyReply(c, { actionId: 'surrounded', person: 'sanniang', text: '走吧' }, result);
+    const saved = c.conversations.sanniang.at(-1);
+    assert.equal(calls, 1); assert.equal(c.people.sanniang.mode, 'follow');
+    assert.equal(saved.reply, '我脱下外套，跟你走。'); assert.equal(saved.action, 'follow');
+    assert.deepEqual(saved.clothing, { outer: null });
+    assert.deepEqual(saved.performance, { expression: 'serious', gesture: 'gesture' });
+    assert.ok(saved.affectionDelta > 0); assert.equal(c.relationships.sanniang.affection, saved.affectionDelta);
 });
 
 test('optional action errors keep valid dialogue without guessing or executing unavailable actions', async () => {
