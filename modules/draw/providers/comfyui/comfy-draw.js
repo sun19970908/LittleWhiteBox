@@ -4326,6 +4326,9 @@ async function toggleEditPanel(container, show) {
             });
         }
 
+        // 追加位（拼在所有角色之后、整条正向提示词最后）
+        appendEditGroup(scrollWrap, { label: '追加 (post_prompt)', value: preview?.postPrompt || '', type: 'post_prompt' });
+
         editPanel.style.display = 'block';
 
         if (btnsPanel) {
@@ -4355,9 +4358,9 @@ async function toggleEditPanel(container, show) {
 
 async function saveEditedTags(container) {
     try {
-        await persistCardTagEdits(container, (tags, characters, record) => {
-            // [K2] 追加位从记录里取回，避免编辑重生成后丢失
-            const data = buildEditedPromptData(tags, characters, undefined, record?.postPrompt || '');
+        await persistCardTagEdits(container, (tags, characters, record, postPrompt) => {
+            // 追加位优先用编辑框的值；面板没有该字段时回落记录里存的
+            const data = buildEditedPromptData(tags, characters, undefined, postPrompt ?? record?.postPrompt ?? '');
             return { positive: data.positive, negativePrompt: data.negative ?? record?.negativePrompt ?? '' };
         });
         toggleEditPanel(container, false);
