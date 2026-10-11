@@ -78,9 +78,9 @@ function flattenSchemaFields(schema, path, out) {
     return out;
 }
 
-/** Field paths with their model-facing descriptions, for the read-only request preview. */
-export function listScenePlanFieldDescriptions(profile) {
-    const tool = createSubmitScenePlanTool({ profile });
+/** Field paths with their model-facing descriptions, for the request preview. */
+export function listScenePlanFieldDescriptions(profile, descriptions = {}) {
+    const tool = createSubmitScenePlanTool({ profile, descriptions });
     return flattenSchemaFields(tool.function.parameters, '', []);
 }
 
@@ -88,7 +88,7 @@ export function listScenePlanFieldDescriptions(profile) {
  * Read-only request structure for the prompt editor: one system, one user, one tool.
  * `editable` sections map onto the three user-editable textareas.
  */
-export function buildScenePlannerChainPreview({ profile, hasTagGuide = true } = {}) {
+export function buildScenePlannerChainPreview({ profile, hasTagGuide = true, descriptions = {} } = {}) {
     const effective = normalizeScenePlannerProfile(profile);
     return [
         {
@@ -130,7 +130,7 @@ export function buildScenePlannerChainPreview({ profile, hasTagGuide = true } = 
             role: 'tools',
             key: 'tools',
             summary: 'tools：submit_scene_plan 字段说明（模型读到的字段语义）',
-            fields: listScenePlanFieldDescriptions(effective),
+            fields: listScenePlanFieldDescriptions(effective, descriptions),
         },
     ];
 }

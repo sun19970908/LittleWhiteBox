@@ -42,11 +42,12 @@ export function getLoadedTagGuide() {
     return tagGuideContent;
 }
 
-/** 请求结构只读预览：system / user / tools 三节。 */
-export function getPromptChainPreview(customPrompts) {
+/** 请求结构预览：system / user / tools 三节。descriptions 为字段描述覆写（路径 → 文案）。 */
+export function getPromptChainPreview(customPrompts, descriptions = {}) {
     return buildScenePlannerChainPreview({
         profile: COMFY_PLANNER_PROFILE,
         hasTagGuide: !!getEffectiveTagGuide(customPrompts?.tagGuideContent).trim(),
+        descriptions,
     });
 }
 

@@ -80,12 +80,41 @@ export function getScenePlanCharacterProperties(profile) {
     };
 }
 
+/**
+ * Apply user-configured description overrides onto a freshly built parameters tree.
+ * Paths use the same naming as listScenePlanFieldDescriptions' flattening
+ * (`images`, `images[].scene`, `images[].characters[].name`, ...); `tool` targets the
+ * function-level description. Empty/whitespace overrides are ignored.
+ */
+function applyFieldDescriptionOverrides(tool, descriptions) {
+    const walk = (schema, path) => {
+        if (!schema || typeof schema !== 'object') return;
+        const override = descriptions[path];
+        if (typeof schema.description === 'string' && typeof override === 'string' && override.trim()) {
+            schema.description = override;
+        }
+        if (schema.type === 'object' && schema.properties) {
+            for (const [key, child] of Object.entries(schema.properties)) {
+                walk(child, path ? `${path}.${key}` : key);
+            }
+        } else if (schema.type === 'array' && schema.items) {
+            walk(schema.items, `${path}[]`);
+        }
+    };
+    walk(tool.function?.parameters, '');
+    const toolDescription = descriptions.tool;
+    if (typeof toolDescription === 'string' && toolDescription.trim()) {
+        tool.function.description = toolDescription;
+    }
+}
+
 export function createSubmitScenePlanTool(options = {}) {
     const maxImages = normalizeLimit(options.maxImages);
     const maxPlanImages = normalizeLimit(options.maxPlanImages);
     const maxCharactersPerImage = normalizeLimit(options.maxCharactersPerImage);
     const insertPointCount = normalizeLimit(options.insertPointCount);
     const profile = normalizeScenePlannerProfile(options.profile);
+    const descriptions = options.descriptions && typeof options.descriptions === 'object' ? options.descriptions : {};
     const maxPlanItems = maxImages || maxPlanImages;
     const charactersSchema = {
         type: 'array',
@@ -124,14 +153,14 @@ export function createSubmitScenePlanTool(options = {}) {
                 // 只有 profile.postPrompt === 'append' 的 provider 才暴露，避免教会模型一个编译器会丢的字段。
                 ...(profile.postPrompt === 'append' ? {
                     post_prompt: stringSchema(
-                        '追加在整条正向提示词最末尾的英文 tag/短句：人物之间的交互、环境、光影、镜头等角色段不写的信息。不要写人物名字，要写类型和方位。没有要补充的内容时省略。',
+                        '整条正向提示词的最末尾的后置提示词，可选',
                     ),
                 } : {}),
             },
         },
     };
 
-    return {
+    const tool = {
         type: 'function',
         function: {
             name: SUBMIT_SCENE_PLAN_TOOL_NAME,
@@ -146,4 +175,6 @@ export function createSubmitScenePlanTool(options = {}) {
             },
         },
     };
+    applyFieldDescriptionOverrides(tool, descriptions);
+    return tool;
 }
