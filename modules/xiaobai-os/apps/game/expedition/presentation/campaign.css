@@ -23,6 +23,7 @@
 .ember-conversation-notice { position:absolute; bottom:20px; left:50%; transform:translateX(-50%); width:min(90%,480px); max-height:45%; overflow:auto; box-sizing:border-box; z-index:7; display:grid; gap:8px; padding:12px 16px; border:1px solid #c0cbc2; border-radius:8px; background:#f7faf3; box-shadow:0 5px 22px #193e4928; font-size:13px; }
 .ember-conversation-notice button { justify-self:end; }
 .ember-dialogue-issue { padding:8px 12px; border-left:3px solid #aa7946; color:#78532e; font-size:13px; }
+.ember-error-detail { white-space:pre-wrap; overflow-wrap:anywhere; }
 .ember-dialogue-scroll details { overflow-wrap:anywhere; }
 .ember-transition { position:absolute; z-index:4; left:50%; top:48%; transform:translate(-50%,-50%); max-width:calc(100% - 32px); padding:9px 17px; border-block:1px solid #c9cedf99; border-radius:3px; background:#f4f6f1ed; color:#3c4e62; font-size:13px; letter-spacing:.04em; pointer-events:none; text-align:center; }
 .ember-curtain { position:absolute; inset:0; z-index:5; display:grid; place-items:center; padding:20px; background:#274d5359; }
@@ -55,8 +56,10 @@
 .ember-person-heading h2 { font-size:23px; letter-spacing:.08em; }
 .ember-person-heading small { color:#647b7d; }
 .ember-dialogue-heading > button { background:transparent; padding:6px 10px; border:0; }
-.ember-dialogue-scroll { overflow:auto; overscroll-behavior:contain; flex:1; min-height:0; display:flex; flex-direction:column; align-items:stretch; gap:20px; padding:24px; scrollbar-width:thin; }
+.ember-dialogue-scroll { overflow:auto; overflow-anchor:none; overscroll-behavior:contain; flex:1; min-height:0; display:flex; flex-direction:column; align-items:stretch; gap:20px; padding:24px; scrollbar-width:thin; }
 .ember-dialogue-scroll > * { flex-shrink:0; }
+.ember-history-nav { display:flex; justify-content:center; gap:16px; }
+.ember-dialogue-scroll .ember-history-link { align-self:center; min-height:40px; padding:6px 12px; background:transparent; border:0; color:#526f69; font-size:.85em; }
 .ember-greeting,.ember-npc-line,.ember-player-line,.ember-prose { white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.95; }
 .ember-player-line { padding:10px 14px; align-self:flex-end; max-width:88%; border-radius:6px; background:#e7eee8; }
 .ember-player-line small { display:block; color:#637f79; }
