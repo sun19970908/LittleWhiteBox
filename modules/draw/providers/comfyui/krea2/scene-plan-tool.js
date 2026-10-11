@@ -59,11 +59,13 @@ export function getScenePlanCharacterProperties(profile) {
             '角色名。已录入角色用【已录入角色】列出的规范名，原文用别名也归一到规范名。未知角色用原文名字，无名时用简短称呼。',
             { minLength: 1 },
         ),
-        danbooru: stringSchema(
-            '该角色的 Danbooru 身份 tag，下划线格式：同人角色 `character_name_(series)`，原创角色 `中文名_(original)`。仅在确定时提交；已录入角色省略。',
-        ),
+        // [K2] type 提到 danbooru 之前：与 assembleCharacterPrompts 的拼接顺序一致
+        // （type → danbooru → appear → costume → action）。type 的文案改为"类型和方位"是 K2 的另一处差异。
         type: stringSchema(
             `人物类型和方位，比如A girl on the left,`,
+        ),
+        danbooru: stringSchema(
+            '该角色的 Danbooru 身份 tag，下划线格式：同人角色 `character_name_(series)`，原创角色 `中文名_(original)`。仅在确定时提交；已录入角色省略。',
         ),
         appear: stringSchema(
             'Stable appearance visible in this composition, such as hair, eyes or build. Every unregistered character needs a non-empty appearance description. Omit for registered characters, whose appearance comes from the character library.',
