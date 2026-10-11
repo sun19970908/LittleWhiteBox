@@ -4326,8 +4326,10 @@ async function toggleEditPanel(container, show) {
             });
         }
 
-        // 追加位（拼在所有角色之后、整条正向提示词最后）
-        appendEditGroup(scrollWrap, { label: '追加 (post_prompt)', value: preview?.postPrompt || '', type: 'post_prompt' });
+        // 追加位：与角色框一致，记录里实际存了 post_prompt 才渲染；为空的图不出框
+        if (preview?.postPrompt) {
+            appendEditGroup(scrollWrap, { label: '追加 (post_prompt)', value: preview.postPrompt, type: 'post_prompt' });
+        }
 
         editPanel.style.display = 'block';
 

@@ -153,7 +153,7 @@ export function createSubmitScenePlanTool(options = {}) {
                 // 只有 profile.postPrompt === 'append' 的 provider 才暴露，避免教会模型一个编译器会丢的字段。
                 ...(profile.postPrompt === 'append' ? {
                     post_prompt: stringSchema(
-                        '整条正向提示词的最末尾的后置提示词，可选',
+                        '本字段留空不写',
                     ),
                 } : {}),
             },

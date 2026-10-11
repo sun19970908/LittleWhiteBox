@@ -95,26 +95,32 @@ export function renderScenePlannerChain(container, chain, { getEditable, onField
                 fieldRow.className = 'chain-field';
                 const path = document.createElement('code');
                 path.textContent = field.path;
-                const description = document.createElement('textarea');
-                description.className = 'chain-field-desc';
-                description.rows = 2;
-                description.dataset.path = field.path;
-                description.value = field.description;
+                fieldRow.append(path);
+                // 没有编辑回调的面板（SD/NAI）保持只读展示，避免渲染一个改了没效果的输入框
                 if (typeof onFieldEdit === 'function') {
+                    const description = document.createElement('textarea');
+                    description.className = 'chain-field-desc';
+                    description.rows = 2;
+                    description.dataset.path = field.path;
+                    description.value = field.description;
                     description.addEventListener('input', () => onFieldEdit(field.path, description.value));
-                }
-                fieldRow.append(path, description);
-                if (typeof onFieldReset === 'function') {
-                    const reset = document.createElement('button');
-                    reset.type = 'button';
-                    reset.className = 'chain-field-reset';
-                    reset.title = '恢复内置文案';
-                    reset.textContent = '↺';
-                    reset.addEventListener('click', (event) => {
-                        event.stopPropagation();
-                        onFieldReset(field.path);
-                    });
-                    fieldRow.appendChild(reset);
+                    fieldRow.append(description);
+                    if (typeof onFieldReset === 'function') {
+                        const reset = document.createElement('button');
+                        reset.type = 'button';
+                        reset.className = 'chain-field-reset';
+                        reset.title = '恢复内置文案';
+                        reset.textContent = '↺';
+                        reset.addEventListener('click', (event) => {
+                            event.stopPropagation();
+                            onFieldReset(field.path);
+                        });
+                        fieldRow.appendChild(reset);
+                    }
+                } else {
+                    const description = document.createElement('span');
+                    description.textContent = field.description;
+                    fieldRow.append(description);
                 }
                 fieldList.appendChild(fieldRow);
             });
