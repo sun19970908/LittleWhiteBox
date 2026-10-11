@@ -1,7 +1,7 @@
 // [K2] Krea2 方案的请求组装：原件 buildScenePlannerRequest 是 shared/scene-planner.js 的内部函数
 // （连同 buildNativeWorldInfoForDraw / combineWorldInfoEntries / buildSessionLimitsLine 都不导出），
 // 且原件的 tool 是写死的内部依赖，没有替换缝——所以这里照搬它的组装顺序，只把 tool 换成
-// krea2/ 下自己的版本；frame 直接用 shared/scene-planner-frame.js（与原生同一份，含 frame 覆写支持）。
+// krea2/ 下自己的版本；frame 直接用 shared/scene-planner-frame.js（与原生同一份）。
 // 与原件差异：不调用 emitScenePromptReady（仅影响提示词预览事件），tool 取自 krea2/。
 import { buildCharacterInfoForLLM, getEffectivePromptConfig, getEffectiveTagGuide } from '../../../shared/scene-planner.js';
 import { normalizeScenePlannerProfile } from '../../../shared/scene-planner-profile.js';
