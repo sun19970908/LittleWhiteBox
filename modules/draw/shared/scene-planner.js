@@ -13,8 +13,10 @@ import {
 } from './scene-planner-executor.js';
 import { createSceneSource, stripScenePointMarkers } from './scene-source.js';
 import { createSubmitScenePlanTool } from './scene-plan-tool.js';
+import { parseFieldDescriptions } from './scene-plan-descriptions.js';
 import { buildScenePlannerSystemPrompt, buildScenePlannerUserTask } from './scene-planner-frame.js';
 import { normalizeScenePlannerProfile } from './scene-planner-profile.js';
+import { normalizePlannerRetry } from './planner-retry.js';
 import {
     applyPromptSlots,
     createPromptSlots,
@@ -152,23 +154,6 @@ function buildSessionLimitsLine(maxImages, maxCharactersPerImage, insertPointCou
     else if (maxPlanImages > 0) clauses.push(`images 最多包含 ${maxPlanImages} 项`);
     if (characterLimit) clauses.push(`每项 characters 最多 ${characterLimit} 人`);
     return clauses.length ? `本次提交数量约束：${clauses.join('；')}。` : '';
-}
-
-/** fieldDescriptions 存的是 JSON 字符串；坏 JSON / 非对象一律回落空覆写（全部用内置文案）。 */
-function parseFieldDescriptions(value) {
-    if (typeof value !== 'string' || !value.trim()) return {};
-    try {
-        const parsed = JSON.parse(value);
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
-        const out = {};
-        for (const [key, text] of Object.entries(parsed)) {
-            if (typeof key === 'string' && key.trim() && typeof text === 'string') out[key] = text;
-        }
-        return out;
-    } catch (error) {
-        console.warn('[Scene Planner] fieldDescriptions 解析失败，已忽略自定义字段描述:', error);
-        return {};
-    }
 }
 
 function resolveRequestedMaxImages(maxImages) {
@@ -366,6 +351,8 @@ export async function prepareScenePlannerInput(options = {}) {
             tool: request.tool,
             validationContext: request.validationContext,
             presentCharacters: Array.isArray(options.presentCharacters) ? options.presentCharacters : [],
+            // 重试设置随快照冻结：后台 Draw Run 只能读到这里，与浏览器流程行为一致。
+            ...(options.plannerRetry ? { retry: normalizePlannerRetry(options.plannerRetry) } : {}),
         },
         agent: {
             channel: String(providerConfig?.provider || ''),
