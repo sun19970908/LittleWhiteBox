@@ -8,7 +8,7 @@
 import { getContext, extension_settings } from "../../../../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../../../../script.js";
 import { xbLog } from "../../../core/debug-core.js";
-import { getSummaryStore, getFacts } from "../data/store.js";
+import { getPublishedSummaryStore as getSummaryStore, getFacts } from "../data/store.js";
 import { isRelationFact } from "../data/fact-predicates.js";
 import { formatCharacterAliasTableForAI } from "../data/character-aliases.js";
 import { getVectorConfig, getSummaryPanelConfig, getSettings, DEFAULT_MEMORY_PROMPT_TEMPLATE } from "../data/config.js";
@@ -18,7 +18,7 @@ import {
     releaseDirectEvidenceContext,
 } from "../vector/retrieval/recall.js";
 import { getMeta } from "../vector/storage/chunk-store.js";
-import { getStateAtoms } from "../vector/storage/state-store.js";
+import { getPublishedStateAtoms as getStateAtoms } from "../vector/storage/state-store.js";
 import { getEngineFingerprint } from "../vector/utils/embedder.js";
 import { buildTrustedCharacters } from "../vector/retrieval/entity-lexicon.js";
 import { filterConstraintsByRelevance } from "./constraint-filter.js";
@@ -1747,7 +1747,6 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
         return finish('', '剧情总结未启用');
     }
 
-    const { chat } = getContext();
     const store = getSummaryStore();
 
     if (!store?.json) {
@@ -1755,12 +1754,6 @@ export async function buildVectorPromptText(excludeLastAi = false, options = {})
     }
 
     const allEvents = store.json.events || [];
-    const lastIdx = store.lastSummarizedMesId ?? 0;
-    const length = chat?.length || 0;
-
-    if (lastIdx >= length) {
-        return finish('', '总结边界超过当前聊天范围');
-    }
 
     const vectorCfg = getVectorConfig();
     if (!vectorCfg?.enabled) {

@@ -11,12 +11,13 @@ import { build } from 'esbuild';
 import { createCampaign } from '../apps/game/expedition/campaign/rules.ts';
 import { advanceExpedition, emptyExpedition } from '../apps/game/expedition/domain.ts';
 import { DIALOGUE_COPY } from '../apps/game/expedition/content/dialogue-copy.ts';
+import { CLOTHING_COPY, INITIAL_CLOTHING } from '../apps/game/expedition/content/clothing.ts';
 import { CAMPAIGN_COPY } from '../apps/game/expedition/content/campaign-copy.ts';
 import { JOURNEY_COPY } from '../apps/game/expedition/content/journey-copy.ts';
 import { COURTYARD } from '../apps/game/expedition/content/courtyard.ts';
 import { startWorld } from '../apps/game/expedition/world/exploration.ts';
 import { applyReply } from '../apps/game/expedition/narrative/apply-reply.ts';
-import { rewindReply } from '../apps/game/expedition/campaign/reply-checkpoint.ts';
+import { prepareRegeneration } from '../apps/game/expedition/campaign/reply-checkpoint.ts';
 
 // Production entry, dialogue and maps. Visual-only renderers are replaced; the composer
 // supplies draft edits here and is exercised with real sizing/keyboard APIs in the browser.
@@ -49,7 +50,8 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
                         : h('textarea',{value:p.modelValue,onInput:e=>emit('update:modelValue',e.target.value)}),
                         h('button',{type:'submit','data-send':'',disabled:p.blocked})])}}`, loader: 'js' };
                 if (args.path.endsWith('ExplorationField.vue')) return { contents: `import {h} from 'vue'; export default {props:['world','paused'],emits:['interact','input','ready','pause'],setup(p,ctx){ctx.expose({focus(){}});return()=>h('div',{'data-paused':p.paused},[...['sanniang','laobai',...p.world.definition.exits.map(e=>e.id)].map(id=>h('button',{'data-interact':id,onClick:()=>ctx.emit('interact',id)})),h('button',{'data-frame':'',onClick:()=>ctx.emit('ready',p.world.definition.id)}),h('button',{'data-background':'',onClick:()=>ctx.emit('pause')}),h('button',{'data-step':'',onClick:()=>ctx.emit('input',{move:1,dash:false,skill:false})})])}}`, loader: 'js' };
-                if (['ExpeditionWardrobe.vue', 'WorldFrontispiece.vue', 'ExpeditionIcon.vue', 'DialogueActor.vue'].some(name => args.path.endsWith(name))) return { contents: 'export default {render(){return null}}', loader: 'js' };
+                if (args.path.endsWith('DialogueActor.vue')) return { contents: "import {h} from 'vue'; export default {setup(){return()=>h('i',{'data-dialogue-actor':''})}}", loader: 'js' };
+                if (['ExpeditionWardrobe.vue', 'WorldFrontispiece.vue', 'ExpeditionIcon.vue'].some(name => args.path.endsWith(name))) return { contents: 'export default {render(){return null}}', loader: 'js' };
                 const { descriptor } = parse(readFileSync(args.path, 'utf8'), { filename: args.path });
                 return { contents: compileScript(descriptor, { id: args.path, inlineTemplate: true }).content, loader: 'ts' };
             });
@@ -67,14 +69,18 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
     const campaign = createCampaign('fixture', 7, 'blade', 'traveler', traveler); campaign.location.position = { ...campaign.people.sanniang.position };
     campaign.people.laobai.position = { ...campaign.location.position };
     const state = { data: { ...emptyExpedition(), active: campaign }, fileRevision: 0, balance: 0, ready: true, pending: false, writeState: 'ready', conversation: null, replyFailure: null, memories: {} };
-    let notify, retriedMemory, replyAction = null, beforeAct = async () => {}, beforeTalk = async () => {};
+    let notify, retriedMemory, replyAction = null, replyClothing, beforeAct = async () => {}, beforeTalk = async () => {};
     const bridge = { subscribe(listener) { notify = listener; return () => {}; }, async request(type, payload) {
         if (type === 'game/expedition/retry-memory') { retriedMemory = payload.person; state.memories[payload.person] = { status: 'running' }; }
         if (type === 'game/expedition/act') { await beforeAct(payload); state.data = advanceExpedition(state.data, payload.command, payload.actionId, 7); }
         if (type === 'game/expedition/talk' || type === 'game/expedition/regenerate') {
+            if (payload.turnId) {
+                state.data.active = prepareRegeneration(state.data.active, payload.person, payload.turnId);
+                state.data.revision++;
+                notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } });
+            }
             await beforeTalk(payload);
-            if (payload.turnId) state.data.active = rewindReply(state.data.active, payload.person, payload.turnId);
-            applyReply(state.data.active, { ...payload, regenerate: payload.turnId }, { kind: 'dialogue', reply: payload.actionId, action: replyAction, affection: 'up' });
+            applyReply(state.data.active, { ...payload, regenerate: payload.turnId }, { kind: 'dialogue', reply: payload.actionId, action: replyAction, affection: 'up', clothing: replyClothing });
             state.data.revision++;
         }
         return { result: structuredClone(state) };
@@ -90,6 +96,12 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
     assert.equal(root.querySelector('[role=alertdialog]'), null);
     assert.ok(root.querySelector('textarea'));
     assert.equal(root.querySelector('[data-choice]'), null);
+
+    // Clothing belongs to saved game state; unavailable remote character cards cannot hide it.
+    root.querySelector(`[aria-label="${CLOTHING_COPY.title}"]`).click(); await settle();
+    assert.equal(root.querySelectorAll('.ember-clothing-popover dd').length, 6);
+    assert.equal(root.querySelector('.ember-clothing-popover [role=status]'), null);
+    root.querySelector('.ember-clothing-popover button').click(); await settle();
 
     const editDraft = text => { const input = root.querySelector('textarea'); input.value = text; input.dispatchEvent(new window.Event('input')); };
     const leave = async () => { [...root.querySelector('[role=dialog]').querySelectorAll('button')].find(b => b.textContent === CAMPAIGN_COPY.close).click(); await settle(); };
@@ -123,15 +135,36 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
 
     await t.test('background memory status stays inside its meter and explicit retry targets that character without sending dialogue', async () => {
         const history = structuredClone(state.data.active.conversations);
-        state.memories.sanniang = { status: 'failed', code: 'expedition_agent_failed' };
+        const diagnostic = 'HTTP 502\n<html><body>upstream unavailable</body></html>\nrequest_id: summary-fixture';
+        state.memories.sanniang = { status: 'failed', code: 'expedition_agent_failed', message: diagnostic };
         notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
         assert.equal(root.querySelector('[role=alertdialog],.ember-conversation-notice,.ember-dialogue-issue'), null);
+        assert.equal(root.querySelector('.ember-meter-popover [role=status]').textContent, diagnostic);
+        assert.equal(root.querySelector('.ember-meter-popover [role=status]').children.length, 0);
         const retry = button(DIALOGUE_COPY.memoryRetry); assert.ok(retry); retry.click(); await settle();
         assert.equal(retriedMemory, 'sanniang'); assert.equal(state.memories.sanniang.status, 'running');
         assert.equal(button(DIALOGUE_COPY.memoryRetry), undefined);
+        assert.equal(root.querySelector('.ember-meter-popover [role=status]'), null);
         assert.deepEqual(state.data.active.conversations, history);
         assert.equal(root.querySelector('textarea').value, 'I will ask Sanniang about her work.');
         state.memories = {}; notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
+    });
+
+    await t.test('provider diagnostics remain literal text in the dialogue and outside it', async () => {
+        const diagnostic = 'HTTP 429\n<img src=x onerror=alert(1)>\nrequest_id: dialogue-fixture';
+        const before = structuredClone(state.data);
+        state.replyFailure = { actionId: 'failed-fixture', person: 'sanniang', playerText: 'question', regenerating: false, text: null,
+            code: 'expedition_agent_failed', message: diagnostic };
+        notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
+        const detail = root.querySelector('.ember-dialogue-issue .ember-error-detail');
+        assert.equal(detail.textContent, diagnostic); assert.equal(detail.children.length, 0);
+        await leave();
+        const notice = root.querySelector('.ember-conversation-notice .ember-error-detail');
+        assert.equal(notice.textContent, diagnostic); assert.equal(notice.children.length, 0);
+        assert.deepEqual(state.data, before);
+        state.replyFailure = null;
+        notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
+        root.querySelector('[data-interact=sanniang]').click(); await settle();
     });
 
     await t.test('sending moves text into the log immediately; replacement never duplicates the player turn or erases the next draft', async () => {
@@ -142,12 +175,26 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         assert.equal(root.querySelector('textarea').value, '');
         assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
         assert.equal(root.querySelector('.ember-player-line').getAttribute('aria-busy'), 'true');
+        const status = () => root.querySelector('.ember-dialogue-status');
+        assert.equal(status().dataset.phase, 'preparing');
+        for (const phase of ['waiting', 'thinking', 'replying', 'saving']) {
+            const progress = structuredClone(state);
+            progress.conversation = { actionId: 'live-fixture', person: 'sanniang', text: 'one sent message', regenerating: false, phase, startedAt: Date.now() - 3000 };
+            notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: progress } }); await settle();
+            assert.equal(status().dataset.phase, phase);
+            assert.equal(status().querySelector('time').getAttribute('datetime'), 'PT3S');
+            assert.equal(root.querySelector('[role=log]').contains(status()), false);
+        }
+        notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } });
         editDraft('next draft'); await settle(); release(); await settle();
+        assert.equal(status(), null);
         assert.equal(root.querySelector('textarea').value, 'next draft');
         assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
         const original = state.data.active.conversations.sanniang.at(-1).id;
         root.querySelector('[data-regenerate]').click(); await settle();
         assert.equal(state.data.active.conversations.sanniang.at(-1).id, original);
+        assert.equal(state.data.active.conversations.sanniang.at(-1).kind, 'player');
+        assert.equal(root.querySelector(`[data-message-key="${original}:npc"]`), null);
         assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
         release(); await settle();
         assert.notEqual(state.data.active.conversations.sanniang.at(-1).id, original);
@@ -158,7 +205,170 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         assert.ok(root.querySelector('[role=alertdialog]')); root.querySelector('[role=alertdialog] button').click(); await settle();
         assert.equal(root.querySelector('textarea').value, 'next draft');
         assert.equal(root.querySelectorAll('.ember-player-line').length, 1);
+        assert.equal(state.data.active.conversations.sanniang.at(-1).kind, 'player');
+        await leave(); root.querySelector('[data-interact=sanniang]').click(); await settle();
+        assert.equal(root.querySelector('[data-regenerate]').disabled, false);
         beforeTalk = async () => {};
+        root.querySelector('[data-regenerate]').click(); await settle();
+        assert.equal(state.data.active.conversations.sanniang.at(-1).kind, 'dialogue');
+    });
+
+    await t.test('sending after a tall reply reveals the pending input immediately without hijacking later manual scrolling', async st => {
+        const baseline = structuredClone(state.data);
+        editDraft('first message'); await settle();
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        const log = root.querySelector('[role=log]'), reply = root.querySelector('[data-fresh-reply=true]');
+        Object.defineProperties(log, { scrollHeight: { value: 1500, configurable: true }, clientHeight: { value: 300, configurable: true } });
+        Object.defineProperty(reply, 'offsetHeight', { value: 800, configurable: true });
+        log.getBoundingClientRect = () => ({ top: 0 }); reply.getBoundingClientRect = () => ({ top: 0 });
+        log.scrollTop = 50; log.dispatchEvent(new window.Event('scroll'));
+        let release;
+        st.after(async () => {
+            release?.(); await settle(); beforeTalk = async () => {};
+            delete log.scrollHeight; delete log.clientHeight; delete log.getBoundingClientRect;
+            delete reply.offsetHeight; delete reply.getBoundingClientRect;
+            state.data = { ...baseline, revision: state.data.revision + 1 };
+            notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
+        });
+        beforeTalk = () => new Promise(resolve => { release = resolve; });
+        editDraft('next message'); await settle();
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        assert.equal(root.querySelector('.ember-player-line[aria-busy=true]').textContent, traveler.name + 'next message');
+        assert.equal(log.scrollTop, log.scrollHeight);
+        log.scrollTop = 75; log.dispatchEvent(new window.Event('scroll'));
+        release(); await settle();
+        assert.equal(log.scrollTop, 75);
+        const latest = state.data.active.conversations.sanniang.at(-1);
+        assert.ok(log.querySelector(`[data-message-key="${latest.id}:npc"]`));
+        assert.equal(log.querySelector('[data-history=newer]'), null);
+    });
+
+    await t.test('long history is a bounded message window; browsing never edits saved conversations or memories', async st => {
+        const baseline = structuredClone(state.data);
+        const publish = async () => {
+            notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
+        };
+        const remount = async () => {
+            app.unmount(); app = createApp(Room, { bridge, chatIdentity: 'fixture', generationActive: false }); app.mount(root); await settle();
+            button(CAMPAIGN_COPY.resume + '→').click(); await settle();
+            root.querySelector('[data-interact=sanniang]').click(); await settle();
+        };
+        let release;
+        st.after(async () => {
+            release?.(); await settle(); beforeTalk = async () => {};
+            state.data = { ...baseline, revision: state.data.revision + 1 }; await remount();
+        });
+        for (let i = 0; i < 120; i++) applyReply(state.data.active, { person: 'sanniang', text: `player-${i}`, actionId: `history-${i}` },
+            { kind: 'dialogue', reply: `npc-${i}`, action: null, affection: null });
+        state.data.active.memories.sanniang = { throughId: 'history-50', text: 'saved memory' };
+        state.data.revision++; await remount();
+        const saved = structuredClone(state.data.active);
+        const rows = () => [...root.querySelectorAll('[data-message-key]')];
+        const keys = () => rows().map(row => row.dataset.messageKey);
+        const navigate = async direction => { root.querySelector(`[data-history=${direction}]`).click(); await settle(); };
+        assert.equal(rows().length, 10);
+        assert.equal(root.querySelectorAll('[data-dialogue-actor]').length, 5);
+        assert.equal(keys().at(0), 'history-115:player');
+        const removed = rows().at(-1);
+        await navigate('older'); assert.equal(rows().length, 20);
+        await navigate('older'); assert.equal(rows().length, 30);
+        await navigate('older'); assert.equal(rows().length, 30);
+        assert.equal(removed.isConnected, false);
+        assert.equal(root.querySelectorAll('[data-dialogue-actor]').length, 15);
+        const visited = new Set(keys());
+        while (root.querySelector('[data-history=older]')) {
+            await navigate('older'); assert.ok(rows().length <= 30); keys().forEach(key => visited.add(key));
+        }
+        assert.equal(keys()[0], `${saved.conversations.sanniang[0].id}:npc`);
+        while (root.querySelector('[data-history=newer]')) {
+            await navigate('newer'); assert.ok(rows().length <= 30); keys().forEach(key => visited.add(key));
+        }
+        assert.equal(visited.size, saved.conversations.sanniang.length * 2 - 1);
+        await navigate('latest'); assert.equal(rows().length, 10);
+        for (let i = 0; i < 4; i++) await navigate('older');
+        const browsing = keys();
+        let log;
+        const measureLog = () => {
+            log = root.querySelector('[role=log]');
+            Object.defineProperties(log, { scrollHeight: { value: 5000, configurable: true }, clientHeight: { value: 300, configurable: true } });
+        };
+        measureLog();
+        log.scrollTop = 220; log.dispatchEvent(new window.Event('scroll'));
+        editDraft('preserved draft'); await settle(); await leave();
+        root.querySelector('[data-interact=laobai]').click(); await settle();
+        assert.equal(rows().length, 1);
+        await leave(); root.querySelector('[data-interact=sanniang]').click(); await settle();
+        assert.deepEqual(keys(), browsing); assert.equal(root.querySelector('[role=log]').scrollTop, 220);
+        measureLog();
+        assert.equal(root.querySelector('textarea').value, 'preserved draft');
+        assert.deepEqual(state.data.active, saved);
+
+        // Collapse immediately, before the model completes. The pending player line is one of ten.
+        beforeTalk = () => new Promise(resolve => { release = resolve; });
+        editDraft('new message from old history'); await settle();
+        // A browse update already queued for the same frame cannot reopen the window after send.
+        root.querySelector('[data-history=older]').click();
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        assert.equal(rows().length, 10); assert.equal(keys().at(-1), 'pending');
+        assert.equal(root.querySelectorAll('[data-dialogue-actor]').length, 5);
+        assert.equal(root.querySelector('textarea').value, '');
+        assert.deepEqual(state.data.active, saved);
+
+        // Reading older messages during the paid request must not be interrupted by its arrival.
+        for (let i = 0; i < 4; i++) await navigate('older');
+        const waitingRange = keys();
+        release(); await settle(); assert.deepEqual(keys(), waitingRange);
+        assert.deepEqual(state.data.active.conversations.sanniang.slice(0, -1), saved.conversations.sanniang);
+        assert.deepEqual(state.data.active.memories, saved.memories);
+        const length = state.data.active.conversations.sanniang.length;
+        root.querySelector('[data-regenerate]').click(); await settle();
+        assert.equal(rows().length, 10); assert.equal(root.querySelector('[data-history=latest]'), null);
+        release(); await settle();
+        assert.equal(rows().length, 10); assert.equal(state.data.active.conversations.sanniang.length, length);
+
+        // A failed send and its retry obey the same bound; the error does not destroy old records.
+        beforeTalk = async () => { throw Object.assign(new Error('fixture'), { code: 'expedition_agent_failed' }); };
+        await navigate('older'); await navigate('older');
+        editDraft('retry this message'); await settle();
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        root.querySelector('[role=alertdialog] button').click(); await settle();
+        assert.equal(rows().length, 10); assert.equal(keys().at(-1), 'pending');
+        await navigate('older'); await navigate('older');
+        measureLog();
+        beforeTalk = () => new Promise(resolve => { release = resolve; });
+        root.querySelector('[data-regenerate]').click(); await settle();
+        assert.equal(rows().length, 10); assert.equal(keys().at(-1), 'pending');
+        release(); await settle(); assert.equal(rows().length, 10);
+        assert.equal(state.data.active.conversations.sanniang.length, length + 1);
+        assert.deepEqual(state.data.active.conversations.sanniang.slice(0, saved.conversations.sanniang.length), saved.conversations.sanniang);
+
+        // A new campaign owns a new, temporary reading window.
+        await navigate('older');
+        state.data.active.id = 'another-campaign'; state.data.revision++; await publish();
+        assert.equal(rows().length, 10);
+        for (const pages of [0, 1, 2]) {
+            await st.test(`reading near the latest reply after ${pages} history expansions does not hide arrivals`, async () => {
+                editDraft('read while waiting'); await settle();
+                root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+                for (let i = 0; i < pages; i++) await navigate('older');
+                const anchor = keys().at(-3);
+                log.scrollTop = 220; log.dispatchEvent(new window.Event('scroll')); await settle();
+                release(); await settle();
+                assert.ok(keys().includes(anchor));
+                assert.equal(keys().at(-1), `${state.data.active.conversations.sanniang.at(-1).id}:npc`);
+                assert.equal(root.querySelector('[data-history=newer]'), null);
+                assert.equal(rows().length, Math.min(11 + pages * 10, 30));
+                assert.equal(log.scrollTop, 220);
+                root.querySelector('[data-regenerate]').click(); await settle();
+                log.scrollTop = 180; log.dispatchEvent(new window.Event('scroll')); await settle();
+                release(); await settle();
+                assert.equal(keys().at(-1), `${state.data.active.conversations.sanniang.at(-1).id}:npc`);
+                assert.equal(root.querySelector('[data-history=newer]'), null);
+                assert.equal(log.scrollTop, 180);
+                log.scrollTop = 4700; log.dispatchEvent(new window.Event('scroll')); await settle();
+                assert.equal(rows().length, 10);
+            });
+        }
     });
 
     await t.test('speech styling preserves reply text and treats model markup as text, not HTML', async () => {
@@ -179,7 +389,7 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
 
     await t.test('complete dialogue diagnostics do not interrupt reading or follow the player out of chat; actionable failures stay visible', async () => {
         const before = structuredClone(state.data.active);
-        for (const issue of ['metadata_invalid', 'performance_rejected', 'action_rejected', 'reply_invalid', 'reply_incomplete']) {
+        for (const issue of ['metadata_invalid', 'performance_rejected', 'action_rejected', 'clothing_rejected', 'reply_invalid', 'reply_incomplete']) {
             state.data.active = structuredClone(before);
             const turn = state.data.active.conversations.sanniang.at(-1);
             turn.issue = issue;
@@ -199,7 +409,7 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
     });
 
-    await t.test('action feedback belongs to the committed reply, survives reopening and follows successful regeneration only', async () => {
+    await t.test('action feedback survives reopening and is removed with the discarded reply before regeneration', async () => {
         const baseline = structuredClone(state.data);
         const outcomes = () => [...root.querySelectorAll('.ember-action-feedback')].map(el => [el.dataset.action, el.dataset.phase]);
         let release;
@@ -217,7 +427,7 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
 
         replyAction = 'go:clinic_back';
         root.querySelector('[data-regenerate]').click(); await settle();
-        assert.deepEqual(outcomes(), [['briefing', 'applied']]);
+        assert.deepEqual(outcomes(), []);
         release(); await settle();
         assert.equal(state.data.active.facts.includes('briefed'), false);
         assert.equal(state.data.active.people.sanniang.destination, 'clinic_back');
@@ -225,7 +435,7 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         beforeTalk = async () => { throw Object.assign(new Error('fixture'), { code: 'expedition_agent_failed' }); };
         root.querySelector('[data-regenerate]').click(); await settle();
         root.querySelector('[role=alertdialog] button').click(); await settle();
-        assert.deepEqual(outcomes(), [['go:clinic_back', 'pending']]);
+        assert.deepEqual(outcomes(), []);
 
         beforeTalk = async () => {}; replyAction = null;
         root.querySelector('[data-regenerate]').click(); await settle();
@@ -257,6 +467,40 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         assert.equal(state.data.active.people.sanniang.mode, 'idle');
         assert.ok(root.querySelector('textarea'));
         replyAction = null;
+        state.data = { ...baseline, revision: state.data.revision + 1 };
+        notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
+    });
+
+    await t.test('clothing is readable without model access, safely renders free text and follows reply replacement', async () => {
+        const baseline = structuredClone(state.data);
+        root.querySelector(`[aria-label="${CLOTHING_COPY.title}"]`).click(); await settle();
+        const value = slot => root.querySelector(`.ember-clothing-popover [data-clothing-slot=${slot}]`);
+        assert.equal(root.querySelectorAll('.ember-clothing-popover dd').length, 6);
+        assert.equal(value('outer').textContent, INITIAL_CLOTHING.sanniang.outer);
+        editDraft('leave this draft untouched'); await settle();
+        root.querySelector('.ember-clothing-popover button').click(); await settle();
+        assert.equal(root.querySelector('textarea').value, 'leave this draft untouched');
+        replyClothing = { outer: '<img src=x onerror=alert(1)>', lower: 'grass skirt', shoes: null };
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        assert.equal(root.querySelectorAll('.ember-clothing-feedback').length, 1);
+        assert.equal(root.querySelector('.ember-clothing-feedback img'), null);
+        root.querySelector(`[aria-label="${CLOTHING_COPY.title}"]`).click(); await settle();
+        assert.equal(value('outer').textContent, replyClothing.outer);
+        assert.equal(value('lower').textContent, replyClothing.lower);
+        assert.equal(value('shoes').textContent, CLOTHING_COPY.absent);
+        assert.equal(root.querySelector('.ember-clothing-popover img'), null);
+        root.querySelector('.ember-clothing-popover button').click(); await settle();
+        replyClothing = undefined;
+        root.querySelector('[data-regenerate]').click(); await settle();
+        assert.equal(root.querySelector('.ember-clothing-feedback'), null);
+        await leave(); root.querySelector('[data-interact=laobai]').click(); await settle();
+        root.querySelector(`[aria-label="${CLOTHING_COPY.title}"]`).click(); await settle();
+        assert.equal(value('outer').textContent, INITIAL_CLOTHING.laobai.outer);
+        root.querySelector('.ember-clothing-popover button').click(); await settle();
+        await leave(); root.querySelector('[data-interact=sanniang]').click(); await settle();
+        root.querySelector(`[aria-label="${CLOTHING_COPY.title}"]`).click(); await settle();
+        assert.equal(value('outer').textContent, INITIAL_CLOTHING.sanniang.outer);
+        root.querySelector('.ember-clothing-popover button').click(); await settle();
         state.data = { ...baseline, revision: state.data.revision + 1 };
         notify({ type: 'game/expedition/state', payload: { chatIdentity: 'fixture', state: structuredClone(state) } }); await settle();
     });
@@ -318,8 +562,17 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         const name = root.querySelector('input[type=text], #ember-traveler-name');
         name.value = '江雪'; name.dispatchEvent(new window.Event('input'));
         const gender = root.querySelector('input[value=female]'); gender.checked = true; gender.dispatchEvent(new window.Event('change'));
+        const age = root.querySelector('#ember-traveler-age');
+        age.querySelector('option[value=forties]').selected = true;
+        age.dispatchEvent(new window.Event('change'));
         root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
         assert.equal(state.data.active.id, priorId);
+        root.querySelector('.entry-sheet header button').click(); await settle();
+        assert.equal(root.querySelector('#ember-traveler-name').value, '江雪');
+        assert.equal(root.querySelector('input[value=female]').checked, true);
+        const restoredAge = root.querySelector('#ember-traveler-age');
+        assert.equal(restoredAge.options[restoredAge.selectedIndex].value, 'forties');
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
         root.querySelector('.entry-sheet').scrollTop = 90;
         root.querySelector('.entry-chapter').click(); await settle();
         assert.equal(root.querySelector('.entry-sheet').scrollTop, 0);
@@ -328,7 +581,7 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         const checkbox = root.querySelector('input[type=checkbox]'); checkbox.checked = true; checkbox.dispatchEvent(new window.Event('change'));
         root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
         assert.notEqual(state.data.active.id, priorId);
-        assert.deepEqual(state.data.active.traveler, { name: '江雪', gender: 'female' });
+        assert.deepEqual(state.data.active.traveler, { name: '江雪', gender: 'female', appearanceAge: 'forties' });
         assert.ok(root.querySelector('[role=dialog]'));
     });
 
@@ -350,13 +603,23 @@ test('dialogue keeps drafts and reading position; failed meters never remove the
         assert.equal(!!button(DIALOGUE_COPY.fight), decision === 'attack');
     });
 
-    await t.test('first-time identity has no selected gender and incomplete setup cannot create a save', async () => {
+    await t.test('first-time identity requires explicit gender and adult age choices before proceeding', async () => {
         app.unmount(); state.data = emptyExpedition();
         app = createApp(Room, { bridge, chatIdentity: 'fixture', generationActive: false }); app.mount(root); await settle();
         button(JOURNEY_COPY.begin + '→').click(); await settle();
         assert.equal([...root.querySelectorAll('input[type=radio]')].some(input => input.checked), false);
+        const age = root.querySelector('#ember-traveler-age');
+        assert.equal(age.options[age.selectedIndex].value, '');
+        assert.deepEqual([...age.options].filter(option => !option.hasAttribute('disabled')).map(option => option.value), ['twenties', 'thirties', 'forties', 'elder']);
         const name = root.querySelector('#ember-traveler-name'); name.value = '江雪'; name.dispatchEvent(new window.Event('input'));
         root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
         assert.ok(root.querySelector('#ember-traveler-name')); assert.equal(state.data.active, null);
+        const gender = root.querySelector('input[value=female]'); gender.checked = true; gender.dispatchEvent(new window.Event('change'));
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        assert.ok(root.querySelector('#ember-traveler-age')); assert.equal(state.data.active, null);
+        age.querySelector('option[value=twenties]').selected = true;
+        age.dispatchEvent(new window.Event('change'));
+        root.querySelector('form').dispatchEvent(new window.Event('submit', { cancelable: true })); await settle();
+        assert.ok(root.querySelector('.entry-chapter')); assert.equal(state.data.active, null);
     });
 });
