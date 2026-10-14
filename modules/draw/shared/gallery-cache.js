@@ -5,6 +5,8 @@ import { getContext } from "../../../../../../extensions.js";
 import { saveBase64AsFile } from "../../../../../../utils.js";
 import { hasPreviewImage, DRAW_SLOT_COPY, PreviewStatus } from './image-record.js';
 import { IMAGE_SAVE_LABEL_HTML } from './image-save-ui.js';
+import { normalizeMediaUrl } from './media-url.js';
+import { getSafeViewportStyles, observeViewport } from '../../../shared/common/viewport.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
@@ -94,7 +96,7 @@ function blobToDataUrl(blob) {
 }
 
 async function savedUrlToDataUrl(savedUrl = '') {
-    const url = String(savedUrl || '').trim();
+    const url = normalizeMediaUrl(savedUrl);
     if (!url) return '';
     if (/^data:[^;]+;base64,/i.test(url)) return url;
     if (/^blob:/i.test(url)) {
@@ -170,9 +172,8 @@ export function clearPreviewObjectUrls() {
 }
 
 export function getPreviewDisplayUrl(preview = {}) {
-    const savedUrl = String(preview?.savedUrl || '').trim();
+    const savedUrl = normalizeMediaUrl(preview?.savedUrl);
     if (savedUrl) return savedUrl;
-
     const parsed = parseBase64Image(preview?.base64);
     if (!parsed?.data) return '';
 
@@ -1268,7 +1269,34 @@ function ensureGalleryStyles() {
     if (document.getElementById('nd-gallery-styles')) return;
     const style = document.createElement('style');
     style.id = 'nd-gallery-styles';
-    style.textContent = `#nd-gallery-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:100000;display:none;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px)}#nd-gallery-overlay.visible{display:flex;flex-direction:column;align-items:center;justify-content:center}.nd-gallery-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border:none;background:rgba(255,255,255,0.1);border-radius:50%;color:#fff;font-size:20px;cursor:pointer;z-index:10}.nd-gallery-close:hover{background:rgba(255,255,255,0.2)}.nd-gallery-main{display:flex;align-items:center;gap:16px;max-width:90vw;max-height:70vh}.nd-gallery-nav{width:48px;height:48px;border:none;background:rgba(255,255,255,0.1);border-radius:50%;color:#fff;font-size:24px;cursor:pointer;flex-shrink:0}.nd-gallery-nav:hover{background:rgba(255,255,255,0.2)}.nd-gallery-nav:disabled{opacity:0.3;cursor:not-allowed}.nd-gallery-img-wrap{position:relative;max-width:calc(90vw - 140px);max-height:70vh}.nd-gallery-img{max-width:100%;max-height:70vh;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5)}.nd-gallery-saved-badge{position:absolute;top:12px;left:12px;background:rgba(62,207,142,0.9);padding:4px 10px;border-radius:6px;font-size:11px;color:#fff;font-weight:600}.nd-gallery-thumbs{display:flex;gap:8px;margin-top:20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:12px;max-width:90vw;overflow-x:auto}.nd-gallery-thumb{width:64px;height:64px;border-radius:8px;object-fit:cover;cursor:pointer;border:2px solid transparent;opacity:0.6;transition:all 0.15s;flex-shrink:0}.nd-gallery-thumb:hover{opacity:0.9}.nd-gallery-thumb.active{border-color:#d4a574;opacity:1}.nd-gallery-thumb.saved{border-color:rgba(62,207,142,0.8)}.nd-gallery-actions{display:flex;gap:12px;margin-top:16px}.nd-gallery-btn{padding:10px 20px;border:1px solid rgba(255,255,255,0.2);border-radius:8px;background:rgba(255,255,255,0.1);color:#fff;font-size:13px;cursor:pointer;transition:all 0.15s}.nd-gallery-btn:hover{background:rgba(255,255,255,0.2)}.nd-gallery-btn.primary{background:rgba(212,165,116,0.3);border-color:rgba(212,165,116,0.5)}.nd-gallery-btn.danger{color:#f87171;border-color:rgba(248,113,113,0.3)}.nd-gallery-btn.danger:hover{background:rgba(248,113,113,0.15)}.nd-gallery-info{text-align:center;margin-top:12px;font-size:12px;color:rgba(255,255,255,0.6)}`;
+    style.textContent = `
+#nd-gallery-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:100000;display:none;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px)}
+#nd-gallery-overlay.visible{display:flex;flex-direction:column;align-items:center;justify-content:center}
+.nd-gallery-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border:none;background:rgba(255,255,255,0.1);border-radius:50%;color:#fff;font-size:20px;cursor:pointer;z-index:10}
+.nd-gallery-close:hover{background:rgba(255,255,255,0.2)}
+.nd-gallery-main{display:flex;align-items:center;justify-content:center;gap:16px;width:90%;max-height:70%;flex:1;min-height:0}
+.nd-gallery-nav{width:48px;height:48px;border:none;background:rgba(255,255,255,0.1);border-radius:50%;color:#fff;font-size:24px;cursor:pointer;flex-shrink:0}
+.nd-gallery-nav:hover{background:rgba(255,255,255,0.2)}
+.nd-gallery-nav:disabled{opacity:0.3;cursor:not-allowed}
+/* 图片与角标共享居中的图片网格区域，不以撑满高度的外壳作为角标边界。 */
+.nd-gallery-img-wrap{position:relative;max-width:calc(100% - 128px);height:100%;min-height:0;display:grid;grid-template-rows:minmax(0,max-content);align-content:center;justify-content:center}
+.nd-gallery-img,.nd-gallery-saved-badge{grid-area:1/1}
+.nd-gallery-img{min-width:0;min-height:0;max-width:100%;max-height:100%;object-fit:contain;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5)}
+.nd-gallery-saved-badge{position:absolute;top:min(12px,10%);left:min(12px,10%);background:rgba(62,207,142,0.9);padding:min(4px,5%) min(10px,5%);white-space:nowrap;border-radius:6px;font-size:11px;color:#fff;font-weight:600}
+/* 百分比以安全区内的 overlay 为准，内边距也计入限宽。 */
+.nd-gallery-thumbs{flex-shrink:0;display:flex;gap:8px;margin-top:20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:12px;box-sizing:border-box;max-width:90%;overflow-x:auto}
+.nd-gallery-thumb{width:64px;height:64px;border-radius:8px;object-fit:cover;cursor:pointer;border:2px solid transparent;opacity:0.6;transition:all 0.15s;flex-shrink:0}
+.nd-gallery-thumb:hover{opacity:0.9}
+.nd-gallery-thumb.active{border-color:#d4a574;opacity:1}
+.nd-gallery-thumb.saved{border-color:rgba(62,207,142,0.8)}
+.nd-gallery-actions{display:flex;flex-shrink:0;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:16px;max-width:100%}
+.nd-gallery-btn{padding:10px 20px;border:1px solid rgba(255,255,255,0.2);border-radius:8px;background:rgba(255,255,255,0.1);color:#fff;font-size:13px;cursor:pointer;transition:all 0.15s}
+.nd-gallery-btn:hover{background:rgba(255,255,255,0.2)}
+.nd-gallery-btn.primary{background:rgba(212,165,116,0.3);border-color:rgba(212,165,116,0.5)}
+.nd-gallery-btn.danger{color:#f87171;border-color:rgba(248,113,113,0.3)}
+.nd-gallery-btn.danger:hover{background:rgba(248,113,113,0.15)}
+.nd-gallery-info{flex-shrink:0;text-align:center;margin:12px 0 8px;font-size:12px;color:rgba(255,255,255,0.6)}
+@media(max-height:500px){.nd-gallery-thumbs{margin-top:8px;padding:6px}.nd-gallery-thumb{width:40px;height:40px}.nd-gallery-actions{margin-top:8px}.nd-gallery-info{margin-top:6px}}`;
     document.head.appendChild(style);
 }
 
@@ -1311,13 +1339,19 @@ export async function openGallery(slotId, messageId, callbacks = {}) {
         if (idx >= 0) startIndex = idx;
     }
 
-    currentGalleryData = { slotId, messageId, previews: validPreviews, currentIndex: startIndex, callbacks };
+    currentGalleryData?.stopViewport();
+    currentGalleryData = { slotId, messageId, previews: validPreviews, currentIndex: startIndex, callbacks,
+        stopViewport: observeViewport(() => {
+            Object.assign(document.getElementById('nd-gallery-overlay').style, getSafeViewportStyles());
+        }),
+    };
     renderGalleryThumbs();
     renderGallery();
     document.getElementById('nd-gallery-overlay').classList.add('visible');
 }
 
 export function closeGallery() {
+    currentGalleryData?.stopViewport();
     const el = document.getElementById('nd-gallery-overlay');
     if (el) el.classList.remove('visible');
     currentGalleryData = null;

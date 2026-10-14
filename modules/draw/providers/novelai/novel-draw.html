@@ -798,7 +798,8 @@ body.char-dragging, body.char-dragging * { cursor: grabbing !important; user-sel
                     <h2 class="view-title">API 配置</h2>
                     <p class="view-desc">NovelAI 服务连接设置</p>
                 </div>
-                <div class="card">
+                <fieldset id="nd_api_form" class="card" style="min-width:0;margin:0;" disabled>
+                    <div id="nd_api_presets" class="preset-bar"></div>
                     <div class="form-group">
                         <label class="form-label">NovelAI API Key</label>
                         <div class="input-row">
@@ -852,7 +853,7 @@ body.char-dragging, body.char-dragging * { cursor: grabbing !important; user-sel
                         <button id="nd_test_api" class="btn"><i class="fa-solid fa-plug"></i> 测试连接</button>
                     </div>
                     <div id="nd_api_status" class="status-text"></div>
-                </div>
+                </fieldset>
             </div>
 
             <!-- ═══════════════════════════════════════════════════════════════
@@ -1497,14 +1498,16 @@ body.char-dragging, body.char-dragging * { cursor: grabbing !important; user-sel
 <!-- ═══════════════════════════════════════════════════════════════════════════
      脚本
      ═══════════════════════════════════════════════════════════════════════════ -->
-<script>
+<script type="module">
+import { normalizeMediaUrl } from '../../shared/media-url.js';
+import { NOVEL_API_DEFAULTS, NOVEL_API_FIELDS, normalizeNovelApiConfig } from './novel-api-config.js';
+import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
 // ═══════════════════════════════════════════════════════════════════════════
 
 const DEFAULTS = {
-    timeout: 60000,
-    requestDelay: { min: 15000, max: 30000 },
+    ...NOVEL_API_DEFAULTS,
     cacheDays: 3,
     params: {
         model: 'nai-diffusion-4-5-full',
@@ -1546,13 +1549,9 @@ const CHARACTER_TYPES = [
 let state = {
     enabled: false,
     mode: 'manual',
-    apiKey: '',
-    apiBaseUrl: '',
-    sendMode: 'frontend',
-    useImageBackendJobs: false,
-    insecureTLS: false,
-    timeout: DEFAULTS.timeout,
-    requestDelay: { ...DEFAULTS.requestDelay },
+    ...normalizeNovelApiConfig(),
+    apiPresets: [],
+    activeApiPresetId: null,
     cacheDays: DEFAULTS.cacheDays,
     cacheStats: { count: 0, sizeMB: '0' },
     selectedParamsPresetId: null,
@@ -1659,7 +1658,7 @@ function base64ToObjectUrl(base64, mime) {
 }
 
 function getGalleryImageUrl(image = {}) {
-    const savedUrl = String(image.savedUrl || '').trim();
+    const savedUrl = normalizeMediaUrl(image.savedUrl);
     if (savedUrl) return savedUrl;
     const knownKey = String(image.imgId || '').trim();
     if (knownKey && previewObjectUrls.has(knownKey)) return previewObjectUrls.get(knownKey);
@@ -4395,6 +4394,105 @@ function renderWorldbookEntriesLocal(book) {
 // 预设与设置
 // ═══════════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════════
+// API 配置预设
+// ═══════════════════════════════════════════════════════════════════════════
+// 预设栏组件在 shared/api-presets-ui.js（纯函数在 api-presets.js），宿主（novel-draw.js）负责规范化与落盘。
+// 预设里含 API Key：与 apiKey 同样只存本地，这里不把它写进日志 / 提示。
+
+let AP_UI = null;
+let apiPresetBar = null;
+let apiSettingsReady = false;
+let apiSavePending = null;
+let apiSaveSequence = 0;
+const API_SAVE_SLOW_MS = 15000;
+
+function readApiConfigFromForm() {
+    return normalizeNovelApiConfig({
+        apiKey: $('nd_api_key').value,
+        apiBaseUrl: $('nd_api_base_url').value,
+        sendMode: getSendMode(),
+        useImageBackendJobs: $('nd_use_backend_jobs').checked,
+        insecureTLS: $('nd_insecure_tls').checked,
+        timeout: Number($('nd_timeout').value) * 1000,
+        requestDelay: parseDelay($('nd_delay').value),
+    });
+}
+
+function getEffectiveApiConfig() {
+    return normalizeNovelApiConfig(state);
+}
+
+function fillApiConfigForm(config) {
+    const next = normalizeNovelApiConfig(config);
+    $('nd_api_key').value = next.apiKey;
+    $('nd_api_base_url').value = next.apiBaseUrl;
+    $('nd_use_backend_jobs').checked = next.useImageBackendJobs;
+    $('nd_insecure_tls').checked = next.insecureTLS;
+    $('nd_timeout').value = next.timeout / 1000;
+    $('nd_delay').value = `${next.requestDelay.min}-${next.requestDelay.max}`;
+    updateSendModeUI(next.sendMode);
+    renderBackendPluginStatus();
+}
+
+function renderApiPresetBar() {
+    if (!AP_UI || !apiSettingsReady) return;
+    if (apiPresetBar) {
+        apiPresetBar.render();
+        return;
+    }
+    apiPresetBar = AP_UI.createApiPresetBar({
+        document,
+        container: $('nd_api_presets'),
+        form: $('nd_api_form'),
+        fields: NOVEL_API_FIELDS,
+        defaults: NOVEL_API_DEFAULTS,
+        getState: () => ({ apiPresets: state.apiPresets, activeApiPresetId: state.activeApiPresetId }),
+        readConfig: readApiConfigFromForm,
+        getEffectiveConfig: getEffectiveApiConfig,
+        onCommit: change => requestApiSave('SAVE_API_PRESETS', change, Boolean(change.config)),
+        confirm: message => confirm(message),
+        prompt: (message, fallback) => prompt(message, fallback),
+    });
+}
+
+// 超时只表示尚未收到结果，不代表存储失败；保留请求及互斥直到真实回执到达。
+// requestId 跨 iframe 实例唯一，关闭重开后的迟到回执不能改写新页面。
+function requestApiSave(type, payload, applyForm) {
+    return new Promise(resolve => {
+        const requestId = `api-${Date.now()}-${Math.random().toString(36).slice(2)}-${++apiSaveSequence}`;
+        const timer = setTimeout(() => {
+            apiPresetBar.setStatus('pending', API_PRESET_COPY.awaitingReceipt);
+        }, API_SAVE_SLOW_MS);
+        apiSavePending = { requestId, resolve, timer, applyForm };
+        postToParent({ type, ...payload, requestId });
+    });
+}
+
+function submitApiConfig(syncApiPreset = false) {
+    if (!apiPresetBar || apiPresetBar.isBusy()) return;
+    void apiPresetBar.runSave(() => requestApiSave('SAVE_API_CONFIG', {
+        ...readApiConfigFromForm(), syncApiPreset,
+    }, true), () => {
+        const active = syncApiPreset && state.apiPresets.find(item => item.id === state.activeApiPresetId);
+        return active ? API_PRESET_COPY.synced(active.name) : API_PRESET_COPY.saved;
+    });
+}
+
+function handleApiSaveStatus(data) {
+    const pending = apiSavePending;
+    if (!pending || pending.requestId !== data.requestId || !['success', 'error'].includes(data.state)) return;
+    clearTimeout(pending.timer);
+    apiSavePending = null;
+    state.apiPresets = data.apiPresets;
+    state.activeApiPresetId = data.activeApiPresetId;
+    Object.assign(state, normalizeNovelApiConfig(data.config));
+    const ok = data.state === 'success';
+    if (ok && pending.applyForm) fillApiConfigForm(data.config);
+    if (data.target === 'api') updateStatus($('nd_api_status'), data.state, data.text);
+    pending.resolve(ok);
+}
+
 function applyStateToUI() {
     console.log('[ND-UI] applyStateToUI: autoLearn=%s, advMode=%s, presets=%d',
         state.autoLearnCharacters, state.advancedMode, state.promptPresets?.length);
@@ -4404,15 +4502,8 @@ function applyStateToUI() {
         $('nd_show_floor').checked = state.showFloorButton !== false;
         $('nd_show_floating').checked = state.showFloatingButton === true;
 
-        $('nd_api_key').value = state.apiKey || '';
-        $('nd_api_base_url').value = state.apiBaseUrl || '';
-        $('nd_use_backend_jobs').checked = state.useImageBackendJobs === true;
-        updateSendModeUI(state.sendMode === 'backend' ? 'backend' : 'frontend');
-        $('nd_insecure_tls').checked = state.insecureTLS === true;
-        $('nd_timeout').value = Math.round((state.timeout > 0 ? state.timeout : DEFAULTS.timeout) / 1000);
-        const dMin = state.requestDelay?.min > 0 ? state.requestDelay.min : DEFAULTS.requestDelay.min;
-        const dMax = state.requestDelay?.max > 0 ? state.requestDelay.max : DEFAULTS.requestDelay.max;
-        $('nd_delay').value = `${dMin}-${dMax}`;
+        if (!apiSavePending) fillApiConfigForm(state);
+        renderApiPresetBar();
         $('nd_cache_days').value = state.cacheDays >= 1 ? state.cacheDays : DEFAULTS.cacheDays;
         $('nd_cache_count').textContent = state.cacheStats?.count || 0;
         $('nd_cache_size').textContent = (state.cacheStats?.sizeMB || 0) + ' MB';
@@ -4693,6 +4784,7 @@ window.addEventListener('message', event => {
             if (Array.isArray(incoming.characterGroupPresets)) groupPresetHostPresets = incoming.characterGroupPresets;
             if (groupPresetPendingSaves.size) delete incoming.characterGroupPresets;
             state = { ...state, ...incoming, cacheStats: data.cacheStats || state.cacheStats };
+            apiSettingsReady = true;
             // 宿主推来的是已保存的角色表，不含本页还没保存的空白草稿；编辑中的草稿放回去，
             // 表单内容由 renderCharList 重绘前读回并恢复。
             reattachDraftCharacters();
@@ -4751,6 +4843,10 @@ window.addEventListener('message', event => {
         case 'STATUS':
             if (data.target === 'group-presets') {
                 handleGroupPresetStatus(data);
+                break;
+            }
+            if (data.target === 'api-presets' || (data.target === 'api' && data.requestId)) {
+                handleApiSaveStatus(data);
                 break;
             }
             if (data.target === 'worldbook') {
@@ -4906,78 +5002,34 @@ document.addEventListener('DOMContentLoaded', () => {
     });
     
     $('nd_reset_base_url').addEventListener('click', () => {
+        if (apiPresetBar?.isBusy()) return;
         $('nd_api_base_url').value = '';
-        setSavingState($('nd_save_api'));
-        postToParent({
-            type: 'SAVE_API_CONFIG',
-            apiKey: $('nd_api_key').value.trim(),
-            apiBaseUrl: '',
-            sendMode: getSendMode(),
-            useImageBackendJobs: $('nd_use_backend_jobs').checked,
-            insecureTLS: $('nd_insecure_tls').checked,
-            timeout: Number($('nd_timeout').value) * 1000 || 180000,
-            requestDelay: parseDelay($('nd_delay').value)
-        });
+        submitApiConfig();
     });
 
     $('nd_send_mode_group').querySelectorAll('.nd-mode-btn').forEach((btn) => {
         btn.addEventListener('click', () => {
-            const mode = btn.dataset.sendMode === 'backend' ? 'backend' : 'frontend';
-            updateSendModeUI(mode);
-            postToParent({
-                type: 'SAVE_API_CONFIG',
-                apiKey: $('nd_api_key').value.trim(),
-                apiBaseUrl: $('nd_api_base_url').value.trim(),
-                sendMode: mode,
-                useImageBackendJobs: $('nd_use_backend_jobs').checked,
-                insecureTLS: $('nd_insecure_tls').checked,
-                timeout: Number($('nd_timeout').value) * 1000 || 180000,
-                requestDelay: parseDelay($('nd_delay').value)
-            });
+            if (apiPresetBar?.isBusy()) return;
+            updateSendModeUI(btn.dataset.sendMode);
+            submitApiConfig();
         });
     });
 
-    $('nd_insecure_tls').addEventListener('change', () => {
-        postToParent({
-            type: 'SAVE_API_CONFIG',
-            apiKey: $('nd_api_key').value.trim(),
-            apiBaseUrl: $('nd_api_base_url').value.trim(),
-            sendMode: getSendMode(),
-            useImageBackendJobs: $('nd_use_backend_jobs').checked,
-            insecureTLS: $('nd_insecure_tls').checked,
-            timeout: Number($('nd_timeout').value) * 1000 || 180000,
-            requestDelay: parseDelay($('nd_delay').value)
-        });
-    });
-
+    $('nd_insecure_tls').addEventListener('change', () => submitApiConfig());
     $('nd_use_backend_jobs').addEventListener('change', () => {
+        if (apiPresetBar?.isBusy()) return;
         updateSendModeUI(getSendMode());
         renderBackendPluginStatus();
-        postToParent({
-            type: 'SAVE_API_CONFIG',
-            apiKey: $('nd_api_key').value.trim(),
-            apiBaseUrl: $('nd_api_base_url').value.trim(),
-            sendMode: getSendMode(),
-            useImageBackendJobs: $('nd_use_backend_jobs').checked,
-            insecureTLS: $('nd_insecure_tls').checked,
-            timeout: Number($('nd_timeout').value) * 1000 || 180000,
-            requestDelay: parseDelay($('nd_delay').value)
-        });
+        submitApiConfig();
     });
-
     $('nd_backend_recheck').addEventListener('click', () => requestBackendPluginCheck());
+    $('nd_save_api').addEventListener('click', () => submitApiConfig(true));
 
-    $('nd_save_api').addEventListener('click', () => {
-        setSavingState($('nd_save_api'));
-        postToParent({
-            type: 'SAVE_API_CONFIG',
-            apiKey: $('nd_api_key').value.trim(),
-            apiBaseUrl: $('nd_api_base_url').value.trim(),
-            sendMode: getSendMode(),
-            useImageBackendJobs: $('nd_use_backend_jobs').checked,
-            insecureTLS: $('nd_insecure_tls').checked,
-            timeout: Number($('nd_timeout').value) * 1000 || 180000,
-            requestDelay: parseDelay($('nd_delay').value)
+    // API 配置页里任何改动都刷新预设栏的“与预设一致 / 不一致”状态（预设栏自己的操作除外）。
+    ['input', 'change', 'click'].forEach((type) => {
+        $('view-api').addEventListener(type, (event) => {
+            if (event.target?.closest?.('#nd_api_presets')) return;
+            apiPresetBar?.refresh();
         });
     });
     
@@ -5456,6 +5508,9 @@ document.addEventListener('DOMContentLoaded', () => {
         import('../../shared/character-group-presets-ui.js')
             .then((module) => { GP = module; })
             .catch((error) => { console.error('[ND-UI] 分组预设模块加载失败，分组预设不可用:', error); }),
+        import('../../shared/api-presets-ui.js')
+            .then((module) => { AP_UI = module; renderApiPresetBar(); })
+            .catch((error) => { console.error('[ND-UI] API 预设模块加载失败，API 配置预设不可用:', error); }),
     ]).finally(() => postToParent({ type: 'FRAME_READY' }));
 });
 </script>

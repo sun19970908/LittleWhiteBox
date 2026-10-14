@@ -47,6 +47,7 @@ import {
     updateSharedDrawSettingsPersistent,
     normalizeSharedCacheDays,
     mergeNovelDrawProviderSettingsIntoStorageRoot,
+    updateDrawSettingsRootPersistent,
 } from "../../shared/draw-settings.js";
 import { getLastDrawAgentDiagnostic } from "../../shared/draw-agent.js";
 import {
@@ -61,6 +62,13 @@ import { attachDrawAgentSettingsSurface } from "../../shared/agent-settings-surf
 import { createSerialImageRequestQueue } from "../../shared/serial-image-request-queue.js";
 import { characterLibraryFromSettings, selectEnabledCharacters } from "../../shared/character-library.js";
 import { restoreGroupPresetReferences } from "../../shared/character-group-presets.js";
+import {
+    findApiPreset,
+    pickApiConfig,
+    syncActiveApiPreset,
+} from "../../shared/api-presets.js";
+import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
+import { NOVEL_API_FIELDS, NOVEL_API_PRESET_OPTIONS, normalizeNovelApiConfig, normalizeNovelApiPresets } from './novel-api-config.js';
 import { detectPresentCharacters } from "../../shared/present-characters.js";
 import { joinTags } from "../../shared/character-prompts.js";
 import { resolveAutoLearnCharacter } from "./novel-character-learning.js";
@@ -311,7 +319,6 @@ const ErrorType = {
     SCENE_PLACEMENT: { code: 'scene_placement', label: '插图位置', desc: '正文位置已变化，未写入图片' },
     ABORTED: { code: 'aborted', label: '已取消', desc: '请求已取消' },
     UNKNOWN: { code: 'unknown', label: '错误', desc: '未知错误' },
-    CACHE_LOST: { code: 'cache_lost', label: '缓存丢失', desc: '图片缓存已过期' },
 };
 
 const DEFAULT_PARAMS_PRESET = {
@@ -346,15 +353,11 @@ const DEFAULT_SETTINGS = {
     configVersion: CONFIG_VERSION,
     updatedAt: 0,
     mode: 'manual',
-    apiKey: '',
-    apiBaseUrl: '',
-    sendMode: 'frontend',
-    useImageBackendJobs: false,
-    insecureTLS: false,
+    ...normalizeNovelApiConfig(),
+    apiPresets: [],
+    activeApiPresetId: null,
     selectedParamsPresetId: null,
     paramsPresets: [],
-    requestDelay: { min: 15000, max: 30000 },
-    timeout: 60000,
     useWorldInfo: false,    
     characterTags: [],
     autoLearnCharacters: false,
@@ -744,35 +747,29 @@ function normalizeParamsPreset(preset, index) {
     };
 }
 
+/** 当前生效的 API 配置（timeout 在共享设置里，所以取运行时视图）。 */
+function getEffectiveNovelApiConfig() {
+    return normalizeNovelApiConfig(getRuntimeSettings());
+}
+
 function normalizeSettings(saved = {}) {
     const source = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
     const rawWorldbooks = source.worldbooks && typeof source.worldbooks === 'object'
         && !Array.isArray(source.worldbooks)
         ? source.worldbooks
         : {};
-    const rawDelay = source.requestDelay && typeof source.requestDelay === 'object'
-        ? source.requestDelay
-        : {};
     const merged = {
         configVersion: Number(source.configVersion) || 0,
         updatedAt: Number(source.updatedAt) || 0,
         mode: source.mode === 'auto' ? 'auto' : 'manual',
-        apiKey: String(source.apiKey || ''),
-        apiBaseUrl: String(source.apiBaseUrl || '').trim(),
-        sendMode: source.sendMode === 'backend' ? 'backend' : 'frontend',
-        useImageBackendJobs: source.useImageBackendJobs === true,
-        insecureTLS: source.insecureTLS === true,
+        ...normalizeNovelApiConfig(source),
+        ...normalizeNovelApiPresets(source),
         selectedParamsPresetId: source.selectedParamsPresetId == null
             ? null
             : String(source.selectedParamsPresetId),
         paramsPresets: Array.isArray(source.paramsPresets)
             ? source.paramsPresets.map(normalizeParamsPreset)
             : [],
-        requestDelay: {
-            min: Number(rawDelay.min) > 0 ? Number(rawDelay.min) : DEFAULT_SETTINGS.requestDelay.min,
-            max: Number(rawDelay.max) > 0 ? Number(rawDelay.max) : DEFAULT_SETTINGS.requestDelay.max,
-        },
-        timeout: Number(source.timeout) > 0 ? Number(source.timeout) : DEFAULT_SETTINGS.timeout,
         cacheDays: normalizeSharedCacheDays(source.cacheDays),
         useWorldInfo: source.useWorldInfo === true,
         characterTags: Array.isArray(source.characterTags) ? source.characterTags : [],
@@ -1066,6 +1063,38 @@ async function runSettingsPersistentUpdate(mutator, okText, options) {
 
 function updateSettingsPersistent(mutator, okText = '已保存', options = {}) {
     const update = () => runSettingsPersistentUpdate(mutator, okText, options);
+    const result = settingsUpdateQueue.then(update, update);
+    settingsUpdateQueue = result.catch(() => {});
+    return result;
+}
+
+// API 生效配置、选中预设与共享 timeout 在同一次存储事务中提交。
+function updateApiSettingsPersistent({ config, presetState, syncApiPreset = false }) {
+    const update = async () => {
+        if (!settingsLoaded) return false;
+        try {
+            const committed = await updateDrawSettingsRootPersistent((root) => {
+                const next = normalizeSettings(root);
+                if (presetState) Object.assign(next, presetState);
+                if (config) Object.assign(next, normalizeNovelApiConfig({ ...root, ...config }));
+                if (syncApiPreset) {
+                    next.apiPresets = syncActiveApiPreset(next.apiPresets, next.activeApiPresetId,
+                        normalizeNovelApiConfig(next), NOVEL_API_PRESET_OPTIONS);
+                }
+                next.configVersion = CONFIG_VERSION;
+                next.updatedAt = Date.now();
+                const merged = mergeNovelDrawProviderSettingsIntoStorageRoot(root, next);
+                if (config) merged.timeout = next.timeout;
+                return { ...merged, updatedAt: next.updatedAt };
+            }, { silent: false });
+            if (!committed) return false;
+            settingsCache = normalizeSettings(committed);
+            return true;
+        } catch (error) {
+            console.error('[NovelDraw] API settings save failed:', error);
+            return false;
+        }
+    };
     const result = settingsUpdateQueue.then(update, update);
     settingsUpdateQueue = result.catch(() => {});
     return result;
@@ -2224,11 +2253,14 @@ async function handleImageClick(container) {
         onSave: (imgId, url) => {
             const cont = document.querySelector(`.xb-nd-img[data-img-id="${imgId}"]`);
             if (cont) {
-                cont.querySelector('img').src = url;
                 setImageState(cont, ImageState.SAVED);
             }
             void getPreview(imgId)
-                .then(preview => preview && syncNovelDrawSavedFromPreview(messageId, preview, { savedUrl: url }))
+                .then(preview => {
+                    if (!preview) return;
+                    if (cont) cont.querySelector('img').src = getPreviewDisplayUrl(preview);
+                    return syncNovelDrawSavedFromPreview(messageId, preview, { savedUrl: url });
+                })
                 .catch(e => {
                     console.warn('[NovelDraw] 保存后的楼层持久化失败:', e);
                 });
@@ -2383,7 +2415,7 @@ async function saveSingleImage(container) {
         await updatePreviewSavedUrl(imgId, url);
         await setSlotSelection(slotId, imgId);
         await syncNovelDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url });
-        container.querySelector('img').src = url;
+        container.querySelector('img').src = getPreviewDisplayUrl(preview);
         setImageState(container, ImageState.SAVED);
         container.dataset.imgId = preview.imgId;
         showToast(`已保存到: ${url}`, 'success', 5000);
@@ -3085,6 +3117,8 @@ function hideOverlay() {
 }
 
 async function sendInitData() {
+    // 重开面板不能在上一页保存尚未完成时拿到旧 API，再用旧表单覆盖新预设。
+    await settingsUpdateQueue;
     console.log('[NovelDraw] sendInitData called');
     const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
     if (!iframe?.contentWindow) { console.warn('[NovelDraw] sendInitData: no iframe'); return; }
@@ -3107,6 +3141,8 @@ async function sendInitData() {
             insecureTLS: settings.insecureTLS === true,
             timeout: settings.timeout,
             requestDelay: settings.requestDelay,
+            apiPresets: settings.apiPresets || [],
+            activeApiPresetId: settings.activeApiPresetId || null,
             cacheDays: getSharedDrawSettings().cacheDays,
             selectedParamsPresetId: settings.selectedParamsPresetId,
             paramsPresets: settings.paramsPresets,
@@ -3281,33 +3317,36 @@ async function handleFrameMessage(event) {
         }
 
         case 'SAVE_API_CONFIG': {
-            const nextTimeout = typeof data.timeout === 'number' && data.timeout > 0
-                ? data.timeout
-                : null;
-            const providerOk = await updateSettingsPersistent((settings) => {
-                if (typeof data.apiKey === 'string') {
-                    settings.apiKey = data.apiKey.trim();
-                }
-                if (typeof data.apiBaseUrl === 'string') {
-                    settings.apiBaseUrl = data.apiBaseUrl.trim();
-                }
-                if (data.sendMode === 'frontend' || data.sendMode === 'backend') {
-                    settings.sendMode = data.sendMode;
-                }
-                if (typeof data.useImageBackendJobs === 'boolean') {
-                    settings.useImageBackendJobs = data.useImageBackendJobs;
-                }
-                if (typeof data.insecureTLS === 'boolean') {
-                    settings.insecureTLS = data.insecureTLS;
-                }
-                if (data.requestDelay?.min > 0 && data.requestDelay?.max > 0) {
-                    settings.requestDelay = data.requestDelay;
-                }
-            }, '已保存', { notify: false, silent: false });
-            const sharedOk = nextTimeout == null || await updateSharedSettingsPersistent((settings) => {
-                settings.timeout = nextTimeout;
-            }, '已保存', { notify: false, silent: false });
-            postStatus(providerOk && sharedOk ? 'success' : 'error', providerOk && sharedOk ? '已保存' : '保存失败', 'api');
+            const ok = await updateApiSettingsPersistent({
+                config: pickApiConfig(data, NOVEL_API_FIELDS),
+                syncApiPreset: data.syncApiPreset === true,
+            });
+            const active = data.syncApiPreset && findApiPreset(getSettings().apiPresets, getSettings().activeApiPresetId);
+            postStatus(ok ? 'success' : 'error',
+                ok ? (active ? API_PRESET_COPY.synced(active.name) : API_PRESET_COPY.saved) : API_PRESET_COPY.saveFailed,
+                'api', {
+                    requestId: data.requestId,
+                    apiPresets: getSettings().apiPresets,
+                    activeApiPresetId: getSettings().activeApiPresetId,
+                    config: getEffectiveNovelApiConfig(),
+                });
+            break;
+        }
+
+        case 'SAVE_API_PRESETS': {
+            const valid = Array.isArray(data.apiPresets);
+            const ok = valid && await updateApiSettingsPersistent({
+                presetState: normalizeNovelApiPresets(data),
+                config: data.config ? normalizeNovelApiConfig(data.config) : null,
+            });
+            postStatus(ok ? 'success' : 'error',
+                !valid ? API_PRESET_COPY.invalidData : ok ? API_PRESET_COPY.saved : API_PRESET_COPY.saveFailed,
+                'api-presets', {
+                    requestId: data.requestId,
+                    apiPresets: getSettings().apiPresets,
+                    activeApiPresetId: getSettings().activeApiPresetId,
+                    config: getEffectiveNovelApiConfig(),
+                });
             break;
         }
 

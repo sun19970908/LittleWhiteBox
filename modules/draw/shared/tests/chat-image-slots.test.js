@@ -397,14 +397,19 @@ async function storeFailedSlots(h, prefix, slots, status = 'failed') {
 const floorSource = (prefix, names) => names.map(name => `[image:${prefix}-${name}]`).join(' ');
 const failedCards = h => [...h.root.querySelectorAll('.xb-nd-img[data-state="failed"]')];
 
-test('every failed card offers a floor-wide redraw next to the single redraw', async t => {
+test('failed cards keep single redraw primary and floor-wide actions collapsed', async t => {
     const h = setup(t, floorSource('fr1', ['a', 'b']));
     await storeFailedSlots(h, 'fr1', [['a', 'tag a'], ['b', 'tag b']]);
     assert.equal(failedCards(h).length, 2);
     for (const card of failedCards(h)) {
-        const actions = [...card.querySelectorAll('[data-action]')].map(node => node.dataset.action);
-        assert.deepEqual(actions.slice(0, 3), ['retry-image', 'retry-floor-failed', 'edit-tags']);
-        assert.match(card.querySelector('[data-action="retry-floor-failed"]').textContent, /重生本楼失败项/);
+        const retry = card.querySelector('[data-action="retry-image"]');
+        assert.ok(retry);
+        assert.equal(retry.closest('details'), null);
+        for (const action of ['retry-floor-failed', 'edit-tags', 'remove-placeholder']) {
+            const menu = card.querySelector(`[data-action="${action}"]`).closest('details');
+            assert.ok(menu);
+            assert.equal(menu.hasAttribute('open'), false);
+        }
     }
 });
 
@@ -1423,6 +1428,21 @@ for (const status of ['failed', 'success']) for (const selected of [false, true]
         assert.deepEqual(h.submissions[0].tasks[0].characterPrompts, []);
         assert.equal(h.submissions[0].tasks[0].negativePrompt, undefined);
         assert.deepEqual(await api.getPreview(other.imgId), other);
+    });
+}
+
+for (const savedUrl of ['/user/images/fixture.png', 'user/images/fixture.png']) {
+    test(`saved upload ${savedUrl} remains displayable without its base64 cache`, async t => {
+        const slotId = 'saved-upload-path', imgId = slotId + '-image';
+        const h = setup(t, `[image:${slotId}]`);
+        await api.storePreview({ slotId, imgId, messageId: 0, base64: 'YWJj', tags: 'portrait' });
+        await api.updatePreviewSavedUrl(imgId, savedUrl);
+        const saved = await api.getPreview(imgId);
+        assert.equal(saved.base64, null);
+        assert.equal(api.getPreviewDisplayUrl(saved), '/user/images/fixture.png');
+        await api.renderPreviewsForMessage(0);
+        assert.equal(h.root.querySelector('.xb-nd-img img').getAttribute('src'), '/user/images/fixture.png');
+        assert.equal(h.requests, 0);
     });
 }
 

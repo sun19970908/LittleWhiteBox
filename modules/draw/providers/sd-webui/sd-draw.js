@@ -54,6 +54,12 @@ import { cancelFloorDrawWork, captureDrawCancellationTarget } from "../../shared
 import { createCharacterEnabledControl, getCharacterEnabledFromCard } from "../../shared/character-enabled-control.js";
 import { createCharacterLibraryUi } from "../../shared/character-library-ui.js";
 import { bindGroupPresetPanel } from "../../shared/character-group-presets-draft-binding.js";
+import { createApiPresetBar } from "../../shared/api-presets-ui.js";
+import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
+import {
+    normalizeApiPresetState,
+    syncActiveApiPreset,
+} from "../../shared/api-presets.js";
 import {
     applyGroupPresetForCurrentChat,
     getActiveCharacterAvatars,
@@ -127,6 +133,8 @@ const DEFAULT_SD_DRAW_SETTINGS = {
     timeout: 120000,
     transport: 'st-proxy',
     useImageBackendJobs: false,
+    apiPresets: [],
+    activeApiPresetId: null,
     mode: 'manual',
     overrideSize: 'default',
     showFloorButton: true,
@@ -173,6 +181,7 @@ let eventsBound = false;
 let agentSettingsSurface = null;
 let characterLibraryUi = null;
 let groupPresetBinding = null;
+let apiPresetBar = null;
 let promptChainPreviewFrame = 0;
 let ensureSdDrawPanelRef = null;
 let destroySdDrawPanelsRef = null;
@@ -250,21 +259,38 @@ function cloneSettingsObject(obj) {
     return JSON.parse(JSON.stringify(obj));
 }
 
+// API 配置预设：只保存“API 配置”页里的字段（含认证信息，仅存本地，与 auth 本身的存储位置相同）。
+const SD_API_PRESET_FIELDS = Object.freeze(Object.keys(normalizeSdApiConfig()));
+
+function normalizeSdApiConfig(raw = {}) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    return {
+        host: String(source.host || '').trim(),
+        auth: String(source.auth || '').trim(),
+        timeout: normalizeNumber(source.timeout, DEFAULT_SD_DRAW_SETTINGS.timeout, 10000, 600000),
+        useImageBackendJobs: source.useImageBackendJobs === true,
+    };
+}
+
+const SD_API_PRESET_OPTIONS = Object.freeze({ fields: SD_API_PRESET_FIELDS, normalizeConfig: normalizeSdApiConfig });
+
+function getEffectiveSdApiConfig(settings = getSettings()) {
+    return normalizeSdApiConfig(settings);
+}
+
 function normalizeSettings(raw = {}) {
     const presets = normalizePresets(raw.presets, raw);
     const selectedPresetId = presets.some(p => p.id === raw.selectedPresetId)
         ? raw.selectedPresetId
         : presets[0]?.id || 'default';
     const merged = {
-        host: String(raw.host || ''),
-        auth: String(raw.auth || ''),
+        ...normalizeSdApiConfig(raw),
         transport: 'st-proxy',
-        useImageBackendJobs: raw.useImageBackendJobs === true,
+        ...normalizeApiPresetState(raw, SD_API_PRESET_OPTIONS),
         mode: raw.mode === 'auto' ? 'auto' : 'manual',
         overrideSize: String(raw.overrideSize || 'default'),
         showFloorButton: raw.showFloorButton !== false,
         showFloatingButton: raw.showFloatingButton !== false,
-        timeout: normalizeNumber(raw.timeout, DEFAULT_SD_DRAW_SETTINGS.timeout, 10000, 600000),
         selectedPresetId,
         presets,
         selectedModel: String(raw.selectedModel || ''),
@@ -438,18 +464,19 @@ export function getGenerationSnapshot() {
     };
 }
 
-async function persistSettings(nextSettings, okText = '已保存', { notify = true, silent = false } = {}) {
+let settingsUpdateQueue = Promise.resolve();
+
+async function persistSettingsNow(nextSettings, okText = '已保存', { notify = true, silent = false } = {}) {
     if (!settingsLoaded) {
         console.error('[SdDraw] 设置尚未成功加载，拒绝保存');
         if (notify) toastr.error('配置尚未成功加载，已禁止保存', 'SD WebUI');
         return false;
     }
     const next = normalizeSettings(nextSettings);
-    const previous = settingsCache ? cloneSettingsObject(settingsCache) : null;
     try {
-        settingsCache = next;
         const ok = await SdDrawStorage.setAndSave(SERVER_FILE_KEY, next, { silent });
         if (ok !== false) {
+            settingsCache = next;
             if (notify) {
                 toastr.success(okText, 'SD WebUI');
             }
@@ -458,10 +485,8 @@ async function persistSettings(nextSettings, okText = '已保存', { notify = tr
         if (notify) {
             toastr.error('保存失败', 'SD WebUI');
         }
-        settingsCache = previous;
         return false;
     } catch (error) {
-        settingsCache = previous;
         if (notify) {
             toastr.error(error?.message || '保存失败', 'SD WebUI');
         }
@@ -469,12 +494,22 @@ async function persistSettings(nextSettings, okText = '已保存', { notify = tr
     }
 }
 
-export async function updateSettingsPersistent(mutator, okText = '已保存', options = {}) {
-    const draft = cloneSettingsObject(getSettings());
-    if (typeof mutator === 'function') {
-        await mutator(draft);
-    }
-    return await persistSettings(draft, okText, options);
+function enqueueSettingsUpdate(update) {
+    const result = settingsUpdateQueue.then(update, update);
+    settingsUpdateQueue = result.catch(() => {});
+    return result;
+}
+
+function persistSettings(nextSettings, okText = '已保存', options = {}) {
+    return enqueueSettingsUpdate(() => persistSettingsNow(nextSettings, okText, options));
+}
+
+export function updateSettingsPersistent(mutator, okText = '已保存', options = {}) {
+    return enqueueSettingsUpdate(async () => {
+        const draft = cloneSettingsObject(getSettings());
+        if (typeof mutator === 'function') await mutator(draft);
+        return persistSettingsNow(draft, okText, options);
+    });
 }
 
 function getActivePreset(settings = getSettings()) {
@@ -1001,20 +1036,32 @@ function bindOverlayEvents() {
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
         } catch {}
     });
-    querySettings('#sd-draw-save')?.addEventListener('click', async (event) => {
-        const ok = await saveAllSettings({ notify: true, triggerButton: event.currentTarget, statusElementId: 'sd-draw-api-status' });
-        if (ok) fillForm(getSettings());
+    querySettings('#sd-draw-save')?.addEventListener('click', async () => {
+        const bar = ensureApiPresetBar();
+        await bar.runSave(() => {
+            const { apiPresets, activeApiPresetId } = getSettings();
+            const config = readSdApiConfigFromForm();
+            return commitSdApiPresets({ reason: 'save', activeApiPresetId, config,
+                apiPresets: syncActiveApiPreset(apiPresets, activeApiPresetId, config, SD_API_PRESET_OPTIONS) });
+        });
+    });
+    // API 配置页里任何改动都刷新预设栏的“与预设一致 / 不一致”状态（预设栏自己的操作除外）。
+    ['input', 'change', 'click'].forEach((type) => {
+        querySettings('[data-sd-view-panel="api"]')?.addEventListener(type, (event) => {
+            if (event.target?.closest?.('#sd-api-presets')) return;
+            apiPresetBar?.refresh();
+        });
     });
     querySettings('#sd-draw-test')?.addEventListener('click', async () => {
-        await saveAllSettings({ notify: false });
+        if (!await saveAllSettings({ notify: false })) return;
         await testConnection();
     });
     querySettings('#sd-draw-refresh-options')?.addEventListener('click', async () => {
-        await saveAllSettings({ notify: false });
+        if (!await saveAllSettings({ notify: false })) return;
         await refreshSdOptions({ notify: true });
     });
     querySettings('#sd-draw-test-generate')?.addEventListener('click', async () => {
-        await saveAllSettings({ notify: false });
+        if (!await saveAllSettings({ notify: false })) return;
         await testGenerateFromSettingsPanel();
     });
     querySettings('#sd-draw-size-preset')?.addEventListener('change', () => {
@@ -1357,6 +1404,7 @@ function fillForm(settings) {
     setValue('sd-draw-timeout', settings.timeout);
     setChecked('sd-use-image-backend-jobs', settings.useImageBackendJobs === true);
     getSettingsElement('sd-backend-guide').classList.toggle('hidden', settings.useImageBackendJobs !== true);
+    ensureApiPresetBar();
     setValue('sd-draw-steps', preset.steps ?? '');
     setValue('sd-draw-cfg', preset.cfg_scale ?? '');
     setValue('sd-draw-seed', Number.isFinite(Number(preset.seed)) ? preset.seed : -1);
@@ -1489,6 +1537,73 @@ function updateHiresOptionsVisibility() {
     const row = getSettingsElement('sd-draw-hires-options');
     if (!row) return;
     row.classList.toggle('hidden', !getChecked('sd-draw-hires-enabled'));
+}
+
+// ───────────── API 配置预设 ─────────────
+// 预设栏组件在 shared/api-presets-ui.js；这里提供表单读写与落盘。预设里含认证信息，仅存本地，不写日志 / 提示。
+
+/** 表单里现在的 API 配置（与 readForm 里的同名字段一致）。 */
+function readSdApiConfigFromForm() {
+    return normalizeSdApiConfig({
+        host: getValue('sd-draw-host'),
+        auth: getValue('sd-draw-auth'),
+        timeout: normalizeNumber(getValue('sd-draw-timeout'), getSettings().timeout, 10000, 600000),
+        useImageBackendJobs: getChecked('sd-use-image-backend-jobs'),
+    });
+}
+
+/** 只把 API 配置字段填进表单（不动绘图参数等其它未保存的修改）。 */
+function fillSdApiConfigForm(config) {
+    const next = normalizeSdApiConfig(config);
+    setValue('sd-draw-host', next.host);
+    setValue('sd-draw-auth', next.auth);
+    setValue('sd-draw-timeout', next.timeout);
+    setChecked('sd-use-image-backend-jobs', next.useImageBackendJobs);
+    getSettingsElement('sd-backend-guide')?.classList.toggle('hidden', !next.useImageBackendJobs);
+}
+
+async function commitSdApiPresets(change) {
+    const doc = getSettingsDocument();
+    const incoming = normalizeApiPresetState(
+        { apiPresets: change.apiPresets, activeApiPresetId: change.activeApiPresetId },
+        SD_API_PRESET_OPTIONS,
+    );
+    const applied = change.config ? normalizeSdApiConfig(change.config) : null;
+    const ok = await withSaveTimeout(updateSettingsPersistent((draft) => {
+        draft.apiPresets = incoming.apiPresets;
+        draft.activeApiPresetId = incoming.activeApiPresetId;
+        if (applied) Object.assign(draft, applied);
+    }, API_PRESET_COPY.saved, { notify: false, silent: false }));
+    if (ok && applied && getSettingsDocument() === doc) fillSdApiConfigForm(getEffectiveSdApiConfig());
+    return ok;
+}
+
+function ensureApiPresetBar() {
+    const doc = getSettingsDocument();
+    const container = querySettings('#sd-api-presets');
+    if (!doc || !container) return null;
+    if (apiPresetBar?.document === doc) {
+        apiPresetBar.render();
+        return apiPresetBar;
+    }
+    apiPresetBar?.destroy();
+    apiPresetBar = createApiPresetBar({
+        document: doc,
+        container,
+        fields: SD_API_PRESET_FIELDS,
+        form: querySettings('#sd-api-form'),
+        defaults: normalizeSdApiConfig({}),
+        getState: () => {
+            const { apiPresets, activeApiPresetId } = getSettings();
+            return { apiPresets, activeApiPresetId };
+        },
+        readConfig: readSdApiConfigFromForm,
+        getEffectiveConfig: () => getEffectiveSdApiConfig(),
+        onCommit: commitSdApiPresets,
+        confirm: message => confirm(message),
+        prompt: (message, fallback) => prompt(message, fallback),
+    });
+    return apiPresetBar;
 }
 
 function fillPresetSelect(settings = getSettings()) {
@@ -2408,7 +2523,14 @@ async function saveSharedDrawSettings({ notify = false } = {}) {
     }, '共享规划设置已保存', { notify, silent: false });
 }
 
-async function saveAllSettings({ notify = false, triggerButton = null, statusElementId = '' } = {}) {
+async function saveAllSettings(options = {}) {
+    const bar = ensureApiPresetBar();
+    if (!bar) return false;
+    return bar.runSave(() => persistAllSettings(options));
+}
+
+async function persistAllSettings({ notify = false, triggerButton = null, statusElementId = '' } = {}) {
+    const savedText = API_PRESET_COPY.saved;
     const saveTask = async () => {
         const [sdOk, sharedOk] = await Promise.all([
             persistSettings(readForm(), 'SD WebUI 设置已保存', { notify: false, silent: false }),
@@ -2424,13 +2546,14 @@ async function saveAllSettings({ notify = false, triggerButton = null, statusEle
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
             fp.updateAutoModeUI?.();
         } catch {}
+        apiPresetBar?.render();
     };
 
     if (triggerButton) {
         const ok = await runSaveButtonTask(triggerButton, saveTask, {
             statusElementId,
             pendingText: '正在保存...',
-            successText: '已保存到小白X服务端配置',
+            successText: savedText,
             errorText: '保存失败，请重试',
             notify,
         });
@@ -2453,7 +2576,7 @@ async function saveAllSettings({ notify = false, triggerButton = null, statusEle
         updateStatusText(
             statusElementId,
             ok ? 'success' : 'error',
-            ok ? '已保存到小白X服务端配置' : '保存失败，请重试',
+            ok ? savedText : '保存失败，请重试',
         );
     }
 
@@ -2621,6 +2744,7 @@ async function refreshSdOptions({ notify = false } = {}) {
 export async function openSettings() {
     try {
         await loadSettings();
+        await settingsUpdateQueue;
         await loadSharedDrawSettings();
     } catch {
         return false;
@@ -2638,6 +2762,8 @@ function hideSettings() {
     abortPendingRequest();
     agentSettingsSurface?.destroy();
     agentSettingsSurface = null;
+    apiPresetBar?.destroy();
+    apiPresetBar = null;
     destroyCharacterLibraryUi();
     if (promptChainPreviewFrame) cancelAnimationFrame(promptChainPreviewFrame);
     promptChainPreviewFrame = 0;
@@ -3168,12 +3294,14 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
         onSave: async (imgId, url) => {
             const cont = document.querySelector(`.xb-nd-img[data-img-id="${imgId}"]`);
             if (cont) {
-                const img = cont.querySelector('img');
-                if (img) img.src = url;
                 setImageState(cont, ImageState.SAVED);
             }
             const preview = await getPreview(imgId).catch(() => null);
-            if (preview) await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch(() => {});
+            if (preview) {
+                const img = cont?.querySelector('img');
+                if (img) img.src = getPreviewDisplayUrl(preview);
+                await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch(() => {});
+            }
         },
         onDelete: async (sid, deletedImgId, remainingPreviews) => {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
@@ -3482,9 +3610,10 @@ async function saveCurrentImage(container) {
             : String(ctx.characters?.[ctx.characterId]?.name || 'character');
         const url = await saveBase64AsFile(preview.base64, charName, `sd_${imgId}`, 'png');
         await updatePreviewSavedUrl(imgId, url);
+        preview.savedUrl = url;
         await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch(() => {});
         const img = container.querySelector('img');
-        if (img) img.src = url;
+        if (img) img.src = getPreviewDisplayUrl(preview);
         container.dataset.state = 'saved';
         toastr.success('图片已保存到服务器');
     } catch (error) {
