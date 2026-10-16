@@ -22,8 +22,8 @@ import { SUMMARY_FEEDBACK_COPY } from '../feedback-copy.js';
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const host = globalThis.__memoryStorageTest = { metadata: {}, context: {} };
 const shims = {
-    'extensions.js': 'export const getContext=()=>globalThis.__memoryStorageTest.context;',
-    'script.js': 'export let chat_metadata=globalThis.__memoryStorageTest.metadata; export function reload(){chat_metadata=globalThis.__memoryStorageTest.metadata;} export const getRequestHeaders=()=>({});',
+    'extensions.js': 'export const getContext=()=>globalThis.__memoryStorageTest.context; export const extension_settings={};',
+    'script.js': 'export let chat_metadata=globalThis.__memoryStorageTest.metadata; export function reload(){chat_metadata=globalThis.__memoryStorageTest.metadata;} export const getRequestHeaders=()=>({}); export const saveSettingsDebounced=()=>{};',
     'debug-core.js': 'export const xbLog={info(){},warn(){},error(){},debug(){}};',
     'runtime.js': 'export const applyRecallRuntimeMutationBestEffort=(chatId,change)=>globalThis.__memoryStorageTest.mutations.push({chatId,...change}); export const clearRecallRuntime=async()=>{};',
     'modules/story-summary/data/config.js': 'export const getTextFilterRules=()=>[]; export const getVectorConfig=()=>globalThis.__memoryStorageTest.vectorConfig; export const getSummaryPanelConfig=()=>({memoryMaintenanceEnabled:false,trigger:{},ui:{hideSummarized:true,keepVisibleCount:0}}); export const getSettings=()=>({storySummary:{enabled:true}}); export const DEFAULT_MEMORY_PROMPT_TEMPLATE="{$剧情记忆}";',
