@@ -6,6 +6,7 @@ import { SUMMARY_CONFIG_LOCAL_STORAGE_KEY, writeSummaryConfigLocalCache } from '
 import { CHARACTER_ALIAS_OUTPUT_TEMPLATE } from './character-aliases.js';
 import { EVENT_MEMORY_ROLES } from "./events.js";
 import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './summary-delay.js';
+import { normalizeRecallTimeoutSec } from './recall-settings.js';
 import { DEFAULT_MEMORY_MAINTENANCE_ENABLED } from '../maintenance/settings.js';
 import {
     SUMMARY_ALIAS_RULES, SUMMARY_ARC_RULES, SUMMARY_EVENT_STYLE_RULES, SUMMARY_FACT_TRACKING_RULES,
@@ -329,6 +330,7 @@ function normalizeVectorConfig(rawVector = null) {
         enabled: !!rawVector?.enabled,
         engine: "online",
         l0Concurrency: Math.max(1, Math.min(50, Number(rawVector?.l0Concurrency) || 10)),
+        recallTimeoutSec: normalizeRecallTimeoutSec(rawVector?.recallTimeoutSec),
         l0Api: normalizeOpenAiCompatApiConfig(rawVector?.l0Api, {
             provider: sharedProvider,
             url: sharedUrl,
@@ -360,6 +362,7 @@ function createDefaultSummaryPanelConfig() {
         gen: { temperature: null, top_p: null, top_k: null, presence_penalty: null, frequency_penalty: null },
         trigger: {
             enabled: false,
+            notifyOnComplete: false,
             interval: 20,
             delayFloors: DEFAULT_SUMMARY_DELAY_FLOORS,
             timing: "before_user",
@@ -456,6 +459,7 @@ function normalizeSummaryPanelConfig(rawConfig = null) {
         result.trigger.timing = defaults.trigger.timing;
     }
     if (result.trigger.useStream === undefined) result.trigger.useStream = true;
+    result.trigger.notifyOnComplete = rawConfig?.trigger?.notifyOnComplete === true;
     result.trigger.delayFloors = normalizeSummaryDelayFloors(result.trigger.delayFloors);
     result.ui.hideSummarized = !!result.ui.hideSummarized;
     result.ui.keepVisibleCount = clampKeepVisibleCount(result.ui.keepVisibleCount);

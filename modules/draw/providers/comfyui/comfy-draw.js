@@ -91,6 +91,7 @@ import {
     DEFAULT_MESSAGE_FILTER_RULES,
     joinTags,
     ensureDrawImageStyles,
+    showDrawTagEditor,
     classifyError,
     ErrorType,
     syncDrawSavedFromPreview,
@@ -125,6 +126,7 @@ import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImag
 import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
+import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
@@ -4536,14 +4538,12 @@ async function toggleEditPanel(container, show) {
             appendEditGroup(scrollWrap, { label: '追加 (post_prompt)', value: preview.postPrompt, type: 'post_prompt' });
         }
 
-        editPanel.style.display = 'block';
-
         if (btnsPanel) {
             btnsPanel.style.opacity = '0.3';
             btnsPanel.style.pointerEvents = 'none';
         }
 
-        scrollWrap.querySelector('[data-type="scene"]')?.focus();
+        showDrawTagEditor(editPanel);
 
     } else {
         const scrollWrap = editPanel.querySelector('.xb-nd-edit-scroll');
@@ -4581,7 +4581,7 @@ async function saveEditedTags(container) {
 }
 
 async function refreshSingleImage(container) {
-    try { await redrawImageCard("comfyui", container); }
+    try { await withDrawActionFeedback(container, () => redrawImageCard("comfyui", container)); }
     catch (error) { console.error(DRAW_SLOT_COPY.redrawFailed, error); globalThis.toastr?.error(error.message); }
 }
 
@@ -4590,7 +4590,9 @@ async function retryFailedImage(container) {
 }
 
 async function saveTagsAndRetry(container) {
-    if (await saveEditedTags(container)) await retryFailedImage(container);
+    await withDrawActionFeedback(container, async () => {
+        if (await saveEditedTags(container)) await retryFailedImage(container);
+    });
 }
 
 async function removePlaceholder(container) {

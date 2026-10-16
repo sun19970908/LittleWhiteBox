@@ -7,6 +7,7 @@ import { hasPreviewImage, DRAW_SLOT_COPY, PreviewStatus } from './image-record.j
 import { IMAGE_SAVE_LABEL_HTML } from './image-save-ui.js';
 import { normalizeMediaUrl } from './media-url.js';
 import { getSafeViewportStyles, observeViewport } from '../../../shared/common/viewport.js';
+import { getImageChatIdentity } from './chat-image-persistence.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
@@ -611,6 +612,7 @@ export async function storePreview(opts) {
         negativePrompt = null,
         // 整图正向提示词追加位（ComfyUI 编译器拼在最后），落盘以便画廊编辑重生成时重建
         postPrompt = null,
+        placement,
         source = '',
         chatId = '',
         characterName = '',
@@ -628,7 +630,9 @@ export async function storePreview(opts) {
     return new Promise((resolve, reject) => {
         try {
             const tx = database.transaction(DB_STORE, 'readwrite');
-            tx.objectStore(DB_STORE).put({
+            const store = tx.objectStore(DB_STORE);
+            const previous = store.get(imgId);
+            previous.onsuccess = () => store.put({
                 imgId,
                 slotId: resolvedSlotId,
                 messageId,
@@ -649,6 +653,9 @@ export async function storePreview(opts) {
                 characterPrompts,
                 negativePrompt,
                 postPrompt,
+                // Only creation grants attachment authority. Progress/late paid
+                // results cannot restore authority withdrawn by save or editing.
+                placement: previous.result ? previous.result.placement ?? null : placement ?? null,
                 timestamp: Date.now()
             });
             tx.oncomplete = () => {
@@ -698,6 +705,30 @@ export async function getPreview(imgId) {
         } catch (e) {
             reject(e);
         }
+    });
+}
+
+// Bounded by the floor, never by the size of the chat or image archive.
+export async function getPreviewsForMessage(chatId, messageId) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction(DB_STORE, 'readonly');
+        const store = tx.objectStore(DB_STORE);
+        // Intersect existing indexes before loading records. This also works
+        // with released databases, without another blocking schema upgrade.
+        const requests = [store.index('chatId').getAllKeys(String(chatId)),
+            store.index('messageId').getAllKeys(Number(messageId)), store.index('messageId').getAllKeys(String(messageId))];
+        const records = [];
+        let remaining = requests.length;
+        for (const request of requests) request.onsuccess = () => {
+            if (--remaining) return;
+            const chatKeys = new Set(requests[0].result);
+            for (const key of new Set(requests.slice(1).flatMap(item => item.result))) {
+                if (chatKeys.has(key)) store.get(key).onsuccess = event => records.push(event.target.result);
+            }
+        };
+        tx.oncomplete = () => resolve(records);
+        tx.onerror = tx.onabort = () => reject(tx.error || new Error(DRAW_SLOT_COPY.storageReadFailed));
     });
 }
 
@@ -769,7 +800,8 @@ export async function getDisplayPreviewForSlot(slotId) {
         selectedImgId,
         historyCount: successPreviews.length,
         hasData: false,
-        isFailed: true,
+        isFailed: preview?.status !== PreviewStatus.UNGENERATED,
+        isUngenerated: preview?.status === PreviewStatus.UNGENERATED,
         isPending: preview?.status === PreviewStatus.PENDING || preview?.status === PreviewStatus.UNKNOWN,
         failedInfo: {
             tags: preview?.tags || '',
@@ -821,6 +853,33 @@ export async function updatePreviewRecord(imgId, changes) {
             resolve(updated);
         };
         tx.onerror = tx.onabort = () => reject(failure || storageWriteError(tx));
+    });
+}
+
+// Revoke attachment only; never remove the paid image or its reusable input.
+// The transaction also serializes against late full-record transport writes.
+export async function clearPreviewPlacements(owner, slotIds) {
+    const database = await openDB();
+    const ids = [...new Set(slotIds)];
+    if (!owner || !ids.length) return;
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction(DB_STORE, 'readwrite');
+        const store = tx.objectStore(DB_STORE);
+        for (const slotId of ids) {
+            const request = store.index('slotId').openCursor(slotId);
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) return;
+                if (cursor.value.placement?.owner === owner) cursor.update({ ...cursor.value, placement: null });
+                cursor.continue();
+            };
+        }
+        tx.oncomplete = () => {
+            ids.forEach(invalidateCache);
+            publishCacheChange(ids);
+            resolve();
+        };
+        tx.onerror = tx.onabort = () => reject(storageWriteError(tx));
     });
 }
 
@@ -960,7 +1019,12 @@ export async function clearExpiredCache(cacheDays = 3) {
                     const isFailed = record.status === 'failed' || (!record.base64 && !record.savedUrl);
                     const shouldTrimSavedBase64 = !!record.savedUrl && !!record.base64;
 
-                    if (isExpiredUnsaved || (isFailed && record.timestamp < cutoff)) { 
+                    // Chat image rows are durable user inputs/results, not a
+                    // disposable request cache. Only explicit gallery/slot
+                    // deletion may remove the last copy of their TAG or image.
+                    const chatImage = record.chatId && record.messageId !== undefined
+                        && record.messageId !== null && record.messageId !== '' && !record.source;
+                    if (!chatImage && (isExpiredUnsaved || (isFailed && record.timestamp < cutoff))) {
                         revokePreviewObjectUrl(record.imgId);
                         cursor.delete(); 
                         cleaned++; 
@@ -1322,10 +1386,35 @@ function createGalleryOverlay() {
 }
 
 export async function openGallery(slotId, messageId, callbacks = {}) {
+    // Capture before IndexedDB yields; the host can reuse its chat array when
+    // navigating, so neither an index nor a chat filename identifies the source.
+    const ctx = getContext();
+    const owner = getImageChatIdentity(ctx);
+    const chatId = String(ctx.chatId || '');
+    const msgIdx = Number(messageId);
+    const message = Number.isInteger(msgIdx) ? ctx.chat?.[msgIdx] : null;
+    const swipeIndex = message?.swipe_id ?? 0;
+    const assertCurrent = () => {
+        const current = getContext();
+        if (current.chat !== ctx.chat || getImageChatIdentity(current) !== owner
+            || (Number.isInteger(msgIdx) && current.chat?.[msgIdx] !== message)
+            || (message?.swipe_id ?? 0) !== swipeIndex) throw new Error(DRAW_SLOT_COPY.sourceChanged);
+    };
     createGalleryOverlay();
 
-    const previews = await getPreviewsBySlot(slotId);
-    const validPreviews = previews.filter(hasPreviewImage);
+    let previews = await getPreviewsBySlot(slotId);
+    assertCurrent();
+    let validPreviews = previews.filter(hasPreviewImage);
+
+    if (!validPreviews.length && message && owner) {
+        const { materializeDrawSavedPreview } = await import('./draw-common.js');
+        assertCurrent();
+        await materializeDrawSavedPreview(message, slotId, { messageId: msgIdx, chatId });
+        assertCurrent();
+        previews = await getPreviewsBySlot(slotId);
+        assertCurrent();
+        validPreviews = previews.filter(hasPreviewImage);
+    }
 
     if (!validPreviews.length) {
         showToast('没有找到图片历史', 'error');
@@ -1333,6 +1422,7 @@ export async function openGallery(slotId, messageId, callbacks = {}) {
     }
 
     const selectedImgId = await getSlotSelection(slotId);
+    assertCurrent();
     let startIndex = 0;
     if (selectedImgId) {
         const idx = validPreviews.findIndex(p => p.imgId === selectedImgId);

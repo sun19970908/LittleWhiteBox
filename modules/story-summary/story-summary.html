@@ -9,6 +9,7 @@
     <title>剧情总结 · Story Summary</title>
     <link rel="stylesheet" href="story-summary.css">
     <link rel="stylesheet" href="story-summary-timeline.css">
+    <link rel="stylesheet" href="summary-status.css">
     <link rel="stylesheet" href="settings-config.css">
     <link rel="stylesheet" href="maintenance/ui.css">
     <style>
@@ -120,11 +121,14 @@
                     <span>设置</span>
                 </button>
                 <button class="btn" id="btn-clear">清理</button>
-                <button class="btn btn-p" id="btn-generate">总结</button>
+                <button class="btn btn-p" id="btn-generate"></button>
             </div>
         </div>
 
-        <div id="summary-status" class="summary-status" role="status" aria-live="polite" hidden></div>
+        <div id="summary-notice" class="summary-notice" hidden>
+            <div id="summary-status" class="summary-status" role="status" aria-live="polite"></div>
+            <button id="btn-dismiss-summary" class="summary-dismiss" type="button" hidden></button>
+        </div>
 
         <!-- Main Content -->
         <main>
@@ -436,6 +440,14 @@
                             </div>
                         </div>
 
+                        <div class="settings-checkbox-group">
+                            <label class="settings-checkbox">
+                                <input type="checkbox" id="trigger-notify-on-complete">
+                                <span class="checkbox-mark"></span>
+                                <span class="checkbox-label">总结完成提醒</span>
+                            </label>
+                        </div>
+
                         <!-- Auto Summary with sub-options -->
                         <div class="settings-checkbox-group">
                             <label class="settings-checkbox">
@@ -509,6 +521,12 @@
                         </div>
 
                         <div id="vector-config-area" class="hidden">
+                            <div class="settings-row">
+                                <div class="settings-field">
+                                    <label for="vector-recall-timeout">召回超时（秒）</label>
+                                    <input type="number" id="vector-recall-timeout" min="1" step="1">
+                                </div>
+                            </div>
 
                             <!-- Step 0: API Config -->
                             <div class="neo-card" style="margin-top: 24px;">

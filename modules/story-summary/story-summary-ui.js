@@ -3,6 +3,7 @@
 
 import { EVENT_MEMORY_ROLES, projectEditedSummaryEvents } from './data/events.js';
 import { DEFAULT_SUMMARY_DELAY_FLOORS, normalizeSummaryDelayFloors } from './data/summary-delay.js';
+import { DEFAULT_RECALL_TIMEOUT_SEC, MAX_RECALL_TIMEOUT_SEC, normalizeRecallTimeoutSec } from './data/recall-settings.js';
 import { RELATION_TRENDS } from './data/fact-predicates.js';
 import { createMemoryMaintenancePage } from './maintenance/ui.js';
 import { MEMORY_COPY } from './maintenance/copy.js';
@@ -307,6 +308,7 @@ const UNANNOTATED_LABEL = '未标注';
             enabled: false,
             engine: 'online',
             l0Concurrency: 10,
+            recallTimeoutSec: DEFAULT_RECALL_TIMEOUT_SEC,
             l0Api: {
                 provider: 'siliconflow', url: 'https://api.siliconflow.cn/v1', key: '', model: 'Qwen/Qwen3-8B', modelCache: [],
                 providers: {
@@ -364,8 +366,8 @@ const UNANNOTATED_LABEL = '未标注';
     let tlPagingEnabled = false;
     let tlCurrentPage = -1;
     let settingsSaveTimeoutId = null;
-    let currentChatSummaryEnabled = true;
-    let currentChatSummaryPending = true;
+    let currentChatSummaryState = { hasChat: false, chatEnabled: true, effectiveEnabled: false, changing: true };
+    let summaryStatusId = 0;
     let panelConfigLoad = { status: 'loading', error: '' };
     let settingsOpenedWithServerConfig = false;
     const pendingConfigSaveRequests = new Map();
@@ -446,6 +448,7 @@ const UNANNOTATED_LABEL = '未标注';
             base.enabled = !!raw.enabled;
             base.engine = 'online';
             base.l0Concurrency = Math.max(1, Math.min(50, Number(raw.l0Concurrency) || 10));
+            base.recallTimeoutSec = normalizeRecallTimeoutSec(raw.recallTimeoutSec);
             Object.assign(base.l0Api, {
                 provider: raw.l0Api?.provider || legacyOnline.provider || base.l0Api.provider,
                 url: raw.l0Api?.url || sharedUrl || base.l0Api.url,
@@ -492,29 +495,27 @@ const UNANNOTATED_LABEL = '未标注';
         }
     }
 
-    function syncCurrentChatSummaryControls(
-        enabled = currentChatSummaryEnabled,
-        effectiveEnabled = enabled,
-        consumable = effectiveEnabled,
-    ) {
-        currentChatSummaryEnabled = enabled !== false;
-        const controlsEnabled = effectiveEnabled && consumable && !currentChatSummaryPending;
+    function canUseCurrentChatControls() {
+        const { hasChat, effectiveEnabled, changing } = currentChatSummaryState;
+        return hasChat && effectiveEnabled && !changing;
+    }
+
+    function syncCurrentChatSummaryControls() {
+        const { hasChat, chatEnabled, effectiveEnabled, changing } = currentChatSummaryState;
+        const controlsEnabled = canUseCurrentChatControls();
+        const copy = SUMMARY_FEEDBACK_COPY.summaryControls;
         const toggle = $('current-chat-enabled');
         if (toggle) {
-            toggle.checked = currentChatSummaryEnabled;
-            toggle.disabled = currentChatSummaryPending;
+            toggle.checked = chatEnabled;
+            toggle.disabled = !hasChat || changing;
         }
 
         const generateButton = $('btn-generate');
         if (generateButton) {
-            generateButton.disabled = !controlsEnabled;
-            generateButton.title = currentChatSummaryPending
-                ? '正在同步当前聊天状态'
-                : !effectiveEnabled
-                    ? '请先启用当前聊天的剧情总结'
-                    : !consumable
-                        ? '总结历史无法安全回滚；请导出并修正后重新导入，或清空总结数据'
-                        : '';
+            generateButton.textContent = localGenerating ? copy.stop : copy.generate;
+            generateButton.disabled = !localGenerating && !controlsEnabled;
+            generateButton.title = localGenerating ? '' : !hasChat ? copy.noChat
+                : changing ? copy.changing : !effectiveEnabled ? copy.disabled : '';
         }
 
         for (const id of ['hide-summarized', 'keep-visible-count', 'use-vector-boundary']) {
@@ -522,6 +523,34 @@ const UNANNOTATED_LABEL = '未标注';
             if (control) control.disabled = !controlsEnabled;
         }
         syncVectorBoundaryControl(config.vector?.enabled, controlsEnabled && config.ui.hideSummarized);
+    }
+
+    function renderSummaryStatus(data) {
+        const status = $('summary-status');
+        const isError = data.type === 'SUMMARY_ERROR';
+        summaryStatusId = data.statusId;
+        status.classList.toggle('is-error', isError);
+        status.setAttribute('role', isError ? 'alert' : 'status');
+        status.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+        status.tabIndex = isError ? 0 : -1;
+        status.textContent = String((isError ? data.message : data.statusText) || '');
+        $('summary-notice').hidden = !status.textContent;
+        $('btn-dismiss-summary').hidden = !isError;
+        if (!status.textContent && document.activeElement === $('btn-dismiss-summary')) $('btn-generate').focus();
+    }
+
+    function bindSummaryActions() {
+        $('btn-dismiss-summary').textContent = SUMMARY_FEEDBACK_COPY.summaryControls.dismiss;
+        $('btn-dismiss-summary').onclick = () => postMsg('DISMISS_SUMMARY_STATUS', { statusId: summaryStatusId });
+        $('btn-generate').onclick = () => {
+            if (localGenerating) {
+                postMsg('REQUEST_CANCEL');
+                return;
+            }
+            localGenerating = true;
+            syncCurrentChatSummaryControls();
+            postMsg('REQUEST_GENERATE', { config: { api: config.api, gen: config.gen, trigger: config.trigger } });
+        };
     }
 
     function syncAutoSummaryControls() {
@@ -545,7 +574,7 @@ const UNANNOTATED_LABEL = '未标注';
         const container = $('container-vector-boundary');
         if (!input || !label || !container) return;
 
-        const enabled = !!vectorEnabled && !!hideEnabled;
+        const enabled = canUseCurrentChatControls() && !!vectorEnabled && !!hideEnabled;
         input.checked = config.ui.useVectorBoundary !== false;
         input.disabled = !enabled;
         container.classList.toggle('is-disabled', !enabled);
@@ -846,6 +875,7 @@ const UNANNOTATED_LABEL = '未标注';
             enabled: $('vector-enabled')?.checked || false,
             engine: 'online',
             l0Concurrency: Math.max(1, Math.min(50, Number($('vector-l0-concurrency')?.value) || 10)),
+            recallTimeoutSec: normalizeRecallTimeoutSec($('vector-recall-timeout')?.value),
             l0Api: getVectorApiConfig('l0'),
             embeddingApi: getVectorApiConfig('embedding'),
             rerankApi: getVectorApiConfig('rerank'),
@@ -858,6 +888,8 @@ const UNANNOTATED_LABEL = '未标注';
         $('vector-config-area').classList.toggle('hidden', !cfg.enabled);
         syncVectorBoundaryControl(cfg.enabled, config.ui.hideSummarized);
         $('vector-l0-concurrency').value = String(Math.max(1, Math.min(50, Number(cfg.l0Concurrency) || 10)));
+        $('vector-recall-timeout').max = String(MAX_RECALL_TIMEOUT_SEC);
+        $('vector-recall-timeout').value = String(normalizeRecallTimeoutSec(cfg.recallTimeoutSec));
         loadVectorApiConfig('l0', cfg.l0Api || {});
         loadVectorApiConfig('embedding', cfg.embeddingApi || {});
         loadVectorApiConfig('rerank', cfg.rerankApi || {});
@@ -1242,6 +1274,9 @@ const UNANNOTATED_LABEL = '未标注';
         $('gen-top-k').value = config.gen.top_k ?? '';
         $('gen-presence').value = config.gen.presence_penalty ?? '';
         $('gen-frequency').value = config.gen.frequency_penalty ?? '';
+        if ($('trigger-notify-on-complete')) {
+            $('trigger-notify-on-complete').checked = !!config.trigger.notifyOnComplete;
+        }
         $('trigger-enabled').checked = config.trigger.enabled;
         $('trigger-interval').value = config.trigger.interval;
         $('trigger-delay-floors').value = normalizeSummaryDelayFloors(config.trigger.delayFloors);
@@ -1314,6 +1349,9 @@ const UNANNOTATED_LABEL = '未标注';
         const timing = $('trigger-timing').value;
         config.trigger.timing = normalizeTriggerTiming(timing);
         config.trigger.role = $('trigger-role').value || 'system';
+        if ($('trigger-notify-on-complete')) {
+            config.trigger.notifyOnComplete = $('trigger-notify-on-complete').checked;
+        }
         config.trigger.enabled = $('trigger-enabled').checked;
         config.trigger.interval = Math.max(1, Math.min(30, parseInt($('trigger-interval').value) || 20));
         config.trigger.delayFloors = normalizeSummaryDelayFloors($('trigger-delay-floors').value);
@@ -2385,7 +2423,8 @@ const UNANNOTATED_LABEL = '未标注';
             // 按人物首次出现的插入顺序分组，同一人物的事实保持相邻
             const grouped = new Map();
             for (const f of (summaryData.facts || []).filter(f => !f.retracted)) {
-                grouped.set(f.s, [...(grouped.get(f.s) || []), f]);
+                if (!grouped.has(f.s)) grouped.set(f.s, []);
+                grouped.get(f.s).push(f);
             }
             ta.value = [...grouped.values()].flat()
                 .map(f => [f.s, f.p, f.o].concat(f.trend ? [f.trend] : []).join('|'))
@@ -2534,21 +2573,15 @@ const UNANNOTATED_LABEL = '未标注';
         const d = e.data;
         if (!d || d.source !== 'LittleWhiteBox') return;
 
-        const btn = $('btn-generate');
-
         switch (d.type) {
             case 'CHAT_SUMMARY_STATE':
-                currentChatSummaryPending = d.state?.changing === true;
-                syncCurrentChatSummaryControls(
-                    d.state?.chatEnabled !== false,
-                    d.state?.effectiveEnabled !== false,
-                    d.state?.consumable !== false,
-                );
+                currentChatSummaryState = d.state;
+                syncCurrentChatSummaryControls();
                 break;
 
             case 'GENERATION_STATE':
                 localGenerating = !!d.isGenerating;
-                btn.textContent = localGenerating ? '停止' : '总结';
+                syncCurrentChatSummaryControls();
                 break;
 
             case 'SUMMARY_BASE_DATA':
@@ -2563,7 +2596,8 @@ const UNANNOTATED_LABEL = '未标注';
                 }
                 if (d.keepVisibleCount !== undefined) $('keep-visible-count').value = d.keepVisibleCount;
                 if (d.useVectorBoundary !== undefined) config.ui.useVectorBoundary = d.useVectorBoundary !== false;
-                syncVectorBoundaryControl(d.vectorEnabled, d.hideSummarized ?? config.ui.hideSummarized);
+                if (d.vectorEnabled !== undefined) config.vector.enabled = d.vectorEnabled;
+                syncCurrentChatSummaryControls();
                 cleanActionState.canRollback = !!d.canRollback;
                 cleanActionState.rollbackTargetSummarizedUpTo = Number(d.rollbackTargetSummarizedUpTo || 0);
                 cleanActionState.rollbackWillResetBoundary = !!d.rollbackWillResetBoundary;
@@ -2592,17 +2626,9 @@ const UNANNOTATED_LABEL = '未标注';
                 break;
 
             case 'SUMMARY_STATUS':
-            case 'SUMMARY_ERROR': {
-                const status = $('summary-status');
-                const isError = d.type === 'SUMMARY_ERROR';
-                status.classList.toggle('is-error', isError);
-                status.setAttribute('role', isError ? 'alert' : 'status');
-                status.setAttribute('aria-live', isError ? 'assertive' : 'polite');
-                status.tabIndex = isError ? 0 : -1;
-                status.textContent = String((isError ? d.message : d.statusText) || '');
-                status.hidden = !status.textContent;
+            case 'SUMMARY_ERROR':
+                renderSummaryStatus(d);
                 break;
-            }
 
             case 'MEMORY_MAINTENANCE_RESULTS':
                 memoryMaintenancePage.render(d.payload);
@@ -2880,8 +2906,8 @@ const UNANNOTATED_LABEL = '未标注';
         // Current chat switch (saved immediately in chat metadata)
         $('current-chat-enabled').onchange = e => {
             const enabled = e.target.checked;
-            currentChatSummaryPending = true;
-            syncCurrentChatSummaryControls(enabled);
+            currentChatSummaryState = { ...currentChatSummaryState, chatEnabled: enabled, changing: true };
+            syncCurrentChatSummaryControls();
             postMsg('SET_CURRENT_CHAT_ENABLED', { enabled });
         };
 
@@ -2902,18 +2928,7 @@ const UNANNOTATED_LABEL = '未标注';
                 }
             }
         };
-        $('btn-generate').onclick = () => {
-            const btn = $('btn-generate');
-            if (!localGenerating) {
-                localGenerating = true;
-                btn.textContent = '停止';
-                postMsg('REQUEST_GENERATE', { config: { api: config.api, gen: config.gen, trigger: config.trigger } });
-            } else {
-                localGenerating = false;
-                btn.textContent = '总结';
-                postMsg('REQUEST_CANCEL');
-            }
-        };
+        bindSummaryActions();
 
         // Hide summarized
         $('hide-summarized').onchange = e => {
@@ -3071,7 +3086,7 @@ const UNANNOTATED_LABEL = '未标注';
         renderCharacterAliases([]);
 
         bindEvents();
-        syncCurrentChatSummaryControls(currentChatSummaryEnabled);
+        syncCurrentChatSummaryControls();
 
         // === THEME SWITCHER ===
         (function () {

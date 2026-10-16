@@ -155,6 +155,7 @@ import {
     buildImageHtml,
     buildFailedPlaceholderHtml,
     ensureDrawImageStyles,
+    showDrawTagEditor,
 } from "../../shared/draw-common.js";
 import { IMAGE_SAVE_BUTTON_HTML, IMAGE_SAVING_INDICATOR_HTML } from '../../shared/image-save-ui.js';
 import { replaceSceneSlotElements } from "../../shared/scene-slot-dom.js";
@@ -167,6 +168,7 @@ import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImag
 import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
+import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
@@ -2349,14 +2351,12 @@ async function toggleEditPanel(container, show) {
         // Escaped data used in template.
         // eslint-disable-next-line no-unsanitized/property
         scrollWrap.innerHTML = html;
-        editPanel.style.display = 'block';
-
         if (btnsPanel) {
             btnsPanel.style.opacity = '0.3';
             btnsPanel.style.pointerEvents = 'none';
         }
 
-        scrollWrap.querySelector('[data-type="scene"]')?.focus();
+        showDrawTagEditor(editPanel);
 
     } else {
         const scrollWrap = editPanel.querySelector('.xb-nd-edit-scroll');
@@ -2394,7 +2394,7 @@ async function saveEditedTags(container) {
 }
 
 async function refreshSingleImage(container) {
-    try { await redrawImageCard("novelai", container); }
+    try { await withDrawActionFeedback(container, () => redrawImageCard("novelai", container)); }
     catch (error) { console.error(DRAW_SLOT_COPY.redrawFailed, error); globalThis.toastr?.error(error.message); }
 }
 
@@ -2480,7 +2480,9 @@ async function retryFailedImage(container) {
 }
 
 async function saveTagsAndRetry(container) {
-    if (await saveEditedTags(container)) await retryFailedImage(container);
+    await withDrawActionFeedback(container, async () => {
+        if (await saveEditedTags(container)) await retryFailedImage(container);
+    });
 }
 
 async function removePlaceholder(container) {

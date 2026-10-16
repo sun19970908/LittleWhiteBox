@@ -1,6 +1,6 @@
 // A preview is also the durable input of an image attempt. Progress is not a
 // record state: only a live operation/backend job may claim to be generating.
-export const PreviewStatus = Object.freeze({ PENDING: 'pending', UNKNOWN: 'unknown', SUCCESS: 'success', FAILED: 'failed' });
+export const PreviewStatus = Object.freeze({ UNGENERATED: 'ungenerated', PENDING: 'pending', UNKNOWN: 'unknown', SUCCESS: 'success', FAILED: 'failed' });
 
 export function hasPreviewImage(record) {
     return record?.status !== PreviewStatus.FAILED && record?.status !== PreviewStatus.PENDING && record?.status !== PreviewStatus.UNKNOWN
@@ -41,6 +41,7 @@ export const DRAW_SLOT_COPY = Object.freeze({
     editTargetChanged: '图片版本已变化，草稿已保留，请重新打开编辑后保存。',
     tagSaved: 'TAG 已保存',
     tagSaveFailed: 'TAG 保存失败',
+    attachmentSaveFailed: '聊天尚未保存成功，TAG 和图片已保留在图片管理中；重新打开本楼会接回，不会重新绘图。',
     tagReadFailed: 'TAG 读取失败',
     tagAdoptionFailed: '图片标签接管失败',
     redrawFailed: '图片重绘失败',
@@ -49,6 +50,10 @@ export const DRAW_SLOT_COPY = Object.freeze({
     restoreFailed: '图片版本恢复失败',
     removeConfirm: '确定移除此图位及所属图片记录？',
     removeFailed: '图位移除失败',
+    removeTargetChanged: '原消息已变化，请在当前消息上重新操作。',
+    removeSaveFailed: '已从本页移除，但聊天保存未完成。请检查连接后重新编辑并保存原消息，保存前请勿刷新。',
+    removeLocalSaveFailed: '已从本页移除，但这次修改未能保存。请勿刷新，重新编辑并保存原消息以重试。',
+    removeCleanupFailed: '移除已保存，但图片管理中的记录未清理完成，可在图片管理中删除。',
     editTags: '编辑 TAG（场景描述）',
     saveTags: '保存 TAG',
     saveAndRetry: '保存并重试',
@@ -56,6 +61,7 @@ export const DRAW_SLOT_COPY = Object.freeze({
     sourceUnresolved: '此图片标签无法定位到聊天原文，未自动绘图。',
     formatReadFailed: '无法确认聊天图片格式已保存。',
     cacheReadFailed: '旧图片缓存读取失败，未重新绘图。',
+    cacheUpgradeBlocked: '旧页面占用了图片缓存，请关闭其他酒馆页面后重新打开聊天以恢复旧图；未重新绘图。',
 });
 
 export const DRAW_SLOT_ERRORS = Object.freeze({

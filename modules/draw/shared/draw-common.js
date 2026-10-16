@@ -27,6 +27,7 @@ import { findImageJobDeliverySlot } from './image-job-delivery-target.js';
 import { createDrawImageSlotRegex } from './image-marker-syntax.js';
 import { hasPreviewImage, PreviewStatus, DRAW_SLOT_COPY, DRAW_SLOT_ERRORS } from './image-record.js';
 import { getSlotActivity } from './slot-activity.js';
+import { drawMessageViewport } from './draw-message-viewport.js';
 import { classifyScenePlannerErrorForUi } from "./scene-planner-error-ui.js";
 import { detectPresentCharacters } from './present-characters.js';
 import { joinTags } from './character-prompts.js';
@@ -40,15 +41,14 @@ import {
 const DRAW_IMAGE_HTML_REGEX = /<div\b[^>]*class=(["'])[^"']*\bxb-nd-img\b[^"']*\1[^>]*>[\s\S]*?<\/div>/gi;
 const DRAW_SAVED_EXTRA_KEY = 'xiaobaixDrawSaved';
 const LEGACY_NOVEL_SAVED_EXTRA_KEY = 'novelDrawSaved';
-const INITIAL_RENDER_MESSAGE_LIMIT = 1;
-
 let drawPreviewRuntimeEvents = null;
 let drawPreviewRuntimeRefs = 0;
-let drawPreviewMessageObserver = null;
-let drawPreviewRuntimeGeneration = 0;
 let drawPreviewCacheSyncCleanup = null;
-const drawPreviewPendingTimers = new Set();
+let drawPreviewViewCleanup = null;
 const drawPreviewRenderQueues = new WeakMap();
+const previewSlotContents = new Map();
+const previewContentSlots = new Map();
+const deferredPreviewSlots = new WeakMap();
 
 export const ImageState = {
     PREVIEW: 'preview',
@@ -238,15 +238,16 @@ export function ensureDrawImageStyles() {
 .xb-nd-view-empty .xb-nd-menu-wrap{top:16px;right:16px}
 .xb-nd-view-empty .xb-nd-view-notice{padding:12px 0 0}
 .xb-nd-view-empty .xb-nd-status-overlay{position:static;max-height:none}
-.xb-nd-edit{animation:nd-slide-up 0.2s ease-out}
-.xb-nd-edit-scroll{max-height:250px;overflow-y:auto;margin-bottom:8px}
+.xb-nd-edit{animation:nd-slide-up 0.2s ease-out;box-sizing:border-box;flex-direction:column;max-height:calc(100dvh - 32px)}
+.xb-nd-edit-overlay{max-height:min(calc(100% - 16px),calc(100dvh - 32px))}
+.xb-nd-edit-scroll{min-height:0;overflow-y:auto;margin-bottom:8px}
 .xb-nd-edit-scroll::-webkit-scrollbar{width:4px}
 .xb-nd-edit-scroll::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.2);border-radius:2px}
 .xb-nd-edit-group{margin-bottom:8px}
 .xb-nd-edit-group:last-child{margin-bottom:0}
 .xb-nd-edit-group-label{font-size:11px;color:inherit;opacity:.8;margin-bottom:4px}
-.xb-nd-edit-input{box-sizing:border-box;width:100%;min-height:240px;background:rgba(127,127,127,0.1);border:1px solid rgba(127,127,127,0.4);border-radius:6px;color:inherit;font-size:12px;padding:8px;resize:vertical;font-family:monospace}
-.xb-nd-edit-actions{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.xb-nd-edit-input{box-sizing:border-box;width:100%;min-height:clamp(100px,20dvh,240px);background:rgba(127,127,127,0.1);border:1px solid rgba(127,127,127,0.4);border-radius:6px;color:inherit;font-size:12px;padding:8px;resize:vertical;font-family:monospace}
+.xb-nd-edit-actions{display:flex;flex-shrink:0;flex-wrap:wrap;gap:6px;margin-top:8px}
 .xb-nd-edit-actions button{min-height:36px;padding:6px 12px;border:1px solid rgba(127,127,127,.4);background:rgba(127,127,127,.1);border-radius:6px;color:inherit;cursor:pointer;white-space:nowrap}
 .xb-nd-edit-actions [data-action="save-tags"]{flex:1;background:rgba(212,165,116,.2)}
 .xb-nd-img button:focus-visible,.xb-nd-img summary:focus-visible,.xb-nd-edit-input:focus-visible{outline:2px solid currentColor;outline-offset:2px}
@@ -266,6 +267,11 @@ export function ensureDrawImageStyles() {
 .xb-nd-tag-actions{display:inline-flex;margin-inline-start:12px;vertical-align:middle}
 .xb-nd-tag-actions button{min-height:44px;min-width:64px}
 .xb-nd-retry-btn{border:1px solid rgba(212,165,116,0.5);background:rgba(212,165,116,0.2);color:inherit}
+.xb-nd-img button[aria-busy="true"]{cursor:progress;opacity:.8}
+.xb-nd-action-progress{display:inline-flex;align-items:center;justify-content:center;gap:6px;white-space:nowrap}
+.xb-nd-action-spinner{display:inline-block;width:12px;height:12px;box-sizing:border-box;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:xb-nd-action-spin .8s linear infinite}
+@keyframes xb-nd-action-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.xb-nd-action-spinner{animation:none}}
 .xb-nd-edit-btn{border:1px solid rgba(127,127,127,0.4);background:rgba(127,127,127,0.1);color:inherit}
 .xb-nd-remove-btn{border:1px solid rgba(248,113,113,0.3);background:transparent;color:rgba(248,113,113,0.8)}
 @media(prefers-reduced-motion:reduce){.xb-nd-img img,.xb-nd-edit{animation:none;transition:none}}
@@ -313,8 +319,14 @@ ${buildTagEditor(tags, false)}
 </div>`;
 }
 
+export function showDrawTagEditor(editPanel) {
+    editPanel.style.display = 'flex';
+    editPanel.scrollIntoView({ block: 'nearest' });
+    editPanel.querySelector('[data-type="scene"]')?.focus({ preventScroll: true });
+}
+
 function buildTagEditor(tags, failed) {
-    return `<div class="xb-nd-edit" style="display:none;${failed ? 'margin-top:12px;' : 'position:absolute;bottom:8px;left:8px;right:8px;background:rgba(0,0,0,.94);color:#fff;z-index:15;'}border-radius:10px;padding:10px;text-align:left;">
+    return `<div class="xb-nd-edit${failed ? '' : ' xb-nd-edit-overlay'}" style="display:none;${failed ? 'margin-top:12px;' : 'position:absolute;bottom:8px;left:8px;right:8px;background:rgba(0,0,0,.94);color:#fff;z-index:15;'}border-radius:10px;padding:10px;text-align:left;">
     <label data-draw-edit-label style="display:block;font-size:11px;margin-bottom:6px;">${DRAW_SLOT_COPY.editTags}</label>
     <textarea class="xb-nd-edit-input" aria-label="${DRAW_SLOT_COPY.editTags}">${escapeHtml(tags)}</textarea>
     <div class="xb-nd-edit-actions">
@@ -508,9 +520,8 @@ export async function setDrawSavedEntry(messageId, slotId, data) {
     return true;
 }
 
-export async function clearDrawSavedEntry(messageId, slotId) {
-    const ctx = getContext();
-    const message = ctx.chat?.[messageId];
+// Synchronous message edit for callers that already own the subsequent save.
+export function removeDrawSavedEntry(message, slotId) {
     if (!message?.extra || !slotId) return false;
 
     let changed = false;
@@ -522,7 +533,11 @@ export async function clearDrawSavedEntry(messageId, slotId) {
         if (Object.keys(savedMap).length === 0) delete message.extra[key];
     }
 
-    if (!changed) return false;
+    return changed;
+}
+
+export async function clearDrawSavedEntry(messageId, slotId) {
+    if (!removeDrawSavedEntry(getContext().chat?.[messageId], slotId)) return false;
     await persistChatSilently();
     return true;
 }
@@ -565,25 +580,6 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
         const selectedIndex = successPreviews.findIndex(p => p.imgId === savedEntry.imgId);
         const matchedPreview = selectedIndex >= 0 ? successPreviews[selectedIndex] : null;
 
-        // 换设备 / 清缓存后浏览器 IndexedDB 为空，但服务器聊天 extra 里还有这张已保存图的
-        // 完整元数据（含角色提示词）。这里把 extra 重建成本地记录，后续重绘 / 重试 / 画廊
-        // 都能从 IndexedDB 拿回完整提示词，而不是只有场景 tags。
-        if (!matchedPreview) {
-            await storePreview({
-                imgId: savedEntry.imgId || `saved-${slotId}`,
-                slotId,
-                messageId,
-                base64: null,
-                savedUrl: savedEntry.savedUrl,
-                tags: savedEntry.tags || '',
-                positive: savedEntry.positive || '',
-                characterPrompts: savedEntry.characterPrompts || null,
-                negativePrompt: savedEntry.negativePrompt || '',
-                postPrompt: savedEntry.postPrompt || null,
-                status: 'success',
-            }).catch(() => {});
-        }
-
         return {
             preview: {
                 ...matchedPreview,
@@ -592,9 +588,6 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
                 savedUrl: savedEntry.savedUrl,
                 tags: savedEntry.tags ?? matchedPreview?.tags ?? '',
                 positive: savedEntry.positive ?? matchedPreview?.positive ?? '',
-                characterPrompts: savedEntry.characterPrompts ?? matchedPreview?.characterPrompts ?? null,
-                negativePrompt: savedEntry.negativePrompt ?? matchedPreview?.negativePrompt ?? '',
-                postPrompt: savedEntry.postPrompt ?? matchedPreview?.postPrompt ?? null,
                 messageId,
             },
             historyCount: selectedIndex >= 0 ? successPreviews.length : 1,
@@ -605,6 +598,18 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
     }
 
     return display;
+}
+
+function buildUngeneratedImageHtml({ slotId, imgId, messageId, tags, positive }) {
+    return `<div class="xb-nd-img" data-slot-id="${escapeHtml(slotId)}" data-img-id="${escapeHtml(imgId)}" data-tags="${escapeHtml(tags)}" data-positive="${escapeHtml(positive)}" data-mesid="${messageId}" data-state="ungenerated" style="margin:0.8em 0;text-align:center;position:relative;padding:12px;">
+<div class="xb-nd-failed-title">${DRAW_SLOT_COPY.unclaimed}</div>
+<div class="xb-nd-failed-btns">
+    <button class="xb-nd-retry-btn" data-action="retry-image">${DRAW_SLOT_COPY.generate}</button>
+    <button class="xb-nd-edit-btn" data-action="edit-tags">${DRAW_SLOT_COPY.editTagsAction}</button>
+    <button class="xb-nd-remove-btn" data-action="remove-placeholder">${DRAW_SLOT_COPY.remove}</button>
+</div>
+${buildTagEditor(tags, true)}
+</div>`;
 }
 
 export function buildFailedPlaceholderHtml({ slotId, imgId = '', messageId, tags, positive, errorType, errorMessage, historyCount = 0 }) {
@@ -684,6 +689,15 @@ async function renderPreviewsForMessageNow(messageId, {
     if (signal?.aborted) return;
     const ctx = getContext();
     const message = ctx.chat?.[messageId];
+    const mesTextEl = getMesTextElement(messageId);
+    if (!mesTextEl || (content && content !== mesTextEl)) return;
+    if (!drawMessageViewport.isActive(mesTextEl)) {
+        const deferred = deferredPreviewSlots.get(mesTextEl) || new Set();
+        for (const slotId of refreshSlotIds) deferred.add(slotId);
+        deferredPreviewSlots.set(mesTextEl, deferred);
+        drawMessageViewport.invalidate(mesTextEl);
+        return;
+    }
     if (!message?.mes
         || String(ctx.chatId || '') !== String(expectedChatId || '')
         || message !== expectedMessage) return;
@@ -691,11 +705,6 @@ async function renderPreviewsForMessageNow(messageId, {
     const sourceText = message.mes;
     const swipeIndex = message.swipe_id ?? 0;
     const slotIds = extractSlotIds(sourceText);
-    const mesTextEl = getMesTextElement(messageId);
-    if (!mesTextEl || (content && content !== mesTextEl)) return;
-    // Projection observes the host's DOM, including filtered/hidden markers.
-    // Only an explicit text commit may request a whole-message rebuild.
-    const renderedSlots = getRenderedSceneSlotIds(mesTextEl);
     const refreshSlots = new Set((Array.isArray(refreshSlotIds) ? refreshSlotIds : [])
         .map(slotId => String(slotId || '').trim())
         .filter(Boolean));
@@ -703,6 +712,9 @@ async function renderPreviewsForMessageNow(messageId, {
         if (!slotIds.has(slotId)) mesTextEl.querySelector(buildDrawSlotSelector(slotId))?.remove();
     }
     if (slotIds.size === 0) return;
+    // Projection observes the host's DOM, including filtered/hidden markers.
+    // Only an explicit text commit may request a whole-message rebuild.
+    const renderedSlots = getRenderedSceneSlotIds(mesTextEl);
 
     const replacements = [];
     // 待接回的后台任务槽位：只在真的需要判定时读一次，避免每条消息都白跑一次 IndexedDB。
@@ -739,6 +751,10 @@ async function renderPreviewsForMessageNow(messageId, {
                     total: (activity || pendingSlot).total,
                     label: activity?.label || (pendingSlot.state === PendingJobState.CANCELLING ? '正在取消' : DRAW_SLOT_COPY.generating),
                 });
+            } else if (displayData.isUngenerated) {
+                replacementHtml = buildUngeneratedImageHtml({ slotId, messageId,
+                    imgId: displayData.preview.imgId, tags: displayData.preview.tags || '',
+                    positive: displayData.preview.positive || '' });
             } else if (displayData.isFailed) {
                 const interrupted = displayData.isPending
                     ? (displayData.preview?.status === PreviewStatus.UNKNOWN
@@ -818,22 +834,30 @@ async function renderPreviewsForMessageNow(messageId, {
 export function renderPreviewsForMessage(messageId, { refreshSlotIds = [], content, signal } = {}) {
     const ctx = getContext();
     const message = ctx.chat?.[messageId];
-    if (!message?.mes) return Promise.resolve();
+    if (!message) return Promise.resolve();
     const expectedChatId = ctx.chatId;
 
     const root = getMesTextElement(messageId);
-    if (!signal?.aborted && root && (!content || content === root) && !isMessageBeingEdited(messageId)) {
-        mountImageSlotShells(root, messageId, message);
+    if (signal?.aborted || !root || (content && content !== root) || isMessageBeingEdited(messageId)) return Promise.resolve();
+    const requestedSlots = new Set(deferredPreviewSlots.get(root));
+    for (const slotId of refreshSlotIds) requestedSlots.add(slotId);
+    if (!drawMessageViewport.isActive(root)) {
+        deferredPreviewSlots.set(root, requestedSlots);
+        drawMessageViewport.invalidate(root);
+        return Promise.resolve();
     }
+    deferredPreviewSlots.delete(root);
+    if (!message.mes) return Promise.resolve();
+    indexPreviewSlots(root, extractSlotIds(message.mes));
+    drawMessageViewport.write(() => mountImageSlotShells(root, messageId, message));
 
     let queue = drawPreviewRenderQueues.get(message);
     if (!queue) {
         queue = { tail: Promise.resolve() };
         drawPreviewRenderQueues.set(message, queue);
     }
-    const requestedSlots = Array.isArray(refreshSlotIds) ? [...refreshSlotIds] : [];
     const render = queue.tail.then(() => renderPreviewsForMessageNow(messageId, {
-        refreshSlotIds: requestedSlots,
+        refreshSlotIds: [...requestedSlots],
         expectedChatId,
         expectedMessage: message,
         content,
@@ -865,108 +889,55 @@ export async function syncRenderedMessageFromState(messageId, { chatId, expected
     return true;
 }
 
-function initDrawPreviewMessageObserver() {
-    if (drawPreviewMessageObserver) return;
-    drawPreviewMessageObserver = new IntersectionObserver((entries) => {
-        entries.forEach(entry => {
-            if (!entry.isIntersecting) return;
-            const mesEl = entry.target;
-            drawPreviewMessageObserver.unobserve(mesEl);
-            delete mesEl.dataset.ndLazyObserved;
-            const messageId = parseInt(mesEl.getAttribute('mesid'), 10);
-            if (!Number.isNaN(messageId)) {
-                renderPreviewsForMessage(messageId);
-            }
-        });
-    }, { rootMargin: '600px 0px', threshold: 0.01 });
-}
-
-function observeMessageForDrawPreviewLazyRender(messageId) {
-    const mesEl = document.querySelector(`.mes[mesid="${messageId}"]`);
-    if (!mesEl || mesEl.dataset.ndLazyObserved === '1') return;
-    initDrawPreviewMessageObserver();
-    mesEl.dataset.ndLazyObserved = '1';
-    drawPreviewMessageObserver.observe(mesEl);
-}
-
-function isMessageNearViewport(mesEl) {
-    if (!mesEl) return false;
-    const root = document.getElementById('chat');
-    const rootRect = root?.getBoundingClientRect?.() || { top: 0, bottom: window.innerHeight || 0 };
-    const rect = mesEl.getBoundingClientRect();
-    return rect.bottom >= rootRect.top - 600 && rect.top <= rootRect.bottom + 600;
-}
-
-function cleanupDrawPreviewMessageObserver() {
-    if (drawPreviewMessageObserver) {
-        drawPreviewMessageObserver.disconnect();
-        drawPreviewMessageObserver = null;
-    }
-    document.querySelectorAll('[data-nd-lazy-observed="1"]').forEach(el => {
-        delete el.dataset.ndLazyObserved;
-    });
-}
-
 export async function renderAllDrawPreviews() {
-    const ctx = getContext();
-    const chat = ctx.chat || [];
-    let rendered = 0;
-
-    for (let i = chat.length - 1; i >= 0; i--) {
-        if (extractSlotIds(chat[i]?.mes).size === 0) continue;
-        const mesEl = document.querySelector(`.mes[mesid="${i}"]`);
-        if (rendered < INITIAL_RENDER_MESSAGE_LIMIT || isMessageNearViewport(mesEl)) {
-            await renderPreviewsForMessage(i);
-            rendered++;
-        } else {
-            observeMessageForDrawPreviewLazyRender(i);
-        }
+    drawMessageViewport.refresh();
+    for (const content of drawMessageViewport.activeContents()) {
+        const id = Number(content.closest('.mes')?.getAttribute('mesid'));
+        await renderPreviewsForMessage(id, { content });
     }
-}
-
-function clearPendingDrawPreviewTimers() {
-    for (const timer of drawPreviewPendingTimers) {
-        clearTimeout(timer);
-    }
-    drawPreviewPendingTimers.clear();
-}
-
-function scheduleRenderAllDrawPreviews(delay = 150) {
-    const generation = drawPreviewRuntimeGeneration;
-    const timer = setTimeout(() => {
-        drawPreviewPendingTimers.delete(timer);
-        if (!drawPreviewRuntimeEvents || generation !== drawPreviewRuntimeGeneration) return;
-        cleanupDrawPreviewMessageObserver();
-        void renderAllDrawPreviews();
-    }, delay);
-    drawPreviewPendingTimers.add(timer);
 }
 
 function handleDrawPreviewMessageRendered(data) {
     const messageId = typeof data === 'number' ? data : data?.messageId ?? data?.mesId;
-    if (messageId !== undefined) void renderPreviewsForMessage(messageId);
+    if (messageId !== undefined) drawMessageViewport.invalidate(getMesTextElement(messageId));
 }
 
 function handleDrawPreviewMessageModified(data) {
     const raw = typeof data === 'object' ? (data?.messageId ?? data?.mesId) : data;
     const messageId = parseInt(raw, 10);
     if (Number.isNaN(messageId)) return;
-    setTimeout(() => {
-        void renderPreviewsForMessage(messageId);
-    }, 100);
+    drawMessageViewport.invalidate(getMesTextElement(messageId));
+}
+
+function releasePreviewContent(content) {
+    for (const slotId of previewContentSlots.get(content) || []) {
+        const owners = previewSlotContents.get(slotId);
+        owners?.delete(content);
+        if (!owners?.size) previewSlotContents.delete(slotId);
+    }
+    previewContentSlots.delete(content);
+    deferredPreviewSlots.delete(content);
+}
+
+function indexPreviewSlots(content, slots) {
+    releasePreviewContent(content);
+    previewContentSlots.set(content, slots);
+    for (const slotId of slots) {
+        const owners = previewSlotContents.get(slotId) || new Set();
+        owners.add(content);
+        previewSlotContents.set(slotId, owners);
+    }
 }
 
 function handleGalleryCacheChanged({ slotIds } = {}) {
-    const changedSlots = slotIds === null ? null : new Set(Array.isArray(slotIds) ? slotIds : []);
-    if (changedSlots && changedSlots.size === 0) return;
-    const chat = getContext().chat || [];
-    for (let messageId = 0; messageId < chat.length; messageId++) {
-        const messageSlots = extractSlotIds(chat[messageId]?.mes);
-        const refreshSlotIds = changedSlots
-            ? [...messageSlots].filter(slotId => changedSlots.has(slotId))
-            : [...messageSlots];
-        if (refreshSlotIds.length > 0) {
-            void renderPreviewsForMessage(messageId, { refreshSlotIds });
+    // Only previously admitted views have an index. Unvisited history reads the
+    // current cache when it enters the viewport, not on every image write.
+    for (const slotId of slotIds === null ? previewSlotContents.keys() : slotIds || []) {
+        for (const content of previewSlotContents.get(slotId) || []) {
+            const pending = deferredPreviewSlots.get(content) || new Set();
+            pending.add(slotId);
+            deferredPreviewSlots.set(content, pending);
+            drawMessageViewport.invalidate(content);
         }
     }
 }
@@ -975,21 +946,26 @@ export function startSharedDrawPreviewRuntime() {
     drawPreviewRuntimeRefs++;
     if (drawPreviewRuntimeEvents) return;
 
-    drawPreviewRuntimeGeneration++;
     drawPreviewRuntimeEvents = createModuleEvents('drawPreviewRuntime');
+    drawPreviewViewCleanup = drawMessageViewport.subscribe({
+        refresh: (content, messageId) => {
+            void renderPreviewsForMessage(messageId, { content })
+                .catch(error => console.error(DRAW_SLOT_COPY.renderFailed, error));
+        },
+        release: releasePreviewContent,
+    });
     drawPreviewRuntimeEvents.on(event_types.CHARACTER_MESSAGE_RENDERED, handleDrawPreviewMessageRendered);
     drawPreviewRuntimeEvents.on(event_types.USER_MESSAGE_RENDERED, handleDrawPreviewMessageRendered);
-    drawPreviewRuntimeEvents.on(event_types.CHAT_CHANGED, () => scheduleRenderAllDrawPreviews(150));
-    drawPreviewRuntimeEvents.on(event_types.MORE_MESSAGES_LOADED, () => scheduleRenderAllDrawPreviews(150));
+    drawPreviewRuntimeEvents.on(event_types.CHAT_CHANGED, () => {
+        for (const content of previewContentSlots.keys()) releasePreviewContent(content);
+        drawMessageViewport.refresh();
+        drawMessageViewport.invalidateAll();
+    });
+    drawPreviewRuntimeEvents.on(event_types.MORE_MESSAGES_LOADED, () => drawMessageViewport.refresh());
     drawPreviewRuntimeEvents.on(event_types.MESSAGE_EDITED, handleDrawPreviewMessageModified);
     drawPreviewRuntimeEvents.on(event_types.MESSAGE_UPDATED, handleDrawPreviewMessageModified);
     drawPreviewRuntimeEvents.on(event_types.MESSAGE_SWIPED, handleDrawPreviewMessageModified);
     drawPreviewCacheSyncCleanup = subscribeGalleryCacheChanges(handleGalleryCacheChanged);
-
-    setTimeout(() => {
-        if (!drawPreviewRuntimeEvents) return;
-        void renderAllDrawPreviews();
-    }, 300);
 }
 
 export function stopSharedDrawPreviewRuntime() {
@@ -1000,7 +976,6 @@ export function stopSharedDrawPreviewRuntime() {
     drawPreviewRuntimeEvents = null;
     drawPreviewCacheSyncCleanup?.();
     drawPreviewCacheSyncCleanup = null;
-    drawPreviewRuntimeGeneration++;
-    clearPendingDrawPreviewTimers();
-    cleanupDrawPreviewMessageObserver();
+    drawPreviewViewCleanup?.();
+    drawPreviewViewCleanup = null;
 }

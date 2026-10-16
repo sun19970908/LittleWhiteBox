@@ -290,5 +290,8 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     }
 
     onStatus?.(`总结完成，已保存至 ${slice.endMesId + 1} 楼`);
+    if (config.trigger?.notifyOnComplete) {
+        window.toastr?.success(SUMMARY_FEEDBACK_COPY.summaryCompleted(slice.endMesId + 1, newEventIds.length));
+    }
     return result;
 }
