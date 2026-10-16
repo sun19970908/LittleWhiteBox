@@ -609,14 +609,15 @@ export function formatCharacterAliasTableForAI(json, names = null) {
         if (!canonicalKey || !fromKey || canonicalKey === fromKey) continue;
         if (wanted && !wanted.has(canonicalKey) && !wanted.has(fromKey)) continue;
         const group = grouped.get(canonicalKey) || { canonical, aliases: [] };
-        group.aliases.push(alias.from);
+        group.aliases.push(alias);
         grouped.set(canonicalKey, group);
     }
 
     return Array.from(grouped.values())
         .map(group => {
-            const groupNames = dedupeByKey(group.aliases, normalizeAliasNameKey);
-            return groupNames.length ? `- ${group.canonical}：${groupNames.join('、')}` : '';
+            const groupAliases = dedupeByKey(group.aliases, a => normalizeAliasNameKey(a.from));
+            const names = groupAliases.map(a => a.evidence ? `${a.from}（${a.evidence}）` : a.from);
+            return names.length ? `- ${group.canonical}：${names.join('、')}` : '';
         })
         .filter(Boolean)
         .join('\n');
