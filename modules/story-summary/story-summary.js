@@ -3628,19 +3628,15 @@ async function handleFrameMessage(event) {
                     store.json.facts = mergeCharacterRelationshipsIntoFacts(store.json.facts, data?.data?.relationships || [], getCurrentFloorHint());
                 }
                 store.updatedAt = Date.now();
-                const committed = await runVectorWriteTask({ chatId, kind: 'summary-manual-edit', scope: VECTOR_WRITE_SCOPES.CONSISTENCY }, async () => {
-                    // The queue wait can outlast a save started after the entry
-                    // check; re-wait once dequeued, before the write asserts.
-                    await waitForMemoryCommit();
-                    return commitSummaryMemory(chatId, next, { previous, invalidate: async () => {
+                const committed = await runVectorWriteTask({ chatId, kind: 'summary-manual-edit', scope: VECTOR_WRITE_SCOPES.CONSISTENCY }, () =>
+                    commitSummaryMemory(chatId, next, { previous, invalidate: async () => {
                         if (oldEvents) {
                             const nextById = new Map(store.json.events.map(event => [event.id, event]));
                             const ids = oldEvents.filter(event => buildEventVectorText(event) !== buildEventVectorText(nextById.get(event.id))).map(event => event.id);
                             await deleteEventVectorsByIds(chatId, ids);
                             invalidateLexicalIndex();
                         }
-                    } });
-                });
+                    } }));
                 if (!committed) throw new Error('metadata_commit_cancelled');
                 if (oldEvents && getContext().chatId === chatId) await syncEventVectorsOnEdit(oldEvents, store.json.events);
             } catch (error) {
@@ -3970,15 +3966,10 @@ async function synchronizeCurrentSources(chatId, kind = 'observed', floor = null
     else recallReuse.historyChanged(getContext(), change.historyFromFloor);
     const outcome = await runVectorWriteTask(
         { chatId, kind: 'source-sync', scope: VECTOR_WRITE_SCOPES.CONSISTENCY },
-        async () => {
-            // The queue wait above can outlast a save started after the entry
-            // check; re-wait once dequeued, before the write asserts writability.
-            await waitForMemoryCommit();
-            return synchronizeSourceCaches(messageSources, getContext(), {
-                kind, floor, getCurrentContext: getContext,
-                isCurrent: () => !isChatStale(chatId) && isStorySummaryEnabledForCurrentChat(),
-            });
-        },
+        () => synchronizeSourceCaches(messageSources, getContext(), {
+            kind, floor, getCurrentContext: getContext,
+            isCurrent: () => !isChatStale(chatId) && isStorySummaryEnabledForCurrentChat(),
+        }),
     );
     if (isChatStale(chatId)) return { status: 'stale' };
     // The write may have committed before a newer edit made its source snapshot
