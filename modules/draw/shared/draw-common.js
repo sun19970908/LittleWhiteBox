@@ -558,25 +558,6 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
         const selectedIndex = successPreviews.findIndex(p => p.imgId === savedEntry.imgId);
         const matchedPreview = selectedIndex >= 0 ? successPreviews[selectedIndex] : null;
 
-        // 换设备 / 清缓存后浏览器 IndexedDB 为空，但服务器聊天 extra 里还有这张已保存图的
-        // 完整元数据（含角色提示词）。这里把 extra 重建成本地记录，后续重绘 / 重试 / 画廊
-        // 都能从 IndexedDB 拿回完整提示词，而不是只有场景 tags。
-        if (!matchedPreview) {
-            await storePreview({
-                imgId: savedEntry.imgId || `saved-${slotId}`,
-                slotId,
-                messageId,
-                base64: null,
-                savedUrl: savedEntry.savedUrl,
-                tags: savedEntry.tags || '',
-                positive: savedEntry.positive || '',
-                characterPrompts: savedEntry.characterPrompts || null,
-                negativePrompt: savedEntry.negativePrompt || '',
-                postPrompt: savedEntry.postPrompt || null,
-                status: 'success',
-            }).catch(() => {});
-        }
-
         return {
             preview: {
                 ...matchedPreview,
@@ -585,9 +566,6 @@ async function resolveRenderPreviewForSlot(message, messageId, slotId) {
                 savedUrl: savedEntry.savedUrl,
                 tags: savedEntry.tags ?? matchedPreview?.tags ?? '',
                 positive: savedEntry.positive ?? matchedPreview?.positive ?? '',
-                characterPrompts: savedEntry.characterPrompts ?? matchedPreview?.characterPrompts ?? null,
-                negativePrompt: savedEntry.negativePrompt ?? matchedPreview?.negativePrompt ?? '',
-                postPrompt: savedEntry.postPrompt ?? matchedPreview?.postPrompt ?? null,
                 messageId,
             },
             historyCount: selectedIndex >= 0 ? successPreviews.length : 1,
