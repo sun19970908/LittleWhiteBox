@@ -4486,15 +4486,27 @@ function runContentChangeSync(handler, ...args) {
     }
     cancelPendingHide({ resetProjection: handler !== handleMessageUpdated });
     cancelEmbeddingWriteTasks('Chat content changed');
-    void handler(chatId, ...args).catch(async (error) => {
-        // 派生数据同步失败时边界不可信。所有正文变更统一恢复原文，
-        // 且异步失败绝不能落到已经切换的新聊天上。
-        if (!isChatStale(chatId)) {
-            await clearHideState();
-            reportMemorySaveFailure(error);
-        }
-        xbLog.error(MODULE_ID, "正文变更同步失败", error);
-    });
+    void handler(chatId, ...args).catch(error => reportContentChangeSyncFailure(handler, args, chatId, error, false));
+}
+
+/**
+ * A queued writer can lose the baseline race: it drafted from an older memory, the earlier
+ * write landed first, and assertBaseline rejected the stale payload. Re-running the handler
+ * re-inspects the live sources and recomputes from current memory, so one retry is safe and
+ * usually enough; only a failed retry reaches the user.
+ */
+async function reportContentChangeSyncFailure(handler, args, chatId, error, isRetry) {
+    if (error?.code === 'metadata_draft_conflict' && !isRetry && !isChatStale(chatId)) {
+        runContentChangeSync(handler, ...args);
+        return;
+    }
+    // 派生数据同步失败时边界不可信。所有正文变更统一恢复原文，
+    // 且异步失败绝不能落到已经切换的新聊天上。
+    if (!isChatStale(chatId)) {
+        await clearHideState();
+        reportMemorySaveFailure(error);
+    }
+    xbLog.error(MODULE_ID, "正文变更同步失败", error);
 }
 
 function isChatStale(scheduledChatId) {
