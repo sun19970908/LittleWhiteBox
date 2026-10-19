@@ -4486,17 +4486,17 @@ function runContentChangeSync(handler, ...args) {
     }
     cancelPendingHide({ resetProjection: handler !== handleMessageUpdated });
     cancelEmbeddingWriteTasks('Chat content changed');
-    void handler(chatId, ...args).catch(error => reportContentChangeSyncFailure(handler, args, chatId, error, false));
+    void handler(chatId, ...args).catch(error => reportContentChangeSyncFailure(handler, args, chatId, error));
 }
 
 /**
  * A queued writer can lose the baseline race: it drafted from an older memory, the earlier
  * write landed first, and assertBaseline rejected the stale payload. Re-running the handler
- * re-inspects the live sources and recomputes from current memory, so one retry is safe and
- * usually enough; only a failed retry reaches the user.
+ * re-inspects the live sources and recomputes from current memory.
  */
-async function reportContentChangeSyncFailure(handler, args, chatId, error, isRetry) {
-    if (error?.code === 'metadata_draft_conflict' && !isRetry && !isChatStale(chatId)) {
+async function reportContentChangeSyncFailure(handler, args, chatId, error) {
+    if (error?.code === 'metadata_draft_conflict' && !isChatStale(chatId)) {
+        xbLog.warn(MODULE_ID, "正文变更基线冲突，继续重跑同步...", error);
         runContentChangeSync(handler, ...args);
         return;
     }
