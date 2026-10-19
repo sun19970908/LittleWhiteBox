@@ -1,6 +1,7 @@
 import { getChatIdentity } from './chat-identity.js';
 
-export const CONFIRMABLE_CHAT_PHASE_TIMEOUT_MS = 15_000;
+// 大聊天的保存和读回分别允许等待一分钟；确认条件与聊天身份隔离不变。
+export const CONFIRMABLE_CHAT_PHASE_TIMEOUT_MS = 60_000;
 
 export class ConfirmableChatSaveUncertainError extends Error {
     constructor(reason, message, { cause, saveError } = {}) {
@@ -126,9 +127,9 @@ async function withLocalSaveLock(name, task) {
     const previous = localSaveQueues.get(name) || Promise.resolve();
     let release;
     const current = new Promise(resolve => { release = resolve; });
-    const tail = previous.catch(() => {}).then(() => current);
+    const tail = previous.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "tail" }, caughtError); }).then(() => current);
     localSaveQueues.set(name, tail);
-    await previous.catch(() => {});
+    await previous.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "withLocalSaveLock" }, caughtError); });
     try {
         return await task();
     } finally {

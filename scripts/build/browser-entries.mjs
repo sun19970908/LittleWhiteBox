@@ -3,7 +3,7 @@ import { collectSourceFiles } from '../workspace-files.mjs';
 
 export const root = path.resolve(import.meta.dirname, '../..');
 export const entries = {
-    'host/plugin': 'index.js',
+    'host/plugin': 'plugin-entry.js',
     'apps/novel-draw': 'modules/draw/providers/novelai/novel-draw-page.js',
     'apps/tts-settings': 'modules/tts/tts-settings-page.js',
     'apps/debug-panel': 'modules/debug-panel/debug-panel-page.js',
@@ -27,7 +27,6 @@ export const entries = {
 // These are design/asset-authoring pages, not plugin pages. They still receive lint.
 const developmentPages = new Set([
     'modules/xiaobai-os/docs/prototypes/xiaobai-space-2d.html',
-    'modules/xiaobai-os/apps/game/island/production/characters/review.html',
 ]);
 export function discoverPages(directory) {
     return collectSourceFiles(directory, new Set(['.html']))

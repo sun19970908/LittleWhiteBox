@@ -401,8 +401,13 @@
 		pgp: !1,
 		env: {},
 		finalize: N
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	}, R = we, st = [], Fe = 0, It = [];
 	function E(t) {
+========
+	}, R = we, st = [], Oe = 0, St = [];
+	function A(t) {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 		if (typeof this != "object") throw new TypeError("Promises must be constructed via new");
 		this._listeners = [], this._lib = !1;
 		var e = this._PSD = R;
@@ -417,7 +422,7 @@
 		get: function() {
 			var t = R, e = Et;
 			function n(r, i) {
-				var o = this, a = !t.global && (t !== R || e !== Et), u = a && !_e(), s = new E(function(c, h) {
+				var o = this, a = !t.global && (t !== R || e !== Et), u = a && !_e(), s = new A(function(c, h) {
 					un(o, new ir(ur(r, t, a, u), ur(i, t, a, u), c, h, t));
 				});
 				return this._consoleTask && (s._consoleTask = this._consoleTask), s;
@@ -433,7 +438,11 @@
 			});
 		}
 	};
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	ze(E.prototype, {
+========
+	je(A.prototype, {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 		then: an,
 		_then: function(t, e) {
 			un(this, new ir(null, null, t, e, R));
@@ -449,52 +458,61 @@
 		},
 		finally: function(t) {
 			return this.then(function(e) {
-				return E.resolve(t()).then(function() {
+				return A.resolve(t()).then(function() {
 					return e;
 				});
 			}, function(e) {
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 				return E.resolve(t()).then(function() {
 					return St(e);
+========
+				return A.resolve(t()).then(function() {
+					return It(e);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 				});
 			});
 		},
 		timeout: function(t, e) {
 			var n = this;
-			return t < Infinity ? new E(function(r, i) {
+			return t < Infinity ? new A(function(r, i) {
 				var o = setTimeout(function() {
 					return i(new O.Timeout(e));
 				}, t);
 				n.then(r, i).finally(clearTimeout.bind(null, o));
 			}) : this;
 		}
-	}), typeof Symbol < "u" && Symbol.toStringTag && ge(E.prototype, Symbol.toStringTag, "Dexie.Promise"), we.env = sr();
+	}), typeof Symbol < "u" && Symbol.toStringTag && ge(A.prototype, Symbol.toStringTag, "Dexie.Promise"), we.env = sr();
 	function ir(t, e, n, r, i) {
 		this.onFulfilled = typeof t == "function" ? t : null, this.onRejected = typeof e == "function" ? e : null, this.resolve = n, this.reject = r, this.psd = i;
 	}
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	ze(E, {
+========
+	je(A, {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 		all: function() {
 			var t = pe.apply(null, arguments).map(At);
-			return new E(function(e, n) {
+			return new A(function(e, n) {
 				t.length === 0 && e([]);
 				var r = t.length;
 				t.forEach(function(i, o) {
-					return E.resolve(i).then(function(a) {
+					return A.resolve(i).then(function(a) {
 						t[o] = a, --r || e(t);
 					}, n);
 				});
 			});
 		},
 		resolve: function(t) {
-			return t instanceof E ? t : t && typeof t.then == "function" ? new E(function(e, n) {
+			return t instanceof A ? t : t && typeof t.then == "function" ? new A(function(e, n) {
 				t.then(e, n);
-			}) : new E(ot, !0, t);
+			}) : new A(ot, !0, t);
 		},
 		reject: St,
 		race: function() {
 			var t = pe.apply(null, arguments).map(At);
-			return new E(function(e, n) {
+			return new A(function(e, n) {
 				t.map(function(r) {
-					return E.resolve(r).then(e, n);
+					return A.resolve(r).then(e, n);
 				});
 			});
 		},
@@ -528,7 +546,7 @@
 			}
 		},
 		follow: function(t, e) {
-			return new E(function(n, r) {
+			return new A(function(n, r) {
 				return be(function(i, o) {
 					var a = R;
 					a.unhandleds = [], a.onunhandled = o, a.finalize = Pe(function() {
@@ -540,13 +558,17 @@
 				}, e, n, r);
 			});
 		}
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	}), Re && (Re.allSettled && ge(E, "allSettled", function() {
+========
+	}), Pe && (Pe.allSettled && ge(A, "allSettled", function() {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 		var t = pe.apply(null, arguments).map(At);
-		return new E(function(e) {
+		return new A(function(e) {
 			t.length === 0 && e([]);
 			var n = t.length, r = new Array(n);
 			t.forEach(function(i, o) {
-				return E.resolve(i).then(function(a) {
+				return A.resolve(i).then(function(a) {
 					return r[o] = {
 						status: "fulfilled",
 						value: a
@@ -561,20 +583,28 @@
 				});
 			});
 		});
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	}), Re.any && typeof AggregateError < "u" && ge(E, "any", function() {
+========
+	}), Pe.any && typeof AggregateError < "u" && ge(A, "any", function() {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 		var t = pe.apply(null, arguments).map(At);
-		return new E(function(e, n) {
+		return new A(function(e, n) {
 			t.length === 0 && n(/* @__PURE__ */ new AggregateError([]));
 			var r = t.length, i = new Array(r);
 			t.forEach(function(o, a) {
-				return E.resolve(o).then(function(u) {
+				return A.resolve(o).then(function(u) {
 					return e(u);
 				}, function(u) {
 					i[a] = u, --r || n(new AggregateError(i));
 				});
 			});
 		});
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	}), Re.withResolvers && (E.withResolvers = Re.withResolvers));
+========
+	}), Pe.withResolvers && (A.withResolvers = Pe.withResolvers));
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 	function or(t, e) {
 		try {
 			e(function(n) {
@@ -582,8 +612,13 @@
 					if (n === t) throw new TypeError("A promise cannot be resolved with itself.");
 					var r = t._lib && Ge();
 					n && typeof n.then == "function" ? or(t, function(i, o) {
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 						n instanceof E ? n._then(i, o) : n.then(i, o);
 					}) : (t._state = !0, t._value = n, ar(t)), r && He();
+========
+						n instanceof A ? n._then(i, o) : n.then(i, o);
+					}) : (t._state = !0, t._value = n, ar(t)), r && Ge();
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 				}
 			}, sn.bind(null, t));
 		} catch (n) {
@@ -675,8 +710,13 @@
 			return;
 		}
 	}
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	function St(t) {
 		return new E(ot, !1, t);
+========
+	function It(t) {
+		return new A(ot, !1, t);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 	}
 	function L(t, e) {
 		var n = R;
@@ -699,18 +739,18 @@
 	function be(t, e, n, r) {
 		var i = R, o = Object.create(i);
 		o.parent = i, o.ref = 0, o.global = !1, o.id = ++xi, we.env, o.env = nn ? {
-			Promise: E,
+			Promise: A,
 			PromiseProp: {
-				value: E,
+				value: A,
 				configurable: !0,
 				writable: !0
 			},
-			all: E.all,
-			race: E.race,
-			allSettled: E.allSettled,
-			any: E.any,
-			resolve: E.resolve,
-			reject: E.reject
+			all: A.all,
+			race: A.race,
+			allSettled: A.allSettled,
+			any: A.any,
+			resolve: A.resolve,
+			reject: A.reject
 		} : {}, e && re(o, e), ++i.ref, o.finalize = function() {
 			--this.parent.ref || this.parent.finalize();
 		};
@@ -780,7 +820,7 @@
 	function ln(t) {
 		Promise === Re && X.echoes === 0 ? xt === 0 ? t() : enqueueNativeMicroTask(t) : setTimeout(t, 0);
 	}
-	var q = E.reject;
+	var q = A.reject;
 	function fn(t, e, n, r) {
 		if (!t.idbdb || !t._state.openComplete && !R.letThrough && !t._vip) {
 			if (t._state.openComplete) return q(new O.DatabaseClosed(t._state.dbOpenError));
@@ -1005,7 +1045,7 @@
 					values: [u]
 				});
 			}).then(function(s) {
-				return s.numFailures ? E.reject(s.failures[0]) : s.lastResult;
+				return s.numFailures ? A.reject(s.failures[0]) : s.lastResult;
 			}).then(function(s) {
 				if (a) try {
 					ie(e, a, s);
@@ -1027,7 +1067,7 @@
 					keys: n != null ? [n] : null
 				});
 			}).then(function(s) {
-				return s.numFailures ? E.reject(s.failures[0]) : s.lastResult;
+				return s.numFailures ? A.reject(s.failures[0]) : s.lastResult;
 			}).then(function(s) {
 				if (a) try {
 					ie(e, a, s);
@@ -1043,7 +1083,7 @@
 					keys: [e]
 				});
 			}).then(function(r) {
-				return r.numFailures ? E.reject(r.failures[0]) : void 0;
+				return r.numFailures ? A.reject(r.failures[0]) : void 0;
 			});
 		}, t.prototype.clear = function() {
 			var e = this;
@@ -1054,7 +1094,7 @@
 					range: fr
 				});
 			}).then(function(n) {
-				return n.numFailures ? E.reject(n.failures[0]) : void 0;
+				return n.numFailures ? A.reject(n.failures[0]) : void 0;
 			});
 		}, t.prototype.bulkGet = function(e) {
 			var n = this;
@@ -1529,8 +1569,13 @@
 					var a = Q(e), u = a.length;
 					o = function(d) {
 						for (var g = !1, b = 0; b < u; ++b) {
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 							var _ = a[b], S = e[_], A = de(d, _);
 							S instanceof Oi ? (ie(d, _, S.execute(A)), g = !0) : A !== S && (ie(d, _, S), g = !0);
+========
+							var _ = a[b], I = e[_], E = de(d, _);
+							I instanceof Oi ? (ie(d, _, I.execute(E)), g = !0) : E !== I && (ie(d, _, I), g = !0);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 						}
 						return g;
 					};
@@ -1540,8 +1585,13 @@
 				var f = [], v = 0, m = [], w = function(d, g) {
 					var b = g.failures, _ = g.numFailures;
 					v += d - _;
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 					for (var S = 0, A = Q(b); S < A.length; S++) {
 						var M = A[S];
+========
+					for (var I = 0, E = Q(b); I < E.length; I++) {
+						var M = E[I];
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 						f.push(b[M]);
 					}
 				};
@@ -1555,10 +1605,17 @@
 							trans: i,
 							keys: d.slice(_, _ + S),
 							cache: "immutable"
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 						}).then(function(A) {
 							for (var M = [], P = [], T = h ? [] : null, F = [], k = 0; k < S; ++k) {
 								var I = A[k], C = {
 									value: Te(I),
+========
+						}).then(function(E) {
+							for (var M = [], P = [], T = h ? [] : null, F = [], k = 0; k < I; ++k) {
+								var S = E[k], C = {
+									value: Me(S),
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 									primKey: d[_ + k]
 								};
 								o.call(C, C.value, C) !== !1 && (C.value == null ? F.push(d[_ + k]) : !h && B(l(I), l(C.value)) !== 0 ? (F.push(d[_ + k]), M.push(C.value)) : (P.push(C.value), h && T.push(d[_ + k])));
@@ -1867,6 +1924,7 @@
 				return _[0] !== void 0 && _[1] !== void 0 && o(_[0], _[1]) <= 0;
 			})) return oe(this, "First argument to inAnyRange() must be an Array of two-value Arrays [lower,upper] where upper must not be lower than lower", O.InvalidArgument);
 			var c = !n || n.includeLowers !== !1, h = n && n.includeUppers === !0;
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 			function l(_, S) {
 				for (var A = 0, M = _.length; A < M; ++A) {
 					var P = _[A];
@@ -1876,6 +1934,17 @@
 					}
 				}
 				return A === M && _.push(S), _;
+========
+			function l(_, I) {
+				for (var E = 0, M = _.length; E < M; ++E) {
+					var P = _[E];
+					if (i(I[0], P[1]) < 0 && i(I[1], P[0]) > 0) {
+						P[0] = u(P[0], I[0]), P[1] = s(P[1], I[1]);
+						break;
+					}
+				}
+				return E === M && _.push(I), _;
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 			}
 			var p = o;
 			function y(_, S) {
@@ -1904,9 +1973,15 @@
 			});
 			return b._ondirectionchange = function(_) {
 				_ === "next" ? (g = m, p = o) : (g = w, p = a), f.sort(y);
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 			}, b._addAlgorithm(function(_, S, A) {
 				for (var M = _.key; g(M);) if (++v, v === f.length) return S(A), !1;
 				return d(M) ? !0 : (r._cmp(M, f[v][1]) === 0 || r._cmp(M, f[v][0]) === 0 || S(function() {
+========
+			}, b._addAlgorithm(function(_, I, E) {
+				for (var M = _.key; g(M);) if (++v, v === f.length) return I(E), !1;
+				return d(M) ? !0 : (r._cmp(M, f[v][1]) === 0 || r._cmp(M, f[v][0]) === 0 || I(function() {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 					p === o ? _.continue(f[v][0]) : _.continue(f[v][1]);
 				}), !1);
 			}), b;
@@ -1977,13 +2052,13 @@
 			var i = this;
 			if (e === "readwrite" && this.mode !== "readwrite") return q(new O.ReadOnly("Transaction is readonly"));
 			if (!this.active) return q(new O.TransactionInactive());
-			if (this._locked()) return new E(function(a, u) {
+			if (this._locked()) return new A(function(a, u) {
 				i._blockedFuncs.push([function() {
 					i._promise(e, n, r).then(a, u);
 				}, R]);
 			});
 			if (r) return be(function() {
-				var a = new E(function(u, s) {
+				var a = new A(function(u, s) {
 					i._lock();
 					var c = n(u, s, i);
 					c && c.then && c.then(u, s);
@@ -1992,7 +2067,7 @@
 					return i._unlock();
 				}), a._lib = !0, a;
 			});
-			var o = new E(function(a, u) {
+			var o = new A(function(a, u) {
 				var s = n(a, u, i);
 				s && s.then && s.then(a, u);
 			});
@@ -2000,7 +2075,7 @@
 		}, t.prototype._root = function() {
 			return this.parent ? this.parent._root() : this;
 		}, t.prototype.waitFor = function(e) {
-			var n = this._root(), r = E.resolve(e);
+			var n = this._root(), r = A.resolve(e);
 			if (n._waitingFor) n._waitingFor = n._waitingFor.then(function() {
 				return r;
 			});
@@ -2013,7 +2088,7 @@
 				})();
 			}
 			var o = n._waitingFor;
-			return new E(function(a, u) {
+			return new A(function(a, u) {
 				r.then(function(s) {
 					return n._waitingQueue.push(L(a.bind(null, s)));
 				}, function(s) {
@@ -2036,7 +2111,7 @@
 	function Li(t) {
 		return ct(zi.prototype, function(n, r, i, o, a) {
 			var u = this;
-			this.db = t, this.mode = n, this.storeNames = r, this.schema = i, this.chromeTransactionDurability = o, this.idbtrans = null, this.on = ut(this, "complete", "error", "abort"), this.parent = a || null, this.active = !0, this._reculock = 0, this._blockedFuncs = [], this._resolve = null, this._reject = null, this._waitingFor = null, this._waitingQueue = null, this._spinCount = 0, this._completion = new E(function(s, c) {
+			this.db = t, this.mode = n, this.storeNames = r, this.schema = i, this.chromeTransactionDurability = o, this.idbtrans = null, this.on = ut(this, "complete", "error", "abort"), this.parent = a || null, this.active = !0, this._reculock = 0, this._blockedFuncs = [], this._resolve = null, this._reject = null, this._waitingFor = null, this._waitingQueue = null, this._spinCount = 0, this._completion = new A(function(s, c) {
 				u._resolve = s, u._reject = c;
 			}), this._completion.then(function() {
 				u.active = !1, u.on.complete.fire();
@@ -2128,11 +2203,16 @@
 							indexes: br(f.indexNames).map(function(_) {
 								return f.index(_);
 							}).map(function(_) {
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 								var S = _.name, A = _.unique, M = _.multiEntry, P = _.keyPath, T = {
 									name: S,
+========
+								var I = _.name, E = _.unique, M = _.multiEntry, P = _.keyPath, T = {
+									name: I,
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 									compound: U(P),
 									keyPath: P,
-									unique: A,
+									unique: E,
 									multiEntry: M,
 									extractKey: _n(P)
 								};
@@ -2158,8 +2238,13 @@
 			var p = l.name;
 			function y(m) {
 				var w = m.trans, d = m.type, g = m.keys, b = m.values, _ = m.range;
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 				return new Promise(function(S, A) {
 					S = L(S);
+========
+				return new Promise(function(I, E) {
+					I = L(I);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 					var M = w.objectStore(p), P = M.keyPath == null, T = d === "put" || d === "add";
 					if (!T && d !== "delete" && d !== "deleteRange") throw new Error("Invalid operation type: " + d);
 					var F = (g || b || { length: 1 }).length;
@@ -2206,11 +2291,19 @@
 			}
 			function f(m) {
 				var w = m.trans, d = m.values, g = m.query, b = m.reverse, _ = m.unique;
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 				return new Promise(function(S, A) {
 					S = L(S);
 					var M = g.index, P = g.range, T = w.objectStore(p), F = M.isPrimaryKey ? T : T.index(M.name), k = b ? _ ? "prevunique" : "prev" : _ ? "nextunique" : "next", I = d || !("openKeyCursor" in F) ? F.openCursor(i(P), k) : F.openKeyCursor(i(P), k);
 					I.onerror = fe(A), I.onsuccess = L(function(C) {
 						var x = I.result;
+========
+				return new Promise(function(I, E) {
+					I = L(I);
+					var M = g.index, P = g.range, T = w.objectStore(p), F = M.isPrimaryKey ? T : T.index(M.name), k = b ? _ ? "prevunique" : "prev" : _ ? "nextunique" : "next", S = d || !("openKeyCursor" in F) ? F.openCursor(i(P), k) : F.openKeyCursor(i(P), k);
+					S.onerror = fe(E), S.onsuccess = L(function(C) {
+						var x = S.result;
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 						if (!x) {
 							S(null);
 							return;
@@ -2223,7 +2316,7 @@
 						}, z = function() {
 							throw new Error("Cursor not stopped");
 						};
-						x.trans = w, x.stop = x.continue = x.continuePrimaryKey = x.advance = W, x.fail = L(A), x.next = function() {
+						x.trans = w, x.stop = x.continue = x.continuePrimaryKey = x.advance = W, x.fail = L(E), x.next = function() {
 							var G = this, Z = 1;
 							return this.start(function() {
 								return Z-- ? G.continue() : G.stop();
@@ -2248,16 +2341,26 @@
 							return I.onsuccess = L(function(V) {
 								I.onsuccess = se, se();
 							}), x.continue = $, x.continuePrimaryKey = D, x.advance = j, se(), Z;
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 						}, S(x);
 					}, A);
+========
+						}, I(x);
+					}, E);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 				});
 			}
 			function v(m) {
 				return function(w) {
 					return new Promise(function(d, g) {
 						d = L(d);
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 						var b = w.trans, _ = w.values, S = w.limit, A = w.query, M = S === Infinity ? void 0 : S, P = A.index, T = A.range, F = b.objectStore(p), k = P.isPrimaryKey ? F : F.index(P.name), I = i(T);
 						if (S === 0) return d({ result: [] });
+========
+						var b = w.trans, _ = w.values, I = w.limit, E = w.query, M = I === Infinity ? void 0 : I, P = E.index, T = E.range, F = b.objectStore(p), k = P.isPrimaryKey ? F : F.index(P.name), S = i(T);
+						if (I === 0) return d({ result: [] });
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 						if (m) {
 							var C = _ ? k.getAll(I, M) : k.getAllKeys(I, M);
 							C.onsuccess = function(j) {
@@ -2283,11 +2386,19 @@
 					var w = m.trans, d = m.keys;
 					return new Promise(function(g, b) {
 						g = L(g);
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 						for (var _ = w.objectStore(p), S = d.length, A = new Array(S), M = 0, P = 0, T, F = function(C) {
 							var x = C.target;
 							A[x._pos] = x.result, ++P === M && g(A);
 						}, k = fe(b), I = 0; I < S; ++I) d[I] != null && (T = _.get(d[I]), T._pos = I, T.onsuccess = F, T.onerror = k, ++M);
 						M === 0 && g(A);
+========
+						for (var _ = w.objectStore(p), I = d.length, E = new Array(I), M = 0, P = 0, T, F = function(C) {
+							var x = C.target;
+							E[x._pos] = x.result, ++P === M && g(E);
+						}, k = fe(b), S = 0; S < I; ++S) d[S] != null && (T = _.get(d[S]), T._pos = S, T.onsuccess = F, T.onerror = k, ++M);
+						M === 0 && g(E);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 					});
 				},
 				get: function(m) {
@@ -2304,8 +2415,13 @@
 				openCursor: f,
 				count: function(m) {
 					var w = m.query, d = m.trans, g = w.index, b = w.range;
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 					return new Promise(function(_, S) {
 						var A = d.objectStore(p), M = g.isPrimaryKey ? A : A.index(g.name), P = i(b), T = P ? M.count(P) : M.count();
+========
+					return new Promise(function(_, I) {
+						var E = d.objectStore(p), M = g.isPrimaryKey ? E : E.index(g.name), P = i(b), T = P ? M.count(P) : M.count();
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 						T.onsuccess = L(function(F) {
 							return _(F.target.result);
 						}), T.onerror = fe(S);
@@ -2387,7 +2503,7 @@
 		be(function() {
 			if (R.trans = o, R.transless = u, e === 0) Q(i).forEach(function(s) {
 				kn(n, s, i[s].primKey, i[s].indexes);
-			}), Ot(t, n), E.follow(function() {
+			}), Ot(t, n), A.follow(function() {
 				return t.on.populate.fire(o);
 			}).catch(a);
 			else return Ot(t, n), Zi(t, o, e).then(function(s) {
@@ -2413,13 +2529,13 @@
 	function Zi(t, e, n) {
 		return e.storeNames.includes("$meta") ? e.table("$meta").get("version").then(function(r) {
 			return r ?? n;
-		}) : E.resolve(n);
+		}) : A.resolve(n);
 	}
 	function eo(t, e, n, r) {
 		var i = [], o = t._versions, a = t._dbSchema = Dt(t, t.idbdb, r), u = o.filter(function(c) {
 			return c._cfg.version >= e;
 		});
-		if (u.length === 0) return E.resolve();
+		if (u.length === 0) return A.resolve();
 		u.forEach(function(c) {
 			i.push(function() {
 				var h = a, l = c._cfg.dbschema;
@@ -2446,14 +2562,19 @@
 						f[d] = h[d];
 					}), In(t, [t.Transaction.prototype]), Ft(t, [t.Transaction.prototype], Q(f), f), n.schema = f;
 					var v = Xt(y);
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 					v && Ye();
 					var m, w = E.follow(function() {
+========
+					v && He();
+					var m, w = A.follow(function() {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 						if (m = y(n), m && v) {
 							var d = _e.bind(null, null);
 							m.then(d, d);
 						}
 					});
-					return m && typeof m.then == "function" ? E.resolve(m) : w.then(function() {
+					return m && typeof m.then == "function" ? A.resolve(m) : w.then(function() {
 						return m;
 					});
 				}
@@ -2467,7 +2588,7 @@
 			});
 		});
 		function s() {
-			return i.length ? E.resolve(i.shift()(n.idbtrans)).then(s) : E.resolve();
+			return i.length ? A.resolve(i.shift()(n.idbtrans)).then(s) : A.resolve();
 		}
 		return s().then(function() {
 			_r(a, r);
@@ -2853,7 +2974,7 @@
 			if (e.openCanceller !== r) throw new O.DatabaseClosed("db.open() was cancelled");
 		}
 		var u = e.dbReadyResolve, s = null, c = !1, h = function() {
-			return new E(function(l, p) {
+			return new A(function(l, p) {
 				if (a(), !n) throw new O.MissingAPI();
 				var y = t.name, f = e.autoSchema || !i ? n.open(y) : n.open(y, i);
 				if (!f) throw new O.MissingAPI();
@@ -2893,16 +3014,16 @@
 						if (i > 0) return i = 0, h();
 						break;
 				}
-				return E.reject(l);
+				return A.reject(l);
 			});
 		};
-		return E.race([r, (typeof navigator > "u" ? E.resolve() : co()).then(h)]).then(function() {
-			return a(), e.onReadyBeingFired = [], E.resolve(An(function() {
+		return A.race([r, (typeof navigator > "u" ? A.resolve() : co()).then(h)]).then(function() {
+			return a(), e.onReadyBeingFired = [], A.resolve(An(function() {
 				return t.on.ready.fire(t.vip);
 			})).then(function l() {
 				if (e.onReadyBeingFired.length > 0) {
 					var p = e.onReadyBeingFired.reduce(en, N);
-					return e.onReadyBeingFired = [], E.resolve(An(function() {
+					return e.onReadyBeingFired = [], A.resolve(An(function() {
 						return p(t.vip);
 					})).then(l);
 				}
@@ -2954,7 +3075,7 @@
 		];
 	}
 	function Er(t, e, n, r, i) {
-		return E.resolve().then(function() {
+		return A.resolve().then(function() {
 			var o = R.transless || R, a = t._createTransaction(e, n, t._dbSchema, r);
 			a.explicit = !0;
 			var u = {
@@ -2970,14 +3091,19 @@
 				})) : q(l);
 			}
 			var s = Xt(i);
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 			s && Ye();
 			var c, h = E.follow(function() {
+========
+			s && He();
+			var c, h = A.follow(function() {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 				if (c = i.call(a, a), c) if (s) {
 					var l = _e.bind(null, null);
 					c.then(l, l);
 				} else typeof c.next == "function" && typeof c.throw == "function" && (c = Fn(c));
 			}, u);
-			return (c && typeof c.then == "function" ? E.resolve(c).then(function(l) {
+			return (c && typeof c.then == "function" ? A.resolve(c).then(function(l) {
 				return a.active ? l : q(new O.PrematureCommit("Transaction committed too early. See http://bit.ly/2kdckMn"));
 			}) : h.then(function() {
 				return c;
@@ -3007,8 +3133,13 @@
 					extractKey: _n(f),
 					unique: !b && m.unique
 				});
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 				return d.push(_), _.isPrimaryKey || o.push(_), g > 1 && a(g === 2 ? f[0] : f.slice(0, g - 1), v + 1, m), d.sort(function(S, A) {
 					return S.keyTail - A.keyTail;
+========
+				return d.push(_), _.isPrimaryKey || o.push(_), g > 1 && a(g === 2 ? f[0] : f.slice(0, g - 1), v + 1, m), d.sort(function(I, E) {
+					return I.keyTail - E.keyTail;
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 				}), _;
 			}
 			var u = a(r.primaryKey.keyPath, 0, r.primaryKey);
@@ -3058,8 +3189,13 @@
 						}
 						return Object.create(b, {
 							continue: { value: _ },
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 							continuePrimaryKey: { value: function(S, A) {
 								b.continuePrimaryKey(zt(S, t.MAX_KEY, m), A);
+========
+							continuePrimaryKey: { value: function(I, E) {
+								b.continuePrimaryKey(zt(I, t.MAX_KEY, m), E);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 							} },
 							primaryKey: { get: function() {
 								return b.primaryKey;
@@ -3149,7 +3285,7 @@
 									var S = s.fire.call(_, d, y.values[g], f);
 									d == null && S != null && (d = S, y.keys[g] = d, r.outbound || ie(y.values[g], r.keyPath, d));
 								} else {
-									var A = Kn(b, y.values[g]), M = c.fire.call(_, A, d, b, f);
+									var E = Kn(b, y.values[g]), M = c.fire.call(_, E, d, b, f);
 									if (M) {
 										var P = y.values[g];
 										Object.keys(M).forEach(function(T) {
@@ -3160,9 +3296,15 @@
 								return _;
 							});
 							return n.mutate(y).then(function(d) {
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 								for (var g = d.failures, b = d.results, _ = d.numFailures, S = d.lastResult, A = 0; A < v.length; ++A) {
 									var M = b ? b[A] : v[A], P = w[A];
 									M == null ? P.onerror && P.onerror(g[A]) : P.onsuccess && P.onsuccess(y.type === "put" && m[A] ? y.values[A] : M);
+========
+								for (var g = d.failures, b = d.results, _ = d.numFailures, I = d.lastResult, E = 0; E < v.length; ++E) {
+									var M = b ? b[E] : v[E], P = w[E];
+									M == null ? P.onerror && P.onerror(g[E]) : P.onsuccess && P.onsuccess(y.type === "put" && m[E] ? y.values[E] : M);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 								}
 								return {
 									failures: g,
@@ -3237,7 +3379,7 @@
 					getMany: function(r) {
 						if (!r.cache) return n.getMany(r);
 						var i = Ar(r.keys, r.trans._cache, r.cache === "clone");
-						return i ? E.resolve(i) : n.getMany(r).then(function(o) {
+						return i ? A.resolve(i) : n.getMany(r).then(function(o) {
 							return r.trans._cache = {
 								keys: r.keys,
 								values: r.cache === "clone" ? Te(o) : o
@@ -3281,9 +3423,15 @@
 						var v, m, w = f.trans, d = f.mutatedParts || (f.mutatedParts = {}), g = function(I) {
 							var C = "idb://".concat(e, "/").concat(r, "/").concat(I);
 							return d[C] || (d[C] = new te());
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 						}, b = g(""), _ = g(":dels"), S = f.type, A = f.type === "deleteRange" ? [f.range] : f.type === "delete" ? [f.keys] : f.values.length < 50 ? [Dn(a, f).filter(function(I) {
 							return I;
 						}), f.values] : [], M = A[0], P = A[1], T = f.trans._cache;
+========
+						}, b = g(""), _ = g(":dels"), I = f.type, E = f.type === "deleteRange" ? [f.range] : f.type === "delete" ? [f.keys] : f.values.length < 50 ? [Dn(a, f).filter(function(S) {
+							return S;
+						}), f.values] : [], M = E[0], P = E[1], T = f.trans._cache;
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 						if (U(M)) {
 							b.addKeys(M);
 							var F = S === "delete" || M.length === P.length ? Ar(M, T) : null;
@@ -3328,8 +3476,13 @@
 								var g = function(T) {
 									var F = "idb://".concat(e, "/").concat(r, "/").concat(T);
 									return d[F] || (d[F] = new te());
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 								}, b = g(""), _ = g(":dels"), S = y[f](v), A = S[0], M = S[1];
 								if (f === "query" && A.isPrimaryKey && !v.values ? _.add(M) : g(A.name || "").add(M), !A.isPrimaryKey) if (f === "count") _.add(n);
+========
+								}, b = g(""), _ = g(":dels"), I = y[f](v), E = I[0], M = I[1];
+								if (f === "query" && E.isPrimaryKey && !v.values ? _.add(M) : g(E.name || "").add(M), !E.isPrimaryKey) if (f === "count") _.add(n);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 								else {
 									var P = f === "query" && c && v.values && i.query(K(K({}, v), { values: !1 }));
 									return i[f].apply(this, arguments).then(function(T) {
@@ -3433,11 +3586,11 @@
 					}));
 					break;
 				case "put":
-					var A = new te().addKeys(f.values.map(function(T) {
+					var E = new te().addKeys(f.values.map(function(T) {
 						return c(T);
 					}));
 					v = y.filter(function(T) {
-						return !A.hasKey(e.values ? c(T) : T);
+						return !E.hasKey(e.values ? c(T) : T);
 					}).concat(e.values ? m : m.map(function(T) {
 						return c(T);
 					}));
@@ -3575,6 +3728,7 @@
 												f.optimisticOps = f.optimisticOps.filter(function(I) {
 													return I.trans !== o;
 												});
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 												for (var A = 0, M = Object.values(f.queries.query); A < M.length; A++) for (var g = M[A], P = 0, T = g.slice(); P < T.length; P++) {
 													var S = T[P];
 													if (S.res != null && o.mutatedParts) if (c && !S.dirty) {
@@ -3583,6 +3737,16 @@
 															return h.add(x);
 														})) : k !== S.res && (S.res = k, S.promise = E.resolve({ result: k }));
 													} else S.dirty && Ce(g, S), S.subscribers.forEach(function(x) {
+========
+												for (var E = 0, M = Object.values(f.queries.query); E < M.length; E++) for (var g = M[E], P = 0, T = g.slice(); P < T.length; P++) {
+													var I = T[P];
+													if (I.res != null && o.mutatedParts) if (c && !I.dirty) {
+														var F = Object.isFrozen(I.res), k = Pr(I.res, I.req, m, v, I, F);
+														I.dirty ? (Te(g, I), I.subscribers.forEach(function(x) {
+															return h.add(x);
+														})) : k !== I.res && (I.res = k, I.promise = A.resolve({ result: k }));
+													} else I.dirty && Te(g, I), I.subscribers.forEach(function(x) {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 														return h.add(x);
 													});
 												}
@@ -3707,15 +3871,15 @@
 				PR1398_maxLoop: 3,
 				autoOpen: n.autoOpen
 			};
-			a.dbReadyPromise = new E(function(s) {
+			a.dbReadyPromise = new A(function(s) {
 				a.dbReadyResolve = s;
-			}), a.openCanceller = new E(function(s, c) {
+			}), a.openCanceller = new A(function(s, c) {
 				a.cancelOpen = c;
 			}), this._state = a, this.name = e, this.on = ut(this, "populate", "blocked", "versionchange", "close", { ready: [en, N] }), this.on.ready.subscribe = Un(this.on.ready.subscribe, function(s) {
 				return function(c, h) {
 					t.vip(function() {
 						var l = r._state;
-						if (l.openComplete) l.dbOpenError || E.resolve().then(c), h && s(c);
+						if (l.openComplete) l.dbOpenError || A.resolve().then(c), h && s(c);
 						else if (l.onReadyBeingFired) l.onReadyBeingFired.push(c), h && s(c);
 						else {
 							s(c);
@@ -3765,7 +3929,7 @@
 			return r || (r = new this.Version(e), n.push(r), n.sort(Qi), r.stores({}), this._state.autoSchema = !1, r);
 		}, t.prototype._whenReady = function(e) {
 			var n = this;
-			return this.idbdb && (this._state.openComplete || R.letThrough || this._vip) ? e() : new E(function(r, i) {
+			return this.idbdb && (this._state.openComplete || R.letThrough || this._vip) ? e() : new A(function(r, i) {
 				if (n._state.openComplete) return i(new O.DatabaseClosed(n._state.dbOpenError));
 				if (!n._state.isBeingOpened) {
 					if (!n._state.autoOpen) {
@@ -3809,9 +3973,9 @@
 				} catch {}
 				this.idbdb = null;
 			}
-			e.isBeingOpened || (e.dbReadyPromise = new E(function(r) {
+			e.isBeingOpened || (e.dbReadyPromise = new A(function(r) {
 				e.dbReadyResolve = r;
-			}), e.openCanceller = new E(function(r, i) {
+			}), e.openCanceller = new A(function(r, i) {
 				e.cancelOpen = i;
 			}));
 		}, t.prototype.close = function(e) {
@@ -3821,7 +3985,7 @@
 			var n = this;
 			e === void 0 && (e = { disableAutoOpen: !0 });
 			var r = arguments.length > 0 && typeof arguments[0] != "object", i = this._state;
-			return new E(function(o, a) {
+			return new A(function(o, a) {
 				var u = function() {
 					n.close(e);
 					var s = n._deps.indexedDB.deleteDatabase(n.name);
@@ -4009,7 +4173,7 @@
 			return function() {
 				try {
 					var e = Fn(t.apply(this, arguments));
-					return !e || typeof e.then != "function" ? E.resolve(e) : e;
+					return !e || typeof e.then != "function" ? A.resolve(e) : e;
 				} catch (n) {
 					return q(n);
 				}
@@ -4018,7 +4182,7 @@
 		spawn: function(t, e, n) {
 			try {
 				var r = Fn(t.apply(n, e || []));
-				return !r || typeof r.then != "function" ? E.resolve(r) : r;
+				return !r || typeof r.then != "function" ? A.resolve(r) : r;
 			} catch (i) {
 				return q(i);
 			}
@@ -4027,10 +4191,14 @@
 			return R.trans || null;
 		} },
 		waitFor: function(t, e) {
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 			var n = E.resolve(typeof t == "function" ? $e.ignoreTransaction(t) : t).timeout(e || 6e4);
+========
+			var n = A.resolve(typeof t == "function" ? Ve.ignoreTransaction(t) : t).timeout(e || 6e4);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 			return R.trans ? R.trans.waitFor(n) : n;
 		},
-		Promise: E,
+		Promise: A,
 		debug: {
 			get: function() {
 				return le;
@@ -4098,9 +4266,15 @@
 		}
 	}), addEventListener("pageshow", function(t) {
 		!vt.disableBfCache && t.persisted && (le && console.debug("Dexie: handling persisted pageshow"), $n(), Vn({ all: new te(-Infinity, [[]]) }));
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 	})), E.rejectionMapper = li, er(le);
 	const Oo = "LittleWhiteBox_Memory", Fo = 4, Ae = new vt(Oo);
 	Ae.version(3).stores({
+========
+	})), A.rejectionMapper = li, er(le);
+	const Oo = "LittleWhiteBox_Memory", Fo = 3, Je = new vt(Oo);
+	Je.version(Fo).stores({
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 		meta: "chatId",
 		chunks: "[chatId+chunkId], chatId, [chatId+floor]",
 		chunkVectors: "[chatId+chunkId], chatId",
@@ -4350,8 +4524,13 @@
 		for (const I of c) p.add(I);
 		for (const I of h) p.add(I);
 		const _ = Array.from({ length: i }, () => []);
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 		let S = 0;
 		const A = {
+========
+		let I = 0;
+		const E = {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 			what: 0,
 			where: 0,
 			rSem: 0,
@@ -4372,6 +4551,7 @@
 			}), _[x].push({
 				target: C,
 				weight: se
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 			}), S++, W > 0 && A.what++, z > 0 && A.rSem++, G > 0 && A.who++, Z > 0 && A.where++, G > 0 && M++, Z > 0 && P++);
 		}
 		const T = Math.round(performance.now() - o);
@@ -4381,6 +4561,17 @@
 			neighbors: _,
 			edgeCount: S,
 			channelStats: A,
+========
+			}), I++, W > 0 && E.what++, z > 0 && E.rSem++, G > 0 && E.who++, Z > 0 && E.where++, G > 0 && M++, Z > 0 && P++);
+		}
+		const T = Math.round(performance.now() - o);
+		r.info(jn, `Graph: ${i} nodes, ${I} edges (candidate_by_what=${c.size} candidate_by_r_sem=${h.size}) (what=${E.what} r_sem=${E.rSem} who=${E.who} where=${E.where}) (reweight_who_used=${M} reweight_where_used=${P}) (what_window_skipped_occurrences=${y} topk_pruned=${g}) (${T}ms)`);
+		const F = i > 1 ? i * (i - 1) / 2 : 0, k = F > 0 ? Number((I / F * 100).toFixed(2)) : 0;
+		return {
+			neighbors: _,
+			edgeCount: I,
+			channelStats: E,
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 			buildTime: T,
 			candidatePairs: p.size,
 			pairsFromWhat: c.size,
@@ -4531,7 +4722,11 @@
 			indexTime: v,
 			time: d.buildTime
 		}), u.info(jn, "No graph edges - skipping diffusion"), [];
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 		const g = performance.now(), b = ta(m, y, f), _ = Math.round(performance.now() - g), S = performance.now(), { columns: A, dangling: M } = na(d.neighbors, f), P = Math.round(performance.now() - S), T = performance.now(), { pi: F, iterations: k, finalError: I } = ra(A, b, M, f), C = Math.round(performance.now() - T);
+========
+		const g = performance.now(), b = ta(m, y, f), _ = Math.round(performance.now() - g), I = performance.now(), { columns: E, dangling: M } = na(d.neighbors, f), P = Math.round(performance.now() - I), T = performance.now(), { pi: F, iterations: k, finalError: S } = ra(E, b, M, f), C = Math.round(performance.now() - T);
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 		let x = 0;
 		for (let V = 0; V < f; V++) F[V] > 0 && !w.has(p[V]) && x++;
 		const $ = performance.now(), D = /* @__PURE__ */ new Map();
@@ -4861,7 +5056,11 @@
 			selected: []
 		}), _ = /* @__PURE__ */ new Set();
 		for (const k of n.sourceTurns || []) _.has(k.floor) || (_.add(k.floor), h.push(b([...o.get(k.floor) || [], ...o.get(k.contextFloor) || []])));
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 		const S = [...o.values()].map(b).sort((k, I) => (I.conversationRows[0]?.conversationScore || 0) - (k.conversationRows[0]?.conversationScore || 0) || (I.queryRows[0]?.queryScore || 0) - (k.queryRows[0]?.queryScore || 0) || (k.queryRows[0]?.chunk.floor || 0) - (I.queryRows[0]?.chunk.floor || 0)), A = ca(Math.max(l.parents, h.length) * ce.perLane * 2, sa.maxCandidateShare), M = (k) => s.get(k.chunk.floor) === k.chunk.chunkId && l.temporalProtectedCandidates < A, P = (k, I) => {
+========
+		const I = [...o.values()].map(b).sort((k, S) => (S.conversationRows[0]?.conversationScore || 0) - (k.conversationRows[0]?.conversationScore || 0) || (S.queryRows[0]?.queryScore || 0) - (k.queryRows[0]?.queryScore || 0) || (k.queryRows[0]?.chunk.floor || 0) - (S.queryRows[0]?.chunk.floor || 0)), E = ca(Math.max(l.parents, h.length) * ce.perLane * 2, sa.maxCandidateShare), M = (k) => s.get(k.chunk.floor) === k.chunk.chunkId && l.temporalProtectedCandidates < E, P = (k, S) => {
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 			const C = M(k);
 			C && l.temporalProtectedCandidates++, a.add(k.chunk.chunkId), c.push(jr(k, I, C));
 		};
@@ -4921,10 +5120,22 @@
 			let b = a.get(w);
 			b || (b = /* @__PURE__ */ new Map(), a.set(w, b));
 			const _ = r(() => {
+<<<<<<<< HEAD:dist/assets/runtime.worker-Drkp0Ybp.js
 				const S = u(w, v, !1);
 				if (S.released) try {
 					o?.(S);
 				} catch {}
+========
+				const I = u(w, v, !1);
+				if (I.released) try {
+					o?.(I);
+				} catch (E) {
+					console.warn({
+						source: self.location.href,
+						operation: "timer"
+					}, E);
+				}
+>>>>>>>> dev/main:dist/assets/runtime.worker-DUmrnGwM.js
 			}, Math.max(0, g - n()));
 			return b.set(v, {
 				startedAt: d,

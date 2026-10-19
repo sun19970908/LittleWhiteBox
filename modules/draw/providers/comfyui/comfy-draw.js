@@ -33,6 +33,7 @@ import {
     updateSharedDrawSettingsPersistent,
     normalizeSharedCacheDays,
 } from "../../shared/draw-settings.js";
+import { normalizeMaxImagesOverride, resolveEffectiveMaxImages } from "../../shared/max-images-override.js";
 import { getLastDrawAgentDiagnostic } from "../../shared/draw-agent.js";
 import { characterLibraryFromSettings, selectEnabledCharacters } from "../../shared/character-library.js";
 import { attachDrawAgentSettingsSurface } from "../../shared/agent-settings-surface.js";
@@ -130,6 +131,10 @@ import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
+import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+
+const handleImageDelegatedClickEvent = observeAsyncCallback(handleImageDelegatedClick, { source: import.meta.url, operation: "handleImageDelegatedClick" });
+
 // comfy-draw.js
 
 
@@ -149,6 +154,7 @@ const DEFAULT_COMFY_DRAW_SETTINGS = {
     activeApiPresetId: null,
     mode: 'manual',
     overrideSize: 'default',
+    overrideMaxImages: null,
     showFloorButton: true,
     showFloatingButton: true,
     selectedPresetId: 'default',
@@ -420,6 +426,7 @@ function normalizeSettings(raw = {}) {
         ...normalizeComfyApiConfig(raw),
         mode: raw.mode === 'auto' ? 'auto' : 'manual',
         overrideSize: String(raw.overrideSize || 'default'),
+        overrideMaxImages: normalizeMaxImagesOverride(raw.overrideMaxImages),
         showFloorButton: raw.showFloorButton !== false,
         showFloatingButton: raw.showFloatingButton !== false,
         ...normalizeApiPresetState(raw, COMFY_API_PRESET_OPTIONS),
@@ -602,7 +609,7 @@ async function persistSettingsNow(nextSettings, okText = '已保存', { notify =
 
 function enqueueSettingsUpdate(update) {
     const result = settingsUpdateQueue.then(update, update);
-    settingsUpdateQueue = result.catch(() => {});
+    settingsUpdateQueue = result.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "enqueueSettingsUpdate" }, caughtError); });
     return result;
 }
 
@@ -670,7 +677,7 @@ export async function updateQuickSettings(patch = {}) {
         fp.updateAllPresetSelects?.();
         fp.updateAllSizeSelects?.();
         fp.updateAutoModeUI?.();
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "updateQuickSettings" }, caughtError); }
     return getQuickSettings();
 }
 
@@ -888,7 +895,7 @@ async function requestComfyTransport(path, body = {}, { signal, timeoutMs, gener
     const proxySignal = createComfyRequestSignal(signal, timeoutMs ?? settings.timeout ?? 120000);
     try {
         const payload = JSON.stringify({ url: settings.host, ...body });
-        attempt?.submit();
+        attempt?.submit(proxySignal.signal);
         const response = await fetch(`/api/sd/comfy/${path}`, {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -920,7 +927,7 @@ async function fetchComfyDirectJson(path, { signal, timeoutMs, method = 'GET', b
     const directSignal = createComfyRequestSignal(signal, timeoutMs ?? settings.timeout ?? 120000);
     try {
         const url = createComfyUrl(path, {}, settings);
-        attempt?.submit();
+        attempt?.submit(directSignal.signal);
         const response = await fetch(url, {
             method,
             headers: {
@@ -1475,7 +1482,7 @@ function bindOverlayEvents() {
             try {
                 const fp = await import('./floating-panel.js');
                 fp.updateAutoModeUI?.();
-            } catch {}
+            } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
         });
     });
     querySettings('#comfy-show-floor')?.addEventListener('change', async (event) => {
@@ -1489,7 +1496,7 @@ function bindOverlayEvents() {
         try {
             const fp = await import('./floating-panel.js');
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
     });
     querySettings('#comfy-show-floating')?.addEventListener('change', async (event) => {
         const checked = event.target.checked === true;
@@ -1502,7 +1509,7 @@ function bindOverlayEvents() {
         try {
             const fp = await import('./floating-panel.js');
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
     });
     querySettings('#comfy-draw-save')?.addEventListener('click', async () => {
         const bar = ensureApiPresetBar();
@@ -2152,11 +2159,6 @@ function bindOverlayEvents() {
             showComfyDanbooruPanel(danbooruButton.dataset.sdCharDanbooru);
         }
     });
-    querySettings('#comfy-char-search')?.addEventListener('input', (event) => {
-        charSearchText = String(event.target.value || '').trim().toLowerCase();
-        // 原样重绘当前草稿：未保存的编辑保留，只是重新套一遍过滤 class。
-        rerenderCharacterTagList();
-    });
 }
 
 function fillForm(settings) {
@@ -2578,7 +2580,7 @@ async function refreshComfyOptions({ notify = true, timeoutMs = getSettings().ti
                     : '没有找到“只选一个模型文件就能画”的模型；如果你的模型需要多个文件，请导入自定义工作流',
             );
         }
-        void refreshComfySamplerOptions({ notify: false, timeoutMs: Math.max(timeoutMs, 30000) });
+        observeBackgroundTask(refreshComfySamplerOptions({ notify: false, timeoutMs: Math.max(timeoutMs, 30000) }), { source: import.meta.url, operation: "refreshComfyOptions" });
         return true;
     } catch (error) {
         console.error('[ComfyDraw] refreshComfyOptions failed:', error);
@@ -2622,7 +2624,7 @@ function switchSettingsView(viewName = 'test') {
         panel.classList.toggle('active', panel.dataset.comfyViewPanel === normalized);
     });
     if (normalized === 'gallery') {
-        void renderGalleryManagement();
+        observeBackgroundTask(renderGalleryManagement(), { source: import.meta.url, operation: "switchSettingsView" });
     }
     if (normalized === 'llm') {
         ensureAgentSettingsSurface();
@@ -2700,17 +2702,17 @@ async function renderGalleryManagement() {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'gallery-slot-btn';
-            button.addEventListener('click', async () => {
+            button.addEventListener('click', observeAsyncCallback(async () => {
                 const latest = await getPreview(slotSummaries[slotId]?.latestImgId).catch(() => null);
                 await openGallery(slotId, Number(latest?.messageId || 0), buildSharedGalleryCallbacks(slotId, Number(latest?.messageId || 0)));
-            });
+            }, { source: import.meta.url, operation: "callback" }));
 
             const img = document.createElement('img');
             img.className = 'gallery-slot-thumb';
             img.alt = '';
             void getPreview(slotSummaries[slotId]?.latestImgId).then((latest) => {
                 if (latest) img.src = getPreviewDisplayUrl(latest);
-            }).catch(() => {});
+            }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "renderGalleryManagement" }, caughtError); });
 
             const label = document.createElement('div');
             label.className = 'gallery-slot-title';
@@ -2779,10 +2781,11 @@ function ensureCharacterLibraryUi() {
         document: doc,
         listElement: list,
         toolbarElement: toolbar,
+        searchInput: querySettings('#comfy-char-search'),
         readCharacters: readCharacterCardsFromForm,
         renderCard: renderCharacterCard,
         renderEmpty: createCharacterEmptyState,
-        onChange: () => { refreshSettingsSummary(); applyCharSearchVisibility(); },
+        onChange: refreshSettingsSummary,
         notify: {
             success: (message) => toastr.success(message),
             warning: (message) => toastr.warning(message),
@@ -2837,29 +2840,6 @@ function destroyGroupPresetBinding() {
     groupPresetBinding = null;
 }
 
-// 角色列表搜索：只给不匹配的卡片加 class 隐藏，不重建 DOM，所以未保存的编辑不会丢。
-let charSearchText = '';
-
-function charMatchesSearch(tag, lower) {
-    return [tag.name, ...(tag.aliases || []), tag.appearance, tag.danbooruTag]
-        .filter(Boolean).join(' ').toLowerCase().includes(lower);
-}
-
-// 每次渲染后同步过滤结果：收起没有可见卡片的分组，并把计数显示成「命中 / 总数」。
-function applyCharSearchVisibility() {
-    const list = querySettings('#comfy-shared-character-list');
-    if (!list) return;
-    const cards = Array.from(list.querySelectorAll('.sd-char-card'));
-    list.querySelectorAll('.lwb-cl-group').forEach((section) => {
-        section.classList.toggle('filtered-empty', !section.querySelector('.sd-char-card:not(.filtered-hidden)'));
-    });
-    const counter = querySettings('#comfy-draw-character-result-count');
-    if (counter) {
-        const visible = cards.filter(card => !card.classList.contains('filtered-hidden')).length;
-        counter.textContent = `${visible} / ${cards.length}`;
-    }
-}
-
 // 用 tags / groups 重绘整个角色列表（丢弃当前草稿）；groups 缺省时沿用当前草稿的分组。
 function renderCharacterTagList(tags = [], groups) {
     const ui = ensureCharacterLibraryUi();
@@ -2890,7 +2870,6 @@ function renderCharacterCard({ character: tag, ordinal }) {
     const card = document.createElement('div');
     card.className = 'sd-char-card';
     card.dataset.characterId = String(tag.id || `comfy-char-${index + 1}`);
-    if (charSearchText && !charMatchesSearch(tag, charSearchText)) card.classList.add('filtered-hidden');
 
     const top = document.createElement('div');
     top.className = 'sd-char-card-header';
@@ -3242,10 +3221,10 @@ function bindWorldbookUploadEvents() {
     dropzone.addEventListener('drop', (event) => {
         event.preventDefault();
         dropzone.classList.remove('dragover');
-        if (event.dataTransfer?.files?.length) void handleWorldbookFiles(event.dataTransfer.files);
+        if (event.dataTransfer?.files?.length) observeBackgroundTask(handleWorldbookFiles(event.dataTransfer.files), { source: import.meta.url, operation: "callback" });
     });
     fileInput.addEventListener('change', () => {
-        if (fileInput.files?.length) void handleWorldbookFiles(fileInput.files);
+        if (fileInput.files?.length) observeBackgroundTask(handleWorldbookFiles(fileInput.files), { source: import.meta.url, operation: "callback" });
         fileInput.value = '';
     });
 }
@@ -3288,7 +3267,7 @@ async function setComfyDanbooruLocalEnabled(enabled) {
         unloadLocalDanbooruDB();
         await updateSharedDrawSettingsPersistent((settings) => {
             settings.danbooruLocalDB = false;
-        }, 'Danbooru 本地库加载失败', { notify: false, silent: false }).catch(() => {});
+        }, 'Danbooru 本地库加载失败', { notify: false, silent: false }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "setComfyDanbooruLocalEnabled" }, caughtError); });
         if (checkbox) checkbox.checked = false;
         if (status) status.textContent = '加载失败';
         toastr.error('Danbooru 本地库加载失败');
@@ -3436,7 +3415,7 @@ function renderComfyDanbooruResults(results = [], characterId = '', container = 
         item.appendChild(info);
         item.addEventListener('click', () => {
             let appearanceTags = [];
-            try { appearanceTags = JSON.parse(item.dataset.tags || '[]'); } catch {}
+            try { appearanceTags = JSON.parse(item.dataset.tags || '[]'); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "renderComfyDanbooruResults" }, caughtError); }
             const tagInput = card.querySelector('[data-sd-char-field="danbooruTag"]');
             const appearanceInput = card.querySelector('[data-sd-char-field="appearance"]');
             if (tagInput) tagInput.value = item.dataset.tag || '';
@@ -3463,7 +3442,7 @@ function fillSharedDrawForm() {
     renderCharacterTagList(sharedDrawSettings.characterTags || [], sharedDrawSettings.characterGroups || []);
     ensureGroupPresetBinding();
     setPlannerRetryInput(sharedDrawSettings.plannerMaxRetries);
-    void ensureComfyDanbooruLoadedForForm(sharedDrawSettings);
+    observeBackgroundTask(ensureComfyDanbooruLoadedForForm(sharedDrawSettings), { source: import.meta.url, operation: "fillSharedDrawForm" });
 }
 
 async function saveSharedDrawSettings({ notify = false } = {}) {
@@ -3505,7 +3484,7 @@ async function persistAllSettings({ notify = false, triggerButton = null, status
             const settings = getSettings();
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
             fp.updateAutoModeUI?.();
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "runPostSaveHooks" }, caughtError); }
         apiPresetBar?.render();
     };
 
@@ -3587,7 +3566,7 @@ function refreshSettingsSummary() {
     const charResultEl = querySettings('#comfy-draw-character-result-count');
     if (presetEl) presetEl.textContent = activePreset?.name || '默认';
     if (charSideEl) charSideEl.textContent = String(characterCount);
-    if (charResultEl) charResultEl.textContent = `${characterCount} / ${characterCount}`;
+    if (charResultEl) charResultEl.textContent = `${characterLibraryUi?.getVisibleCardCount() ?? characterCount} / ${characterCount}`;
 }
 
 function setPlannerRetryInput(value) {
@@ -3689,7 +3668,7 @@ export function hideSettings() {
 }
 
 function abortPendingRequest() {
-    try { pendingController?.abort(); } catch {}
+    try { pendingController?.abort(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "abortPendingRequest" }, caughtError); }
     pendingController = null;
 }
 
@@ -4033,7 +4012,8 @@ async function buildComfyScenePlannerOptions({
             customPrompts: promptPreset,
             promptDefaults: DEFAULT_PROMPT_CONFIG,
             worldbookEntries,
-            maxImages: preset.maxImages || 0,
+            // 悬浮菜单“数目”覆盖优先于参数预设；覆盖为空时沿用预设（0 = 不指定）。
+            maxImages: resolveEffectiveMaxImages(comfySettings, preset),
             maxCharactersPerImage: preset.maxCharactersPerImage || 0,
             plannerProfile: COMFY_PLANNER_PROFILE,
             plannerRetry: { maxRetries: sharedDrawSettings.plannerMaxRetries },
@@ -4245,16 +4225,14 @@ function setImageState(container, state) {
     if (dropdown) {
         const saveItem = dropdown.querySelector('[data-action="save-image"]');
         if (state === ImageState.PREVIEW && !saveItem) {
-            // Static draw-owned markup, without user input.
-            // eslint-disable-next-line no-unsanitized/method
+            // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
             dropdown.insertAdjacentHTML('afterbegin', IMAGE_SAVE_BUTTON_HTML);
         } else if (state !== ImageState.PREVIEW && saveItem) {
             saveItem.remove();
         }
     }
     container.querySelector('.xb-nd-indicator')?.remove();
-    // Static draw-owned markup, without user input.
-    // eslint-disable-next-line no-unsanitized/method
+    // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
     if (state === ImageState.SAVING) container.insertAdjacentHTML('afterbegin', IMAGE_SAVING_INDICATOR_HTML);
     else if (state === ImageState.REFRESHING) container.insertAdjacentHTML('afterbegin', '<div class="xb-nd-indicator"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 生成中...</div>');
 }
@@ -4289,7 +4267,7 @@ function syncContainerToPreview(container, preview, historyCount = 1, currentInd
     container.dataset.historyCount = String(historyCount);
     setImageState(container, preview.savedUrl ? ImageState.SAVED : ImageState.PREVIEW);
     updateNavControls(container, currentIndex, historyCount);
-    void warmSlotPreviewNeighbors(container.dataset.slotId, currentIndex).catch(() => {});
+    void warmSlotPreviewNeighbors(container.dataset.slotId, currentIndex).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "syncContainerToPreview" }, caughtError); });
 }
 
 function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings()), postPrompt = '') {
@@ -4348,9 +4326,9 @@ async function navigateToImage(container, targetIndex) {
     await setSlotSelection(slotId, targetPreview.imgId);
     const messageId = Number(container.dataset.mesid);
     if (targetPreview.savedUrl) {
-        void syncDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch(() => {});
+        void syncDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     } else {
-        void clearDrawSavedEntry(messageId, slotId).catch(() => {});
+        void clearDrawSavedEntry(messageId, slotId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     }
     imgEl.classList.remove(`sliding-${direction}`);
     imgEl.classList.add(`sliding-in-${direction === 'left' ? 'left' : 'right'}`);
@@ -4364,9 +4342,9 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
             if (cont) syncContainerToPreview(cont, selected, historyCount, 0);
             if (selected?.savedUrl) {
-                void syncDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch(() => {});
+                void syncDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             } else {
-                void clearDrawSavedEntry(msgId, sid).catch(() => {});
+                void clearDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             }
         },
         onSave: async (imgId, url) => {
@@ -4378,7 +4356,7 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
             if (preview) {
                 const img = cont?.querySelector('img');
                 if (img) img.src = getPreviewDisplayUrl(preview);
-                await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch(() => {});
+                await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onSave" }, caughtError); });
             }
         },
         onDelete: async (sid, deletedImgId, remainingPreviews) => {
@@ -4386,12 +4364,12 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
             if (cont && cont.dataset.imgId === deletedImgId && remainingPreviews.length > 0) {
                 syncContainerToPreview(cont, remainingPreviews[0], remainingPreviews.length, 0);
             }
-            await syncDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch(() => {});
+            await syncDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onDelete" }, caughtError); });
         },
         onBecameEmpty: async (sid, msgId, lastImageInfo = {}) => {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
             if (cont) {
-                // eslint-disable-next-line no-unsanitized/property
+                // eslint-disable-next-line no-unsanitized/property -- The draw renderer escapes text fields; slot/message identifiers come from this image record.
                 cont.outerHTML = buildFailedPlaceholderHtml({
                     slotId: sid, messageId: msgId,
                     tags: lastImageInfo.tags || '', positive: lastImageInfo.positive || '',
@@ -4402,8 +4380,8 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
                 slotId: sid, messageId: msgId,
                 tags: lastImageInfo.tags || '', positive: lastImageInfo.positive || '',
                 errorType: 'deleted', errorMessage: '图片已删除，点击重试可重新生成',
-            }).catch(() => {});
-            await clearDrawSavedEntry(msgId, sid).catch(() => {});
+            }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
+            await clearDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
             if (getSettingsElement('comfy-gallery-container')) {
                 await renderGalleryManagement();
             }
@@ -4484,8 +4462,8 @@ async function handleImageDelegatedClick(event) {
     if (action === 'retry-image') { await retryFailedImage(container); return; }
     if (action === 'retry-floor-failed') { await retryFloorFailedImageCards("comfyui", container); return; }
     if (action === 'restore-image') { await restoreImageCard(container); return; }
-    if (action === 'edit-tags') { container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open'); toggleEditPanel(container, true); return; }
-    if (action === 'cancel-edit') { toggleEditPanel(container, false); return; }
+    if (action === 'edit-tags') { container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open'); observeBackgroundTask(toggleEditPanel(container, true), { source: import.meta.url, operation: 'handleImageDelegatedClick' }); return; }
+    if (action === 'cancel-edit') { observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'handleImageDelegatedClick' }); return; }
     if (action === 'save-tags') { await saveEditedTags(container); return; }
     if (action === 'save-tags-retry') { await saveTagsAndRetry(container); return; }
     if (action === 'save-image') { container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open'); await saveCurrentImage(container); return; }
@@ -4570,7 +4548,7 @@ async function saveEditedTags(container) {
             const data = buildEditedPromptData(tags, characters, undefined, postPrompt ?? record?.postPrompt ?? '');
             return { positive: data.positive, negativePrompt: data.negative ?? record?.negativePrompt ?? '' };
         });
-        toggleEditPanel(container, false);
+        observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'saveEditedTags' });
         toastr.success(DRAW_SLOT_COPY.tagSaved);
         return true;
     } catch (error) {
@@ -4606,14 +4584,14 @@ async function deleteCurrentImage(container) {
     const imgId = container.dataset.imgId;
     const messageId = Number(container.dataset.mesid);
     if (!slotId) return;
-    if (imgId) { try { await deletePreview(imgId); } catch {} }
+    if (imgId) { try { await deletePreview(imgId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); } }
     const previews = await getPreviewsBySlot(slotId).catch(() => []);
     const successPreviews = previews.filter(hasPreviewImage);
     if (successPreviews.length > 0) {
         const nextPreview = successPreviews[0];
-        await setSlotSelection(slotId, nextPreview.imgId).catch(() => {});
+        await setSlotSelection(slotId, nextPreview.imgId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
         syncContainerToPreview(container, nextPreview, successPreviews.length, 0);
-        await syncDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews).catch(() => {});
+        await syncDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
         toastr.success(`已删除（剩余 ${successPreviews.length} 张）`);
         return;
     } else {
@@ -4644,7 +4622,7 @@ async function saveCurrentImage(container) {
         const url = await saveBase64AsFile(preview.base64, charName, `comfy_${imgId}`, 'png');
         await updatePreviewSavedUrl(imgId, url);
         preview.savedUrl = url;
-        await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch(() => {});
+        await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "saveCurrentImage" }, caughtError); });
         const img = container.querySelector('img');
         if (img) img.src = getPreviewDisplayUrl(preview);
         container.dataset.state = 'saved';
@@ -4658,12 +4636,12 @@ async function saveCurrentImage(container) {
 function setupImageDelegation() {
     if (imageDelegationBound) return;
     imageDelegationBound = true;
-    document.addEventListener('click', handleImageDelegatedClick, { capture: true });
+    document.addEventListener('click', handleImageDelegatedClickEvent, { capture: true });
 }
 
 function cleanupImageDelegation() {
     if (!imageDelegationBound) return;
-    document.removeEventListener('click', handleImageDelegatedClick, { capture: true });
+    document.removeEventListener('click', handleImageDelegatedClickEvent, { capture: true });
     imageDelegationBound = false;
 }
 
@@ -4846,7 +4824,7 @@ export async function initComfyDraw() {
     }
     const [floatingPanel] = await Promise.all([
         import('./floating-panel.js'),
-        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch(() => {}),
+        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "initComfyDraw" }, caughtError); }),
     ]);
     if (initGeneration !== moduleLifecycleGeneration || window?.isXiaobaixEnabled === false) return false;
 
@@ -4936,7 +4914,7 @@ export function cleanupComfyDraw() {
     stopSharedDrawPreviewRuntime();
     backendJobMonitors.deactivate();
     abortPendingRequest();
-    abortGeneration(null, { reason: 'teardown' });
+    observeBackgroundTask(abortGeneration(null, { reason: 'teardown' }), { source: import.meta.url, operation: "cleanupComfyDraw" });
     clearFloorImageJobs(generationJobs);
     comfyImageRequestQueue.clear();
     hideSettings();

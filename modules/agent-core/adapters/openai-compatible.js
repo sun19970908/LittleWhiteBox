@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { parseCustomParameters } from '../config.js';
+import { buildSamplingParameters } from '../sampling.js';
 import { resolveAgentAuth } from '../provider-auth.js';
 import { readResponseCompletion } from '../runtime/response-completion.js';
 import {
@@ -27,6 +27,8 @@ import {
     findTextToolStart,
     scanTextToolBlocks,
 } from './text-tool-protocol.js';
+const ERROR_SOURCE = "modules/agent-core/adapters/openai-compatible.js";
+
 
 function parseArgumentsForTaggedReplay(text) {
     try {
@@ -979,8 +981,8 @@ async function readSseEventsFromResponse(response, onEvent) {
     } catch (error) {
         try {
             await reader.cancel();
-        } catch {
-            // A failed stream can also reject cancellation; preserve the original failure.
+        } catch (caughtError) {
+            console.debug({ source: ERROR_SOURCE, operation: "readSseEventsFromResponse" }, caughtError);
         }
         throw error;
     } finally {
@@ -997,8 +999,10 @@ function describeOpenAICompatibleHttpError(rawText, status) {
             if (typeof message === 'string' && message.trim()) {
                 return message.trim();
             }
-        } catch {
-            // Keep the provider response below when it is not valid JSON.
+        } catch (caughtError) {
+            if (!(caughtError instanceof SyntaxError)) {
+                console.warn({ source: ERROR_SOURCE, operation: "describeOpenAICompatibleHttpError" }, caughtError);
+            }
         }
     }
     return source || `OpenAI 兼容流式请求失败（HTTP ${status}）`;
@@ -1030,7 +1034,7 @@ export class OpenAICompatibleAdapter {
         const deepSeekThinkingWithTools = shouldPreserveHistoricalReasoning(
             { ...this.config, provider: 'openai-compatible' }, nativeTools, reasoning,
         );
-        const customParams = parseCustomParameters(this.config.customParameters);
+        const samplingParams = buildSamplingParameters('openai-compatible', this.config.sampling);
         const body = {
             model: this.config.model,
             messages: isTaggedMode ? buildTaggedMessages(task, this.config.model) : buildNativeMessages(task, this.config.model, {
@@ -1042,7 +1046,7 @@ export class OpenAICompatibleAdapter {
                     ? { max_completion_tokens: task.maxTokens }
                     : { max_tokens: task.maxTokens })
                 : {}),
-            ...customParams,
+            ...samplingParams,
         };
         // Inherit can enable thinking too. Only an explicit off permits forced tools;
         // the separate SillyTavern adapter cannot guarantee delivery of that control.
@@ -1052,7 +1056,7 @@ export class OpenAICompatibleAdapter {
         if (!shouldOmitTemperatureForReasoning(
             { ...this.config, provider: 'openai-compatible' },
             reasoning,
-        ) && typeof task.temperature === 'number' && !('temperature' in customParams)) {
+        ) && typeof task.temperature === 'number') {
             body.temperature = task.temperature;
         }
         return applyOpenAICompatibleReasoningControls(body, reasoning);

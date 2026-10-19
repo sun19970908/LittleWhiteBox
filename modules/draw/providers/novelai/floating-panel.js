@@ -16,6 +16,14 @@ import {
 import { registerToToolbar, removeFromToolbar } from '../../../../widgets/message-toolbar.js';
 import { formatScenePlannerProgress } from '../../shared/draw-common.js';
 import { DRAW_CAPSULE_COPY } from '../../shared/draw-capsule-copy.js';
+import { buildMaxImagesSavedMessage, normalizeMaxImagesOverride } from '../../shared/max-images-override.js';
+import {
+    MAX_IMAGES_INPUT_CLASS,
+    MAX_IMAGES_INPUT_CSS,
+    bindMaxImagesInput,
+    createMaxImagesInputRow,
+    syncMaxImagesInput,
+} from '../../shared/max-images-input.js';
 import {
     resolveCurrentDrawRunActivityTarget,
     subscribeDrawRunActivity,
@@ -42,6 +50,8 @@ import {
 
 import { FloorImageBusyError } from '../../shared/floor-image-job.js';
 import { DRAW_SLOT_COPY } from '../../shared/image-record.js';
+import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+
 
 const FLOAT_POS_KEY = 'xb_novel_float_pos';
 const AUTO_RESET_DELAY = 8000;
@@ -421,6 +431,7 @@ const STYLES = `
 .nd-select:focus { border-color: rgba(255, 255, 255, 0.3); }
 .nd-select option { background: #1a1a1e; color: #eee; text-align: left; }
 .nd-select.size { font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 11px; }
+${MAX_IMAGES_INPUT_CSS}
 
 .nd-inner-sep { display: none; }
 
@@ -587,6 +598,36 @@ function fillSizeSelect(selectEl) {
     });
 }
 
+function getCurrentPresetMaxImages() {
+    const settings = getSettings();
+    const presets = settings.paramsPresets || [];
+    const preset = presets.find((item) => item.id === settings.selectedParamsPresetId) || presets[0];
+    return preset?.maxImages || 0;
+}
+
+function fillMaxImagesInput(inputEl, force = false) {
+    syncMaxImagesInput(inputEl, {
+        override: getSettings().overrideMaxImages,
+        presetMaxImages: getCurrentPresetMaxImages(),
+        force,
+    });
+}
+
+function createMaxImagesRow() {
+    const row = createMaxImagesInputRow(document);
+    fillMaxImagesInput(row.querySelector(`.${MAX_IMAGES_INPUT_CLASS}`));
+    return row;
+}
+
+function bindMaxImagesInputEvents(inputEl) {
+    return bindMaxImagesInput(inputEl, {
+        getOverride: () => getSettings().overrideMaxImages,
+        save: setQuickMaxImages,
+        refresh: fillMaxImagesInput,
+        notify: (message) => globalThis.toastr?.warning?.(message),
+    });
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // ▼▼▼ 楼层按钮逻辑 ▼▼▼
 // ═══════════════════════════════════════════════════════════════════════════
@@ -670,7 +711,7 @@ function createFloorPanelElement(messageId) {
     const sizeSelect = createEl('select', 'nd-select size nd-size-select');
     fillSizeSelect(sizeSelect);
     rowSize.appendChild(sizeSelect);
-    card.append(rowPreset, innerSep, rowSize);
+    card.append(rowPreset, innerSep, rowSize, createMaxImagesRow());
 
     const controls = createEl('div', 'nd-controls');
     const autoToggle = createEl('div', `nd-auto${isAuto ? ' on' : ''} nd-auto-toggle`);
@@ -701,6 +742,7 @@ function cacheFloorDOM(panelData) {
         time: el.querySelector('.nd-time'),
         presetSelect: el.querySelector('.nd-preset-select'),
         sizeSelect: el.querySelector('.nd-size-select'),
+        maxImagesInput: el.querySelector(`.${MAX_IMAGES_INPUT_CLASS}`),
         autoToggle: el.querySelector('.nd-auto-toggle'),
     };
 }
@@ -877,7 +919,7 @@ function syncDrawRunActivity(detail = {}) {
     const lastMessageId = findLastAIMessageId();
     if (panelMap.has(currentTarget.messageId)
         || (floatingEl && currentTarget.messageId === lastMessageId)) {
-        void syncDrawRunPanelState(currentTarget.messageId, detail);
+        observeBackgroundTask(syncDrawRunPanelState(currentTarget.messageId, detail), { source: import.meta.url, operation: "syncDrawRunActivity" });
     }
 }
 
@@ -892,7 +934,7 @@ export function refreshDrawRunUiState() {
             setFloatingState(FloatState.IDLE);
         }
     }
-    if (messageId >= 0) void syncDrawRunPanelState(messageId);
+    if (messageId >= 0) observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "refreshDrawRunUiState" });
 }
 
 function resolveCooldownEndTime({ cooldownUntil, duration } = {}) {
@@ -1005,7 +1047,7 @@ function bindFloorPanelEvents(panelData) {
 
     el.querySelector('.nd-btn-draw')?.addEventListener('click', (e) => {
         e.stopPropagation();
-        handleFloorDrawClick(messageId);
+        observeBackgroundTask(handleFloorDrawClick(messageId), { source: import.meta.url, operation: "callback" });
     });
 
     // idle 层的菜单按钮 + 非空闲状态常驻的菜单按钮，行为完全一致
@@ -1015,6 +1057,7 @@ function bindFloorPanelEvents(panelData) {
         if (!el.classList.contains('expanded')) {
             refreshFloorPresetSelect(messageId);
             refreshFloorSizeSelect(messageId);
+            refreshFloorMaxImagesInput(messageId);
         }
         el.classList.toggle('expanded');
     }));
@@ -1023,7 +1066,7 @@ function bindFloorPanelEvents(panelData) {
         e.stopPropagation();
         const state = panelData.state;
         if ([FloatState.SUBMITTING, FloatState.ACCEPTED, FloatState.UNCERTAIN, FloatState.QUEUED, FloatState.LLM, FloatState.GEN, FloatState.COOLDOWN, FloatState.RECONNECTING, FloatState.BACKEND_LEGACY].includes(state)) {
-            handleFloorAbort(messageId);
+            observeBackgroundTask(handleFloorAbort(messageId), { source: import.meta.url, operation: "callback" });
         } else if ([FloatState.SUCCESS, FloatState.PARTIAL, FloatState.ERROR].includes(state)) {
             updateFloorDetailPopup(messageId);
             el.classList.toggle('show-detail');
@@ -1038,6 +1081,8 @@ function bindFloorPanelEvents(panelData) {
         await setQuickSize(e.target.value);
     });
 
+    const maxImagesBinding = bindMaxImagesInputEvents(panelData.$cache.maxImagesInput);
+
     panelData.$cache.autoToggle?.addEventListener('click', async () => {
         await toggleQuickAutoMode();
     });
@@ -1045,7 +1090,7 @@ function bindFloorPanelEvents(panelData) {
     el.querySelector('.nd-settings-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
         el.classList.remove('expanded');
-        openNovelDrawSettings();
+        observeBackgroundTask(openNovelDrawSettings(), { source: import.meta.url, operation: "callback" });
     });
 
     const closeMenu = (e) => {
@@ -1056,6 +1101,7 @@ function bindFloorPanelEvents(panelData) {
     document.addEventListener('click', closeMenu, { passive: true });
 
     panelData._cleanup = () => {
+        maxImagesBinding.destroy();
         document.removeEventListener('click', closeMenu);
         if (panelData.autoResetTimer) clearTimeout(panelData.autoResetTimer);
         panelData.autoResetTimer = null;
@@ -1075,6 +1121,10 @@ function refreshFloorSizeSelect(messageId) {
     const data = panelMap.get(messageId);
     const select = data?.$cache?.sizeSelect;
     fillSizeSelect(select);
+}
+
+function refreshFloorMaxImagesInput(messageId) {
+    fillMaxImagesInput(panelMap.get(messageId)?.$cache?.maxImagesInput);
 }
 
 async function persistQuickSetting(mutator, okText, afterSave) {
@@ -1101,6 +1151,18 @@ async function setQuickSize(value) {
     );
 }
 
+// value 已由数字输入框校验：0 = 覆盖为不指定，1-20 的整数 = 覆盖，null = 清除覆盖（跟随预设）。
+async function setQuickMaxImages(value) {
+    const next = normalizeMaxImagesOverride(value);
+    const ok = await persistQuickSetting(
+        (settings) => { settings.overrideMaxImages = next; },
+        buildMaxImagesSavedMessage(next),
+        updateAllMaxImagesInputs,
+    );
+    if (!ok) updateAllMaxImagesInputs();
+    return ok;
+}
+
 async function toggleQuickAutoMode() {
     const current = getSettings();
     const nextMode = current.mode === 'auto' ? 'manual' : 'auto';
@@ -1115,7 +1177,7 @@ function mountFloorPanel(messageEl, messageId) {
     if (panelMap.has(messageId)) {
         const existing = panelMap.get(messageId);
         if (existing.root?.isConnected) {
-            void syncDrawRunPanelState(messageId);
+            observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "mountFloorPanel" });
             return existing;
         }
         existing._cleanup?.();
@@ -1139,7 +1201,7 @@ function mountFloorPanel(messageEl, messageId) {
     bindFloorPanelEvents(panelData);
 
     panelMap.set(messageId, panelData);
-    void syncDrawRunPanelState(messageId);
+    observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "mountFloorPanel" });
     return panelData;
 }
 
@@ -1243,7 +1305,7 @@ function getFloatingPosition() {
     try {
         const raw = localStorage.getItem(FLOAT_POS_KEY);
         if (raw) return JSON.parse(raw);
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "getFloatingPosition" }, caughtError); }
 
     const debug = document.getElementById('xiaobaix-debug-mini');
     if (debug) {
@@ -1261,7 +1323,7 @@ function saveFloatingPosition() {
             left: Math.round(r.left),
             top: Math.round(r.top)
         }));
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "saveFloatingPosition" }, caughtError); }
 }
 
 // 胶囊宽度有 0.35s 过渡，夹取位置要用过渡结束后的目标宽度（空闲 74px / 非空闲 98px，含边框）
@@ -1468,7 +1530,7 @@ function onFloatingPointerDown(e) {
         originalTarget: e.target
     };
 
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "onFloatingPointerDown" }, caughtError); }
     e.preventDefault();
 }
 
@@ -1497,7 +1559,7 @@ function onFloatingPointerUp(e) {
 
     const { moved, originalTarget } = floatingDragState;
 
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "onFloatingPointerUp" }, caughtError); }
     floatingDragState = null;
 
     if (moved) {
@@ -1509,17 +1571,18 @@ function onFloatingPointerUp(e) {
 
 function routeFloatingClick(target) {
     if (target.closest('.nd-btn-draw')) {
-        handleFloatingDrawClick();
+        observeBackgroundTask(handleFloatingDrawClick(), { source: import.meta.url, operation: "routeFloatingClick" });
     } else if (target.closest('.nd-btn-menu')) {
         floatingEl.classList.remove('show-detail');
         if (!floatingEl.classList.contains('expanded')) {
             refreshFloatingPresetSelect();
             refreshFloatingSizeSelect();
+            refreshFloatingMaxImagesInput();
         }
         floatingEl.classList.toggle('expanded');
     } else if (target.closest('.nd-layer-active')) {
         if ([FloatState.SUBMITTING, FloatState.ACCEPTED, FloatState.UNCERTAIN, FloatState.QUEUED, FloatState.LLM, FloatState.GEN, FloatState.COOLDOWN, FloatState.RECONNECTING, FloatState.BACKEND_LEGACY].includes(floatingState)) {
-            handleFloatingAbort();
+            observeBackgroundTask(handleFloatingAbort(), { source: import.meta.url, operation: "routeFloatingClick" });
         } else if ([FloatState.SUCCESS, FloatState.PARTIAL, FloatState.ERROR].includes(floatingState)) {
             updateFloatingDetailPopup();
             floatingEl.classList.toggle('show-detail');
@@ -1587,6 +1650,10 @@ function refreshFloatingSizeSelect() {
     fillSizeSelect($floatingCache.sizeSelect);
 }
 
+function refreshFloatingMaxImagesInput() {
+    fillMaxImagesInput($floatingCache.maxImagesInput);
+}
+
 function cacheFloatingDOM() {
     if (!floatingEl) return;
     $floatingCache = {
@@ -1599,6 +1666,7 @@ function cacheFloatingDOM() {
         detailTime: floatingEl.querySelector('.nd-time'),
         presetSelect: floatingEl.querySelector('.nd-preset-select'),
         sizeSelect: floatingEl.querySelector('.nd-size-select'),
+        maxImagesInput: floatingEl.querySelector(`.${MAX_IMAGES_INPUT_CLASS}`),
         autoToggle: floatingEl.querySelector('.nd-auto-toggle'),
     };
 }
@@ -1658,7 +1726,7 @@ function createFloatingButton() {
     const sizeSelect = createEl('select', 'nd-select size nd-size-select');
     fillSizeSelect(sizeSelect);
     rowSize.appendChild(sizeSelect);
-    card.append(rowPreset, innerSep, rowSize);
+    card.append(rowPreset, innerSep, rowSize, createMaxImagesRow());
 
     const controls = createEl('div', 'nd-controls');
     const autoToggle = createEl('div', `nd-auto${isAuto ? ' on' : ''} nd-auto-toggle`);
@@ -1713,22 +1781,25 @@ function createFloatingButton() {
         await setQuickSize(e.target.value);
     });
 
+    $floatingCache.maxImagesBinding = bindMaxImagesInputEvents($floatingCache.maxImagesInput);
+
     $floatingCache.autoToggle?.addEventListener('click', async () => {
         await toggleQuickAutoMode();
     });
 
     floatingEl.querySelector('.nd-settings-btn')?.addEventListener('click', () => {
         floatingEl.classList.remove('expanded');
-        openNovelDrawSettings();
+        observeBackgroundTask(openNovelDrawSettings(), { source: import.meta.url, operation: "callback" });
     });
 
     document.addEventListener('click', handleFloatingOutsideClick, { passive: true });
     window.addEventListener('resize', applyFloatingPosition);
     const messageId = findLastAIMessageId();
-    if (messageId >= 0) void syncDrawRunPanelState(messageId);
+    if (messageId >= 0) observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "createFloatingButton" });
 }
 
 function destroyFloatingButton() {
+    $floatingCache.maxImagesBinding?.destroy();
     clearFloatingCooldownTimer();
 
     if (floatingAutoResetTimer) {
@@ -1755,6 +1826,8 @@ function updateAllPresetSelects() {
         fillPresetSelect(data.$cache?.presetSelect);
     });
     fillPresetSelect($floatingCache.presetSelect);
+    // “数目”输入框的提示里带当前预设的出图数，切换预设后一并刷新。
+    updateAllMaxImagesInputs();
 }
 
 function updateAllSizeSelects() {
@@ -1762,6 +1835,13 @@ function updateAllSizeSelects() {
         fillSizeSelect(data.$cache?.sizeSelect);
     });
     fillSizeSelect($floatingCache.sizeSelect);
+}
+
+function updateAllMaxImagesInputs() {
+    panelMap.forEach((data) => {
+        fillMaxImagesInput(data.$cache?.maxImagesInput);
+    });
+    fillMaxImagesInput($floatingCache.maxImagesInput);
 }
 
 export function updateAutoModeUI() {
@@ -1850,6 +1930,7 @@ export {
     SIZE_OPTIONS,
     updateAllPresetSelects,
     updateAllSizeSelects,
+    updateAllMaxImagesInputs,
     createFloatingButton,
     destroyFloatingButton,
     setFloatingState,

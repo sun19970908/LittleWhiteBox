@@ -33,6 +33,7 @@ import {
     updateSharedDrawSettingsPersistent,
     normalizeSharedCacheDays,
 } from "../../shared/draw-settings.js";
+import { normalizeMaxImagesOverride, resolveEffectiveMaxImages } from "../../shared/max-images-override.js";
 import { getLastDrawAgentDiagnostic } from "../../shared/draw-agent.js";
 import { characterLibraryFromSettings, selectEnabledCharacters } from "../../shared/character-library.js";
 import { attachDrawAgentSettingsSurface } from "../../shared/agent-settings-surface.js";
@@ -120,6 +121,10 @@ import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
+import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+
+const handleImageDelegatedClickEvent = observeAsyncCallback(handleImageDelegatedClick, { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "handleImageDelegatedClick" });
+
 // sd-draw.js
 
 
@@ -139,6 +144,7 @@ const DEFAULT_SD_DRAW_SETTINGS = {
     activeApiPresetId: null,
     mode: 'manual',
     overrideSize: 'default',
+    overrideMaxImages: null,
     showFloorButton: true,
     showFloatingButton: true,
     selectedPresetId: 'default',
@@ -291,6 +297,7 @@ function normalizeSettings(raw = {}) {
         ...normalizeApiPresetState(raw, SD_API_PRESET_OPTIONS),
         mode: raw.mode === 'auto' ? 'auto' : 'manual',
         overrideSize: String(raw.overrideSize || 'default'),
+        overrideMaxImages: normalizeMaxImagesOverride(raw.overrideMaxImages),
         showFloorButton: raw.showFloorButton !== false,
         showFloatingButton: raw.showFloatingButton !== false,
         selectedPresetId,
@@ -498,7 +505,7 @@ async function persistSettingsNow(nextSettings, okText = '已保存', { notify =
 
 function enqueueSettingsUpdate(update) {
     const result = settingsUpdateQueue.then(update, update);
-    settingsUpdateQueue = result.catch(() => {});
+    settingsUpdateQueue = result.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "enqueueSettingsUpdate" }, caughtError); });
     return result;
 }
 
@@ -566,7 +573,7 @@ export async function updateQuickSettings(patch = {}) {
         fp.updateAllPresetSelects?.();
         fp.updateAllSizeSelects?.();
         fp.updateAutoModeUI?.();
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "updateQuickSettings" }, caughtError); }
     return getQuickSettings();
 }
 
@@ -648,7 +655,7 @@ function buildSdProxyBody(extra = {}, generationConfig = getSettings()) {
 
 async function fetchSdProxy(path, body = {}, { signal, generationConfig, attempt } = {}) {
     const payload = JSON.stringify(buildSdProxyBody(body, generationConfig));
-    attempt?.submit();
+    attempt?.submit(signal);
     const response = await fetch(`/api/sd/${path}`, {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -1009,7 +1016,7 @@ function bindOverlayEvents() {
             try {
                 const fp = await import('./floating-panel.js');
                 fp.updateAutoModeUI?.();
-            } catch {}
+            } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
         });
     });
     querySettings('#sd-show-floor')?.addEventListener('change', async (event) => {
@@ -1023,7 +1030,7 @@ function bindOverlayEvents() {
         try {
             const fp = await import('./floating-panel.js');
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
     });
     querySettings('#sd-show-floating')?.addEventListener('change', async (event) => {
         const checked = event.target.checked === true;
@@ -1036,7 +1043,7 @@ function bindOverlayEvents() {
         try {
             const fp = await import('./floating-panel.js');
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
     });
     querySettings('#sd-draw-save')?.addEventListener('click', async () => {
         const bar = ensureApiPresetBar();
@@ -1661,7 +1668,7 @@ function switchSettingsView(viewName = 'test') {
         panel.classList.toggle('active', panel.dataset.sdViewPanel === normalized);
     });
     if (normalized === 'gallery') {
-        void renderGalleryManagement();
+        observeBackgroundTask(renderGalleryManagement(), { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "switchSettingsView" });
     }
     if (normalized === 'llm') {
         ensureAgentSettingsSurface();
@@ -1739,17 +1746,17 @@ async function renderGalleryManagement() {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'gallery-slot-btn';
-            button.addEventListener('click', async () => {
+            button.addEventListener('click', observeAsyncCallback(async () => {
                 const latest = await getPreview(slotSummaries[slotId]?.latestImgId).catch(() => null);
                 await openGallery(slotId, Number(latest?.messageId || 0), buildSharedGalleryCallbacks(slotId, Number(latest?.messageId || 0)));
-            });
+            }, { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "callback" }));
 
             const img = document.createElement('img');
             img.className = 'gallery-slot-thumb';
             img.alt = '';
             void getPreview(slotSummaries[slotId]?.latestImgId).then((latest) => {
                 if (latest) img.src = getPreviewDisplayUrl(latest);
-            }).catch(() => {});
+            }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "renderGalleryManagement" }, caughtError); });
 
             const label = document.createElement('div');
             label.className = 'gallery-slot-title';
@@ -1818,10 +1825,11 @@ function ensureCharacterLibraryUi() {
         document: doc,
         listElement: list,
         toolbarElement: toolbar,
+        searchInput: querySettings('#sd-char-search'),
         readCharacters: readCharacterCardsFromForm,
         renderCard: renderCharacterCard,
         renderEmpty: createCharacterEmptyState,
-        onChange: () => refreshSettingsSummary(),
+        onChange: refreshSettingsSummary,
         notify: {
             success: (message) => toastr.success(message),
             warning: (message) => toastr.warning(message),
@@ -2270,10 +2278,10 @@ function bindWorldbookUploadEvents() {
     dropzone.addEventListener('drop', (event) => {
         event.preventDefault();
         dropzone.classList.remove('dragover');
-        if (event.dataTransfer?.files?.length) void handleWorldbookFiles(event.dataTransfer.files);
+        if (event.dataTransfer?.files?.length) observeBackgroundTask(handleWorldbookFiles(event.dataTransfer.files), { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "callback" });
     });
     fileInput.addEventListener('change', () => {
-        if (fileInput.files?.length) void handleWorldbookFiles(fileInput.files);
+        if (fileInput.files?.length) observeBackgroundTask(handleWorldbookFiles(fileInput.files), { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "callback" });
         fileInput.value = '';
     });
 }
@@ -2322,7 +2330,7 @@ async function setSdDanbooruLocalEnabled(enabled) {
         unloadLocalDanbooruDB();
         await updateSharedDrawSettingsPersistent((settings) => {
             settings.danbooruLocalDB = false;
-        }, 'Danbooru 本地库加载失败', { notify: false, silent: false }).catch(() => {});
+        }, 'Danbooru 本地库加载失败', { notify: false, silent: false }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "setSdDanbooruLocalEnabled" }, caughtError); });
         if (checkbox) checkbox.checked = false;
         if (status) status.textContent = '加载失败';
         toastr.error('Danbooru 本地库加载失败');
@@ -2475,7 +2483,7 @@ function renderSdDanbooruResults(results = [], characterId = '', container = nul
         item.appendChild(info);
         item.addEventListener('click', () => {
             let appearanceTags = [];
-            try { appearanceTags = JSON.parse(item.dataset.tags || '[]'); } catch {}
+            try { appearanceTags = JSON.parse(item.dataset.tags || '[]'); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "renderSdDanbooruResults" }, caughtError); }
             const tagInput = card.querySelector('[data-sd-char-field="danbooruTag"]');
             const appearanceInput = card.querySelector('[data-sd-char-field="appearance"]');
             if (tagInput) tagInput.value = item.dataset.tag || '';
@@ -2505,7 +2513,7 @@ function fillSharedDrawForm() {
     renderCharacterTagList(sharedDrawSettings.characterTags || [], sharedDrawSettings.characterGroups || []);
     ensureGroupPresetBinding();
     setPlannerRetryInput(sharedDrawSettings.plannerMaxRetries);
-    void ensureSdDanbooruLoadedForForm(sharedDrawSettings);
+    observeBackgroundTask(ensureSdDanbooruLoadedForForm(sharedDrawSettings), { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "fillSharedDrawForm" });
 }
 
 async function saveSharedDrawSettings({ notify = false } = {}) {
@@ -2547,7 +2555,7 @@ async function persistAllSettings({ notify = false, triggerButton = null, status
             const settings = getSettings();
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
             fp.updateAutoModeUI?.();
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "runPostSaveHooks" }, caughtError); }
         apiPresetBar?.render();
     };
 
@@ -2634,7 +2642,7 @@ function refreshSettingsSummary() {
     const charResultEl = querySettings('#sd-draw-character-result-count');
     if (presetEl) presetEl.textContent = activePreset?.name || '默认';
     if (charSideEl) charSideEl.textContent = String(characterCount);
-    if (charResultEl) charResultEl.textContent = `${characterCount} / ${characterCount}`;
+    if (charResultEl) charResultEl.textContent = `${characterLibraryUi?.getVisibleCardCount() ?? characterCount} / ${characterCount}`;
 }
 
 
@@ -2756,7 +2764,7 @@ export async function openSettings() {
     switchSettingsView('test');
     syncOverlayHeight();
     overlay.style.display = 'block';
-    void refreshSdOptions();
+    observeBackgroundTask(refreshSdOptions(), { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "openSettings" });
     return true;
 }
 
@@ -2784,7 +2792,7 @@ function hideSettings() {
 }
 
 function abortPendingRequest() {
-    try { pendingController?.abort(); } catch {}
+    try { pendingController?.abort(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "abortPendingRequest" }, caughtError); }
     pendingController = null;
 }
 
@@ -3117,7 +3125,8 @@ async function buildSdScenePlannerOptions({
             customPrompts: promptPreset,
             promptDefaults: DEFAULT_PROMPT_CONFIG,
             worldbookEntries,
-            maxImages: preset.maxImages || 0,
+            // 悬浮菜单“数目”覆盖优先于参数预设；覆盖为空时沿用预设（0 = 不指定）。
+            maxImages: resolveEffectiveMaxImages(sdSettings, preset),
             maxCharactersPerImage: preset.maxCharactersPerImage || 0,
             plannerProfile: SD_PLANNER_PROFILE,
             plannerRetry: { maxRetries: sharedDrawSettings.plannerMaxRetries },
@@ -3168,16 +3177,14 @@ function setImageState(container, state) {
     if (dropdown) {
         const saveItem = dropdown.querySelector('[data-action="save-image"]');
         if (state === ImageState.PREVIEW && !saveItem) {
-            // Static draw-owned markup, without user input.
-            // eslint-disable-next-line no-unsanitized/method
+            // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
             dropdown.insertAdjacentHTML('afterbegin', IMAGE_SAVE_BUTTON_HTML);
         } else if (state !== ImageState.PREVIEW && saveItem) {
             saveItem.remove();
         }
     }
     container.querySelector('.xb-nd-indicator')?.remove();
-    // Static draw-owned markup, without user input.
-    // eslint-disable-next-line no-unsanitized/method
+    // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
     if (state === ImageState.SAVING) container.insertAdjacentHTML('afterbegin', IMAGE_SAVING_INDICATOR_HTML);
     else if (state === ImageState.REFRESHING) container.insertAdjacentHTML('afterbegin', '<div class="xb-nd-indicator"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 生成中...</div>');
 }
@@ -3212,7 +3219,7 @@ function syncContainerToPreview(container, preview, historyCount = 1, currentInd
     container.dataset.historyCount = String(historyCount);
     setImageState(container, preview.savedUrl ? ImageState.SAVED : ImageState.PREVIEW);
     updateNavControls(container, currentIndex, historyCount);
-    void warmSlotPreviewNeighbors(container.dataset.slotId, currentIndex).catch(() => {});
+    void warmSlotPreviewNeighbors(container.dataset.slotId, currentIndex).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "syncContainerToPreview" }, caughtError); });
 }
 
 function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings())) {
@@ -3270,9 +3277,9 @@ async function navigateToImage(container, targetIndex) {
     await setSlotSelection(slotId, targetPreview.imgId);
     const messageId = Number(container.dataset.mesid);
     if (targetPreview.savedUrl) {
-        void syncDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch(() => {});
+        void syncDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     } else {
-        void clearDrawSavedEntry(messageId, slotId).catch(() => {});
+        void clearDrawSavedEntry(messageId, slotId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     }
     imgEl.classList.remove(`sliding-${direction}`);
     imgEl.classList.add(`sliding-in-${direction === 'left' ? 'left' : 'right'}`);
@@ -3288,9 +3295,9 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
                 syncContainerToPreview(cont, selected, historyCount, 0);
             }
             if (selected?.savedUrl) {
-                void syncDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch(() => {});
+                void syncDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             } else {
-                void clearDrawSavedEntry(msgId, sid).catch(() => {});
+                void clearDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             }
         },
         onSave: async (imgId, url) => {
@@ -3302,7 +3309,7 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
             if (preview) {
                 const img = cont?.querySelector('img');
                 if (img) img.src = getPreviewDisplayUrl(preview);
-                await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch(() => {});
+                await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onSave" }, caughtError); });
             }
         },
         onDelete: async (sid, deletedImgId, remainingPreviews) => {
@@ -3310,13 +3317,12 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
             if (cont && cont.dataset.imgId === deletedImgId && remainingPreviews.length > 0) {
                 syncContainerToPreview(cont, remainingPreviews[0], remainingPreviews.length, 0);
             }
-            await syncDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch(() => {});
+            await syncDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onDelete" }, caughtError); });
         },
         onBecameEmpty: async (sid, msgId, lastImageInfo = {}) => {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
             if (cont) {
-                // Template-only UI markup built locally.
-                // eslint-disable-next-line no-unsanitized/property
+                // eslint-disable-next-line no-unsanitized/property -- Template-only UI markup built locally.
                 cont.outerHTML = buildFailedPlaceholderHtml({
                     slotId: sid,
                     messageId: msgId,
@@ -3333,8 +3339,8 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
                 positive: lastImageInfo.positive || '',
                 errorType: 'deleted',
                 errorMessage: '图片已删除，点击重试可重新生成',
-            }).catch(() => {});
-            await clearDrawSavedEntry(msgId, sid).catch(() => {});
+            }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
+            await clearDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
             if (getSettingsElement('sd-gallery-container')) {
                 await renderGalleryManagement();
             }
@@ -3429,12 +3435,12 @@ async function handleImageDelegatedClick(event) {
 
     if (action === 'edit-tags') {
         container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open');
-        toggleEditPanel(container, true);
+        observeBackgroundTask(toggleEditPanel(container, true), { source: import.meta.url, operation: 'handleImageDelegatedClick' });
         return;
     }
 
     if (action === 'cancel-edit') {
-        toggleEditPanel(container, false);
+        observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'handleImageDelegatedClick' });
         return;
     }
 
@@ -3531,7 +3537,7 @@ async function saveEditedTags(container) {
             const data = buildEditedPromptData(tags, characters);
             return { positive: data.positive, negativePrompt: data.negative ?? record?.negativePrompt ?? '' };
         });
-        toggleEditPanel(container, false);
+        observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'saveEditedTags' });
         toastr.success(DRAW_SLOT_COPY.tagSaved);
         return true;
     } catch (error) {
@@ -3569,15 +3575,15 @@ async function deleteCurrentImage(container) {
     if (!slotId) return;
 
     if (imgId) {
-        try { await deletePreview(imgId); } catch {}
+        try { await deletePreview(imgId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); }
     }
     const previews = await getPreviewsBySlot(slotId).catch(() => []);
     const successPreviews = previews.filter(hasPreviewImage);
     if (successPreviews.length > 0) {
         const nextPreview = successPreviews[0];
-        await setSlotSelection(slotId, nextPreview.imgId).catch(() => {});
+        await setSlotSelection(slotId, nextPreview.imgId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
         syncContainerToPreview(container, nextPreview, successPreviews.length, 0);
-        await syncDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews).catch(() => {});
+        await syncDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
         toastr.success(`已删除（剩余 ${successPreviews.length} 张）`);
         return;
     } else {
@@ -3613,7 +3619,7 @@ async function saveCurrentImage(container) {
         const url = await saveBase64AsFile(preview.base64, charName, `sd_${imgId}`, 'png');
         await updatePreviewSavedUrl(imgId, url);
         preview.savedUrl = url;
-        await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch(() => {});
+        await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "saveCurrentImage" }, caughtError); });
         const img = container.querySelector('img');
         if (img) img.src = getPreviewDisplayUrl(preview);
         container.dataset.state = 'saved';
@@ -3627,12 +3633,12 @@ async function saveCurrentImage(container) {
 function setupImageDelegation() {
     if (imageDelegationBound) return;
     imageDelegationBound = true;
-    document.addEventListener('click', handleImageDelegatedClick, { capture: true });
+    document.addEventListener('click', handleImageDelegatedClickEvent, { capture: true });
 }
 
 function cleanupImageDelegation() {
     if (!imageDelegationBound) return;
-    document.removeEventListener('click', handleImageDelegatedClick, { capture: true });
+    document.removeEventListener('click', handleImageDelegatedClickEvent, { capture: true });
     imageDelegationBound = false;
 }
 
@@ -3980,7 +3986,7 @@ export async function initSdDraw() {
     }
     const [floatingPanel] = await Promise.all([
         import('./floating-panel.js'),
-        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch(() => {}),
+        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "initSdDraw" }, caughtError); }),
     ]);
     if (initGeneration !== moduleLifecycleGeneration || window?.isXiaobaixEnabled === false) return false;
 
@@ -4072,7 +4078,7 @@ export function cleanupSdDraw() {
     stopSharedDrawPreviewRuntime();
     backendJobMonitors.deactivate();
     abortPendingRequest();
-    abortGeneration(null, { reason: 'teardown' });
+    observeBackgroundTask(abortGeneration(null, { reason: 'teardown' }), { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "cleanupSdDraw" });
     clearFloorImageJobs(generationJobs);
     sdImageRequestQueue.clear();
     hideSettings();
