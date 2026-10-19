@@ -1,5 +1,5 @@
 {
-  "buildId": "f108e75fcad0ece28d6c",
+  "buildId": "7f7fd2b15c650bf461ae",
   "entries": {
     "apps/assistant": {
       "file": "apps/assistant-93w9A_W0.js",
@@ -26,7 +26,7 @@
       "css": []
     },
     "apps/story-summary": {
-      "file": "apps/story-summary-C_cketbN.js",
+      "file": "apps/story-summary-CrGfYvxC.js",
       "css": []
     },
     "apps/tavern": {
@@ -161,9 +161,9 @@
       "dynamicImports": [],
       "css": []
     },
-    "apps/story-summary-C_cketbN.js": {
+    "apps/story-summary-CrGfYvxC.js": {
       "imports": [
-        "shared/presentation-B3qE4tEV.js",
+        "shared/presentation-B0twqCcH.js",
         "shared/message-markdown-DCm4ilJ0.js"
       ],
       "dynamicImports": [],
@@ -242,8 +242,8 @@
         "shared/var-commands-Dk7UIQaW.js",
         "shared/dexie-CLpqrnFC.js",
         "shared/workspace-repository-CA1FdKY6.js",
-        "shared/presentation-B3qE4tEV.js",
-        "shared/prompt-DaJNZfPf.js",
+        "shared/presentation-B0twqCcH.js",
+        "shared/prompt-C7Twj_C1.js",
         "shared/client-DxBm_3Yj.js",
         "shared/plan-ledger-Bv2jVEq6.js",
         "shared/reasoning-capabilities-uLAQtI7I.js",
@@ -1224,14 +1224,14 @@
       "dynamicImports": [],
       "css": []
     },
-    "shared/presentation-B3qE4tEV.js": {
+    "shared/presentation-B0twqCcH.js": {
       "imports": [
         "shared/chunk-b3L32Ng1.js"
       ],
       "dynamicImports": [],
       "css": []
     },
-    "shared/prompt-DaJNZfPf.js": {
+    "shared/prompt-C7Twj_C1.js": {
       "imports": [
         "shared/chunk-b3L32Ng1.js",
         "shared/preload-helper-CBBx94LT.js",
@@ -1239,13 +1239,13 @@
         "shared/debug-core-BNVxCxmw.js",
         "shared/server-storage-Dm9pmgQ5.js",
         "shared/dexie-CLpqrnFC.js",
-        "shared/presentation-B3qE4tEV.js",
+        "shared/presentation-B0twqCcH.js",
         "shared/chat-message-image-markup-Cqn-Ihag.js",
         "shared/scene-placement-BVMp_X_o.js",
         "shared/async-errors-C4kfchr9.js"
       ],
       "dynamicImports": [
-        "shared/prompt-DaJNZfPf.js"
+        "shared/prompt-C7Twj_C1.js"
       ],
       "css": []
     },
