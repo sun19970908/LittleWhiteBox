@@ -317,7 +317,7 @@ select.input { cursor: pointer; }
     min-width: 84px; padding: 8px 12px; border-radius: 999px;
     background: var(--accent-soft); color: var(--accent); font-size: 12px; font-weight: 600;
 }
-.char-list-body { display: flex; flex-direction: column; gap: 12px; }
+.char-list-body { display: flex; flex-direction: column; gap: 12px; padding-bottom: 40px; }
 .char-grid { display: flex; flex-direction: column; gap: 12px; }
 .char-empty {
     text-align: center; padding: 40px 20px; color: var(--text-muted);
@@ -333,6 +333,25 @@ select.input { cursor: pointer; }
 .sd-char-card.character-disabled .sd-char-card-title { color: var(--text-muted); }
 .sd-char-card.filtered-hidden { display: none; }
 .lwb-cl-group.filtered-empty { display: none; }
+.char-floating-save {
+    position: fixed; right: 28px; bottom: 28px; z-index: 80;
+    border-radius: 999px; padding: 10px 18px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(212, 165, 116, 0.25);
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.char-floating-save:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 24px rgba(212, 165, 116, 0.35);
+}
+.char-floating-save:active {
+    transform: translateY(0);
+}
+.char-floating-save.save-success {
+    background: var(--success); border-color: var(--success); color: #fff;
+}
+.char-floating-save.save-failed {
+    background: var(--danger); border-color: var(--danger); color: #fff;
+}
 .sd-char-card-header {
     display: flex; align-items: center; justify-content: space-between;
     gap: 10px; margin-bottom: 12px; padding-bottom: 10px; border-bottom: 1px solid var(--border);
@@ -458,6 +477,7 @@ select.input { cursor: pointer; }
     .char-management-layout { grid-template-columns: minmax(0, 1fr); }
     .char-list-card, .char-list-body, .char-grid { min-width: 0; }
     .char-management-sidebar { position: static; }
+    .char-floating-save { bottom: 76px; right: 16px; }
     .preset-bar { padding: 10px 12px; }
     .preset-bar select { max-width: none; }
     .preset-bar .status-text.inline-status,
@@ -1115,6 +1135,10 @@ select.input { cursor: pointer; }
                         </div>
                     </section>
                 </div>
+                <button id="comfy-char-floating-save" class="btn btn-primary char-floating-save" type="button" data-comfy-save-shared title="保存角色与设置">
+                    <i class="fa-solid fa-floppy-disk"></i>
+                    <span>保存角色</span>
+                </button>
             </section>
 
             <section class="view wide" data-comfy-view-panel="gallery">
