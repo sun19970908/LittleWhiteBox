@@ -2872,11 +2872,6 @@ function openPanelForMessage(mesId) {
     observeBackgroundTask(sendVectorStatsToFrame(), { source: import.meta.url, operation: "openPanelForMessage" });
 }
 
-export function openPanel() {
-    const { chat } = getContext();
-    openPanelForMessage(chat ? chat.length - 1 : 0);
-}
-
 // ═══════════════════════════════════════════════════════════════════════════
 // Hide/Unhide
 // - 非向量：boundary = lastSummarizedMesId
