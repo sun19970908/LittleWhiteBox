@@ -14,6 +14,7 @@ import {
     sleepWithAbort,
 } from './planner-retry.js';
 import { logScenePlannerDiagnostic } from './scene-planner-debug.js';
+import { markToolProtocolMessages } from '../../agent-core/adapters/tool-protocol-marker.js';
 const ERROR_SOURCE = "modules/draw/shared/scene-planner-executor.js";
 
 
@@ -34,6 +35,20 @@ function annotateRetryCount(error, retryCount) {
     return error;
 }
 
+const PLANNER_MESSAGE_ROLES = new Set(['system', 'user', 'assistant']);
+
+// 请求可含多条消息与 system/assistant 角色；但没有任何 user 消息时模型拿不到任务正文，直接判无效。
+function isValidPlannerMessages(messages) {
+    if (!Array.isArray(messages)) return false;
+    let hasUser = false;
+    for (const message of messages) {
+        if (!message || typeof message !== 'object' || Array.isArray(message)) return false;
+        if (!PLANNER_MESSAGE_ROLES.has(message.role) || typeof message.content !== 'string') return false;
+        if (message.role === 'user') hasUser = true;
+    }
+    return hasUser;
+}
+
 function assertPreparedScenePlanner(prepared) {
     const prompt = prepared?.planner?.prompt;
     const validationContext = prepared?.planner?.validationContext;
@@ -41,7 +56,7 @@ function assertPreparedScenePlanner(prepared) {
         || prepared.version !== 1
         || !prompt
         || typeof prompt.systemPrompt !== 'string'
-        || !Array.isArray(prompt.messages)
+        || !isValidPlannerMessages(prompt.messages)
         || !validationContext?.sceneSource) {
         throw new ScenePlannerError('Scene Planner 预处理结果无效。', 'PREPARED_INPUT_INVALID');
     }
@@ -57,7 +72,7 @@ export function createPreparedScenePlannerTask(prepared) {
     const input = assertPreparedScenePlanner(prepared);
     return {
         systemPrompt: input.planner.prompt.systemPrompt,
-        messages: input.planner.prompt.messages,
+        messages: markToolProtocolMessages(input.planner.prompt.messages),
         tools: [input.planner.tool],
         toolChoice: 'required',
     };
