@@ -169,7 +169,7 @@ ${SUMMARY_ALIAS_RULES}
     "user_insight": "本轮主要新增了哪些情节、关系或事实，哪些细节值得进入可召回摘要",
     "dedup_analysis": "已有X个事件，本次识别Y个新事件",
     "fact_changes": "识别到的事实变化概述",
-    "coverage_check": "本批楼层覆盖自检：写出所有事件 marker 的并集 S（区间列表），逐区间确认 S 是否完全覆盖 [#N, #M]，任一缺失楼必须补事件或拓 marker"
+    "coverage_check": "本批楼层覆盖自检：写出所有事件 marker 的并集 S（区间列表），逐区间确认 S 是否完全覆盖 [#N, #M] 内所有剧情楼层；非剧情楼层不计入覆盖，任一剧情楼层缺失必须补事件或拓 marker"
   },
   "keywords": [
     {"text": "综合历史+新内容的全剧情关键词(5-10个)", "weight": "核心|重要|一般"}
@@ -208,8 +208,12 @@ ${SUMMARY_ALIAS_RULES}
 ${SUMMARY_PLAIN_STYLE_RULES}
 
 ## 楼层覆盖约束（确保 marker 无空洞）
-- 所有事件 marker 取并集 S 必须完全覆盖本批所有楼层，无任何一楼遗漏
-- 输出前在 mindful_prelude.coverage_check 字段写"已确认本批所有楼层全覆盖"
+- 所有事件 marker 取并集 S 必须完全覆盖本批所有【剧情楼层】，无任何一楼遗漏
+- 【非剧情楼层】不参与剧情总结，指：OOC/OOB 对话（[OOC]、[OOC: …]、（OOC）、（（OOC））、<ooc> 等写法）、系统提示（[系统]、【系统】）、元指令与状态栏（<state> 等）
+- 非剧情楼层不产出事件、不要求被 marker 覆盖，marker 区间可以跨过它们；事件 marker 不得完全落在非剧情楼层上，若某事件的全部来源楼层都是非剧情楼层，删掉该事件
+- 同一楼既有剧情正文又有 OOC 段时，只取剧情正文部分，OOC 段内容不得写入任何字段
+- 若本批全部为非剧情楼层，events 必须为 []
+- 输出前在 mindful_prelude.coverage_check 字段写"已确认本批剧情楼层全覆盖"
 </meta_protocol>`;
 
 export const DEFAULT_SUMMARY_ASSISTANT_CHECK_PROMPT = `Content review initiated...

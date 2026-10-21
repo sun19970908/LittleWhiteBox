@@ -1,5 +1,5 @@
 {
-  "buildId": "e7173a255a1dcbf2dfaa",
+  "buildId": "95b4cafa2cc12ada5ee0",
   "entries": {
     "apps/assistant": {
       "file": "apps/assistant-DqMVRgxE.js",
@@ -247,7 +247,7 @@
         "shared/dexie-CLpqrnFC.js",
         "shared/workspace-repository-Br6MrrA7.js",
         "shared/chat-contract-BJ3okMcH.js",
-        "shared/prompt-Bc8n0VRv.js",
+        "shared/prompt-BQxvDS5y.js",
         "shared/client-DxBm_3Yj.js",
         "shared/plan-ledger-BD8OkECf.js",
         "shared/reasoning-capabilities-uLAQtI7I.js",
@@ -1264,7 +1264,7 @@
       "dynamicImports": [],
       "css": []
     },
-    "shared/prompt-Bc8n0VRv.js": {
+    "shared/prompt-BQxvDS5y.js": {
       "imports": [
         "shared/chunk-b3L32Ng1.js",
         "shared/preload-helper-CBBx94LT.js",
@@ -1278,7 +1278,7 @@
         "shared/async-errors-C4kfchr9.js"
       ],
       "dynamicImports": [
-        "shared/prompt-Bc8n0VRv.js"
+        "shared/prompt-BQxvDS5y.js"
       ],
       "css": []
     },
