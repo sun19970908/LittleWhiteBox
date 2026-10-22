@@ -24,6 +24,8 @@ import TaskRecruitment from './TaskRecruitment.vue';
 import TaskConfirmDialog from './TaskConfirmDialog.vue';
 import { taskLanes, taskMoney } from './task-display.js';
 import './tasks.css';
+import { observeBackgroundTask } from '../../../../../shared/common/async-errors.js';
+
 
 type MainPage = 'board' | 'active' | 'published' | 'history';
 type TasksPage = MainPage | 'settings' | 'publish' | 'detail' | 'listing' | 'recruit';
@@ -31,7 +33,7 @@ type Confirmation = { kind: 'publish'; form: TaskPublishedForm }
     | { kind: 'cancel'; task: TaskRecord; scopeId: string | null }
     | { kind: 'assign'; task: TaskRecord; candidateId: string };
 const REQUEST_TIMEOUT_MS = 35_000;
-const SAVE_CONFIRMATION_FAILED = '检查保存失败，尚不能确认账目是否写入。请检查连接后再试。';
+const SAVE_CONFIRMATION_FAILED = '保存请求失败，请检查连接后重试。';
 const props = defineProps<XiaobaiOsAppProps>();
 
 function fallbackState(): TasksPresentation {
@@ -54,7 +56,7 @@ function fallbackState(): TasksPresentation {
     };
 }
 
-function initialState(value: unknown): TasksPresentation {
+function createInitialState(value: unknown): TasksPresentation {
     return value && typeof value === 'object'
         ? structuredClone(toRaw(value as TasksPresentation))
         : fallbackState();
@@ -68,7 +70,7 @@ function resultBody(response: unknown): unknown {
     return isRecord(response) ? response.result : null;
 }
 
-const state = ref(initialState(props.initialState));
+const state = ref(createInitialState(props.initialState));
 const page = ref<TasksPage>('board');
 const parents: Partial<Record<TasksPage, TasksPage>> = {};
 const detail = ref<TaskDetailPresentation | null>(null);
@@ -112,7 +114,7 @@ const writeDisabledReason = computed(() => {
     if (writeBusy.value) {return '正在处理上一项任务操作';}
     if (state.value.status === 'loading') {return '正在加载任务';}
     if (state.value.status === 'saving') {return '任务与资金正在保存';}
-    if (state.value.status === 'unconfirmed') {return '请先检查上一次是否保存成功';}
+    if (state.value.status === 'unconfirmed') {return '正在保存，请稍候';}
     if (state.value.status === 'conflict') {return '请先使用已保存版本';}
     if (state.value.status === 'blocked') {return state.value.message || '任务暂时不可用';}
     if (state.value.generationActive) {return '正在生成内容，请稍后';}
@@ -142,7 +144,7 @@ function applyState(next: TasksPresentation): void {
             : [...next.active, ...next.recruiting, ...next.history.items]
                 .find(task => task.taskId === displayedTask.taskId);
         if (latest && latest.eventId !== displayedTask.eventId) {
-            void openDetail(latest.taskId, true, selectedDetailScopeId.value);
+            observeBackgroundTask(openDetail(latest.taskId, true, selectedDetailScopeId.value), { source: import.meta.url, operation: "applyState" });
         }
     }
 }
@@ -387,7 +389,7 @@ function go(next: TasksPage, restore = false): void {
     };
     detailRequest += 1;
     page.value = next;
-    void nextTick(() => {
+    observeBackgroundTask(nextTick(() => {
         if (!mounted || page.value !== next) {return;}
         const position = restore ? pagePositions[next] : undefined;
         content.value?.scrollTo(0, position?.scrollTop ?? 0);
@@ -396,7 +398,7 @@ function go(next: TasksPage, restore = false): void {
                 .find(button => button.dataset.navigationId === position.focusKey)
             : undefined;
         (trigger ?? content.value)?.focus({ preventScroll: true });
-    });
+    }), { source: import.meta.url, operation: "go" });
 }
 
 const back = useAppBack(() => {
@@ -414,7 +416,7 @@ function openPublished(commission: OwnedCommission): void {
     if (task.status === 'recruiting' && scopeId === state.value.currentScopeId) {
         selectedTaskId.value = task.taskId;
         go('recruit');
-    } else {void openDetail(task.taskId, false, scopeId);}
+    } else {observeBackgroundTask(openDetail(task.taskId, false, scopeId), { source: import.meta.url, operation: "openPublished" });}
 }
 
 function showPublishedHistory(): void {
@@ -437,9 +439,9 @@ function askAssign(task: TaskRecord, candidateId: string): void {
 function confirmAction(): void {
     const action = confirmation.value;
     if (!action) {return;}
-    if (action.kind === 'publish') {void confirmPublish();}
-    else if (action.kind === 'cancel') {void cancelTask(action.task);}
-    else {void assignTask(action.task, action.candidateId);}
+    if (action.kind === 'publish') {observeBackgroundTask(confirmPublish(), { source: import.meta.url, operation: "confirmAction" });}
+    else if (action.kind === 'cancel') {observeBackgroundTask(cancelTask(action.task), { source: import.meta.url, operation: "confirmAction" });}
+    else {observeBackgroundTask(assignTask(action.task, action.candidateId), { source: import.meta.url, operation: "confirmAction" });}
 }
 
 
@@ -474,11 +476,11 @@ onBeforeUnmount(() => {
             <button v-if="isMainPage" type="button" class="tasks-icon-button" aria-label="任务设置" data-navigation-id="settings" @click="go('settings')"><TaskIcon name="settings" /></button>
         </header>
         <div class="tasks-notices" aria-live="polite">
-            <aside v-if="state.message || (errorMessage && !confirmation) || actionMessage" class="tasks-notice" :class="{ 'is-error': Boolean(errorMessage) || state.status === 'conflict' || state.status === 'blocked', 'is-warning': requiresConfirmation }" role="status">
-                <div><p>{{ (confirmation ? '' : errorMessage) || state.message || actionMessage }}</p><button v-if="requiresConfirmation" type="button" :disabled="saveBusy" @click="confirmSave">{{ saveBusy ? '正在检查…' : '检查保存' }}</button><button v-else-if="state.status === 'conflict'" type="button" :disabled="saveBusy" @click="adoptServer">{{ saveBusy ? '正在加载…' : '使用已保存版本' }}</button><button v-else-if="state.status === 'blocked'" type="button" :disabled="saveBusy" @click="retryRead">{{ saveBusy ? '正在读取…' : '重新加载' }}</button></div>
+            <aside v-if="state.writeState !== 'unconfirmed' && (state.message || (errorMessage && !confirmation) || actionMessage)" class="tasks-notice" :class="{ 'is-error': Boolean(errorMessage) || state.status === 'conflict' || state.status === 'blocked' || state.writeState === 'failed' }" role="status">
+                <div><p>{{ (confirmation ? '' : errorMessage) || state.message || actionMessage }}</p><button v-if="requiresConfirmation" type="button" :disabled="saveBusy" @click="confirmSave">{{ saveBusy ? '正在保存…' : '重试保存' }}</button><button v-else-if="state.status === 'conflict'" type="button" :disabled="saveBusy" @click="adoptServer">{{ saveBusy ? '正在加载…' : '使用已保存版本' }}</button><button v-else-if="state.status === 'blocked'" type="button" :disabled="saveBusy" @click="retryRead">{{ saveBusy ? '正在读取…' : '重新加载' }}</button></div>
                 <button v-if="!state.message" type="button" class="tasks-icon-button" aria-label="关闭提示" @click="errorMessage = ''; actionMessage = ''"><TaskIcon name="close" /></button>
             </aside>
-            <aside v-if="state.generation.message && !state.message" class="tasks-notice" role="status"><p>{{ state.generation.message }}</p></aside>
+            <aside v-if="!requiresConfirmation && state.generation.message && !state.message" class="tasks-notice" role="status"><p>{{ state.generation.message }}</p></aside>
         </div>
         <div class="tasks-workspace" :class="{ 'is-main': isMainPage }">
             <div ref="content" class="tasks-content" tabindex="-1">

@@ -177,7 +177,7 @@ declare module '*.js' {
         overlayCss?: string;
         iframeCss?: string;
     }): Promise<HTMLElement>;
-    export function loadFirstPartyIframeCacheKey(path: string): Promise<string>;
+    export function loadFirstPartyIframeCacheKey(): Promise<string>;
     export function isTrustedMessage(event: MessageEvent, iframe: HTMLIFrameElement | null, source: string): boolean;
     export function postToIframe(iframe: HTMLIFrameElement, message: unknown, source: string): boolean;
     export function createLightBrakeController(options?: {
@@ -274,6 +274,7 @@ declare module '*.js' {
     export function getWrapperScript(): string;
     export function replaceXbGetVarInString(value: string): string;
     export function createAgentSettingsPanel(deps?: Record<string, unknown>): {
+        completePresetSave(requestId: string, outcome: { ok: boolean; config?: Record<string, unknown> }): boolean;
         getActiveProviderConfig(options?: Record<string, unknown>): Record<string, unknown>;
         syncConfigToForm(root: ParentNode): void;
         bindSettingsPanelEvents(root: ParentNode): void;

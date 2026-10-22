@@ -105,10 +105,12 @@ export function createDrawAgentSettingsSurface(options = {}) {
             try {
                 result = await persistSettings(payload);
             } catch (error) {
+                settingsPanel.completePresetSave(requestId, { ok: false });
                 completeSave(requestId, { ok: false, error: describeError(error) });
                 return { ok: false };
             }
             if (!result?.ok) {
+                settingsPanel.completePresetSave(requestId, { ok: false });
                 completeSave(requestId, {
                     ok: false,
                     error: String(result?.error || '共享 Agent API 配置保存失败'),
@@ -116,13 +118,16 @@ export function createDrawAgentSettingsSurface(options = {}) {
                 return { ok: false };
             }
 
-            state.config = normalizeAgentConfig(result.config || payload || {});
-            state.configDraft = null;
-            state.configDirty = false;
-            state.configFormSyncPending = true;
+            const confirmed = normalizeAgentConfig(result.config || payload || {});
+            if (!settingsPanel.completePresetSave(requestId, { ok: true, config: confirmed })) {
+                state.config = confirmed;
+                state.configDraft = null;
+                state.configDirty = false;
+                state.configFormSyncPending = true;
+            }
             completeSave(requestId, { ok: true });
-            options.onSaved?.(state.config);
-            return { ok: true, config: state.config };
+            options.onSaved?.(confirmed);
+            return { ok: true, config: confirmed };
         },
         getRuntimeSummaryText: buildRuntimeSummary,
     });
@@ -143,6 +148,7 @@ export function createDrawAgentSettingsSurface(options = {}) {
     }
 
     function beginSave(requestId) {
+        refreshSequence += 1;
         clearResetTimer();
         state.configSave = { status: 'saving', requestId, error: '' };
         state.inlineToastText = '正在保存共享 API 配置…';
@@ -174,7 +180,7 @@ export function createDrawAgentSettingsSurface(options = {}) {
 
     function handleRootClick(event) {
         if (event?.target?.closest?.('[data-draw-agent-settings-retry]')) {
-            void refresh({ force: true }).catch(() => {});
+            void refresh({ force: true }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "handleRootClick" }, caughtError); });
         }
     }
 
@@ -207,8 +213,7 @@ export function createDrawAgentSettingsSurface(options = {}) {
         bindRoot(root);
         const mode = state.loading ? 'loading' : state.loadError ? 'error' : 'panel';
         if (mode !== renderedMode) {
-            // The markup comes exclusively from our first-party AgentCore renderer.
-            // eslint-disable-next-line no-unsanitized/property
+            // eslint-disable-next-line no-unsanitized/property -- The markup comes exclusively from our first-party AgentCore renderer.
             root.innerHTML = buildDrawAgentSettingsSurfaceMarkup(state);
             renderedMode = mode;
             boundPanel = null;
@@ -231,6 +236,7 @@ export function createDrawAgentSettingsSurface(options = {}) {
 
     async function refresh(refreshOptions = {}) {
         if (destroyed) return null;
+        if (state.configSave.status === 'saving') return state.config;
         refreshSequence += 1;
         const sequence = refreshSequence;
         const force = refreshOptions.force === true;
@@ -274,6 +280,7 @@ export function createDrawAgentSettingsSurface(options = {}) {
     function destroy() {
         destroyed = true;
         clearResetTimer();
+        settingsPanel.destroy();
         boundRoot?.removeEventListener?.('click', handleRootClick);
         boundRoot?.removeEventListener?.('input', markConfigDirty, true);
         boundRoot?.removeEventListener?.('change', markConfigDirty, true);

@@ -4,12 +4,15 @@ import { captureImageCardTarget, readImageCardTarget } from './image-card-target
 import { generatePreparedChatImages } from './prepared-chat-images.js';
 import { getSlotActivity } from './slot-activity.js';
 import { getPendingImageJobSlots, discardPendingImageSlot } from './pending-image-jobs.js';
-import { discardChatImagePlacement, commitChatImageRemoval, rollbackChatImageRemoval } from './chat-image-placement.js';
-import { isMessageBeingEdited, renderPreviewsForMessage, syncRenderedMessageFromState, clearDrawSavedEntry, syncDrawSavedFromPreview, getDrawSavedPreview } from './draw-common.js';
+import { discardChatImagePlacement, commitChatImageRemoval } from './chat-image-placement.js';
+import { isMessageBeingEdited, renderPreviewsForMessage, removeDrawSavedEntry, clearDrawSavedEntry, syncDrawSavedFromPreview, getDrawSavedPreview } from './draw-common.js';
+import { withdrawEditedImagePlacements } from './chat-image-tag-migration.js';
+import { getImageChatIdentity } from './chat-image-persistence.js';
 import { isSceneSlotAlive } from './scene-placement.js';
 import { saveChatAndConfirm, withConfirmableChatMutation } from './confirmable-chat-save.js';
 import { findImageJobDeliverySlot } from './image-job-delivery-target.js';
 import { DRAW_SLOT_COPY, hasPreviewImage } from './image-record.js';
+import { withDrawActionFeedback } from './draw-action-feedback.js';
 
 const redraws = new Map();
 
@@ -50,17 +53,20 @@ export function redrawImageCard(provider, container) {
         // 否则点击单张的入口会再弹一次同样的错误。
         return floor.operation.then(
             () => (floor.claims.has(slotId) ? undefined : redrawImageCard(provider, container)),
-            () => undefined,
+            (caughtError) => { console.warn({ source: import.meta.url, operation: "redrawImageCard" }, caughtError); },
         );
     }
-    if (getSlotActivity(slotId)) return Promise.resolve();
+    if (getSlotActivity(slotId)) {
+        globalThis.toastr?.info?.(DRAW_SLOT_COPY.slotBusy);
+        return renderPreviewsForMessage(Number(container.dataset.mesid), { refreshSlotIds: [slotId] });
+    }
     const operation = redraw(provider, container).finally(() => redraws.delete(slotId));
     redraws.set(slotId, operation);
     return operation;
 }
 
 // 重生本楼失败项：把当前楼层（当前 swipe）上所有显示“失败 / 结果未知”卡片的图片，作为同一批任务重新提交。
-// 沿用各张图自己保存的 TAG 与提示词，不重新规划；每张图与单张“重新生成”一样进入生成状态，
+// 沿用各张图保存的场景、角色和追加词，套用当前绘图参数，不重新规划；每张图与单张“重新生成”一样进入生成状态，
 // 请求仍由 Provider 的串行队列依次执行。已在生成、已在排队或有后台任务的格子会被跳过。
 const FLOOR_REDRAW_PREFIX = 'floor-failed:';
 // 进行中的整楼重生认领了哪些格子（整楼键 → 格子集合）。在收集阶段第一个 await 之前就登记候选格子，
@@ -109,7 +115,7 @@ export async function retryFloorFailedImageCards(provider, container) {
     // 同一楼层已有整楼重生在进行：本次点击只是并入同一个操作，结果和错误提示由第一次点击负责，不重复弹提示。
     const joining = redraws.has(floorRedrawKey(container));
     try {
-        const result = await redrawFloorFailedImageCards(provider, container);
+        const result = await withDrawActionFeedback(container, () => redrawFloorFailedImageCards(provider, container));
         if (joining || !result) return;
         if (result.submitted === 0) globalThis.toastr?.info?.('本楼层没有可重新生成的失败图片');
         else if (result.skipped > 0) {
@@ -151,9 +157,9 @@ async function redrawFloorFailed(provider, container, messageId, floor = { claim
             const tags = record?.tags ?? card.dataset.tags;
             if (!tags?.trim()) { claims.delete(slotId); skipped += 1; continue; }
             slotIds.push(slotId);
+            // 不传历史合成负向：编译时使用当前全局负向与本图已保存的角色 uc。
             tasks.push({ scene: tags, characterPrompts: record?.characterPrompts ?? [],
                 post_prompt: record?.postPrompt ?? '',
-                negativePrompt: record?.negativePrompt ?? undefined,
                 placement: { mode: 'existing', slotId } });
         }
         if (!tasks.length) return { submitted: 0, skipped };
@@ -179,7 +185,10 @@ async function redraw(provider, container) {
     try {
         // A refresh drops runtime activity, not the submitted backend job. Do
         // not turn a journal read failure into permission for a paid resubmit.
-        if ((await getPendingImageJobSlots()).has(slotId)) return;
+        if ((await getPendingImageJobSlots()).has(slotId)) {
+            globalThis.toastr?.info?.(DRAW_SLOT_COPY.slotBusy);
+            return;
+        }
         const record = await readImageCardTarget(target);
         target.assertCurrent();
         const tags = record?.tags ?? container.dataset.tags;
@@ -187,7 +196,6 @@ async function redraw(provider, container) {
         return await generatePreparedChatImages(provider, { ctx, message, messageId, sourceText, swipeIndex,
             tasks: [{ scene: tags, characterPrompts: record?.characterPrompts ?? [],
                 post_prompt: record?.postPrompt ?? '',
-                negativePrompt: record?.negativePrompt ?? undefined,
                 placement: { mode: 'existing', slotId } }] });
     } finally {
         if (String(getContext().chatId) === String(ctx.chatId)) await renderPreviewsForMessage(messageId, { refreshSlotIds: [slotId] });
@@ -200,34 +208,49 @@ export async function removeChatImageSlot(container) {
     const slotId = container.dataset.slotId;
     const message = ctx.chat[messageId];
     const swipeIndex = message?.swipe_id ?? 0;
-    const isCurrentTarget = () => String(getContext().chatId) === String(ctx.chatId)
+    const identity = getImageChatIdentity(ctx);
+    const isCurrentTarget = () => getImageChatIdentity(getContext()) === identity
         && getContext().chat[messageId] === message && (message.swipe_id ?? 0) === swipeIndex;
-    const assertRemovable = () => {
-        if (!isCurrentTarget() || isMessageBeingEdited(messageId) || !isSceneSlotAlive(message.mes, slotId)) {
-            throw new Error(DRAW_SLOT_COPY.sourceChanged);
-        }
-    };
-    if (!message || !isSceneSlotAlive(message.mes, slotId)) throw new Error(DRAW_SLOT_COPY.sourceChanged);
-    await withConfirmableChatMutation(ctx, async () => {
-        assertRemovable();
-        // Mark only this item, not its batch. This intent precedes cleanup and
-        // survives refresh even if native persistence of the deletion fails.
-        getSlotActivity(slotId)?.discard?.();
-        discardChatImagePlacement(slotId);
-        await discardPendingImageSlot(slotId);
-        assertRemovable();
-        const change = commitChatImageRemoval({ message, swipeIndex, slotId });
-        try {
-            await saveChatAndConfirm({ ctx, verify: persisted => !findImageJobDeliverySlot(persisted, slotId) });
-        } catch (error) {
-            if (error.saveAttempted === false && isCurrentTarget()) {
-                rollbackChatImageRemoval(change);
-            }
-            throw error;
-        }
-        if (isCurrentTarget()) await clearDrawSavedEntry(messageId, slotId);
+    if (!message || !isCurrentTarget() || isMessageBeingEdited(messageId) || !isSceneSlotAlive(message.mes, slotId)) {
+        throw new Error(DRAW_SLOT_COPY.removeTargetChanged);
+    }
+    // Acknowledgement is the removal itself, before the first storage/lock/network
+    // await. In-flight renders compare the changed source and cannot repaint it.
+    getSlotActivity(slotId)?.discard?.();
+    discardChatImagePlacement(slotId);
+    commitChatImageRemoval({ message, swipeIndex, slotId });
+    removeDrawSavedEntry(message, slotId);
+    const withdrawal = withdrawEditedImagePlacements(ctx, messageId);
+    container.remove();
+
+    try {
+        await Promise.all([withdrawal, discardPendingImageSlot(slotId)]);
+    } catch (cause) {
+        throw new Error(DRAW_SLOT_COPY.removeLocalSaveFailed, { cause });
+    }
+    try {
+        await withConfirmableChatMutation(ctx, async () => {
+            const assertSaveTarget = () => {
+                if (!isCurrentTarget() || findImageJobDeliverySlot(ctx.chat, slotId)) {
+                    throw new Error(DRAW_SLOT_COPY.removeTargetChanged);
+                }
+            };
+            assertSaveTarget();
+            await saveChatAndConfirm({ ctx: { ...ctx, saveChat: () => {
+                // Web Locks may wait too: never let a late deletion save B's chat.
+                assertSaveTarget();
+                return ctx.saveChat();
+            } }, verify: persisted => !findImageJobDeliverySlot(persisted, slotId) });
+        });
+    } catch (cause) {
+        // Keep local removal and all image records. Never silently roll back the
+        // visible action or delete paid data when only the chat save is uncertain.
+        throw new Error(DRAW_SLOT_COPY.removeSaveFailed, { cause });
+    }
+    try {
         for (const record of await getPreviewsBySlot(slotId)) await deletePreview(record.imgId);
         await clearSlotSelection(slotId);
-        await syncRenderedMessageFromState(messageId, { chatId: ctx.chatId, expectedMessage: message });
-    });
+    } catch (cause) {
+        throw new Error(DRAW_SLOT_COPY.removeCleanupFailed, { cause });
+    }
 }

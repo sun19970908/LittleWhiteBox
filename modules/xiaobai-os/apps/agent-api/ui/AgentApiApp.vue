@@ -7,13 +7,16 @@ import '../../../../agent-core/ui/settings-surface.css';
 import type { XiaobaiOsAppProps } from '../../../shell/app-contract.js';
 import type { AgentApiClientState, AgentApiConnectionResult } from '../types.js';
 import './agent-api.css';
+import { observeBackgroundTask } from '../../../../../shared/common/async-errors.js';
+
 
 type UnknownRecord = Record<string, unknown>;
-type SaveRequest = { payload?: UnknownRecord };
+type SaveRequest = { requestId: string; payload?: UnknownRecord };
 type Panel = {
     getActiveProviderConfigFromForm: (root: ParentNode) => UnknownRecord;
     syncConfigToForm: (root: ParentNode) => void;
     bindSettingsPanelEvents: (root: ParentNode) => void;
+    completePresetSave: (requestId: string, outcome: { ok: boolean; config?: UnknownRecord }) => boolean;
 };
 
 const NETWORK_TIMEOUT_MS = 130_000;
@@ -72,13 +75,16 @@ async function handleSaveConfig(request: SaveRequest): Promise<void> {
         if (result.ok !== true || !result.config) {
             throw new Error(result.error || '模型设置保存失败');
         }
-        panelState.config = normalizeAgentConfig(result.config);
-        panelState.configDraft = null;
-        panelState.configDirty = false;
-        panelState.configFormSyncPending = true;
+        if (!panel.completePresetSave(request.requestId, { ok: true, config: result.config })) {
+            panelState.config = normalizeAgentConfig(result.config);
+            panelState.configDraft = null;
+            panelState.configDirty = false;
+            panelState.configFormSyncPending = true;
+        }
         panelState.configSave = { status: 'success', requestId: '', error: '' };
         panelState.inlineToastText = '设置已保存';
     } catch (error) {
+        panel.completePresetSave(request.requestId, { ok: false });
         const message = describeError(error);
         panelState.configSave = { status: 'error', requestId: '', error: message };
         panelState.inlineToastText = message;
@@ -120,8 +126,7 @@ const panel = createAgentSettingsPanel({
 function renderPanel(): void {
     const root = panelRoot.value;
     if (!root || !panelState.config) {return;}
-    // This markup is produced by the first-party Agent Core form renderer.
-    // eslint-disable-next-line no-unsanitized/property
+    // eslint-disable-next-line no-unsanitized/property -- This markup is produced by the first-party Agent Core form renderer.
     root.innerHTML = buildAgentSettingsPanelMarkup({
         configSave: panelState.configSave,
         inlineToastText: panelState.inlineToastText,
@@ -142,7 +147,7 @@ function applyClientState(next: AgentApiClientState): void {
         panelState.configDirty = false;
         panelState.configFormSyncPending = true;
     }
-    void nextTick(renderPanel);
+    observeBackgroundTask(nextTick(renderPanel), { source: import.meta.url, operation: "applyClientState" });
 }
 
 async function testConnection(): Promise<void> {

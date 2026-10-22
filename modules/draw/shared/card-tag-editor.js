@@ -1,8 +1,18 @@
 import { getCardPreview, storePreview, updatePreviewRecord, setSlotSelection } from './gallery-cache.js';
 import { materializeDrawSavedPreview, syncDrawSavedFromPreview } from './draw-common.js';
 import { captureImageCardTarget, readImageCardTarget } from './image-card-target.js';
-import { createImageIdentifiers } from './prepared-chat-images.js';
+import { createImageIdentifiers } from './prepared-image-placement.js';
 import { DRAW_SLOT_COPY, DRAW_SLOT_ERRORS, PreviewStatus } from './image-record.js';
+
+export function getCharacterTagEditGroups(characterPrompts = []) {
+    return (characterPrompts || []).flatMap((character, index) => {
+        const name = character.name || `角色 ${index + 1}`;
+        return [
+            { label: name, value: character.prompt || '', type: 'char', index },
+            { label: `${name} 负向`, value: character.uc || '', type: 'uc', index },
+        ];
+    });
+}
 
 export async function readCardTagEditor(container) {
     const target = captureImageCardTarget(container);
@@ -36,10 +46,18 @@ export async function persistCardTagEdits(container, compile) {
         messageId, chatId: String(ctx.chatId), expectedImgId: imgId,
     });
     assertEditorTarget();
+    // 角色负向（uc）编辑框：面板里有才覆盖，没有就保持记录原值。
+    // 放在角色 prompt 之后读，索引与 data-index 一一对应。
     const characterPrompts = Array.isArray(record?.characterPrompts)
         ? record.characterPrompts.map((character, index) => {
-            const field = panel.querySelector(`textarea[data-type="char"][data-index="${index}"]`);
-            return field ? { ...character, prompt: field.value.trim() } : character;
+            const promptField = panel.querySelector(`textarea[data-type="char"][data-index="${index}"]`);
+            const ucField = panel.querySelector(`textarea[data-type="uc"][data-index="${index}"]`);
+            if (!promptField && !ucField) return character;
+            return {
+                ...character,
+                ...(promptField ? { prompt: promptField.value.trim() } : {}),
+                ...(ucField ? { uc: ucField.value.trim() } : {}),
+            };
         }) : [];
     // 追加位（post_prompt）编辑框可选：面板里有就一起保存并交给 compile，没有就不动记录
     const postPromptField = panel.querySelector('textarea[data-type="post_prompt"]');

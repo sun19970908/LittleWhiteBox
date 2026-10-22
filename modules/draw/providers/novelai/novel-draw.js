@@ -47,8 +47,10 @@ import {
     updateSharedDrawSettingsPersistent,
     normalizeSharedCacheDays,
     mergeNovelDrawProviderSettingsIntoStorageRoot,
+    updateDrawSettingsRootPersistent,
 } from "../../shared/draw-settings.js";
-import { getLastDrawAgentDiagnostic } from "../../shared/draw-agent.js";
+import { normalizeMaxImagesOverride, resolveEffectiveMaxImages } from "../../shared/max-images-override.js";
+import { getDrawAgentDiagnosticHistory } from "../../shared/draw-agent.js";
 import {
     applyGroupPresetForCurrentChat,
     getActiveCharacterAvatars,
@@ -61,6 +63,13 @@ import { attachDrawAgentSettingsSurface } from "../../shared/agent-settings-surf
 import { createSerialImageRequestQueue } from "../../shared/serial-image-request-queue.js";
 import { characterLibraryFromSettings, selectEnabledCharacters } from "../../shared/character-library.js";
 import { restoreGroupPresetReferences } from "../../shared/character-group-presets.js";
+import {
+    findApiPreset,
+    pickApiConfig,
+    syncActiveApiPreset,
+} from "../../shared/api-presets.js";
+import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
+import { NOVEL_API_FIELDS, NOVEL_API_PRESET_OPTIONS, normalizeNovelApiConfig, normalizeNovelApiPresets } from './novel-api-config.js';
 import { detectPresentCharacters } from "../../shared/present-characters.js";
 import { joinTags } from "../../shared/character-prompts.js";
 import { resolveAutoLearnCharacter } from "./novel-character-learning.js";
@@ -95,6 +104,7 @@ import {
     normalizeNovelPromptGuideOverrides,
 } from "./novel-prompts.js";
 import { parseNovelPromptPresetImport } from "./novel-prompt-import.js";
+import { layoutForStorage } from "../../shared/scene-planner-layout.js";
 import { createScenePlannerDefaultPresets, isPovPromptPreset, SCENE_PLANNER_PRESET_INSTALL_NOTICE } from "../../shared/scene-planner-presets.js";
 import {
     getNovelModelCapability,
@@ -147,21 +157,30 @@ import {
     buildImageHtml,
     buildFailedPlaceholderHtml,
     ensureDrawImageStyles,
+    showDrawTagEditor,
 } from "../../shared/draw-common.js";
 import { IMAGE_SAVE_BUTTON_HTML, IMAGE_SAVING_INDICATOR_HTML } from '../../shared/image-save-ui.js';
 import { replaceSceneSlotElements } from "../../shared/scene-slot-dom.js";
 import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
 import { createDrawImageSlotRegex, stripDrawImageSlots } from "../../shared/image-marker-syntax.js";
 import { ScenePlacementError, assertSceneSourceUnchanged } from "../../shared/scene-placement.js";
+import { retryScenePlanning } from "../../shared/planner-retry.js";
+import { pickNeighborAfterRemoval, reorderPresetsByIds } from "../../shared/preset-order.js";
 import { submitPreparedChatImages, registerPreparedImageProvider } from "../../shared/prepared-chat-images.js";
 import { prepareImageInput } from '../../shared/prepared-image-input.js';
 import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImagePhase, getFloorImageState, releaseFloorImageJob, observeFloorImageJob, failFloorImageJob, clearFloorImageJobs, resolveFloorImageJobTarget, rebaseFloorImageJobsAfterSwipeDeletion } from '../../shared/floor-image-job.js';
 import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
-import { persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
+import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
+import { getCharacterTagEditGroups, persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
+import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+
+const handleDelegatedClickEvent = observeAsyncCallback(handleDelegatedClick, { source: import.meta.url, operation: "handleDelegatedClick" });
+const handleFrameMessageEvent = observeAsyncCallback(handleFrameMessage, { source: import.meta.url, operation: "handleFrameMessage" });
+
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
 // ═══════════════════════════════════════════════════════════════════════════
@@ -311,7 +330,6 @@ const ErrorType = {
     SCENE_PLACEMENT: { code: 'scene_placement', label: '插图位置', desc: '正文位置已变化，未写入图片' },
     ABORTED: { code: 'aborted', label: '已取消', desc: '请求已取消' },
     UNKNOWN: { code: 'unknown', label: '错误', desc: '未知错误' },
-    CACHE_LOST: { code: 'cache_lost', label: '缓存丢失', desc: '图片缓存已过期' },
 };
 
 const DEFAULT_PARAMS_PRESET = {
@@ -346,21 +364,18 @@ const DEFAULT_SETTINGS = {
     configVersion: CONFIG_VERSION,
     updatedAt: 0,
     mode: 'manual',
-    apiKey: '',
-    apiBaseUrl: '',
-    sendMode: 'frontend',
-    useImageBackendJobs: false,
-    insecureTLS: false,
+    ...normalizeNovelApiConfig(),
+    apiPresets: [],
+    activeApiPresetId: null,
     selectedParamsPresetId: null,
     paramsPresets: [],
-    requestDelay: { min: 15000, max: 30000 },
-    timeout: 60000,
     useWorldInfo: false,    
     characterTags: [],
     autoLearnCharacters: false,
     autoLearnMode: 'new_only',
     autoLearnGroupId: '',
     overrideSize: 'default',
+    overrideMaxImages: null,
     showFloorButton: true,
     showFloatingButton: false,
     advancedMode: true,
@@ -744,35 +759,29 @@ function normalizeParamsPreset(preset, index) {
     };
 }
 
+/** 当前生效的 API 配置（timeout 在共享设置里，所以取运行时视图）。 */
+function getEffectiveNovelApiConfig() {
+    return normalizeNovelApiConfig(getRuntimeSettings());
+}
+
 function normalizeSettings(saved = {}) {
     const source = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
     const rawWorldbooks = source.worldbooks && typeof source.worldbooks === 'object'
         && !Array.isArray(source.worldbooks)
         ? source.worldbooks
         : {};
-    const rawDelay = source.requestDelay && typeof source.requestDelay === 'object'
-        ? source.requestDelay
-        : {};
     const merged = {
         configVersion: Number(source.configVersion) || 0,
         updatedAt: Number(source.updatedAt) || 0,
         mode: source.mode === 'auto' ? 'auto' : 'manual',
-        apiKey: String(source.apiKey || ''),
-        apiBaseUrl: String(source.apiBaseUrl || '').trim(),
-        sendMode: source.sendMode === 'backend' ? 'backend' : 'frontend',
-        useImageBackendJobs: source.useImageBackendJobs === true,
-        insecureTLS: source.insecureTLS === true,
+        ...normalizeNovelApiConfig(source),
+        ...normalizeNovelApiPresets(source),
         selectedParamsPresetId: source.selectedParamsPresetId == null
             ? null
             : String(source.selectedParamsPresetId),
         paramsPresets: Array.isArray(source.paramsPresets)
             ? source.paramsPresets.map(normalizeParamsPreset)
             : [],
-        requestDelay: {
-            min: Number(rawDelay.min) > 0 ? Number(rawDelay.min) : DEFAULT_SETTINGS.requestDelay.min,
-            max: Number(rawDelay.max) > 0 ? Number(rawDelay.max) : DEFAULT_SETTINGS.requestDelay.max,
-        },
-        timeout: Number(source.timeout) > 0 ? Number(source.timeout) : DEFAULT_SETTINGS.timeout,
         cacheDays: normalizeSharedCacheDays(source.cacheDays),
         useWorldInfo: source.useWorldInfo === true,
         characterTags: Array.isArray(source.characterTags) ? source.characterTags : [],
@@ -780,6 +789,7 @@ function normalizeSettings(saved = {}) {
         autoLearnMode: source.autoLearnMode,
         autoLearnGroupId: String(source.autoLearnGroupId || ''),
         overrideSize: String(source.overrideSize || 'default'),
+        overrideMaxImages: normalizeMaxImagesOverride(source.overrideMaxImages),
         showFloorButton: source.showFloorButton !== false,
         showFloatingButton: source.showFloatingButton === true,
         advancedMode: true,
@@ -836,7 +846,7 @@ function normalizeSettings(saved = {}) {
     }
     merged.promptPresets = merged.promptPresets.map((preset, index) => {
         const isPov = isPovPromptPreset(preset.name);
-        return {
+        const normalized = {
             id: String(preset.id || `prompt-${Date.now()}-${index}`),
             name: String(preset.name || `提示词预设 ${index + 1}`),
             topSystem: typeof preset.topSystem === 'string'
@@ -847,6 +857,10 @@ function normalizeSettings(saved = {}) {
                 : DEFAULT_PROMPT_CONFIG.sceneRules,
             modelGuideOverrides: normalizeNovelPromptGuideOverrides(preset.modelGuideOverrides),
         };
+        // 消息布局稀疏存储：只有偏离默认才带 layout，旧预设与默认布局的预设保持原样（字段缺席）。
+        const layout = layoutForStorage(preset.layout);
+        if (layout) normalized.layout = layout;
+        return normalized;
     });
     if (!merged.selectedPromptPresetId
         || !merged.promptPresets.some(preset => preset.id === merged.selectedPromptPresetId)) {
@@ -874,12 +888,13 @@ async function loadSettings() {
         if (!saved
             || saved.configVersion !== CONFIG_VERSION
             || Number(saved._promptTemplateVersion) !== PROMPT_TEMPLATE_VERSION
+            || saved.activeApiPresetId !== settingsCache.activeApiPresetId
             || promptUpgrade.migrated) {
             settingsCache.configVersion = CONFIG_VERSION;
             settingsCache.updatedAt = Date.now();
             const storageValue = mergeNovelDrawProviderSettingsIntoStorageRoot(saved, settingsCache);
             const savedMigration = await NovelDrawStorage.setAndSave(SERVER_FILE_KEY, storageValue, { silent: true });
-            if (!savedMigration) throw new Error('默认设置保存失败');
+            if (!savedMigration) throw new Error(API_PRESET_COPY.saveFailed);
         }
         settingsLoaded = true;
         if (saved && promptUpgrade.installed) {
@@ -1023,7 +1038,7 @@ async function persistSettingsNow(s, okText = '已保存', { notify = true, sile
 function persistSettings(s, okText = '已保存', options = {}) {
     const update = () => persistSettingsNow(s, okText, options);
     const result = settingsUpdateQueue.then(update, update);
-    settingsUpdateQueue = result.catch(() => {});
+    settingsUpdateQueue = result.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "persistSettings" }, caughtError); });
     return result;
 }
 
@@ -1067,7 +1082,39 @@ async function runSettingsPersistentUpdate(mutator, okText, options) {
 function updateSettingsPersistent(mutator, okText = '已保存', options = {}) {
     const update = () => runSettingsPersistentUpdate(mutator, okText, options);
     const result = settingsUpdateQueue.then(update, update);
-    settingsUpdateQueue = result.catch(() => {});
+    settingsUpdateQueue = result.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "updateSettingsPersistent" }, caughtError); });
+    return result;
+}
+
+// API 生效配置、选中预设与共享 timeout 在同一次存储事务中提交。
+function updateApiSettingsPersistent({ config, presetState, syncApiPreset = false }) {
+    const update = async () => {
+        if (!settingsLoaded) return false;
+        try {
+            const committed = await updateDrawSettingsRootPersistent((root) => {
+                const next = normalizeSettings(root);
+                if (presetState) Object.assign(next, presetState);
+                if (config) Object.assign(next, normalizeNovelApiConfig({ ...root, ...config }));
+                if (syncApiPreset) {
+                    next.apiPresets = syncActiveApiPreset(next.apiPresets, next.activeApiPresetId,
+                        normalizeNovelApiConfig(next), NOVEL_API_PRESET_OPTIONS);
+                }
+                next.configVersion = CONFIG_VERSION;
+                next.updatedAt = Date.now();
+                const merged = mergeNovelDrawProviderSettingsIntoStorageRoot(root, next);
+                if (config) merged.timeout = next.timeout;
+                return { ...merged, updatedAt: next.updatedAt };
+            }, { silent: false });
+            if (!committed) return false;
+            settingsCache = normalizeSettings(committed);
+            return true;
+        } catch (error) {
+            console.error('[NovelDraw] API settings save failed:', error);
+            return false;
+        }
+    };
+    const result = settingsUpdateQueue.then(update, update);
+    settingsUpdateQueue = result.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "updateApiSettingsPersistent" }, caughtError); });
     return result;
 }
 
@@ -1156,10 +1203,10 @@ async function notifySettingsUpdated() {
         refreshPresetSelect?.();
         updateAllSizeSelects?.();
         updateAutoModeUI?.();
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "notifySettingsUpdated" }, caughtError); }
 
     if (overlayCreated && frameReady) {
-        try { await sendInitData(); } catch {}
+        try { await sendInitData(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "notifySettingsUpdated" }, caughtError); }
     }
 }
 
@@ -1188,7 +1235,7 @@ async function loadMessagePackDecoderForResponse(response, controller) {
     try {
         return await loadMessagePackDecoder();
     } catch (error) {
-        await response.body?.cancel?.().catch(() => {});
+        await response.body?.cancel?.().catch((caughtError) => { console.debug({ source: import.meta.url, operation: "loadMessagePackDecoderForResponse" }, caughtError); });
         controller.abort();
         throw error;
     }
@@ -1380,7 +1427,7 @@ async function generateViaBackend({ url, legacyBaseUrl, apiKey, insecure, payloa
         const request = endpoint => {
             const body = JSON.stringify({ url: endpoint === NAI_BACKEND_GENERATE ? legacyBaseUrl : url,
                 key: apiKey, insecure: !!insecure, payload, timeout });
-            attempt.submit();
+            attempt.submit(signal);
             return fetch(endpoint, {
                 method: 'POST',
                 headers: getRequestHeaders(),
@@ -1392,7 +1439,7 @@ async function generateViaBackend({ url, legacyBaseUrl, apiKey, insecure, payloa
         // Compatibility with the upstream-released v1.0.1 server plugin.
         // Remove this fallback when that public backend API is retired.
         if (res.status === 404) {
-            await res.body?.cancel?.().catch(() => {});
+            await res.body?.cancel?.().catch((caughtError) => { console.debug({ source: import.meta.url, operation: "generateViaBackend" }, caughtError); });
             res = await request(NAI_BACKEND_GENERATE);
         }
     } catch (e) {
@@ -1426,7 +1473,7 @@ async function generateV5ViaBackend({ url, apiKey, insecure, payload, signal, ti
     let response;
     try {
         const body = JSON.stringify({ url, key: apiKey, insecure: !!insecure, payload, timeout });
-        attempt.submit();
+        attempt.submit(signal);
         response = await fetch(NAI_BACKEND_GENERATE_STREAM, {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -1506,7 +1553,7 @@ async function testApiConnection(apiKey, baseUrl, opts = {}) {
             // V5 never falls back to the test-line v1.1 protocol. Legacy models retain
             // the released v1.0.1 connection probe until that backend API is retired.
             if (!probe.multipart && res.status === 404) {
-                await res.body?.cancel?.().catch(() => {});
+                await res.body?.cancel?.().catch((caughtError) => { console.debug({ source: import.meta.url, operation: "testApiConnection" }, caughtError); });
                 res = await request(NAI_BACKEND_TEST);
             }
             if (res.status === 404) throw new NovelDrawError(`后端端点不存在。${SERVER_PLUGIN_COPY.install}`, ErrorType.NETWORK);
@@ -1533,7 +1580,7 @@ async function testApiConnection(apiKey, baseUrl, opts = {}) {
         });
         if (res.status === 401) throw new NovelDrawError('API Key 无效', ErrorType.AUTH);
         if (res.status === 400 || res.status === 402 || res.ok) {
-            await res.body?.cancel?.().catch(() => {});
+            await res.body?.cancel?.().catch((caughtError) => { console.debug({ source: import.meta.url, operation: "testApiConnection" }, caughtError); });
             return { success: true };
         }
         throw new NovelDrawError(`返回: ${res.status}`, ErrorType.NETWORK);
@@ -1661,7 +1708,7 @@ async function executePreparedNovelRequest(prepared, requestConfig, signal) {
         if (prepared.isV5) {
             body.append('request', new Blob([JSON.stringify(prepared.payload)], { type: 'application/json' }), 'blob');
         }
-        attempt.submit();
+        attempt.submit(controller.signal);
         const response = await fetch(prepared.apiUrl, {
             method: 'POST',
             headers: {
@@ -1964,8 +2011,7 @@ function setImageState(container, state) {
     if (dropdown) {
         const saveItem = dropdown.querySelector('[data-action="save-image"]');
         if (state === ImageState.PREVIEW && !saveItem) {
-            // Static draw-owned markup, without user input.
-            // eslint-disable-next-line no-unsanitized/method
+            // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
             dropdown.insertAdjacentHTML('afterbegin', IMAGE_SAVE_BUTTON_HTML);
         } else if (state !== ImageState.PREVIEW && saveItem) {
             saveItem.remove();
@@ -1973,8 +2019,7 @@ function setImageState(container, state) {
     }
 
     container.querySelector('.xb-nd-indicator')?.remove();
-    // Static draw-owned markup, without user input.
-    // eslint-disable-next-line no-unsanitized/method
+    // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
     if (state === ImageState.SAVING) container.insertAdjacentHTML('afterbegin', IMAGE_SAVING_INDICATOR_HTML);
     else if (state === ImageState.REFRESHING) container.insertAdjacentHTML('afterbegin', '<div class="xb-nd-indicator"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 生成中...</div>');
 }
@@ -2017,14 +2062,14 @@ async function navigateToImage(container, targetIndex) {
 
     setImageState(container, targetPreview.savedUrl ? ImageState.SAVED : ImageState.PREVIEW);
     updateNavControls(container, targetIndex, historyCount);
-    void warmSlotPreviewNeighbors(slotId, targetIndex).catch(() => {});
+    void warmSlotPreviewNeighbors(slotId, targetIndex).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     await setSlotSelection(slotId, targetPreview.imgId);
     if (targetPreview.savedUrl) {
         const messageId = parseInt(container.dataset.mesid);
-        void syncNovelDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch(() => {});
+        void syncNovelDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     } else {
         const messageId = parseInt(container.dataset.mesid);
-        void clearNovelDrawSavedEntry(messageId, slotId).catch(() => {});
+        void clearNovelDrawSavedEntry(messageId, slotId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     }
 
     imgEl.classList.remove(`sliding-${direction}`);
@@ -2095,8 +2140,8 @@ function handleTouchEnd(e) {
     const historyCount = parseInt(container.dataset.historyCount) || 1;
     const isSwipe = Math.abs(dx) > 50 || (Math.abs(dx) > 30 && dt < 300);
     if (isSwipe) {
-        if (dx < 0 && currentIndex < historyCount - 1) navigateToImage(container, currentIndex + 1);
-        else if (dx > 0 && currentIndex > 0) navigateToImage(container, currentIndex - 1);
+        if (dx < 0 && currentIndex < historyCount - 1) observeBackgroundTask(navigateToImage(container, currentIndex + 1), { source: import.meta.url, operation: "handleTouchEnd" });
+        else if (dx > 0 && currentIndex > 0) observeBackgroundTask(navigateToImage(container, currentIndex - 1), { source: import.meta.url, operation: "handleTouchEnd" });
     }
     touchState = null;
 }
@@ -2147,13 +2192,13 @@ async function handleDelegatedClick(e) {
             break;
         case 'edit-tags':
             container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open');
-            toggleEditPanel(container, true);
+            observeBackgroundTask(toggleEditPanel(container, true), { source: import.meta.url, operation: 'handleDelegatedClick' });
             break;
         case 'save-tags':
             await saveEditedTags(container);
             break;
         case 'cancel-edit':
-            toggleEditPanel(container, false);
+            observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'handleDelegatedClick' });
             break;
         case 'retry-image':
             await retryFailedImage(container);
@@ -2193,7 +2238,7 @@ function setupEventDelegation() {
     if (window._xbNovelEventsBound) return;
     window._xbNovelEventsBound = true;
 
-    document.addEventListener('click', handleDelegatedClick, { capture: true });
+    document.addEventListener('click', handleDelegatedClickEvent, { capture: true });
     document.addEventListener('touchstart', handleTouchStart, { passive: true });
     document.addEventListener('touchmove', handleTouchMove, { passive: false });
     document.addEventListener('touchend', handleTouchEnd, { passive: true });
@@ -2216,19 +2261,22 @@ async function handleImageClick(container) {
                 cont.dataset.historyCount = String(historyCount);
             }
             if (selected?.savedUrl) {
-                void syncNovelDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch(() => {});
+                void syncNovelDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             } else {
-                void clearNovelDrawSavedEntry(msgId, sid).catch(() => {});
+                void clearNovelDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             }
         },
         onSave: (imgId, url) => {
             const cont = document.querySelector(`.xb-nd-img[data-img-id="${imgId}"]`);
             if (cont) {
-                cont.querySelector('img').src = url;
                 setImageState(cont, ImageState.SAVED);
             }
             void getPreview(imgId)
-                .then(preview => preview && syncNovelDrawSavedFromPreview(messageId, preview, { savedUrl: url }))
+                .then(preview => {
+                    if (!preview) return;
+                    if (cont) cont.querySelector('img').src = getPreviewDisplayUrl(preview);
+                    return syncNovelDrawSavedFromPreview(messageId, preview, { savedUrl: url });
+                })
                 .catch(e => {
                     console.warn('[NovelDraw] 保存后的楼层持久化失败:', e);
                 });
@@ -2245,7 +2293,7 @@ async function handleImageClick(container) {
                 cont.dataset.historyCount = String(remainingPreviews.length);
                 updateNavControls(cont, 0, remainingPreviews.length);
             }
-            void syncNovelDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch(() => {});
+            void syncNovelDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onDelete" }, caughtError); });
         },
         onBecameEmpty: (sid, msgId, lastImageInfo) => {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
@@ -2258,10 +2306,9 @@ async function handleImageClick(container) {
                 errorType: '图片已删除',
                 errorMessage: '点击重试可重新生成'
             });
-            // Template-only UI markup built locally.
-            // eslint-disable-next-line no-unsanitized/property
+            // eslint-disable-next-line no-unsanitized/property -- Template-only UI markup built locally.
             cont.outerHTML = failedHtml;
-            void clearNovelDrawSavedEntry(msgId, sid).catch(() => {});
+            void clearNovelDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
         },
     });
 }
@@ -2299,32 +2346,26 @@ async function toggleEditPanel(container, show) {
 
         let html = `
             <div class="xb-nd-edit-group">
-                <div class="xb-nd-edit-group-label">🎬 场景</div>
+                <div class="xb-nd-edit-group-label">场景</div>
                 <textarea class="xb-nd-edit-input" data-type="scene">${escapeHtml(currentTags)}</textarea>
             </div>`;
 
-        if (preview?.characterPrompts?.length > 0) {
-            preview.characterPrompts.forEach((char, i) => {
-                const name = char.name || `角色 ${i + 1}`;
-                html += `
+        for (const group of getCharacterTagEditGroups(preview?.characterPrompts)) {
+            html += `
                 <div class="xb-nd-edit-group">
-                    <div class="xb-nd-edit-group-label">👤 ${escapeHtml(name)}</div>
-                    <textarea class="xb-nd-edit-input" data-type="char" data-index="${i}">${escapeHtml(char.prompt || '')}</textarea>
+                    <div class="xb-nd-edit-group-label">${escapeHtml(group.label)}</div>
+                    <textarea class="xb-nd-edit-input" aria-label="${escapeHtml(group.label)}" data-type="${group.type}" data-index="${group.index}">${escapeHtml(group.value)}</textarea>
                 </div>`;
-            });
         }
 
-        // Escaped data used in template.
-        // eslint-disable-next-line no-unsanitized/property
+        // eslint-disable-next-line no-unsanitized/property -- Escaped data used in template.
         scrollWrap.innerHTML = html;
-        editPanel.style.display = 'block';
-
         if (btnsPanel) {
             btnsPanel.style.opacity = '0.3';
             btnsPanel.style.pointerEvents = 'none';
         }
 
-        scrollWrap.querySelector('[data-type="scene"]')?.focus();
+        showDrawTagEditor(editPanel);
 
     } else {
         const scrollWrap = editPanel.querySelector('.xb-nd-edit-scroll');
@@ -2351,7 +2392,7 @@ async function saveEditedTags(container) {
             return { positive: joinTags(preset?.positivePrefix, tags),
                 negativePrompt: record?.negativePrompt ?? preset?.negativePrefix ?? '' };
         });
-        toggleEditPanel(container, false);
+        observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'saveEditedTags' });
         showToast(DRAW_SLOT_COPY.tagSaved);
         return true;
     } catch (error) {
@@ -2362,7 +2403,7 @@ async function saveEditedTags(container) {
 }
 
 async function refreshSingleImage(container) {
-    try { await redrawImageCard("novelai", container); }
+    try { await withDrawActionFeedback(container, () => redrawImageCard("novelai", container)); }
     catch (error) { console.error(DRAW_SLOT_COPY.redrawFailed, error); globalThis.toastr?.error(error.message); }
 }
 
@@ -2383,7 +2424,7 @@ async function saveSingleImage(container) {
         await updatePreviewSavedUrl(imgId, url);
         await setSlotSelection(slotId, imgId);
         await syncNovelDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url });
-        container.querySelector('img').src = url;
+        container.querySelector('img').src = getPreviewDisplayUrl(preview);
         setImageState(container, ImageState.SAVED);
         container.dataset.imgId = preview.imgId;
         showToast(`已保存到: ${url}`, 'success', 5000);
@@ -2432,8 +2473,7 @@ async function deleteCurrentImage(container) {
                 errorType: '图片已删除',
                 errorMessage: '点击重试可重新生成'
             });
-            // Template-only UI markup built locally.
-            // eslint-disable-next-line no-unsanitized/property
+            // eslint-disable-next-line no-unsanitized/property -- Template-only UI markup built locally.
             container.outerHTML = failedHtml;
             showToast('图片已删除，占位符已保留');
         }
@@ -2448,7 +2488,9 @@ async function retryFailedImage(container) {
 }
 
 async function saveTagsAndRetry(container) {
-    if (await saveEditedTags(container)) await retryFailedImage(container);
+    await withDrawActionFeedback(container, async () => {
+        if (await saveEditedTags(container)) await retryFailedImage(container);
+    });
 }
 
 async function removePlaceholder(container) {
@@ -2551,7 +2593,7 @@ async function maybeAutoLearnFromTasks(tasks = [], settings = {}) {
             const merged = mergeAutoLearnOps(characterLibraryFromSettings(draft), learnResult.ops, mergeOptions);
             if (merged.changed) draft.characterTags = merged.characters;
         }, msg);
-        if (ok && overlayCreated && frameReady) sendInitData();
+        if (ok && overlayCreated && frameReady) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'maybeAutoLearnFromTasks' });
     } catch (e) {
         console.warn('[NovelDraw] 自动学习角色失败:', e);
     }
@@ -2619,7 +2661,8 @@ async function buildNovelScenePlannerOptions({
         customPrompts,
         promptDefaults: DEFAULT_PROMPT_CONFIG,
         worldbookEntries,
-        maxImages: preset.maxImages || 0,
+        // 悬浮菜单“数目”覆盖优先于参数预设；覆盖为空时沿用预设（0 = 不指定）。
+        maxImages: resolveEffectiveMaxImages(settings, preset),
         maxCharactersPerImage: preset.maxCharactersPerImage || 0,
         absoluteMaxCharactersPerImage: capability.maxCharactersPerImage,
         modelGuide: getEffectiveNovelModelGuide(model, customPrompts),
@@ -2907,14 +2950,32 @@ async function generateAndInsertImages({
 
         let tasks = [];
         try {
-            tasks = await generateAndParseScenePlan(await buildNovelScenePlannerOptions({
-                sceneSource,
-                presentCharacters,
-                settings,
-                preset,
-                signal,
-                onStateChange,
-            }));
+            // 规划期间正文若被改动，按最新正文重新规划（指数退避，次数同 Agent 重试设置）。
+            tasks = await retryScenePlanning(async (retryNumber) => {
+                let source = { sceneSource, presentCharacters };
+                if (retryNumber) {
+                    // 换了楼层/分支就不再重试：这里会抛出原有的“原文或分支已变化”。
+                    resolveFloorImageJobTarget(job, getContext());
+                    const refreshed = createSceneSource(normalizeMessageSceneSourceText(message.mes), { filterRules });
+                    if (!refreshed.content) throw new NovelDrawError('消息内容为空（可能被过滤规则清空）', ErrorType.PARSE);
+                    source = {
+                        sceneSource: refreshed,
+                        presentCharacters: detectPresentCharacters(refreshed.content, characterLibraryFromSettings(settings)),
+                    };
+                }
+                job.phase = 'llm';
+                const planned = await generateAndParseScenePlan(await buildNovelScenePlannerOptions({
+                    ...source,
+                    settings,
+                    preset,
+                    signal,
+                    onStateChange,
+                }));
+                if (signal.aborted) throw new NovelDrawError('已取消', ErrorType.ABORTED);
+                await maybeAutoLearnFromTasks(planned, settings);
+                assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), source.sceneSource.sourceHash);
+                return planned;
+            }, { maxRetries: settings.plannerMaxRetries, signal, onStateChange });
         } catch (e) {
             console.error('[NovelDraw] 场景分析原始错误:', e);
             console.error('[NovelDraw] 错误详情:', { message: e?.message, code: e?.code, name: e?.name, stack: e?.stack });
@@ -2924,10 +2985,6 @@ async function generateAndInsertImages({
 
         if (signal.aborted) throw new NovelDrawError('已取消', ErrorType.ABORTED);
 
-        await maybeAutoLearnFromTasks(tasks, settings);
-
-
-        assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), sceneSource.sourceHash);
         return await runPreparedNovelSlots({ ctx, message, messageId, sourceText: message.mes,
             tasks, settings, preset, job, onStateChange });
     } catch (error) {
@@ -3049,9 +3106,8 @@ function createOverlay() {
     overlay.appendChild(frameWrap);
     document.body.appendChild(overlay);
     syncOverlayFrameLayout();
-    // Guarded by isTrustedMessage (origin + source).
-    // eslint-disable-next-line no-restricted-syntax
-    window.addEventListener('message', handleFrameMessage);
+    // eslint-disable-next-line no-restricted-syntax -- Guarded by isTrustedMessage (origin + source).
+    window.addEventListener('message', handleFrameMessageEvent);
     subscribeGroupPresetRefresh();
 }
 
@@ -3063,7 +3119,7 @@ function showOverlay() {
         syncOverlayHeight();
     }
     console.log('[NovelDraw] showOverlay: frameReady=%s', frameReady);
-    if (frameReady) sendInitData();
+    if (frameReady) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: "showOverlay" });
 }
 
 function hideOverlay() {
@@ -3080,11 +3136,13 @@ function hideOverlay() {
         overlayResizeHandler = null;
     }
 
-    window.removeEventListener('message', handleFrameMessage);
+    window.removeEventListener('message', handleFrameMessageEvent);
     unsubscribeGroupPresetRefresh();
 }
 
 async function sendInitData() {
+    // 重开面板不能在上一页保存尚未完成时拿到旧 API，再用旧表单覆盖新预设。
+    await settingsUpdateQueue;
     console.log('[NovelDraw] sendInitData called');
     const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
     if (!iframe?.contentWindow) { console.warn('[NovelDraw] sendInitData: no iframe'); return; }
@@ -3107,6 +3165,8 @@ async function sendInitData() {
             insecureTLS: settings.insecureTLS === true,
             timeout: settings.timeout,
             requestDelay: settings.requestDelay,
+            apiPresets: settings.apiPresets || [],
+            activeApiPresetId: settings.activeApiPresetId || null,
             cacheDays: getSharedDrawSettings().cacheDays,
             selectedParamsPresetId: settings.selectedParamsPresetId,
             paramsPresets: settings.paramsPresets,
@@ -3129,6 +3189,8 @@ async function sendInitData() {
             advancedMode: !!settings.advancedMode,
             promptPresets: settings.promptPresets || [],
             selectedPromptPresetId: settings.selectedPromptPresetId || null,
+            // 宿主认识预设里的 layout 字段：页面据此决定是否启用消息布局编辑器（旧宿主没有这个标记，页面提示刷新）。
+            promptLayoutSupported: true,
             modelGuideDefaults: Object.fromEntries(
                 Object.values(NOVEL_PROMPT_GUIDES)
                     .map(guideId => [guideId, getLoadedTagGuideById(guideId)]),
@@ -3180,13 +3242,13 @@ let groupPresetUnsubscribers = [];
 function subscribeGroupPresetRefresh() {
     unsubscribeGroupPresetRefresh();
     groupPresetUnsubscribers = [
-        onGroupPresetApplied(() => { if (frameReady) void sendInitData(); }),
+        onGroupPresetApplied(() => { if (frameReady) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: "callback" }); }),
         onGroupPresetContextChanged(() => postGroupPresetContext()),
     ];
 }
 
 function unsubscribeGroupPresetRefresh() {
-    groupPresetUnsubscribers.splice(0).forEach((off) => { try { off(); } catch { /* 取消订阅失败可忽略 */ } });
+    groupPresetUnsubscribers.splice(0).forEach((off) => { try { off(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "unsubscribeGroupPresetRefresh" }, caughtError); } });
 }
 
 function describeGroupPresetApply(result) {
@@ -3224,7 +3286,7 @@ async function handleFrameMessage(event) {
     switch (data.type) {
         case 'FRAME_READY':
             frameReady = true;
-            sendInitData();
+            observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             ensureAgentSettingsSurface();
             // 若本地 Danbooru DB 已启用，预加载（失败只警告，不修改用户设置）
             if (getSharedDrawSettings().danbooruLocalDB) {
@@ -3243,7 +3305,7 @@ async function handleFrameMessage(event) {
             await updateSettingsPersistent((settings) => {
                 settings.mode = data.mode || settings.mode;
             }, '已保存');
-            import('./floating-panel.js').then(m => m.updateAutoModeUI?.());
+            observeBackgroundTask(import('./floating-panel.js').then(m => m.updateAutoModeUI?.()), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         }
 
@@ -3257,7 +3319,7 @@ async function handleFrameMessage(event) {
                 try {
                     const fp = await import('./floating-panel.js');
                     fp.updateButtonVisibility?.(s.showFloorButton !== false, s.showFloatingButton === true);
-                } catch {}
+                } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleFrameMessage" }, caughtError); }
                 if (s.showFloorButton !== false && typeof ensureNovelDrawPanelRef === 'function') {
                     const context = getContext();
                     const chat = context.chat || [];
@@ -3268,7 +3330,7 @@ async function handleFrameMessage(event) {
                         ensureNovelDrawPanelRef?.(messageEl, messageId);
                     });
                 }
-                sendInitData();
+                observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             }
             break;
         }
@@ -3281,33 +3343,36 @@ async function handleFrameMessage(event) {
         }
 
         case 'SAVE_API_CONFIG': {
-            const nextTimeout = typeof data.timeout === 'number' && data.timeout > 0
-                ? data.timeout
-                : null;
-            const providerOk = await updateSettingsPersistent((settings) => {
-                if (typeof data.apiKey === 'string') {
-                    settings.apiKey = data.apiKey.trim();
-                }
-                if (typeof data.apiBaseUrl === 'string') {
-                    settings.apiBaseUrl = data.apiBaseUrl.trim();
-                }
-                if (data.sendMode === 'frontend' || data.sendMode === 'backend') {
-                    settings.sendMode = data.sendMode;
-                }
-                if (typeof data.useImageBackendJobs === 'boolean') {
-                    settings.useImageBackendJobs = data.useImageBackendJobs;
-                }
-                if (typeof data.insecureTLS === 'boolean') {
-                    settings.insecureTLS = data.insecureTLS;
-                }
-                if (data.requestDelay?.min > 0 && data.requestDelay?.max > 0) {
-                    settings.requestDelay = data.requestDelay;
-                }
-            }, '已保存', { notify: false, silent: false });
-            const sharedOk = nextTimeout == null || await updateSharedSettingsPersistent((settings) => {
-                settings.timeout = nextTimeout;
-            }, '已保存', { notify: false, silent: false });
-            postStatus(providerOk && sharedOk ? 'success' : 'error', providerOk && sharedOk ? '已保存' : '保存失败', 'api');
+            const ok = await updateApiSettingsPersistent({
+                config: pickApiConfig(data, NOVEL_API_FIELDS),
+                syncApiPreset: data.syncApiPreset === true,
+            });
+            const active = data.syncApiPreset && findApiPreset(getSettings().apiPresets, getSettings().activeApiPresetId);
+            postStatus(ok ? 'success' : 'error',
+                ok ? (active ? API_PRESET_COPY.synced(active.name) : API_PRESET_COPY.saved) : API_PRESET_COPY.saveFailed,
+                'api', {
+                    requestId: data.requestId,
+                    apiPresets: getSettings().apiPresets,
+                    activeApiPresetId: getSettings().activeApiPresetId,
+                    config: getEffectiveNovelApiConfig(),
+                });
+            break;
+        }
+
+        case 'SAVE_API_PRESETS': {
+            const valid = Array.isArray(data.apiPresets);
+            const ok = valid && await updateApiSettingsPersistent({
+                presetState: normalizeNovelApiPresets(data),
+                config: data.config ? normalizeNovelApiConfig(data.config) : null,
+            });
+            postStatus(ok ? 'success' : 'error',
+                !valid ? API_PRESET_COPY.invalidData : ok ? API_PRESET_COPY.saved : API_PRESET_COPY.saveFailed,
+                'api-presets', {
+                    requestId: data.requestId,
+                    apiPresets: getSettings().apiPresets,
+                    activeApiPresetId: getSettings().activeApiPresetId,
+                    config: getEffectiveNovelApiConfig(),
+                });
             break;
         }
 
@@ -3331,7 +3396,7 @@ async function handleFrameMessage(event) {
                 settings.cacheDays = nextDays;
             }, '已保存', { notify: false, silent: false });
             postStatus(ok ? 'success' : 'error', ok ? '已保存' : '保存失败', 'gallery');
-            if (ok) sendInitData();
+            if (ok) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3369,18 +3434,19 @@ async function handleFrameMessage(event) {
                 }
             }, '已保存', { target: 'params' });
             if (ok) {
-                sendInitData();
+                observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
                 try {
                     const { refreshPresetSelect } = await import('./floating-panel.js');
                     refreshPresetSelect?.();
-                } catch {}
+                } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleFrameMessage" }, caughtError); }
             }
             break;
         }
 
         case 'ADD_PARAMS_PRESET': {
             const id = generateSlotId();
-            const base = getActiveParamsPreset() || DEFAULT_PARAMS_PRESET;
+            // 以页面当前显示的预设为底；页面只在“保存”时才把选中项告诉宿主，不能只信宿主记的选中项。
+            const base = getSettings().paramsPresets.find(p => p.id === data.baseId) || getActiveParamsPreset() || DEFAULT_PARAMS_PRESET;
             const ok = await updateSettingsPersistent((settings) => {
                 const copy = cloneSettingsObject(base);
                 copy.id = id;
@@ -3389,32 +3455,62 @@ async function handleFrameMessage(event) {
                 settings.selectedParamsPresetId = id;
             }, '已创建', { target: 'params' });
             if (ok) {
-                sendInitData();
+                observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
                 try {
                     const { refreshPresetSelect } = await import('./floating-panel.js');
                     refreshPresetSelect?.();
-                } catch {}
+                } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleFrameMessage" }, caughtError); }
             }
             break;
         }
 
         case 'DEL_PARAMS_PRESET': {
-            const s = getSettings();
-            if (s.paramsPresets.length <= 1) {
-                postStatus('error', '至少保留一个预设', 'params');
-                break;
-            }
+            // 删页面里正在看的那个：页面切换下拉框时不会通知宿主，宿主记的选中项可能还是旧的。
+            const presetId = String(data.presetId || getSettings().selectedParamsPresetId || '');
+            let deleteResult = 'missing';
             const ok = await updateSettingsPersistent((settings) => {
-                const idx = settings.paramsPresets.findIndex(p => p.id === settings.selectedParamsPresetId);
-                if (idx >= 0) settings.paramsPresets.splice(idx, 1);
-                settings.selectedParamsPresetId = settings.paramsPresets[0]?.id || null;
-            }, '已删除', { target: 'params' });
+                if (settings.paramsPresets.length <= 1) {
+                    deleteResult = 'last';
+                    return;
+                }
+                const ids = settings.paramsPresets.map(p => p.id);
+                if (!ids.includes(presetId)) return;
+                settings.paramsPresets = settings.paramsPresets.filter(p => p.id !== presetId);
+                if (settings.selectedParamsPresetId === presetId) {
+                    settings.selectedParamsPresetId = pickNeighborAfterRemoval(ids, presetId);
+                }
+                deleteResult = 'deleted';
+            }, '已删除', { target: 'params', notify: false });
+            if (!ok) {
+                postStatus('error', '保存失败', 'params');
+            } else if (deleteResult === 'last') {
+                postStatus('error', '至少保留一个预设', 'params');
+            } else if (deleteResult === 'missing') {
+                postStatus('error', '要删除的预设已不存在', 'params');
+            } else {
+                postStatus('success', '已删除', 'params');
+            }
             if (ok) {
-                sendInitData();
+                observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
                 try {
                     const { refreshPresetSelect } = await import('./floating-panel.js');
                     refreshPresetSelect?.();
-                } catch {}
+                } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleFrameMessage" }, caughtError); }
+            }
+            break;
+        }
+
+        case 'REORDER_PARAMS_PRESETS': {
+            // 只按 id 调整顺序，不碰预设内容；页面已自行更新，不回传 INIT_DATA，避免冲掉表单里未保存的编辑。
+            const order = Array.isArray(data.order) ? data.order.map(String) : [];
+            const ok = await updateSettingsPersistent((settings) => {
+                settings.paramsPresets = reorderPresetsByIds(settings.paramsPresets, order);
+            }, '已调整顺序', { target: 'params' });
+            if (ok) {
+                try {
+                    const { refreshPresetSelect } = await import('./floating-panel.js');
+                    refreshPresetSelect?.();
+                } catch (error) { console.warn({ source: import.meta.url, operation: 'refreshPresetSelect' }, error); }
             }
             break;
         }
@@ -3423,7 +3519,7 @@ async function handleFrameMessage(event) {
         // 新增：云端预设
         // ═══════════════════════════════════════════════════════════════
         case 'OPEN_CLOUD_PRESETS': {
-            openCloudPresetsModal(async (presetData) => {
+            observeBackgroundTask(openCloudPresetsModal(async (presetData) => {
                 const { preset: newPreset, warnings: importWarnings } = parsePresetData(presetData, generateSlotId);
                 const ok = await updateSettingsPersistent((settings) => {
                     settings.paramsPresets.push(newPreset);
@@ -3431,10 +3527,10 @@ async function handleFrameMessage(event) {
                 }, `已导入: ${newPreset.name}`, { target: 'params' });
                 if (ok) {
                     await notifySettingsUpdated();
-                    sendInitData();
+                    observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
                     if (importWarnings.length) showToast(importWarnings.join('；'), 'info', 5000);
                 }
-            });
+            }), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
         case 'EXPORT_CURRENT_PRESET': {
@@ -3471,7 +3567,7 @@ async function handleFrameMessage(event) {
                     'prompt-preset',
                 );
                 if (!selected) {
-                    sendInitData();
+                    observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
                 }
             }
             break;
@@ -3492,6 +3588,9 @@ async function handleFrameMessage(event) {
                     sceneRules: current?.sceneRules ?? DEFAULT_PROMPT_CONFIG.sceneRules,
                     modelGuideOverrides: normalizeNovelPromptGuideOverrides(current?.modelGuideOverrides),
                 };
+                // layoutForStorage 返回规范化后的新副本：副本与源预设互不共享块对象，改一边不会牵动另一边。
+                const layout = layoutForStorage(current?.layout);
+                if (layout) newPreset.layout = layout;
                 settings.promptPresets.push(newPreset);
                 settings.selectedPromptPresetId = id;
             }, '已创建', { target: 'prompt-preset', notify: false });
@@ -3500,7 +3599,7 @@ async function handleFrameMessage(event) {
                 ok && sourceFound ? '已创建' : ok ? '源提示词预设已不存在' : '保存失败',
                 'prompt-preset',
             );
-            if (ok && sourceFound) sendInitData();
+            if (ok && sourceFound) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3515,15 +3614,20 @@ async function handleFrameMessage(event) {
                 break;
             }
             const id = generateSlotId();
+            // layoutNotes 只是导入时的修复说明，不属于预设数据，不能随展开写进存储。
+            const { layoutNotes = [], ...presetFields } = imported;
+            const importedText = layoutNotes.length
+                ? `已导入为新预设（布局已自动修复：${layoutNotes.join('；')}）`
+                : '已导入为新预设';
             const ok = await updateSettingsPersistent((settings) => {
                 settings.promptPresets.push({
                     id,
-                    ...imported,
-                    modelGuideOverrides: compactPromptGuideOverrides(imported.modelGuideOverrides),
+                    ...presetFields,
+                    modelGuideOverrides: compactPromptGuideOverrides(presetFields.modelGuideOverrides),
                 });
                 settings.selectedPromptPresetId = id;
-            }, '已导入为新预设', { target: 'prompt-preset' });
-            if (ok) sendInitData();
+            }, importedText, { target: 'prompt-preset' });
+            if (ok) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3536,10 +3640,15 @@ async function handleFrameMessage(event) {
                     deleteResult = 'last';
                     return;
                 }
-                const idx = settings.promptPresets.findIndex(p => p.id === presetId);
-                if (idx < 0) return;
-                settings.promptPresets.splice(idx, 1);
-                settings.selectedPromptPresetId = settings.promptPresets[0]?.id || null;
+                const ids = settings.promptPresets.map(p => p.id);
+                if (!ids.includes(presetId)) return;
+                const wasSelected = settings.selectedPromptPresetId === presetId;
+                settings.promptPresets = settings.promptPresets.filter(p => p.id !== presetId);
+                // 列表里可以删任意一行：删的不是选中项就保持选中，免得页面正在编辑的预设被换掉；
+                // 删的是选中项（或选中项本就失效）时，让原位置上顶上来的邻居接替，而不是总跳回第一个。
+                if (wasSelected || !settings.promptPresets.some(p => p.id === settings.selectedPromptPresetId)) {
+                    settings.selectedPromptPresetId = pickNeighborAfterRemoval(ids, presetId);
+                }
                 deleteResult = 'deleted';
             }, '已删除', { target: 'prompt-preset', notify: false });
             if (!ok) {
@@ -3551,7 +3660,16 @@ async function handleFrameMessage(event) {
             } else {
                 postStatus('success', '已删除', 'prompt-preset');
             }
-            if (ok) sendInitData();
+            if (ok) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
+            break;
+        }
+
+        case 'REORDER_PROMPT_PRESETS': {
+            // 只按 id 调整顺序，不碰预设内容；页面已自行更新，不回传 INIT_DATA，避免冲掉文本框里未保存的编辑。
+            const order = Array.isArray(data.order) ? data.order.map(String) : [];
+            await updateSettingsPersistent((settings) => {
+                settings.promptPresets = reorderPresetsByIds(settings.promptPresets, order);
+            }, '已调整顺序', { target: 'prompt-preset' });
             break;
         }
 
@@ -3571,7 +3689,7 @@ async function handleFrameMessage(event) {
                     ok && presetFound ? '已重命名' : ok ? '目标提示词预设已不存在' : '保存失败',
                     'prompt-preset',
                 );
-                sendInitData();
+                observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             }
             break;
         }
@@ -3592,6 +3710,15 @@ async function handleFrameMessage(event) {
                     if ('modelGuideOverrides' in cp) {
                         current.modelGuideOverrides = compactPromptGuideOverrides(cp.modelGuideOverrides);
                     }
+                    // layout：null = 恢复默认（删字段）；对象 = 按稀疏规则存储；键缺席 = 不动（旧页面 / 编辑器未加载时不会误删）。
+                    if ('layout' in cp) {
+                        if (cp.layout === null) {
+                            delete current.layout;
+                        } else if (typeof cp.layout === 'object') {
+                            const layout = layoutForStorage(cp.layout);
+                            if (layout) current.layout = layout; else delete current.layout;
+                        }
+                    }
                 }, '提示词预设已保存', { target: statusTarget, notify: false });
                 const saved = ok && presetFound;
                 postStatus(
@@ -3600,7 +3727,7 @@ async function handleFrameMessage(event) {
                     statusTarget,
                 );
             }
-            sendInitData();
+            observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3617,7 +3744,7 @@ async function handleFrameMessage(event) {
                 }
             }, '世界书配置已保存', { notify: false });
             postStatus(ok ? 'success' : 'error', ok ? '世界书配置已保存' : '世界书配置保存失败', 'worldbook');
-            sendInitData();
+            observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3689,7 +3816,7 @@ async function handleFrameMessage(event) {
                     ? data.autoLearnMode : 'new_only';
                 if (typeof data.autoLearnGroupId === 'string') settings.autoLearnGroupId = data.autoLearnGroupId;
             }, nextAutoLearnCharacters ? '自动学习已开启' : '自动学习已关闭');
-            sendInitData();
+            observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3719,7 +3846,7 @@ async function handleFrameMessage(event) {
                     settings.danbooruLocalDB = false;
                 }, 'Danbooru 本地库已关闭');
             }
-            sendInitData();
+            observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3757,7 +3884,7 @@ async function handleFrameMessage(event) {
                     const cfg = JSON.parse(raw);
                     summaryRules = cfg?.textFilterRules || cfg?.vector?.textFilterRules || [];
                 }
-            } catch { /* ignore */ }
+            } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleFrameMessage" }, caughtError); }
             postToIframe(iframe, {
                 type: 'SYNC_SUMMARY_FILTER_RESULT',
                 rules: Array.isArray(summaryRules) ? summaryRules : [],
@@ -3767,14 +3894,14 @@ async function handleFrameMessage(event) {
 
         case 'CLEAR_EXPIRED_CACHE': {
             const n = await clearExpiredCache(getSharedDrawSettings().cacheDays);
-            sendInitData();
+            observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             postStatus('success', `已清理/瘦身 ${n} 条`, 'gallery');
             break;
         }
 
         case 'CLEAR_ALL_CACHE':
             await clearAllCache();
-            sendInitData();
+            observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             postStatus('success', '已清空', 'gallery');
             break;
 
@@ -3798,19 +3925,19 @@ async function handleFrameMessage(event) {
             if (iframe) {
                 postToIframe(iframe, {
                     type: 'LAST_LLM_REQUEST_DATA',
-                    snapshot: getLastDrawAgentDiagnostic(),
+                    history: getDrawAgentDiagnosticHistory(),
                 }, 'LittleWhiteBox-NovelDraw');
             }
             break;
         }
 
         case 'REFRESH_CACHE_STATS':
-            void sendCacheData();
+            observeBackgroundTask(sendCacheData(), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
 
         case 'USE_GALLERY_IMAGE':
             // 这里没有任何设置变化，只回一个状态提示；不需要整页刷新。
-            void sendCacheData();
+            observeBackgroundTask(sendCacheData(), { source: import.meta.url, operation: "handleFrameMessage" });
             postStatus('success', '已选择', 'gallery');
             break;
 
@@ -3826,12 +3953,19 @@ async function handleFrameMessage(event) {
                 const url = await saveBase64AsFile(image.base64, charName, `novel_${data.imgId}`, image.format);
                 preview.savedUrl = url;
                 await updatePreviewSavedUrl(data.imgId, url);
-                if (Number.isFinite(preview.messageId)) await syncNovelDrawSavedFromPreview(preview.messageId, preview, { savedUrl: url });
+                if (Number.isFinite(preview.messageId)) {
+                    await syncNovelDrawSavedFromPreview(preview.messageId, preview, { savedUrl: url });
+                    // The chat card may still show this version's blob URL. Re-read the
+                    // record so the card moves to the saved file; a failed refresh must
+                    // not turn a completed save into an error.
+                    await renderSharedPreviewsForMessage(preview.messageId, { refreshSlotIds: [preview.slotId] })
+                        .catch(e => console.warn('[NovelDraw] 保存后刷新楼层图片失败:', e));
+                }
                 {
                     const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
                     if (iframe) postToIframe(iframe, { type: 'GALLERY_IMAGE_SAVED', imgId: data.imgId, savedUrl: url }, 'LittleWhiteBox-NovelDraw');
                 }
-                void sendCacheData();
+                observeBackgroundTask(sendCacheData(), { source: import.meta.url, operation: "handleFrameMessage" });
                 showToast(`已保存: ${url}`, 'success', 5000);
             } catch (e) {
                 console.error('[NovelDraw] 保存失败:', e);
@@ -3876,7 +4010,7 @@ async function handleFrameMessage(event) {
                     const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
                     if (iframe) postToIframe(iframe, { type: 'GALLERY_IMAGE_DELETED', imgId: data.imgId }, 'LittleWhiteBox-NovelDraw');
                 }
-                void sendCacheData();
+                observeBackgroundTask(sendCacheData(), { source: import.meta.url, operation: "handleFrameMessage" });
                 showToast('已删除');
             } catch (e) {
                 console.error('[NovelDraw] 删除失败:', e);
@@ -3978,7 +4112,7 @@ export async function initNovelDraw() {
     }
     const [floatingPanel] = await Promise.all([
         import('./floating-panel.js'),
-        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch(() => {}),
+        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "initNovelDraw" }, caughtError); }),
     ]);
     if (initGeneration !== moduleLifecycleGeneration || window?.isXiaobaixEnabled === false) return false;
 
@@ -4142,13 +4276,13 @@ export async function cleanupNovelDraw() {
     frameReady = false;
 
     backendJobMonitors.deactivate();
-    abortGeneration(null, { reason: 'teardown' });
+    observeBackgroundTask(abortGeneration(null, { reason: 'teardown' }), { source: import.meta.url, operation: 'cleanupNovelDraw' });
     clearFloorImageJobs(generationJobs);
     novelImageRequestQueue.clear();
 
-    window.removeEventListener('message', handleFrameMessage);
+    window.removeEventListener('message', handleFrameMessageEvent);
     // 移除事件委托监听器（防止累积泄漏）
-    document.removeEventListener('click', handleDelegatedClick, { capture: true });
+    document.removeEventListener('click', handleDelegatedClickEvent, { capture: true });
     document.removeEventListener('touchstart', handleTouchStart, { passive: true });
     document.removeEventListener('touchmove', handleTouchMove, { passive: false });
     document.removeEventListener('touchend', handleTouchEnd, { passive: true });
@@ -4166,7 +4300,7 @@ export async function cleanupNovelDraw() {
     try {
         const { destroyFloatingPanel } = await import('./floating-panel.js');
         if (cleanupGeneration === moduleLifecycleGeneration) destroyFloatingPanel();
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "cleanupNovelDraw" }, caughtError); }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

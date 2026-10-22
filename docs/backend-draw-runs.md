@@ -2,7 +2,7 @@
 
 Draw Run 将场景规划、工具纠错与图片请求编译交给后端。现行入口为 `draw-runs-v1`与`draw-run-runtime-v4`，接收前端 Tool Schema，只以 images 作为执行结果；NovelAI V5 子任务归一为最终 PNG。
 
-执行与进程内存边界见 [Image Job](./image-backend-batch-jobs.md)。真实宿主写盘／读回、关闭浏览器接回和三家 Provider 实盘仍需验收，不以自动契约测试代替。
+执行与进程内存边界见 [Image Job](./image-backend-batch-jobs.md)。发布验证须覆盖真实宿主写盘／读回、关闭浏览器接回和三家 Provider 实盘，自动契约测试不覆盖这些外部行为。
 
 ## 0. 目标与产品承诺
 
@@ -190,7 +190,7 @@ req.socket.encrypted        // 决定 http/https
 req.socket.server.address() // 唯一可信的监听地址与端口
 ```
 
-监听地址为 `0.0.0.0` / `::` 时分别收窄到 `127.0.0.1` / `::1`；明确绑定地址必须原样使用。禁止仅按地址族强制改写为回环地址，否则同端口的其他本机进程可能收到 Cookie、CSRF 与 Basic Auth。监听地址不可用时在组装或发送凭证前失败。
+监听地址为 `0.0.0.0` / `::` 时分别收窄到 `127.0.0.1` / `::1`；明确绑定地址必须原样使用。禁止仅按地址族强制改写为回环地址，否则同端口的其他本机进程可能收到 Cookie、CSRF 与 Basic Auth。监听地址不可用时在组装或发送凭证前失败。Host Client 与探针都显式直连该监听 socket，不继承 Node 全局 agent 的环境代理；开发者无需为回环测试修改 `NO_PROXY`。
 
 事实边界：
 
@@ -206,7 +206,7 @@ req.socket.server.address() // 唯一可信的监听地址与端口
 - HTTP / 原生 HTTPS（含自签）。
 - 多用户并发不串身份。
 
-诊断端点为 `POST /api/plugins/littlewhitebox-server/v1/draw-runs/probe`。它只返回回环协议、地址族与各凭证是否通过验证，不回显 Cookie、CSRF token 或 Basic Auth 内容。内层校验路由要求当前进程生成的一次性 challenge，不能作为公开身份查询接口使用。
+诊断端点为 `POST /api/plugins/littlewhitebox-server/v1/draw-runs/probe`。它只返回回环协议、地址族与各凭证是否通过验证，不回显 Cookie、CSRF token 或 Basic Auth 内容。传输失败保留安全格式的底层错误码 `details.transportCode`，不回传可能含凭证的原始错误消息。内层校验路由要求当前进程生成的一次性 challenge，不能作为公开身份查询接口使用。
 
 探针不调用 LLM、不产生费用；设置页的“后台 Agent 连接测试”复用同一诊断端点。
 
@@ -226,10 +226,10 @@ Host Client 边界：
 Node 发布边界：
 
 - `modules/agent-core/node-entry.js` 是后端唯一入口；酒馆三渠道在入口层强制要求实例 Host Client，不导出浏览器全局 setter。
-- `npm run build:agent-core:node` 用 esbuild 生成 `server-plugin/littlewhitebox-server/draw-runs/vendor/agent-core-node.cjs`，把 Agent Core、三个 SDK 及其实际依赖打成 CommonJS 单文件；产物只允许引用 Node 内置模块。
+- `npm run build` 中的 Node 目标用 esbuild 生成 `server-plugin/littlewhitebox-server/draw-runs/vendor/agent-core-node.cjs`，把 Agent Core、三个 SDK 及其实际依赖打成 CommonJS 单文件；产物只允许引用 Node 内置模块。
 - 同一构建根据 esbuild metafile 生成 `draw-runs/vendor/THIRD_PARTY_LICENSES.txt`，逐项记录实际入包依赖的精确版本、许可证声明及上游随包附带的 LICENSE/NOTICE/COPYING 正文；未附带这些文件时回退提取 README 的 License 段，仍无正文则构建失败。
-- `npm run check:agent-core:node` 先核对实际入包依赖与 `package-lock.json` 的锁定版本，再无写入重建并逐字节比对 bundle 与许可证清单，防止提交陈旧产物；正式构建在同目录 staging，并以整个 `vendor` 目录为发布单元切换，失败时恢复上一份完整产物。
-- 运行时不安装 npm 依赖；bundle 编译目标与 server plugin 最低版本均为 Node.js 18。`npm run check:agent-core:node18` 固定在 Node.js 18.20.8 隔离加载 bundle、创建七类 Adapter，并通过本机模拟端点验证 Google SDK 的实际 `generateContent` 请求路径；虽然当前 `@google/genai` 声明 Node.js 20，锁定并打包的现用路径已验证支持 Node.js 18，后续 SDK 升级由该检查拦截。
+- 构建与验收统一遵循[插件构建规则](plugin-build.md)，本功能不保留独立流水线。依赖锁定、产物与许可证一致性、暂存发布和失败恢复都由总流程负责。
+- 运行时不安装 npm 依赖；bundle 编译目标与 server plugin 最低版本均为 Node.js 18。总验收中的 Node 18 兼容检查及其覆盖范围见[服务端说明](../server-plugin/littlewhitebox-server/README.md)。
 
 不能改写：Tool 格式、Reasoning 处理、Claude/Google 原生回放结构、tagged JSON 兼容、Scene Planner 纠错循环、模型家族判断。
 

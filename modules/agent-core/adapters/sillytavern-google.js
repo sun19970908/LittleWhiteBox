@@ -1,4 +1,5 @@
-import { requireResponseCompletion } from '../runtime/response-completion.js';
+import { readResponseCompletion } from '../runtime/response-completion.js';
+import { buildSamplingParameters } from '../sampling.js';
 import {
     assertHostChatCompletionsClient,
     browserHostChatCompletionsClient,
@@ -10,6 +11,7 @@ import {
 } from './request-inspection.js';
 import { resolveTaskReasoning } from '../reasoning-capabilities.js';
 import { isReasoningOutputVisible } from '../reasoning-config.js';
+import { stripToolProtocolMarker } from './tool-protocol-marker.js';
 
 function cloneJson(value) {
     if (value === undefined) return undefined;
@@ -144,7 +146,7 @@ function buildHostGoogleMessageFromContent(content = {}, index = 0) {
 }
 
 function buildHostGoogleMessages(task = {}) {
-    const sourceMessages = Array.isArray(task.messages) ? task.messages : [];
+    const sourceMessages = stripToolProtocolMarker(Array.isArray(task.messages) ? task.messages : []);
     const messages = [];
     sourceMessages.forEach((message) => {
         if (!message || typeof message !== 'object') return;
@@ -277,7 +279,7 @@ function createGoogleStreamAccumulator(task, effectiveReasoning, config = {}) {
                 text,
                 toolCalls,
                 thoughts,
-                finishReason: requireResponseCompletion('google', finishReason, false, text),
+                ...readResponseCompletion('google', finishReason),
                 model,
                 provider: 'sillytavern-google',
                 providerPayload: buildProviderPayload(content),
@@ -315,6 +317,8 @@ export class SillyTavernGoogleAdapter {
             payload.reasoning_effort = 'auto';
             payload.include_reasoning = isReasoningOutputVisible(reasoning);
         }
+        const samplingParams = buildSamplingParameters('sillytavern-google', this.config.sampling);
+        Object.assign(payload, samplingParams);
         return payload;
     }
 

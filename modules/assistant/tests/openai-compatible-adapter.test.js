@@ -36,26 +36,6 @@ test('raw assistant diagnostics are opt-in and preserve missing native arguments
     assert.equal(message.tool_calls[0].function.name, 'Read');
 });
 
-test('tagged-json prompt honors required, named, and none tool choices', () => {
-    const buildSystem = (toolChoice) => buildTaggedMessages({
-        systemPrompt: '你是测试助手。',
-        toolChoice,
-        tools: [{
-            type: 'function',
-            function: {
-                name: 'Read',
-                description: 'Read file.',
-                parameters: { type: 'object', properties: {} },
-            },
-        }],
-        messages: [{ role: 'user', content: '执行任务。' }],
-    })[0].content;
-
-    assert.match(buildSystem('required'), /本轮必须调用工具，不得只返回正文。/);
-    assert.match(buildSystem('Read'), /本轮必须调用工具 Read，不得调用其他工具，也不得只返回正文。/);
-    assert.match(buildSystem('none'), /本轮不得调用工具，不得输出 <tool_call> 标签。/);
-});
-
 test('openai-compatible requests preserve the trusted system prompt before system data messages', () => {
     const task = {
         systemPrompt: 'trusted static rules',
@@ -302,7 +282,8 @@ test('DSML recognizes reported marker spelling but rejects the original unclosed
     }
     const hybrid = '<tool_call>{"name":"submit_scene_plan","arguments":{"images":[]}}' +
         '</｜｜DSML｜｜ parameter>\n</｜｜DSML｜｜ invoke>\n</｜｜DSML｜｜ calls>';
-    assert.throws(() => extractTaggedToolCalls(hybrid), { code: 'DSML_TOOL_CALL_INVALID' });
+    // A DSML suffix does not close a JSON tool block; the unmatched JSON opener stays unexecuted.
+    assert.deepEqual(extractTaggedToolCalls(hybrid), []);
 });
 
 test('tagged JSON recovers the reported complete scene plan with extra protocol closers', () => {
@@ -377,39 +358,33 @@ test('malformed tagged Write keeps literal tool examples inside file content', (
     assert.deepEqual(extractTaggedToolCalls(`<tool_call>${trailingComma}</tool_call>`).map(call => call.name), ['Write']);
 });
 
-test('tagged JSON refuses ambiguous multiple envelopes and cannot consume a sibling tool as decoration', () => {
+test('tagged JSON refuses ambiguous separators and cannot consume a sibling tool as decoration', () => {
     const payload = JSON.stringify({ name: 'Write', arguments: { filePath: 'notes.md', content: 'text' } });
     const sibling = '<tool_call>{"name":"Delete","arguments":{"filePath":"notes.md"}}</tool_call>';
     for (const body of [
-        `${payload}\n${payload}`,
-        `${payload},\n${payload}`,
         `${payload}},\n${payload}`,
-        `${payload}\n[${payload}]`,
-        `${payload},\n[${payload}]`,
         `${payload}\n[完成]\n${payload}`,
         `${payload},\n{"name":"Delete",`,
-        `${payload}\n${sibling}`,
         `${payload}\n${dsmlInvoke('Delete', dsmlParameter('filePath', 'notes.md'))}`,
     ]) {
         assert.throws(() => extractTaggedToolCalls(`<tool_call>${body}</tool_call>`), {
             code: 'TAGGED_TOOL_CALL_INVALID',
         });
     }
-    assert.throws(() => extractTaggedToolCalls(`<tool_call>${payload}\n${sibling}`), {
-        code: 'TAGGED_TOOL_CALL_INVALID',
-    });
+    assert.deepEqual(extractTaggedToolCalls(`<tool_call>${payload}\n${sibling}`).map(call => call.name), ['Delete']);
     const calls = extractTaggedToolCalls(`<tool_call>\`\`\`json\n${payload}\n\`\`\`</tool_call>\n${sibling}`);
     assert.deepEqual(calls.map(call => call.name), ['Write', 'Delete']);
     assert.deepEqual(extractTaggedToolCalls(`<tool_call>\`\`\`json\n${payload}\n\`\`\``), []);
 });
 
-test('tagged JSON never releases tools from an unfinished or mismatched string envelope', () => {
+test('ambiguous JSON strings reject embedded examples while independent pairs survive abandoned openers', () => {
     const sibling = '<tool_call>{"name":"Delete","arguments":{"path":"book/notes/example.md"}}</tool_call>';
     const unfinished = '<tool_call>{"name":"Write","arguments":{"filePath":"book/notes/example.md","content":"unfinished </tool_call>';
     const mismatched = '<tool_call>{"name":"Write","arguments":[]]';
-    for (const text of [`${unfinished}\n${sibling}`, `${mismatched}\n${sibling}`]) {
-        assert.throws(() => extractTaggedToolCalls(text), { code: 'TAGGED_TOOL_CALL_INVALID' });
-    }
+    assert.throws(() => extractTaggedToolCalls(`${unfinished}\n${sibling}`), {
+        code: 'TAGGED_TOOL_CALL_INVALID', offset: 0,
+    });
+    assert.deepEqual(extractTaggedToolCalls(`${mismatched}\n${sibling}`).map(call => call.name), ['Delete']);
 });
 
 test('openai-compatible adapter sanitizes malformed replay tool calls before sending', () => {
@@ -1079,12 +1054,10 @@ test('tagged-json correction replay preserves invalid argument text inside a val
     assert.deepEqual(messages, original);
 });
 
-test('openai-compatible adapter keeps incomplete tagged-json blocks out of tool calls', () => {
-    const calls = extractTaggedToolCalls(
+test('openai-compatible adapter does not decode an unclosed tagged-json block', () => {
+    assert.deepEqual(extractTaggedToolCalls(
         '<tool_call>{"name":"Write","arguments":{"filePath":"book/chapters/001.md","content":"半截',
-    );
-
-    assert.deepEqual(calls, []);
+    ), []);
 });
 
 test('openai-compatible adapter ignores a replay message with no valid tool calls', () => {
@@ -1436,7 +1409,7 @@ test('OpenAI Responses performs only one empty-response fallback and records bot
     );
 });
 
-test('OpenAI Responses never returns executable tools from non-completed JSON responses', async () => {
+test('OpenAI Responses preserves complete tools from abnormal endings but still rejects failed or cancelled requests', async () => {
     for (const status of ['incomplete', 'failed', 'in_progress', 'cancelled', undefined]) {
         const adapter = new OpenAIResponsesAdapter({ apiKey: 'fixture', baseUrl: 'https://responses-relay.example/v1', model: 'fixture' });
         let requests = 0;
@@ -1446,12 +1419,20 @@ test('OpenAI Responses never returns executable tools from non-completed JSON re
                 type: 'function_call', id: 'fc_fixture', call_id: 'call_fixture', name: 'Write', arguments: '{"text":"unfinished"}',
             }], incomplete_details: status === 'incomplete' ? { reason: 'max_output_tokens' } : null });
         } });
-        await assert.rejects(adapter.chat({ messages: [{ role: 'user', content: 'write' }] }), error => {
-            assert.equal(error.name, 'OpenAIResponsesTerminationError');
-            assert.equal(error.requestInspection.requestCount, 1);
-            if (status === 'incomplete') { assert.equal(error.reason, 'max_output_tokens'); }
-            return true;
-        });
+        const pending = adapter.chat({ messages: [{ role: 'user', content: 'write' }] });
+        if (status === 'failed' || status === 'cancelled') {
+            await assert.rejects(pending, error => {
+                assert.equal(error.name, 'OpenAIResponsesTerminationError');
+                assert.equal(error.requestInspection.requestCount, 1);
+                return true;
+            });
+        } else {
+            const result = await pending;
+            assert.equal(result.completion, 'incomplete');
+            assert.equal(result.truncated, status === 'incomplete');
+            assert.deepEqual(JSON.parse(result.toolCalls[0].arguments), { text: 'unfinished' });
+            assert.equal(result.providerPayload.openAIResponseOutput[0].call_id, 'call_fixture');
+        }
         assert.equal(requests, 1);
     }
 });
@@ -2504,7 +2485,7 @@ test('text tool finalization is safe across non-stream, tagged stream, and nativ
                 assert.deepEqual(repaired.toolCalls, result.toolCalls);
                 assert.equal(repaired.rawAssistantMessage.content, content);
                 for (const body of [
-                    `${json},\n${json}`,
+                    `${json},\n{"name":"Write",`,
                     `${json} "完成`,
                     `${json.slice(0, -1)},"content":"misplaced"}}`,
                 ]) {

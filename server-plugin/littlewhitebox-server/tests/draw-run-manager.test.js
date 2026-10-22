@@ -498,7 +498,7 @@ test('backend dispatches a decorated tagged plan once and retains ambiguous-call
     const cases = [
         { body: `\`\`\`json\n${payload}\n\`\`\`\n</unexpected>[完成]<status value="[done]"/> "完成"` },
         { body: `${payload}}\n</｜｜DSML｜｜ parameter> ]\n[2 张已完成]` },
-        { body: `${payload},\n${payload}`, ambiguous: true },
+        { body: `${payload},\n{"name":null,"arguments":{}}`, ambiguous: true },
         { body: `${payload} "完成`, ambiguous: true },
         { body: `${payload.slice(0, -1)},"images":[]}}`, ambiguous: true },
     ];
@@ -913,6 +913,30 @@ test('retained compiler failures redact the image provider credentials still own
     assert.doesNotMatch(JSON.stringify(failed), /image-secret|pa%24%24word|pa\$\$word/);
 });
 
+// Contract: credential discovery must not log raw URL inputs, including malformed ones (credential disclosure).
+test('credential collection never logs raw invalid URLs or optional empty endpoint values', async (t) => {
+    const logs = [];
+    t.mock.method(console, 'warn', (...args) => { logs.push(args); });
+    t.mock.method(console, 'error', (...args) => { logs.push(args); });
+    const sentinel = 'test-url-credential';
+    for (const [index, baseUrl] of ['', `://user:${sentinel}@host?token=${sentinel}`, `https://user:%ZZ${sentinel}@host`].entries()) {
+        const { manager } = createManager({ runtime: createRuntime({
+            compileDrawRunImages() { throw new Error('compiler failed'); },
+        }) });
+        t.after(() => manager.close());
+        const runId = `run-url-redaction-${index}`;
+        const envelope = createEnvelope(runId);
+        envelope.agent.providerConfig.baseUrl = baseUrl;
+        manager.create('alice', envelope, {});
+        const failed = await waitFor(() => {
+            const run = manager.get('alice', runId);
+            return run?.state === 'failed' ? run : null;
+        });
+        assert.equal(JSON.stringify({ failed, logs }).includes(sentinel), false);
+    }
+    assert.equal(logs.length, 0);
+});
+
 test('hosted Agent proxy passwords remain available only for the request-scoped Planner', async (t) => {
     const envelope = createEnvelope('run-test-005');
     envelope.agent.channel = 'sillytavern-openai-compatible';
@@ -986,4 +1010,89 @@ test('a disappeared child is retired without waiting for another API request', a
     await waitFor(() => manager.get('alice', 'run-test-007') === null);
 
     assert.equal(manager.get('alice', 'run-test-007'), null);
+});
+
+test('Draw Run accepts a multi-message planner prompt with system/assistant roles and still accepts the legacy single user message', () => {
+    const validate = createEnvelopeValidator(drawRuntime);
+    assert.doesNotThrow(() => validate(createEnvelope('run-prompt-legacy')));
+    const layouts = [
+        [{ role: 'system', content: 's' }, { role: 'user', content: 'u' }],
+        [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'ok' }, { role: 'user', content: 'b' }],
+        [{ role: 'user', content: 'a' }, { role: 'user', content: 'b' }],
+        [{ role: 'assistant', content: 'x' }, { role: 'system', content: 'y' }, { role: 'user', content: 'z' }],
+    ];
+    for (const messages of layouts) {
+        const envelope = createEnvelope('run-prompt-layout');
+        envelope.planner.prompt.messages = messages;
+        const accepted = validate(envelope);
+        assert.deepEqual(accepted.envelope.planner.prompt.messages, messages);
+        // 空 systemPrompt 与自定义块共存是合法的（内置提示词可被完全替换）。
+        envelope.planner.prompt.systemPrompt = '';
+        assert.doesNotThrow(() => validate(envelope));
+    }
+});
+
+test('Draw Run rejects malformed planner prompt messages', () => {
+    const validate = createEnvelopeValidator(drawRuntime);
+    const user = { role: 'user', content: 'u' };
+    const cases = [
+        [[], /must contain 1 to \d+ messages/],
+        ['x', /must contain 1 to \d+ messages/],
+        [Array.from({ length: 1001 }, () => ({ ...user })), /must contain 1 to \d+ messages/],
+        [[{ role: 'system', content: 's' }], /at least one user message/],
+        [[{ role: 'assistant', content: 'a' }, { role: 'system', content: 's' }], /at least one user message/],
+        [[{ role: 'tool', content: 't' }, user], /messages\[0\]\.role must be system, user or assistant/],
+        [[user, { role: 'developer', content: 'd' }], /messages\[1\]\.role must be system, user or assistant/],
+        [[{ content: 'u' }], /role/],
+        [[{ role: 'user', content: 42 }], /messages\[0\]\.content must be a string/],
+        [[user, { role: 'system', content: null }], /messages\[1\]\.content must be a string/],
+        [[{ role: 'user', content: '   ' }], /messages\[0\]\.content must not be empty/],
+        [[user, { role: 'system', content: '' }], /messages\[1\]\.content must not be empty/],
+        [[{ role: 'user', content: 'u', name: 'x' }], /messages\[0\]\.name is not allowed/],
+        [[user, { role: 'system', content: 's', providerPayload: {} }], /messages\[1\]\.providerPayload is not allowed/],
+        [[user, null], /messages\[1\]/],
+        [[user, 'text'], /messages\[1\]/],
+    ];
+    for (const [messages, pattern] of cases) {
+        const envelope = createEnvelope('run-prompt-invalid');
+        envelope.planner.prompt.messages = messages;
+        assert.throws(() => validate(envelope), error => error.status === 400 && pattern.test(error.message), `${JSON.stringify(messages).slice(0, 80)}`);
+    }
+    const extra = createEnvelope('run-prompt-extra');
+    extra.planner.prompt.extra = true;
+    assert.throws(() => validate(extra), /planner\.prompt\.extra is not allowed/);
+});
+
+test('Draw Run still enforces the total envelope size limit on very large multi-message prompts', () => {
+    const validate = createEnvelopeValidator(drawRuntime);
+    const envelope = createEnvelope('run-prompt-oversize');
+    envelope.planner.prompt.messages = [
+        { role: 'system', content: 'x'.repeat(1_200_000) },
+        { role: 'user', content: 'y'.repeat(1_200_000) },
+    ];
+    assert.throws(() => validate(envelope), error => error.status === 413 && error.code === 'draw_run_input_limit');
+});
+
+test('backend hands the whole multi-message planner prompt to the Planner runtime unchanged', async (t) => {
+    const messages = [
+        { role: 'system', content: 'jailbreak' },
+        { role: 'user', content: 'first' },
+        { role: 'assistant', content: 'ack' },
+        { role: 'user', content: 'second' },
+    ];
+    let received;
+    const { manager } = createManager({
+        runtime: createRuntime({
+            async executePreparedScenePlanner(input) {
+                received = input.planner.prompt;
+                return [{ scene: 'portrait', chars: [], placement: { insertAfter: 1 } }];
+            },
+        }),
+    });
+    t.after(() => manager.close());
+    const envelope = createEnvelope('run-prompt-multi');
+    envelope.planner.prompt.messages = messages;
+    manager.create('alice', envelope, {});
+    await waitFor(() => received);
+    assert.deepEqual(received, { systemPrompt: 'system', messages });
 });

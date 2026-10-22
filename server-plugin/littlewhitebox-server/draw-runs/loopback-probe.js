@@ -53,8 +53,8 @@ function resolveLoopbackTarget(req) {
     let listeningAddress = null;
     try {
         listeningAddress = req.socket?.server?.address?.();
-    } catch {
-        // A closing server may no longer expose its listening address.
+    } catch (caughtError) {
+        console.warn({ source: __filename, operation: "resolveLoopbackTarget" }, caughtError);
     }
     const port = Number(listeningAddress?.port);
     if (!listeningAddress || typeof listeningAddress === 'string'
@@ -117,6 +117,8 @@ function requestLoopbackJson(target, req, challenge, timeoutMs) {
     const requestModule = target.protocol === 'https:' ? https : http;
     const requestOptions = {
         protocol: target.protocol,
+        // A one-request agent does not inherit the global agent's environment proxy.
+        agent: false,
         hostname: target.hostname,
         port: target.port,
         path: LOOPBACK_VERIFY_REQUEST_PATH,
@@ -158,8 +160,8 @@ function requestLoopbackJson(target, req, challenge, timeoutMs) {
                 let parsed = null;
                 try {
                     parsed = JSON.parse(text);
-                } catch {
-                    // Authentication middleware may return HTML. The status code remains diagnostic.
+                } catch (caughtError) {
+                    console.warn({ source: __filename, operation: "request" }, caughtError);
                 }
                 settle(resolve, { statusCode: response.statusCode || 0, body: parsed });
             });
@@ -185,15 +187,19 @@ function describeCredential(expectedFingerprint) {
 function normalizeTransportError(error) {
     if (error instanceof LoopbackProbeError) return error;
     const code = String(error?.code || '');
+    // Native messages can include header values. Expose only the diagnostic code.
+    const details = /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? { transportCode: code } : undefined;
     if (['ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH'].includes(code)) {
         return new LoopbackProbeError(
             'loopback_unreachable',
             'The SillyTavern process could not reach its local listening socket.',
+            details,
         );
     }
     return new LoopbackProbeError(
         'loopback_transport_failed',
         'The SillyTavern loopback request failed.',
+        details,
     );
 }
 

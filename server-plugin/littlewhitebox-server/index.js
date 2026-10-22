@@ -1,6 +1,15 @@
 'use strict';
 
 /**
+ * @param {(req: import('express').Request, res: import('express').Response, next: import('express').NextFunction) => Promise<unknown>} handler
+ * @returns {import('express').RequestHandler}
+ */
+function asyncRoute(handler) {
+    // eslint-disable-next-line @typescript-eslint/no-misused-promises -- Express receives failures through next; return the observed task so direct callers can await completion.
+    return (req, res, next) => handler(req, res, next).catch(next);
+}
+
+/**
  * LittleWhiteBox server plugin. Feature routes are registered here; each feature owns its implementation.
  * Installation and coordinated frontend/backend upgrades are documented in README.md.
  */
@@ -44,6 +53,7 @@ const PLUGIN_CAPABILITIES = Object.freeze([
     'draw-runs-v1',
     'draw-run-runtime-v4',
     'draw-run-planner-retry-v1',
+    'draw-run-planner-layout-v1',
     CANCELLATION_CAPABILITY,
     EXA_BACKEND_CAPABILITY,
 ]);
@@ -194,7 +204,7 @@ async function init(router) {
 
     // v1 is the frozen upstream 1.0.1 contract; URL resolution deliberately
     // stays inside the client so input validation runs in its original order.
-    router.post('/v1/generate-image', async (req, res) => {
+    router.post('/v1/generate-image', asyncRoute(async (req, res) => {
         const scope = createRequestAbortScope(req, res);
         try {
             if (scope.signal.aborted) return;
@@ -225,11 +235,11 @@ async function init(router) {
         } finally {
             scope.dispose();
         }
-    });
+    }));
 
     registerGenerateRoute(router, '/v2/generate-image');
 
-    router.post('/v1/generate-image-stream', async (req, res) => {
+    router.post('/v1/generate-image-stream', asyncRoute(async (req, res) => {
         const scope = createRequestAbortScope(req, res);
         try {
             if (scope.signal.aborted) return;
@@ -274,9 +284,9 @@ async function init(router) {
         } finally {
             scope.dispose();
         }
-    });
+    }));
 
-    router.post('/v1/test', async (req, res) => {
+    router.post('/v1/test', asyncRoute(async (req, res) => {
         const scope = createRequestAbortScope(req, res);
         try {
             if (scope.signal.aborted) return;
@@ -299,7 +309,7 @@ async function init(router) {
         } finally {
             scope.dispose();
         }
-    });
+    }));
 
     registerTestRoute(router, '/v2/test');
 

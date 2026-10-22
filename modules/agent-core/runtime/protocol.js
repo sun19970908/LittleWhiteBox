@@ -96,6 +96,21 @@ export function extractGoogleProviderToolCalls(providerPayload, options = {}) {
 }
 
 export function resolveResultToolCalls(result = {}, providerConfig = {}, options = {}) {
+    // Abnormal transport endings do not invalidate complete calls, but must never
+    // turn a cut-off Write/Edit argument into a repaired, executable request.
+    if (result.completion === 'incomplete') {
+        for (const call of Array.isArray(result.toolCalls) ? result.toolCalls : []) {
+            try {
+                const args = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : call.arguments;
+                if (!args || typeof args !== 'object' || Array.isArray(args)) { throw new TypeError('Expected an argument object'); }
+            } catch (cause) {
+                const error = new Error('Model tool arguments are incomplete or invalid.', { cause });
+                error.code = 'AGENT_TOOL_ARGUMENTS_INVALID';
+                error.toolCallId = call.id;
+                throw error;
+            }
+        }
+    }
     const directToolCalls = normalizeToolCalls(result?.toolCalls, options);
     if (directToolCalls.length) return directToolCalls;
 
@@ -123,6 +138,21 @@ export function buildProviderAssistantToolCallMessage(result = {}, toolCalls = [
                 arguments: toolCall.arguments,
             },
         })),
+    };
+}
+
+// A client-written summary changes the prefix bound into Anthropic signatures.
+// Apply only to turns carried across that edit; new and unedited turns keep all
+// thinking. Keep text/tool_use and other providers' native payloads untouched.
+// https://platform.claude.com/docs/en/build-with-claude/preserved-thinking#custom-compaction-on-the-client
+export function dropInvalidatedThinkingFromMessage(message) {
+    const content = message?.providerPayload?.anthropicContent;
+    if (!Array.isArray(content)) return message;
+    return {
+        ...message,
+        providerPayload: { ...message.providerPayload,
+            anthropicContent: content.filter(block => !['thinking', 'redacted_thinking'].includes(block?.type)),
+        },
     };
 }
 

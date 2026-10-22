@@ -8,8 +8,9 @@ import {
     type AppModuleRegistry,
     type XiaobaiOsAppModule,
 } from '../kernel/app-registry.js';
-import type { ChatReferencePort, CapturedChatBinding, PartitionRegistration, CapabilityToken, XiaobaiOsStoragePort, JsonUserFilePort } from '../kernel/contracts.js';
+import type { ChatReferencePort, ChatPersistence, CapturedChatBinding, PartitionRegistration, CapabilityToken, XiaobaiOsStoragePort, JsonUserFilePort } from '../kernel/contracts.js';
 import { createUserTransactions, type UserTransactions } from '../kernel/user-transactions.js';
+import { startSaveRecovery } from './save-recovery.js';
 import { XiaobaiOsPartitionRegistry } from '../kernel/partition-registry.js';
 import {
     createTransactionCoordinator,
@@ -28,7 +29,7 @@ export interface KernelCompositionOptions {
     user?: {
         storage: JsonUserFilePort;
         initialPartitions(): Promise<Record<string, unknown>>;
-        resolveStory(write: boolean): Promise<CapturedChatBinding>;
+        resolveStory(write: boolean, chatPersistence?: ChatPersistence): Promise<CapturedChatBinding>;
     };
 }
 
@@ -89,12 +90,15 @@ export function createKernelComposition(
         filesFor,
     });
 
+    const stopRecovery: (() => void)[] = [];
     return Object.freeze({
         capabilities,
         apps,
         transactions,
         userTransactions,
         async install() {
+            stopRecovery.push(startSaveRecovery(transactions));
+            if (userTransactions) { stopRecovery.push(startSaveRecovery(userTransactions)); }
             await capabilities.install({
                 createStore,
                 files: transactions,
@@ -103,6 +107,7 @@ export function createKernelComposition(
             await apps.installAll();
         },
         async dispose() {
+            for (const stop of stopRecovery.splice(0)) { stop(); }
             const errors: unknown[] = [];
             try { await apps.dispose(); } catch (error) { errors.push(error); }
             try { await capabilities.dispose(); } catch (error) { errors.push(error); }

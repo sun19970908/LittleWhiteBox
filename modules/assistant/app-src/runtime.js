@@ -1,5 +1,7 @@
+import { pluginAsset } from '../../../core/build-assets.js';
 import { analyzeJavaScriptApiRequest } from '../runtime-src/jsapi-runtime.js';
 import { createDelegateRunner } from '../../agent-core/runtime/delegate-runner.js';
+import { agentErrorGuidance } from '../../agent-core/runtime/error-guidance.js';
 import { runWebSearchTool } from '../../agent-core/web/tools.js';
 import {
     buildProviderMessagesFromHistory,
@@ -12,8 +14,9 @@ import { createContextStatsController } from './runtime/context-stats.js';
 import { createHostToolRequestController } from './runtime/host-tool-requests.js';
 import { createHistoryCompactionController, splitMessagesIntoTurns } from './runtime/history-compaction.js';
 import { createStreamingMessageController } from './runtime/streaming-messages.js';
+import { settleAssistantRunFailure } from './runtime/run-failure.js';
 
-const JSAPI_MANIFEST_URL = new URL('../st-jsapi-manifest.json', import.meta.url);
+const JSAPI_MANIFEST_URL = pluginAsset('modules/assistant/st-jsapi-manifest.json');
 let jsApiManifestPromise = null;
 
 function normalizeJsApiRequestKind(value) {
@@ -87,8 +90,6 @@ export function createAssistantRuntime(deps) {
         HISTORY_SUMMARY_PREFIX,
         MAX_CONTEXT_TOKENS,
         SUMMARY_TRIGGER_TOKENS,
-        DEFAULT_PRESERVED_TURNS,
-        MIN_PRESERVED_TURNS,
         MAX_TOOL_ROUNDS,
         REQUEST_TIMEOUT_MS,
         TOOL_DEFINITIONS,
@@ -103,7 +104,8 @@ export function createAssistantRuntime(deps) {
         const activity = toolActivity.get(call);
         if (!activity) return null;
         if (state.activeRun === activity.run && !activity.run.controller.signal.aborted) return activity.phase;
-        return activity.phase === 'running' ? 'unconfirmed' : 'not-executed';
+        if (activity.phase !== 'running') return 'not-executed';
+        return call.name === TOOL_NAMES.GREP ? 'stopped' : 'unconfirmed';
     }
     function advanceToolActivity(call, run, phase) {
         if (toolActivity.has(call)) {
@@ -253,7 +255,6 @@ export function createAssistantRuntime(deps) {
         buildToolFailureResult,
         callHostTool,
         clearPendingToolCalls,
-        postHostToolCallWithoutResponse,
         recordToolErrorForLightBrake,
         resetToolErrorLightBrake,
     } = createHostToolRequestController({
@@ -271,9 +272,9 @@ export function createAssistantRuntime(deps) {
         if (!run) return;
         run.cancelNotice = notice;
         state.progressLabel = '终止中';
+        run.controller.abort();
         clearPendingToolCalls(run.id, new Error('tool_aborted'));
         clearPendingApprovals(run.id, new Error('tool_aborted'));
-        run.controller.abort();
         render();
     }
 
@@ -321,8 +322,6 @@ export function createAssistantRuntime(deps) {
         buildTextWithAttachmentSummary,
         trimForSummary,
         SUMMARY_SYSTEM_PROMPT,
-        DEFAULT_PRESERVED_TURNS,
-        MIN_PRESERVED_TURNS,
         SUMMARY_TRIGGER_TOKENS,
         buildContextMeterLabel,
         updateContextStats,
@@ -724,6 +723,7 @@ export function createAssistantRuntime(deps) {
                     provider: String(providerConfig?.provider || ''),
                     model: String(providerConfig?.model || ''),
                     message: error instanceof Error ? error.message : String(error || ''),
+                    ...(agentErrorGuidance(error) ? { parser: error.cause?.message } : {}),
                 });
                 if (streamingAssistantMessage) {
                     finalizeStreamingAssistantMessage(streamingAssistantMessage);
@@ -802,16 +802,18 @@ export function createAssistantRuntime(deps) {
             const fallbackContent = sawToolExecution
                 ? '工具已执行完成，但模型没有生成最终答复。'
                 : '没有拿到有效回复。';
-            if (streamingAssistantMessage) {
+            if (!hasVisibleText(result.text)) {
+                settleAssistantRunFailure({ messages: state.messages, notice: fallbackContent, pushMessage, persistSession });
+            } else if (streamingAssistantMessage) {
                 finalizeStreamingAssistantMessage(streamingAssistantMessage, {
-                    content: result.text || fallbackContent,
+                    content: result.text,
                     thoughts: result.thoughts,
                     providerPayload: result.providerPayload,
                 });
             } else {
                 pushMessage({
                     role: 'assistant',
-                    content: result.text || fallbackContent,
+                    content: result.text,
                     thoughts: result.thoughts,
                     providerPayload: result.providerPayload,
                 });
@@ -821,10 +823,9 @@ export function createAssistantRuntime(deps) {
             return;
         }
 
-        pushMessage({
-            role: 'assistant',
-            content: `这轮工具调用已经到上限了（${MAX_TOOL_ROUNDS}/${MAX_TOOL_ROUNDS}）。你可以把问题再收窄一点，比如直接给我模块名、设置项名或报错文本。`,
-        });
+        settleAssistantRunFailure({ messages: state.messages,
+            notice: `这轮工具调用已经到上限了（${MAX_TOOL_ROUNDS}/${MAX_TOOL_ROUNDS}）。你可以把问题再收窄一点，比如直接给我模块名、设置项名或报错文本。`,
+            pushMessage, persistSession });
         state.progressLabel = '';
         render();
     }
@@ -840,6 +841,5 @@ export function createAssistantRuntime(deps) {
         getActiveContextMessages,
         runAssistantLoop,
         callHostTool,
-        postHostToolCallWithoutResponse,
     };
 }

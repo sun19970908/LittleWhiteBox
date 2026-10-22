@@ -1,4 +1,5 @@
-import { extension_settings, getContext } from '../../../../../../extensions.js';
+import { getContext } from '../../../../../../extensions.js';
+import { extensionSettings as extension_settings } from './host-state.js';
 import { power_user } from '../../../../../../power-user.js';
 import { user_avatar } from '../../../../../../personas.js';
 import { getTagKeyForEntity, tag_map } from '../../../../../../tags.js';
@@ -350,7 +351,7 @@ function getCurrentCharacter(ctx: Record<string, unknown> = getContext?.() || {}
             if (character && typeof character === 'object') {
                 return mergeCharacterRecord(runtime, character as Record<string, unknown>);
             }
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "getCurrentCharacter" }, caughtError); }
     }
     if (Array.isArray(ctx.characters) && id !== undefined && id !== null) {
         const character = ctx.characters[index];
@@ -388,7 +389,7 @@ function normalizeCharacter(ctx: Record<string, unknown> = getContext?.() || {},
         data.name,
         ctx.name2,
     ].map((value) => normalizeText(value)).find((value) => value && !isSystemCharacterName(value)) || '';
-    const tagKey = getTagKeyForEntity?.(nativeCharacterId as string | number | null);
+    const tagKey = getTagKeyForEntity?.(nativeCharacterId as string | number);
     const tags = tagKey && Array.isArray(tag_map?.[tagKey])
         ? tag_map[tagKey].map((item) => normalizeText(item)).filter(Boolean)
         : [];
@@ -476,7 +477,7 @@ function collectWorldbookSources(ctx: Record<string, unknown> = getContext?.() |
     addUnique(characterLoreIds, data.avatar);
     try {
         addUnique(characterLoreIds, getCharaFilename(resolveNativeCharacterId(ctx, options) as string | number | null));
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "collectWorldbookSources" }, caughtError); }
     const characterLoreIdSet = new Set(characterLoreIds);
     asArray<Record<string, unknown>>(worldInfo.charLore).forEach((entry) => {
         if (characterLoreIdSet.has(normalizeText(entry?.name))) {

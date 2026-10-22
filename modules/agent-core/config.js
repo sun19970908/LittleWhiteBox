@@ -1,5 +1,6 @@
 import { normalizeWebApiKey, normalizeWebBaseUrl, normalizeWebSettings } from './web/settings.js';
 import { normalizeReasoningConfig } from './reasoning-config.js';
+import { normalizeSampling } from './sampling.js';
 import { normalizeAgentApiKey } from './provider-auth.js';
 import { DEFAULT_MODEL_LIST_AUTH, normalizeModelListAuth, supportsModelListAuth } from './model-list-auth.js';
 
@@ -26,6 +27,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         temperature: 1,
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
+        sampling: {},
     },
     'openai-compatible': {
         baseUrl: 'https://api.openai.com/v1',
@@ -35,6 +37,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
         toolMode: 'tagged-json',
+        sampling: {},
     },
     'sillytavern-openai-compatible': {
         baseUrl: '',
@@ -44,6 +47,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
         toolMode: 'tagged-json',
+        sampling: {},
     },
     'sillytavern-claude': {
         baseUrl: '',
@@ -53,6 +57,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         temperature: 1,
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
+        sampling: {},
     },
     'sillytavern-google': {
         baseUrl: '',
@@ -61,6 +66,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         temperature: 1,
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
+        sampling: {},
     },
     anthropic: {
         baseUrl: 'https://api.anthropic.com',
@@ -70,6 +76,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         temperature: 1,
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
+        sampling: {},
     },
     google: {
         baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
@@ -78,6 +85,7 @@ export const DEFAULT_MODEL_CONFIGS = {
         temperature: 1,
         maxTokens: DEFAULT_MAX_TOKENS,
         sendTemperature: true,
+        sampling: {},
     },
 };
 
@@ -146,6 +154,7 @@ export function normalizeModelConfigs(modelConfigs = {}) {
                 ? { toolMode: String(source.toolMode || defaults.toolMode || 'native') }
                 : {}),
             reasoning: normalizeReasoningConfig(source.reasoning),
+            sampling: normalizeSampling(source.sampling),
         };
     });
     return next;

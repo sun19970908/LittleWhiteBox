@@ -1,4 +1,5 @@
 import { normalizeWebSettings } from '../agent-core/web/settings.js';
+import { tryParseJson } from '../../shared/common/json-candidate.js';
 import { getRequestHeaders } from "../../../../../../script.js";
 import * as scriptModule from "../../../../../../script.js";
 import { getContext } from "../../../../../extensions.js";
@@ -16,6 +17,10 @@ import { normalizeSlashSkillTrigger } from "./app-src/slash-command-policy.js";
 import { applyPatchUpdateToText, parseApplyPatch } from "../agent-core/tools/apply-patch.js";
 import { buildPatchFailureResult, runPatchValidationAndApply } from "../agent-core/tools/apply-patch-execution.js";
 import { createLocalSourcesToolRuntime } from "./shared/local-sources-tool-runtime.js";
+import { workspaceRepository } from './shared/workspace-repository.js';
+import { MAX_READ_RETURN_CHARS, MAX_READ_LINE_CHARS, headPreviewLines, sliceLinesWithBudget, truncateReadLine } from './shared/read-window.js';
+import { readTextPreview } from '../agent-core/runtime/text-preview.js';
+import { orderedConcurrentRead } from '../agent-core/runtime/ordered-concurrent-read.js';
 import {
     LOOKUP_SCOPE_PROJECT,
     LOOKUP_SCOPE_LOCAL,
@@ -55,7 +60,6 @@ import {
     removeLocalSourcePath as kernelRemoveLocalSourcePath,
     upsertLocalSourceDirectory as kernelUpsertLocalSourceDirectory,
     upsertLocalSourceFile as kernelUpsertLocalSourceFile,
-    validateLocalSourcesSnapshot as kernelValidateLocalSourcesSnapshot,
 } from "./shared/local-workspace-kernel.js";
 import {
     INTERNAL_WORKSPACE_TOOL_NAMES,
@@ -65,6 +69,10 @@ import {
     buildWorkspaceOpMeta,
     isWorkspaceMutationTool,
 } from "./shared/workspace-protocol.js";
+import { observeAsyncCallback, observeBackgroundTask } from '../../shared/common/async-errors.js';
+
+const handleIframeMessageEvent = observeAsyncCallback(handleIframeMessage, { source: import.meta.url, operation: "handleIframeMessage" });
+
 
 const MODULE_ID = 'assistant';
 const OVERLAY_ID = 'xiaobaix-assistant-overlay';
@@ -95,12 +103,9 @@ const EMPTY_SKILLS_CATALOG = Object.freeze({
 });
 const MAX_SKILL_PROMPT_ITEMS = 20;
 const MAX_READ_FILE_BYTES = 100 * 1024;
-const MAX_READ_RETURN_CHARS = 50 * 1024;
 const MAX_JSAPI_RETURN_CHARS = 50 * 1024;
 const DEFAULT_AUTO_READ_LINES = 2000;
 const MAX_READ_RANGE_LINES = 2000;
-const MAX_READ_LINE_CHARS = 2000;
-const READ_LINE_TRUNCATION_SUFFIX = `... (line truncated to ${MAX_READ_LINE_CHARS} chars)`;
 const READ_STREAM_HEAD_EXTRA_LINES = 8;
 const READ_STREAM_HEAD_EXTRA_CHARS = MAX_READ_LINE_CHARS * 2;
 const MAX_PATH_SUGGESTIONS = 3;
@@ -296,8 +301,8 @@ async function buildAssistantRuntimePayload(signal) {
 
     try {
         await ensureUserFile(getAssistantSettings().workspaceFileName || DEFAULT_WORKSPACE_FILE, DEFAULT_WORKLOG_CONTENT, { signal });
-    } catch {
-        // Ignore auto-create failures so the assistant can still start.
+    } catch (caughtError) {
+        console.warn({ source: import.meta.url, operation: "buildAssistantRuntimePayload" }, caughtError);
     }
 
     const skillsRuntime = await readSkillsRuntimeData({ signal });
@@ -355,10 +360,6 @@ function findLocalDirectoryByPath(publicPath, localSources = localSourcesCache) 
         directories: match.directories,
         source: match.source,
     };
-}
-
-function validateLocalSourcesSnapshot(localSources = []) {
-    return kernelValidateLocalSourcesSnapshot(localSources);
 }
 
 function getWritableLocalPathError(rawPath) {
@@ -435,7 +436,7 @@ async function loadJsApiManifest(signal) {
 
 async function loadJsApiRuntimeModule() {
     if (!jsApiRuntimeModulePromise) {
-        jsApiRuntimeModulePromise = import('./dist/jsapi-runtime.js');
+        jsApiRuntimeModulePromise = import('./runtime-src/jsapi-runtime.js');
     }
     return jsApiRuntimeModulePromise;
 }
@@ -821,10 +822,8 @@ function buildSkillFileContent({
 function parseSkillFrontmatterListValue(rawValue = '') {
     const value = String(rawValue ?? '').trim();
     if (!value) return '';
-    try {
-        const parsed = JSON.parse(value);
-        if (typeof parsed === 'string') return parsed;
-    } catch {}
+    const candidate = tryParseJson(value);
+    if (candidate.ok && typeof candidate.value === 'string') return candidate.value;
     return value.replace(/^"([\s\S]*)"$/, '$1').replace(/^'([\s\S]*)'$/, '$1');
 }
 
@@ -936,21 +935,6 @@ function ensureNotAborted(signal) {
     }
 }
 
-function countNewlines(text = '') {
-    let count = 0;
-    for (let index = 0; index < text.length; index += 1) {
-        if (text.charCodeAt(index) === 10) count += 1;
-    }
-    return count;
-}
-
-function getResponseSizeBytes(response) {
-    const headerSize = Number.parseInt(response.headers.get('content-length') || '', 10);
-    return Number.isFinite(headerSize) && headerSize >= 0
-        ? headerSize
-        : null;
-}
-
 async function fetchTextResponse(publicPath, options = {}) {
     const cacheKey = String(publicPath || '').trim();
     if (!cacheKey) throw new Error('empty_path');
@@ -965,125 +949,16 @@ async function fetchTextResponse(publicPath, options = {}) {
     return response;
 }
 
-async function readRemoteTextHead(publicPath, options = {}, lineLimit = DEFAULT_AUTO_READ_LINES) {
+async function readRemoteTextPreview(publicPath, options, lineLimit, tail) {
     const response = await fetchTextResponse(publicPath, options);
-    const reportedSizeBytes = getResponseSizeBytes(response);
-    const reader = response.body?.getReader?.();
-    if (!reader || typeof TextDecoder !== 'function') {
-        const text = await response.text();
-        return {
-            text,
-            truncated: false,
-            sizeBytes: reportedSizeBytes ?? new TextEncoder().encode(text).length,
-        };
-    }
-
-    const decoder = new TextDecoder();
-    const chunks = [];
-    let truncated = false;
-    let decodedChars = 0;
-    let decodedLines = 0;
-    let streamedBytes = 0;
-    const safeLineLimit = Math.max(1, Math.min(Math.trunc(Number(lineLimit) || DEFAULT_AUTO_READ_LINES), DEFAULT_AUTO_READ_LINES));
-    const previewLineBudget = safeLineLimit + READ_STREAM_HEAD_EXTRA_LINES;
-    const previewCharBudget = MAX_READ_RETURN_CHARS + READ_STREAM_HEAD_EXTRA_CHARS;
-
-    while (true) {
-        ensureNotAborted(options.signal);
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-
-        streamedBytes += value.byteLength || 0;
-        const chunkText = decoder.decode(value, { stream: true });
-        if (!chunkText) continue;
-
-        chunks.push(chunkText);
-        decodedChars += chunkText.length;
-        decodedLines += countNewlines(chunkText);
-
-        if (decodedLines >= previewLineBudget || decodedChars >= previewCharBudget) {
-            truncated = true;
-            try {
-                await reader.cancel('preview_complete');
-            } catch {}
-            break;
-        }
-    }
-
-    if (!truncated) {
-        const tail = decoder.decode();
-        if (tail) {
-            chunks.push(tail);
-        }
-    }
-
-    return {
-        text: chunks.join(''),
-        truncated,
-        sizeBytes: reportedSizeBytes ?? (truncated ? null : streamedBytes),
-    };
-}
-
-async function readRemoteTextTail(publicPath, options = {}, lineLimit = DEFAULT_AUTO_READ_LINES) {
-    const response = await fetchTextResponse(publicPath, options);
-    const reportedSizeBytes = getResponseSizeBytes(response);
-    const reader = response.body?.getReader?.();
-    if (!reader || typeof TextDecoder !== 'function') {
-        const text = await response.text();
-        return {
-            text,
-            truncated: false,
-            sizeBytes: reportedSizeBytes ?? new TextEncoder().encode(text).length,
-        };
-    }
-
-    const decoder = new TextDecoder();
-    const safeLineLimit = Math.max(1, Math.min(Math.trunc(Number(lineLimit) || DEFAULT_AUTO_READ_LINES), DEFAULT_AUTO_READ_LINES));
-    const tailBudget = safeLineLimit + READ_STREAM_HEAD_EXTRA_LINES;
-    let tailText = '';
-    let streamedBytes = 0;
-    let truncated = false;
-    let totalNewlinesSeen = 0;
-
-    while (true) {
-        ensureNotAborted(options.signal);
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (!value) continue;
-
-        streamedBytes += value.byteLength || 0;
-        const chunkText = decoder.decode(value, { stream: true });
-        if (!chunkText) continue;
-
-        tailText += chunkText;
-        totalNewlinesSeen += countNewlines(chunkText);
-        if (countNewlines(tailText) > tailBudget || tailText.length > MAX_READ_RETURN_CHARS + READ_STREAM_HEAD_EXTRA_CHARS) {
-            const lines = tailText.split('\n');
-            tailText = lines.slice(-tailBudget).join('\n');
-            if (tailText.length > MAX_READ_RETURN_CHARS + READ_STREAM_HEAD_EXTRA_CHARS) {
-                tailText = tailText.slice(-(MAX_READ_RETURN_CHARS + READ_STREAM_HEAD_EXTRA_CHARS));
-            }
-            truncated = true;
-        }
-    }
-
-    const tail = decoder.decode();
-    if (tail) {
-        tailText += tail;
-        totalNewlinesSeen += countNewlines(tail);
-    }
-    if (countNewlines(tailText) > tailBudget) {
-        tailText = tailText.split('\n').slice(-tailBudget).join('\n');
-        truncated = true;
-    }
-
-    return {
-        text: tailText,
-        truncated,
-        hasMoreBefore: totalNewlinesSeen >= safeLineLimit,
-        sizeBytes: reportedSizeBytes ?? streamedBytes,
-    };
+    return readTextPreview(response, {
+        lineLimit,
+        extraLines: READ_STREAM_HEAD_EXTRA_LINES,
+        charLimit: MAX_READ_RETURN_CHARS + READ_STREAM_HEAD_EXTRA_CHARS,
+        lineChars: MAX_READ_LINE_CHARS,
+        tail,
+        assertCurrent: () => ensureNotAborted(options.signal),
+    });
 }
 
 async function readTextFile(publicPath, options = {}) {
@@ -1340,12 +1215,6 @@ function directoryExistsAtPath(directoryPath, files, localSources = localSources
     return false;
 }
 
-function truncateReadLine(line = '') {
-    const text = String(line ?? '');
-    if (text.length <= MAX_READ_LINE_CHARS) return text;
-    return `${text.slice(0, MAX_READ_LINE_CHARS)}${READ_LINE_TRUNCATION_SUFFIX}`;
-}
-
 function truncateSearchLine(line = '') {
     return truncateReadLine(line);
 }
@@ -1505,87 +1374,6 @@ function clampLineNumber(value, fallback, totalLines) {
     return Math.min(Math.max(1, Math.trunc(numeric)), Math.max(totalLines, 1));
 }
 
-function formatLineNumberedContent(lines, startLine, totalLines) {
-    if (!Number.isFinite(Number(startLine))) {
-        return lines.map((line) => truncateReadLine(line));
-    }
-    const width = String(Math.max(totalLines, startLine)).length;
-    return lines.map((line, index) => `${String(startLine + index).padStart(width, ' ')}\t${truncateReadLine(line)}`);
-}
-
-function sliceLinesWithBudget(lines, startLine, requestedEndLine, maxChars) {
-    const totalLines = lines.length;
-    const safeStartLine = Math.max(1, Math.trunc(Number(startLine) || 1));
-    const safeEndLine = Math.min(Math.max(safeStartLine, requestedEndLine), Math.max(totalLines, 1));
-    const selected = [];
-    let totalChars = 0;
-    let endLine = safeStartLine - 1;
-    let charLimited = false;
-
-    for (let lineNumber = safeStartLine; lineNumber <= safeEndLine; lineNumber += 1) {
-        const line = lines[lineNumber - 1] ?? '';
-        const numberedLine = formatLineNumberedContent([line], lineNumber, totalLines)[0];
-        const addition = selected.length ? numberedLine.length + 1 : numberedLine.length;
-        if (selected.length && totalChars + addition > maxChars) {
-            charLimited = true;
-            break;
-        }
-        if (!selected.length && addition > maxChars) {
-            selected.push(numberedLine.slice(0, maxChars));
-            totalChars = maxChars;
-            endLine = lineNumber;
-            charLimited = true;
-            break;
-        }
-        selected.push(numberedLine);
-        totalChars += addition;
-        endLine = lineNumber;
-    }
-
-    if (!selected.length && totalLines === 0) {
-        return {
-            content: '',
-            endLine: 0,
-            charLimited: false,
-        };
-    }
-
-    return {
-        content: selected.join('\n'),
-        endLine,
-        charLimited,
-    };
-}
-
-function sliceTailLinesWithBudget(lines, maxChars) {
-    const selected = [];
-    let totalChars = 0;
-    let charLimited = false;
-
-    for (const line of lines) {
-        const formattedLine = truncateReadLine(line);
-        const addition = selected.length ? formattedLine.length + 1 : formattedLine.length;
-        if (selected.length && totalChars + addition > maxChars) {
-            charLimited = true;
-            break;
-        }
-        if (!selected.length && addition > maxChars) {
-            selected.push(formattedLine.slice(0, maxChars));
-            totalChars = maxChars;
-            charLimited = true;
-            break;
-        }
-        selected.push(formattedLine);
-        totalChars += addition;
-    }
-
-    return {
-        content: selected.join('\n'),
-        returnedLines: selected.length,
-        charLimited,
-    };
-}
-
 async function readFile(args = {}, options = {}) {
     const manifest = await loadManifest(options.signal);
     const scope = normalizeLookupScope(args.scope);
@@ -1680,8 +1468,8 @@ async function readFile(args = {}, options = {}) {
         && requestedTail !== null;
 
     if (shouldStreamHeadPreview) {
-        const preview = await readRemoteTextHead(entry.publicPath, options, requestedLimit);
-        const previewLines = preview.text === '' ? [] : preview.text.split('\n');
+        const preview = await readRemoteTextPreview(entry.publicPath, options, requestedLimit, false);
+        const previewLines = headPreviewLines(preview);
         const previewSizeBytes = indexedSizeBytes ?? preview.sizeBytes;
 
         if (previewLines.length === 0) {
@@ -1708,7 +1496,7 @@ async function readFile(args = {}, options = {}) {
         }
 
         const previewRequestedEndLine = Math.min(previewLines.length, requestedLimit);
-        const slice = sliceLinesWithBudget(previewLines, 1, previewRequestedEndLine, MAX_READ_RETURN_CHARS);
+        const slice = sliceLinesWithBudget(previewLines, 1, previewRequestedEndLine);
         const endLine = slice.endLine || previewRequestedEndLine;
         const totalLines = preview.truncated ? null : previewLines.length;
         const hasMoreAfter = preview.truncated || endLine < previewLines.length;
@@ -1741,12 +1529,10 @@ async function readFile(args = {}, options = {}) {
     }
 
     if (shouldStreamTailPreview) {
-        const preview = await readRemoteTextTail(entry.publicPath, options, requestedTail);
+        const preview = await readRemoteTextPreview(entry.publicPath, options, requestedTail, true);
         const tailLines = preview.text === '' ? [] : preview.text.split('\n').slice(-requestedTail);
         const previewSizeBytes = indexedSizeBytes ?? preview.sizeBytes;
-        const slice = tailLines.length
-            ? sliceTailLinesWithBudget(tailLines, MAX_READ_RETURN_CHARS)
-            : { content: '', returnedLines: 0, charLimited: false };
+        const slice = sliceLinesWithBudget(tailLines, 1, tailLines.length, { numbered: false, fromEnd: true });
 
         return {
             path: entry.publicPath,
@@ -1758,7 +1544,7 @@ async function readFile(args = {}, options = {}) {
             startLine: null,
             endLine: null,
             returnedLines: slice.returnedLines,
-            hasMoreBefore: preview.hasMoreBefore === true,
+            hasMoreBefore: preview.hasMoreBefore === true || preview.truncated || slice.charLimited,
             hasMoreAfter: false,
             nextOffset: null,
             truncated: preview.truncated || slice.charLimited,
@@ -1815,16 +1601,17 @@ async function readFile(args = {}, options = {}) {
         });
     }
 
-    const startLine = requestedTail !== null
+    const requestedStartLine = requestedTail !== null
         ? Math.max(1, totalLines - requestedTail + 1)
         : clampLineNumber(args.offset ?? args.startLine, 1, totalLines);
     const explicitLimit = resolveReadLimit(args.limit);
     const requestedEndLine = requestedTail !== null
         ? totalLines
         : Number.isFinite(requestedEndAlias)
-            ? clampLineNumber(requestedEndAlias, Math.min(totalLines, startLine + explicitLimit - 1), totalLines)
-            : Math.min(totalLines, startLine + explicitLimit - 1, startLine + MAX_READ_RANGE_LINES - 1);
-    const slice = sliceLinesWithBudget(lines, startLine, requestedEndLine, MAX_READ_RETURN_CHARS);
+            ? clampLineNumber(requestedEndAlias, Math.min(totalLines, requestedStartLine + explicitLimit - 1), totalLines)
+            : Math.min(totalLines, requestedStartLine + explicitLimit - 1, requestedStartLine + MAX_READ_RANGE_LINES - 1);
+    const slice = sliceLinesWithBudget(lines, requestedStartLine, requestedEndLine, { fromEnd: requestedTail !== null });
+    const startLine = slice.startLine;
     const endLine = slice.endLine || requestedEndLine;
     const hasMoreBefore = startLine > 1;
     const hasMoreAfter = endLine < totalLines;
@@ -2121,89 +1908,91 @@ async function grepFiles(args = {}, options = {}) {
     let totalMatches = 0;
     let seenContentMatches = 0;
     let skippedFiles = 0;
-    const skippedPaths = [];
-    for (const entry of candidateFiles) {
+    const readErrors = [];
+    const reads = orderedConcurrentRead(candidateFiles,
+        (entry, signal) => readTextFile(entry.publicPath, { ...options, signal }), options.signal);
+    for await (const read of reads) {
         ensureNotAborted(options.signal);
+        const entry = read.item;
         scannedFiles += 1;
-
-        try {
-            const text = await readTextFile(entry.publicPath, options);
-            const lines = text.split('\n');
-            const matches = [];
-
-            lines.forEach((line, lineIndex) => {
-                const isMatch = useRegex
-                    ? regex.test(line)
-                    : line.toLowerCase().includes(loweredPattern);
-
-                if (!isMatch) return;
-
-                const lineNumber = lineIndex + 1;
-                const contextStart = Math.max(0, lineIndex - contextLines);
-                const contextEnd = Math.min(lines.length, lineIndex + contextLines + 1);
-                const contextText = lines.slice(contextStart, contextEnd)
-                    .map((contextLine, contextIndex) => {
-                        const num = contextStart + contextIndex + 1;
-                        const prefix = num === lineNumber ? '>' : ' ';
-                        return `${prefix} ${num}: ${truncateSearchLine(contextLine)}`;
-                    })
-                    .join('\n');
-
-                matches.push({
-                    line: lineNumber,
-                    text: truncateSearchLine(line),
-                    context: contextLines > 0 ? contextText : null,
-                });
-            });
-
-            if (!matches.length) continue;
-            matchedFiles += 1;
-            totalMatches += matches.length;
-
-            if (outputMode === 'count') {
-                if (matchedFiles <= offset) continue;
-                results.push({
-                    path: entry.publicPath,
-                    source: entry.source,
-                    matchCount: matches.length,
-                });
-            } else if (outputMode === 'files_with_matches') {
-                if (matchedFiles <= offset) continue;
-                results.push({
-                    path: entry.publicPath,
-                    source: entry.source,
-                    matchCount: matches.length,
-                });
-            } else {
-                matches.forEach((match) => {
-                    seenContentMatches += 1;
-                    if (seenContentMatches <= offset) return;
-                    if (results.length >= limit) return;
-                    results.push({
-                        path: entry.publicPath,
-                        source: entry.source,
-                        line: match.line,
-                        text: match.text,
-                        context: match.context,
-                    });
-                });
-            }
-            if (results.length >= limit) {
-                truncated = outputMode === 'content'
-                    ? totalMatches > offset + results.length || scannedFiles < candidateFiles.length
-                    : matchedFiles < candidateFiles.length || scannedFiles < candidateFiles.length;
-                break;
-            }
-        } catch {
+        if (!read.ok) {
+            if (read.error?.name === 'AbortError') throw read.error;
             skippedFiles += 1;
-            if (skippedPaths.length < MAX_PATH_SUGGESTIONS) {
-                skippedPaths.push(entry.publicPath);
+            if (readErrors.length < MAX_PATH_SUGGESTIONS) {
+                readErrors.push({ path: entry.publicPath, cause: String(read.error?.message || read.error) });
             }
             continue;
         }
+        const lines = read.value.split('\n');
+        const matches = [];
+
+        lines.forEach((line, lineIndex) => {
+            const isMatch = useRegex
+                ? regex.test(line)
+                : line.toLowerCase().includes(loweredPattern);
+
+            if (!isMatch) return;
+
+            const lineNumber = lineIndex + 1;
+            const contextStart = Math.max(0, lineIndex - contextLines);
+            const contextEnd = Math.min(lines.length, lineIndex + contextLines + 1);
+            const contextText = lines.slice(contextStart, contextEnd)
+                .map((contextLine, contextIndex) => {
+                    const num = contextStart + contextIndex + 1;
+                    const prefix = num === lineNumber ? '>' : ' ';
+                    return `${prefix} ${num}: ${truncateSearchLine(contextLine)}`;
+                })
+                .join('\n');
+
+            matches.push({
+                line: lineNumber,
+                text: truncateSearchLine(line),
+                context: contextLines > 0 ? contextText : null,
+            });
+        });
+
+        if (!matches.length) continue;
+        matchedFiles += 1;
+        totalMatches += matches.length;
+
+        if (outputMode === 'count') {
+            if (matchedFiles <= offset) continue;
+            results.push({
+                path: entry.publicPath,
+                source: entry.source,
+                matchCount: matches.length,
+            });
+        } else if (outputMode === 'files_with_matches') {
+            if (matchedFiles <= offset) continue;
+            results.push({
+                path: entry.publicPath,
+                source: entry.source,
+                matchCount: matches.length,
+            });
+        } else {
+            matches.forEach((match) => {
+                seenContentMatches += 1;
+                if (seenContentMatches <= offset) return;
+                if (results.length >= limit) return;
+                results.push({
+                    path: entry.publicPath,
+                    source: entry.source,
+                    line: match.line,
+                    text: match.text,
+                    context: match.context,
+                });
+            });
+        }
+        if (results.length >= limit) {
+            truncated = outputMode === 'content'
+                ? totalMatches > offset + results.length || scannedFiles < candidateFiles.length
+                : matchedFiles < candidateFiles.length || scannedFiles < candidateFiles.length;
+            break;
+        }
     }
 
-    const searchComplete = !truncated && scannedFiles >= candidateFiles.length;
+    ensureNotAborted(options.signal);
+    const searchComplete = !truncated && scannedFiles >= candidateFiles.length && skippedFiles === 0;
     const matchesFound = totalMatches;
 
     return {
@@ -2224,7 +2013,8 @@ async function grepFiles(args = {}, options = {}) {
         truncated,
         scannedFiles,
         skippedFiles,
-        skippedPaths,
+        skippedPaths: readErrors.map(error => error.path),
+        readErrors,
         candidateFiles: candidateFiles.length,
         indexedFiles: files.length,
         searchComplete,
@@ -3058,8 +2848,8 @@ async function readSkillsRuntimeData(options = {}) {
                 memorySection: 'skills',
                 noteKind: '',
             });
-        } catch {
-            // Ignore individual skill file failures so the rest of the panel can still load.
+        } catch (caughtError) {
+            console.warn({ source: import.meta.url, operation: "readSkillsRuntimeData" }, caughtError);
         }
     }
 
@@ -3086,8 +2876,8 @@ async function readSkillsRuntimeData(options = {}) {
                 memorySection: 'notes',
                 noteKind: 'identity',
             });
-        } catch {
-            // Ignore note loading failures so the rest of the panel can still load.
+        } catch (caughtError) {
+            console.warn({ source: import.meta.url, operation: "readSkillsRuntimeData" }, caughtError);
         }
     }
 
@@ -3114,8 +2904,8 @@ async function readSkillsRuntimeData(options = {}) {
                 memorySection: 'notes',
                 noteKind: 'worklog',
             });
-        } catch {
-            // Ignore note loading failures so the rest of the panel can still load.
+        } catch (caughtError) {
+            console.warn({ source: import.meta.url, operation: "readSkillsRuntimeData" }, caughtError);
         }
     }
 
@@ -3461,7 +3251,7 @@ function getLocalSourcesToolRuntime() {
             },
             normalizeLocalSourcesSnapshot,
             executeToolCall,
-            validateLocalSources: validateLocalSourcesSnapshot,
+            repository: workspaceRepository,
         });
     }
     return localSourcesToolRuntime;
@@ -3483,9 +3273,8 @@ function openAssistant() {
     if (!getAssistantHostWindow().open()) return;
     settingsLoaded = false;
 
-    // Guarded inside handleIframeMessage via isTrustedIframeEvent.
-    // eslint-disable-next-line no-restricted-syntax
-    window.addEventListener('message', handleIframeMessage);
+    // eslint-disable-next-line no-restricted-syntax -- Guarded inside handleIframeMessage via isTrustedIframeEvent.
+    window.addEventListener('message', handleIframeMessageEvent);
 }
 
 async function pushAssistantConfigToIframe(options = {}) {
@@ -3555,7 +3344,7 @@ function openAssistantSettings() {
 }
 
 function closeAssistant() {
-    window.removeEventListener('message', handleIframeMessage);
+    window.removeEventListener('message', handleIframeMessageEvent);
     getAssistantHostWindow().close();
     getLocalSourcesToolRuntime().clearLocalSources();
     assistantFrameReady = false;
@@ -3637,6 +3426,10 @@ async function handleIframeMessage(event) {
             console.info('[Assistant][HostBridge] workspace-hydrate:received', summarizeLocalSourcesForDebug(payload?.localSources));
             await getLocalSourcesToolRuntime().hydrateLocalSources(payload?.localSources);
             break;
+        case WORKSPACE_MESSAGE_TYPES.FLUSH:
+            await getLocalSourcesToolRuntime().flush();
+            replyAssistantHostResult(String(payload?.requestId || ''), { ok: true });
+            break;
         case 'xb-assistant:tool-call': {
             const requestId = payload?.requestId || '';
             const toolName = payload?.name || '';
@@ -3650,11 +3443,13 @@ async function handleIframeMessage(event) {
                 requestId,
                 toolName,
                 cache: summarizeLocalSourcesForDebug(localSourcesCache),
-                workspaceMeta,
+                workspaceMeta: { source: workspaceMeta.source, opId: workspaceMeta.opId, path: workspaceMeta.path },
             });
             const controller = new AbortController();
             activeToolControllers.set(requestId, controller);
             try {
+                let workspaceObservations = [];
+                let workspaceConflictSnapshot;
                 let result = isPlanToolName(toolName)
                     ? await executeToolCall(toolName, args, {
                         signal: controller.signal,
@@ -3663,6 +3458,8 @@ async function handleIframeMessage(event) {
                     : await getLocalSourcesToolRuntime().execute(toolName, args, {
                         signal: controller.signal,
                         workspaceMeta,
+                        onWorkspaceObserved: observations => { workspaceObservations = observations; },
+                        onWorkspaceConflict: snapshot => { workspaceConflictSnapshot = snapshot; },
                         onLocalSourcesUpdated: (nextSources, workspaceState) => {
                             postToIframe(iframe, {
                                 type: LOCAL_SOURCES_UPDATED,
@@ -3724,7 +3521,7 @@ async function handleIframeMessage(event) {
                 }
                 postToIframe(iframe, {
                     type: TOOL_RESULT,
-                    payload: { requestId, name: toolName, result },
+                    payload: { requestId, name: toolName, result, workspaceObservations, workspaceConflictSnapshot },
                 });
             } catch (error) {
                 postToIframe(iframe, {
@@ -3753,8 +3550,8 @@ async function handleIframeMessage(event) {
 export async function initAssistant() {
     try {
         await loadAssistantSettings();
-    } catch {
-        // Opening the settings surface will retry the shared read.
+    } catch (caughtError) {
+        console.warn({ source: import.meta.url, operation: "initAssistant" }, caughtError);
     }
     document.addEventListener('xb-assistant:editor-context', handleAssistantEditorContextEvent);
     window.xiaobaixAssistant = {
@@ -3764,7 +3561,7 @@ export async function initAssistant() {
         getSettings: () => ({ ...getAssistantSettings() }),
         refreshConfig: () => {
             settingsLoaded = false;
-            void pushAssistantConfigToIframe({ force: true });
+            observeBackgroundTask(pushAssistantConfigToIframe({ force: true }), { source: import.meta.url, operation: "refreshConfig" });
         },
         setEditorContext: (payload) => setAssistantEditorContext(payload),
         clearEditorContext: () => clearAssistantEditorContext(),

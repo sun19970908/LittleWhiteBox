@@ -1,4 +1,5 @@
-import { requireResponseCompletion } from '../runtime/response-completion.js';
+import { readResponseCompletion } from '../runtime/response-completion.js';
+import { buildSamplingParameters } from '../sampling.js';
 import {
     assertHostChatCompletionsClient,
     browserHostChatCompletionsClient,
@@ -13,6 +14,7 @@ import {
     shouldOmitTemperatureForReasoning,
 } from '../reasoning-capabilities.js';
 import { isReasoningOutputVisible } from '../reasoning-config.js';
+import { stripToolProtocolMarker } from './tool-protocol-marker.js';
 
 function cloneJson(value) {
     if (value === undefined) return undefined;
@@ -130,7 +132,7 @@ function normalizeAnthropicContent(content = []) {
 }
 
 function buildHostClaudeMessages(task = {}) {
-    const sourceMessages = Array.isArray(task.messages) ? task.messages : [];
+    const sourceMessages = stripToolProtocolMarker(Array.isArray(task.messages) ? task.messages : []);
     const messages = [];
     sourceMessages.forEach((message) => {
         if (!message || typeof message !== 'object') return;
@@ -283,7 +285,7 @@ function parseContentResult(content = [], options = {}) {
         text,
         toolCalls,
         thoughts,
-        finishReason: requireResponseCompletion('anthropic', options.finishReason, false, text),
+        ...readResponseCompletion('anthropic', options.finishReason),
         model: options.model || '',
         provider: 'sillytavern-claude',
         providerPayload: normalized.length ? { anthropicContent: buildProviderPayloadContent(normalized) } : undefined,
@@ -303,7 +305,6 @@ function emitStreamProgress(task, payload) {
 function createClaudeStreamAccumulator(task, effectiveReasoning, config = {}) {
     const blocks = [];
     let finishReason;
-    let stopped = false;
     let model = config.model || '';
 
     const ensureBlock = (index, initial = {}) => {
@@ -328,7 +329,6 @@ function createClaudeStreamAccumulator(task, effectiveReasoning, config = {}) {
 
     return {
         accept(event = {}) {
-            if (event.type === 'message_stop') { stopped = true; }
             if (event?.message?.model) {
                 model = event.message.model;
             }
@@ -361,7 +361,7 @@ function createClaudeStreamAccumulator(task, effectiveReasoning, config = {}) {
         },
         result() {
             return parseContentResult(blocks, {
-                finishReason: stopped ? finishReason : undefined,
+                finishReason,
                 model,
                 includeReasoningOutput: isReasoningOutputVisible(effectiveReasoning),
             });
@@ -411,6 +411,10 @@ export class SillyTavernClaudeAdapter {
             payload.reasoning_effort = 'auto';
             payload.include_reasoning = isReasoningOutputVisible(effectiveReasoning);
         }
+        const samplingParams = buildSamplingParameters('sillytavern-claude', this.config.sampling, {
+            model: this.config.model, reasoning: effectiveReasoning,
+        });
+        Object.assign(payload, samplingParams);
         return payload;
     }
 

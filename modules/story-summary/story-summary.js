@@ -1,3 +1,4 @@
+import { handleTextApiRequest } from '../text-api/host.js';
 // ═══════════════════════════════════════════════════════════════════════════
 // Story Summary - 主入口
 //
@@ -9,23 +10,25 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 import { getContext } from "../../../../../extensions.js";
+import { loadSharedAgentSettings, saveSharedAgentSettings } from '../agent-core/settings-repository.js';
+import { pullModelsForProvider } from '../agent-core/model-list.js';
 import {
     event_types,
     extension_prompts,
     extension_prompt_types,
     extension_prompt_roles,
-    getRequestHeaders,
     chat_metadata,
 } from "../../../../../../script.js";
 import { EXT_ID, extensionFolderPath } from "../../core/constants.js";
+import { getSafeViewportStyles, observeViewport } from '../../shared/common/viewport.js';
 import { xbLog, CacheRegistry } from "../../core/debug-core.js";
-import { formatErrorDetails } from '../../core/error-details.js';
 import { createModuleEvents } from "../../core/event-manager.js";
 import { postToIframe, isTrustedMessage } from "../../core/iframe-messaging.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
 import { STORY_SUMMARY_TOGGLE_EVENT } from './runtime-events.js';
 import { initChatDeletionLifecycle } from './chat-deletion-lifecycle.js';
 import { createMemoryMaintenanceHost } from './maintenance/host.js';
+import { MEMORY_CHAT_MESSAGES } from './maintenance/chat-contract.js';
 import { SUMMARY_FEEDBACK_COPY } from './feedback-copy.js';
 import {
     clearEmbeddingFailureNotice,
@@ -33,11 +36,10 @@ import {
     createRecallRetryNotice,
     notifyRecallFailure,
     notifySummaryStartupFailure,
-    notifyUnconfirmedMemory,
+    shouldNotifyMemoryFailure,
     runClearWithFeedback,
 } from './user-feedback.js';
-import { initAfterAiGate, notifyAfterAiHint, registerAfterAiHandler } from "../../core/after-ai-gate.js";
-import { getDefaultApiPrefix, resolveApiBaseUrl } from "../../shared/common/openai-url-utils.js";
+import { initAfterAiGate, notifyAfterAiHint, registerAfterAiHandler, waitForAfterAiReady } from "../../core/after-ai-gate.js";
 import {
     commitIfSignalActive,
     createAbortError,
@@ -49,10 +51,6 @@ import {
     registerGenerateInterceptor,
     unregisterGenerateInterceptor,
 } from "../../shared/common/generate-interceptor.js";
-import {
-    fetchHostOpenAICompatibleModels,
-    setHostChatCompletionsRequestHeadersProvider,
-} from "../../shared/host-llm/chat-completions/client.js";
 
 // config/store
 import {
@@ -79,6 +77,7 @@ import {
     clearSummaryData,
     getRollbackOnceTargetEndMesId,
     isSummaryConsumable,
+    isSummarySourceValid,
     getPublishedSummaryStore,
     extractRelationshipsFromFacts,
 } from "./data/store.js";
@@ -111,7 +110,7 @@ import {
 import { selectBestStoryMemoryResult } from "./generate/story-memory-result.js";
 import { createRecallReuse, recallConfigKey } from './generate/recall-reuse.js';
 import { createRecallDiagnostics, formatRecallDiagnostics, formatRecallReuseDiagnostics, recordRecallFallback } from './recall-diagnostics.js';
-import { RECALL_TIMEOUT_MS, RECALL_TIMEOUT_REASONS, recallFailureNotice, recallCancellationNotice } from './generate/recall-failure.js';
+import { RECALL_TIMEOUT_REASONS, recallFailureNotice, recallCancellationNotice } from './generate/recall-failure.js';
 import { runRequiredRecall } from './generate/required-recall.js';
 import { isGenerating } from '../../shared/common/sillytavern-generation-state.js';
 
@@ -209,7 +208,13 @@ import { invalidateLexicalIndex, warmupIndex, addEventDocuments, addChunkDocumen
 import { trackVectorActivity } from './vector/runtime/vector-activity.js';
 import { checkVectorCacheConsistency, recordVectorCacheDiagnostic } from './vector/storage/package/service.js';
 import { createMessageSourceTracker } from './data/message-sources.js';
+import { getChatIdentity } from './data/chat-identity.js';
+import { applySummarySectionEdit } from './data/section-edits.js';
 import { retainSourceChange, synchronizeSourceCaches } from './data/source-sync.js';
+import { observeAsyncCallback, observeBackgroundTask } from '../../shared/common/async-errors.js';
+
+const handleFrameMessageEvent = observeAsyncCallback(handleFrameMessage, { source: import.meta.url, operation: "handleFrameMessage" });
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
@@ -228,7 +233,7 @@ const serviceTests = createServiceTests({
     onStatus: (target, state) => postToFrame({ type: 'VECTOR_ONLINE_STATUS', target, ...state }),
 });
 const memoryMaintenance = createMemoryMaintenanceHost({
-    canRun: () => isStorySummaryConsumableForCurrentChat() && !messageSources.inspect(getContext()),
+    isEnabled: () => isStorySummaryEnabledForCurrentChat(),
     invalidateRecall: () => {
         recallReuse.invalidate();
     },
@@ -239,24 +244,22 @@ const memoryMaintenance = createMemoryMaintenanceHost({
         refreshEntityLexiconAndWarmup();
         postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(getSummaryStore()) });
     },
-    changed: () => {
-        reportUnconfirmedMemory();
-        void sendMemoryMaintenanceResults();
+    chatChanged: payload => postToFrame({ type: MEMORY_CHAT_MESSAGES.state, payload }),
+    changed: payload => {
+        if (payload?.stateOnly) postToFrame({ type: 'MEMORY_MAINTENANCE_RESULTS', payload });
+        else observeBackgroundTask(sendMemoryMaintenanceResults(), { source: import.meta.url, operation: 'changed' });
     },
 });
 
-function reportUnconfirmedMemory() {
-    return notifyUnconfirmedMemory(getMemoryCommitState(), chat_metadata.extensions?.[EXT_ID]);
-}
-
 async function sendMemoryMaintenanceResults(offset = 0) {
     const chatId = getContext()?.chatId;
+    const identity = memoryMaintenance.chat.identity;
     try {
         const payload = await memoryMaintenance.results(offset);
-        if (getContext()?.chatId === chatId) postToFrame({ type: 'MEMORY_MAINTENANCE_RESULTS', payload: { ...payload, offset } });
+        if (memoryMaintenance.chat.identity === identity) postToFrame({ type: 'MEMORY_MAINTENANCE_RESULTS', payload: { ...payload, offset } });
     } catch (error) {
         xbLog.error(MODULE_ID, 'memory_maintenance_results_failed', error);
-        if (getContext()?.chatId === chatId) postToFrame({ type: 'MEMORY_MAINTENANCE_RESULTS', payload: {
+        if (memoryMaintenance.chat.identity === identity) postToFrame({ type: 'MEMORY_MAINTENANCE_RESULTS', payload: {
             chatId, items: [], next: null, state: { status: 'failed', code: 'load_failed' },
         } });
     }
@@ -266,8 +269,7 @@ let saveChatSummaryState = context => context.saveMetadata();
 const iframePath = `${extensionFolderPath}/modules/story-summary/story-summary.html`;
 const VALID_SECTIONS = ["keywords", "events", "characters", "arcs", "facts"];
 const MESSAGE_EVENT = "message";
-const SUMMARY_MODEL_FETCH_PROVIDERS = new Set(["openai"]);
-const SUMMARY_MODEL_FETCH_TIMEOUT_MS = 5000;
+const AUTO_SUMMARY_MAX_ATTEMPTS = 3;
 let chatSummaryStateChanging = false;
 let activeSummaryExecution = null;
 
@@ -284,16 +286,12 @@ function getStorySummaryEnablement() {
 
 export function getStorySummaryChatState() {
     const { context, hasChat, globalEnabled, chatEnabled, effectiveEnabled } = getStorySummaryEnablement();
-    const chat = context?.chat;
-    const consumable = effectiveEnabled
-        && isSummaryConsumable(getSummaryStore(), Array.isArray(chat) ? chat.length : 0);
     return {
         hasChat,
         chatId: context?.chatId || null,
         globalEnabled,
         chatEnabled,
         effectiveEnabled,
-        consumable,
         changing: chatSummaryStateChanging,
     };
 }
@@ -348,7 +346,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
 
     try {
         notifyStorySummaryChatState();
-        if (!nextEnabled) clearHideState({ persist: false });
+        if (!nextEnabled) observeBackgroundTask(clearHideState({ persist: false }), { source: import.meta.url, operation: 'setStorySummaryEnabledForCurrentChat' });
         await saveChatSummaryState(context);
 
         if (getContext()?.chatId === targetChatId && events) {
@@ -389,42 +387,6 @@ function compactRecallRuntimeStatsForLog(statsList = getRecallRuntimeStats()) {
     }).join(" | ");
 }
 
-async function fetchSummaryModelsForUi(payload = {}) {
-    const provider = String(payload?.provider || "").trim().toLowerCase() === "custom"
-        ? "openai"
-        : String(payload?.provider || "").trim().toLowerCase();
-    const baseUrl = String(payload?.url || "").trim();
-    const apiKey = String(payload?.apiKey || "").trim();
-
-    if (!SUMMARY_MODEL_FETCH_PROVIDERS.has(provider)) {
-        throw new Error("当前渠道不支持自动拉取模型");
-    }
-    if (!baseUrl) {
-        throw new Error("请先填写 API URL");
-    }
-    if (!apiKey) {
-        throw new Error("请先填写 API KEY");
-    }
-
-    const controller = new AbortController();
-    const timeoutMs = Math.max(1000, Number(payload?.timeoutMs) || SUMMARY_MODEL_FETCH_TIMEOUT_MS);
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-    try {
-        setHostChatCompletionsRequestHeadersProvider(() => getRequestHeaders());
-        return await fetchHostOpenAICompatibleModels({
-            baseUrl: resolveApiBaseUrl(baseUrl, getDefaultApiPrefix(provider)),
-            apiKey,
-        }, { signal: controller.signal });
-    } catch (error) {
-        if (error?.name === "AbortError") {
-            throw new Error(`请求超时（>${Math.floor(timeoutMs / 1000)}s）`);
-        }
-        throw error;
-    } finally {
-        clearTimeout(timeoutId);
-    }
-}
-
 function logRecallRuntimeCheckpoint(label, extra = "") {
     const suffix = extra ? ` ${extra}` : "";
     xbLog.info(MODULE_ID, `[RecallRuntime] ${label}${suffix} stats=${compactRecallRuntimeStatsForLog()}`);
@@ -458,7 +420,8 @@ let frameReady = false;
 let currentMesId = null;
 let pendingFrameMessages = [];
 let lastRecallLogText = "";
-let lastSummaryStatus = { type: 'SUMMARY_STATUS', statusText: '' };
+let summaryStatusSequence = 0;
+let lastSummaryStatus = { type: 'SUMMARY_STATUS', statusText: '', statusId: summaryStatusSequence };
 /** @type {ReturnType<typeof createModuleEvents>|null} */
 let events = null;
 let afterAiGateDispose = null;
@@ -504,6 +467,7 @@ const vectorMaintenanceScheduler = createVectorMaintenanceScheduler({
     getContext,
     isStale: isChatStale,
     getQuietWaitMs: getBackgroundQuietWaitMs,
+    waitForReady: waitForAfterAiReady,
     run: maybeRunDelayedVectorMaintenance,
 });
 let vectorIntegrityTimer = null;
@@ -718,10 +682,13 @@ function cancelActiveSummaryExecution() {
     return true;
 }
 
-function finishSummaryExecution(execution) {
+function finishSummaryExecution(execution, release) {
     if (activeSummaryExecution === execution) {
         activeSummaryExecution = null;
     }
+    release();
+    notifySummaryState();
+    notifyStorySummaryChatState();
 }
 
 function isSummaryExecutionActive(execution) {
@@ -734,9 +701,28 @@ function isSummaryExecutionActive(execution) {
 function postSummaryExecution(execution, payload) {
     // A stopped run may still report its final status, but never into another chat/run.
     if (activeSummaryExecution === execution && getContext()?.chatId === execution.chatId) {
-        if (payload.type === 'SUMMARY_ERROR') reportUnconfirmedMemory();
         postToFrame(payload);
     }
+}
+
+function reportSummaryExecutionFailure(execution, error, { automatic = false, attempts = 1, stale = false } = {}) {
+    if (activeSummaryExecution !== execution || getContext()?.chatId !== execution.chatId) return;
+    // Source revalidation can cancel independently of the run's own controller.
+    if (error?.name === 'AbortError' || execution.controller.signal.aborted) {
+        postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: SUMMARY_FEEDBACK_COPY.summaryStopped });
+        return;
+    }
+    xbLog.error(MODULE_ID, SUMMARY_FEEDBACK_COPY.summaryFailed, error);
+    const uncertain = getMemoryCommitState() === 'unconfirmed' || error?.uncertain === true;
+    // Only known domain reasons reach the panel; provider errors may contain credentials.
+    const reason = ['metadata_saving', 'source_boundary_invalid', 'summary_history_invalid', 'history_discontinuous'].includes(error?.code)
+        ? memorySaveError(error) : '';
+    const message = SUMMARY_FEEDBACK_COPY.summaryRunEnded({
+        automatic, attempts, uncertain, stale, reason,
+        summarizedThrough: (getPublishedSummaryStore()?.lastSummarizedMesId ?? -1) + 1,
+    });
+    postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message, uncertain });
+    return message;
 }
 
 function assertSummaryExecutionActive(execution) {
@@ -745,8 +731,23 @@ function assertSummaryExecutionActive(execution) {
     }
 }
 
+async function prepareSummaryExecution(execution) {
+    await ensureCurrentSources(execution.controller.signal);
+    assertSummaryExecutionActive(execution);
+    // Confirmation can publish a saved result without another generation. Sync
+    // its visible projection here, including the no-new-content retry path.
+    await waitForSummaryPreparation(() => applyHideState(), execution.controller.signal);
+    assertSummaryExecutionActive(execution);
+    const store = getPublishedSummaryStore();
+    replaceEventDocuments(store?.json?.events || [], execution.chatId);
+    refreshEntityLexiconAndWarmup();
+    sendFrameFullData(store, getContext().chat?.length || 0);
+    await updateFrameStatsAfterSummary(store, execution);
+}
+
 function notifySummaryState() {
-    postToFrame({ type: "GENERATION_STATE", isGenerating: guard.isRunning('summary') });
+    postToFrame({ type: "GENERATION_STATE", isGenerating: guard.isRunning('summary')
+        && activeSummaryExecution?.chatId === getContext()?.chatId });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -757,7 +758,10 @@ function postToFrame(payload) {
     if (payload?.type === "RECALL_LOG") {
         lastRecallLogText = String(payload.text || "");
     }
-    if (payload?.type === 'SUMMARY_STATUS' || payload?.type === 'SUMMARY_ERROR') lastSummaryStatus = payload;
+    if (payload?.type === 'SUMMARY_STATUS' || payload?.type === 'SUMMARY_ERROR') {
+        if (payload !== lastSummaryStatus) payload = { ...payload, statusId: ++summaryStatusSequence };
+        lastSummaryStatus = payload;
+    }
 
     const iframe = document.getElementById("xiaobaix-story-summary-iframe");
     if (!iframe?.contentWindow) return;
@@ -774,7 +778,7 @@ function flushPendingFrameMessages() {
     if (!iframe?.contentWindow) return;
     pendingFrameMessages.forEach((p) => postToIframe(iframe, p, "LittleWhiteBox"));
     pendingFrameMessages = [];
-    sendAnchorStatsToFrame();
+    observeBackgroundTask(sendAnchorStatsToFrame(), { source: import.meta.url, operation: "flushPendingFrameMessages" });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -859,6 +863,7 @@ async function handleAnchorGenerateNow(targetChatId, writeSession) {
                 commit: writeSession.commit,
                 shouldCancel: isCancelled,
                 retryFailedFloors: true,
+                persistence: 'confirmed',
             },
         );
         if (isCancelled() || result.cancelled) return;
@@ -871,7 +876,8 @@ async function handleAnchorGenerateNow(targetChatId, writeSession) {
     } catch (error) {
         if (error?.name === 'AbortError' || isCancelled()) return;
         xbLog.error(MODULE_ID, '记忆锚点生成失败', error);
-        await executeSlashCommand('/echo severity=error 记忆锚点生成失败：internal_error');
+        if (!shouldNotifyMemoryFailure(error)) return;
+        toastr.error(memorySaveError(error, 'anchors'), SUMMARY_FEEDBACK_COPY.title);
     } finally {
         await sendAnchorStatsToFrame();
     }
@@ -913,7 +919,7 @@ async function handleAnchorClear() {
     await runClearWithFeedback({
         kind: 'anchors',
         isCurrent: () => getContext()?.chatId === targetChatId,
-        reportUnconfirmed: reportUnconfirmedMemory,
+        getMemoryState: getMemoryCommitState,
         clear: () => runVectorWriteTask(
             { chatId: targetChatId, kind: 'clear-anchors', scope: VECTOR_WRITE_SCOPES.IO },
             async () => {
@@ -1204,7 +1210,7 @@ async function repairVectorsNow(vectorCfg, targetChatId, writeSession) {
         })],
         ['L2', () => repairMissingEventVectorsNow(targetChatId, writeSession, progress('L2'))],
     ];
-    const failures = [];
+    const failedStages = [];
     let repaired = 0;
     for (const [phase, run] of stages) {
         if (isCancelled()) return;
@@ -1218,6 +1224,7 @@ async function repairVectorsNow(vectorCfg, targetChatId, writeSession) {
             result = {
                 success: false,
                 code: String(error?.code || 'repair_failed'),
+                error,
                 ...(Number.isInteger(Number(error?.httpStatus)) ? { httpStatus: Number(error.httpStatus) } : {}),
             };
         }
@@ -1228,11 +1235,14 @@ async function repairVectorsNow(vectorCfg, targetChatId, writeSession) {
             scheduleLexicalWarmup();
         }
         if (isCancelled() || result.cancelled) return;
-        if (!result.success) failures.push(`${phase}（${formatSafeFailure(result.code, result.httpStatus)}）`);
+        if (!result.success) failedStages.push({ phase, result });
     }
+    const failures = failedStages
+        .filter(({ result }) => shouldNotifyMemoryFailure(result.error ?? result))
+        .map(({ phase, result }) => `${phase}（${formatSafeFailure(result.code, result.httpStatus)}）`);
     if (failures.length) {
         await executeSlashCommand(`/echo severity=warning 已补齐 ${repaired} 条向量；${failures.join('、')} 未完成，请检查 API 或存储后再点“补齐缺漏”。`);
-    } else {
+    } else if (!failedStages.length) {
         await executeSlashCommand(`/echo severity=info ${repaired ? `已补齐 ${repaired} 条向量` : '已有材料的向量已完整'}`);
     }
 }
@@ -1266,6 +1276,7 @@ async function handleGenerateVectors(mode = 'rebuild') {
         );
     } catch (error) {
         xbLog.error(MODULE_ID, '向量任务失败', error);
+        if (!shouldNotifyMemoryFailure(error)) return;
         await executeSlashCommand('/echo severity=error 向量任务未完成，请检查 API 或存储后重试');
     } finally {
         release();
@@ -1281,7 +1292,7 @@ async function handleClearVectors() {
     await runClearWithFeedback({
         kind: 'vectors',
         isCurrent: () => getContext()?.chatId === targetChatId,
-        reportUnconfirmed: reportUnconfirmedMemory,
+        getMemoryState: getMemoryCommitState,
         clear: () => runVectorWriteTask(
             { chatId: targetChatId, kind: 'clear-vectors', scope: VECTOR_WRITE_SCOPES.IO },
             async () => {
@@ -1336,7 +1347,7 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
     let stats;
     let l0VectorStatus;
     try {
-        await ensureCurrentSources(null, { requireSummary: false });
+        await ensureCurrentSources(null, { requireSummary: false, recover: false });
         stats = await getAnchorStats();
         l0VectorStatus = await getL0VectorBuildStatus(chatId);
     } catch (e) {
@@ -1437,6 +1448,7 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
                     const preferredFloors = pendingEntry?.floors ? [...pendingEntry.floors] : [];
                     return await incrementalExtractAtoms(chatId, chatSnapshot, null, {
                         maxFloors: 20,
+                        persistence: 'host',
                         preferredFloors,
                         signal: writeSession.signal,
                         commit: writeSession.commit,
@@ -1451,6 +1463,7 @@ async function maybeRunDelayedVectorMaintenance(scheduledChatId = null) {
                         return { success: true, status: 'up_to_date', vectorized: 0 };
                     }
                     return await vectorizeMissingStateAtoms(chatId, null, {
+                        persistence: 'host',
                         vectorConfig: vectorCfg,
                         signal: writeSession.signal,
                         commit: writeSession.commit,
@@ -2027,7 +2040,8 @@ async function checkVectorIntegrity({ allowEventRepair = true, allowChunkRepair 
         return;
     }
     if (!readOnly) {
-        await ensureCurrentSources(null, { requireSummary: false });
+        if (getMemoryCommitState() === 'unconfirmed') { reschedule(); return; }
+        await ensureCurrentSources(null, { requireSummary: false, recover: false });
         if (getContext()?.chatId !== chatId) return;
     }
     if (readOnly ? pendingVectorMaintenanceByChat.has(chatId) : deferVectorIntegrityUntilMaintenance(chatId)) {
@@ -2127,18 +2141,16 @@ async function checkVectorIntegrity({ allowEventRepair = true, allowChunkRepair 
 // Overlay 面板
 // ═══════════════════════════════════════════════════════════════════════════
 
+let stopOverlayViewport = null;
+
 function createOverlay() {
     if (overlayCreated) return;
     overlayCreated = true;
 
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini|Mobile/i.test(navigator.userAgent);
-    const isNarrow = window.matchMedia?.("(max-width: 768px)").matches;
-    const overlayHeight = (isMobile || isNarrow) ? "92.5vh" : "100vh";
-
     const $overlay = $(`
         <div id="xiaobaix-story-summary-overlay" style="
-            position: fixed !important; inset: 0 !important;
-            width: 100vw !important; height: ${overlayHeight} !important;
+            position: fixed !important; left: 0 !important;
+            width: 100vw !important;
             z-index: 99999 !important; display: none; overflow: hidden !important;
         ">
             <div class="xb-ss-backdrop" style="
@@ -2156,21 +2168,17 @@ function createOverlay() {
                            background:#fafafa !important;">
                 </iframe>
             </div>
-            <button class="xb-ss-close-btn" style="
-                position: absolute !important; top: 20px !important; right: 20px !important;
-                z-index: 2 !important; width: 36px !important; height: 36px !important;
-                border-radius: 50% !important; border: none !important;
-                background: rgba(0,0,0,.6) !important; color: #fff !important;
-                font-size: 20px !important; cursor: pointer !important;
-                display: flex !important; align-items: center !important;
-                justify-content: center !important;
-            ">✕</button>
         </div>
     `);
 
-    $overlay.on("click", ".xb-ss-backdrop, .xb-ss-close-btn", hideOverlay);
+    $overlay.on("click", ".xb-ss-backdrop", hideOverlay);
     document.body.appendChild($overlay[0]);
-    window.addEventListener(MESSAGE_EVENT, handleFrameMessage);
+    stopOverlayViewport = observeViewport(() => {
+        for (const [property, value] of Object.entries(getSafeViewportStyles())) {
+            $overlay[0].style.setProperty(property, value, 'important');
+        }
+    });
+    window.addEventListener(MESSAGE_EVENT, handleFrameMessageEvent);
 }
 
 function showOverlay() {
@@ -2179,12 +2187,14 @@ function showOverlay() {
 }
 
 function hideOverlay() {
+    stopOverlayViewport?.();
+    stopOverlayViewport = null;
     removeBackupManagerModal();
     document.getElementById("xiaobaix-story-summary-overlay")?.remove();
     overlayCreated = false;
     frameReady = false;
     pendingFrameMessages = [];
-    window.removeEventListener(MESSAGE_EVENT, handleFrameMessage);
+    window.removeEventListener(MESSAGE_EVENT, handleFrameMessageEvent);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2805,15 +2815,17 @@ function openPanelForMessage(mesId) {
     showOverlay();
 
     const { chat } = getContext();
-    const store = getSummaryStore();
+    const store = getPublishedSummaryStore();
     const totalFloors = chat.length;
 
-    sendFrameBaseData(store, totalFloors);
+    observeBackgroundTask(sendFrameBaseData(store, totalFloors), { source: import.meta.url, operation: "openPanelForMessage" });
     sendFrameFullData(store, totalFloors);
     notifySummaryState();
+    notifyStorySummaryChatState();
+    postToFrame(lastSummaryStatus);
 
     sendVectorConfigToFrame();
-    sendVectorStatsToFrame();
+    observeBackgroundTask(sendVectorStatsToFrame(), { source: import.meta.url, operation: "openPanelForMessage" });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2827,13 +2839,14 @@ const hideState = createHideStateController({
     getState: () => {
         const context = getContext();
         const ui = getHideUiSettings();
-        const store = getSummaryStore();
+        const store = getPublishedSummaryStore();
         return {
             chatId: context.chatId,
             chat: context.chat,
             saveChat: context.saveChat,
             enabled: !!events && window.isXiaobaixEnabled !== false
-                && isStorySummaryConsumableForCurrentChat() && ui.hideSummarized,
+                && isStorySummaryEnabledForCurrentChat()
+                && isSummarySourceValid(store, context.chat?.length || 0) && ui.hideSummarized,
             summaryBoundary: store?.lastSummarizedMesId ?? -1,
             useVectorBoundary: !!getVectorConfig()?.enabled && ui.useVectorBoundary,
             keepVisibleCount: ui.keepVisibleCount,
@@ -2854,7 +2867,7 @@ const hideState = createHideStateController({
             ? '读取向量隐藏边界失败，已按有效总结边界恢复原文'
             : stage === 'save' ? memorySaveError(error) : '更新楼层显隐失败';
         xbLog.error(MODULE_ID, message, error);
-        window.toastr?.warning(message, '剧情总结');
+        if (stage !== 'save' || shouldNotifyMemoryFailure(error, getMemoryCommitState())) window.toastr?.warning(message, '剧情总结');
     },
 });
 
@@ -2898,7 +2911,7 @@ function scheduleAutoSummary(reason, delayMs = AUTO_SUMMARY_DELAY_MS) {
             scheduleAutoSummary(reason, quietWait);
             return;
         }
-        maybeAutoRunSummary(reason);
+        observeBackgroundTask(maybeAutoRunSummary(reason), { source: import.meta.url, operation: "callback" });
     }, delayMs);
     autoSummaryTimers.set(reason, timer);
 }
@@ -2963,7 +2976,11 @@ async function maybeAutoRunSummary(reason) {
     const { chatId, chat } = getContext();
     if (!chatId || !Array.isArray(chat)) return;
     if (!isStorySummaryEnabledForCurrentChat()) return;
-    if (getMemoryCommitState() === 'unconfirmed') {
+    if (isSummaryGenerating()) return;
+    const initiallyTriggered = getAutoSummaryPlan(chat, getPublishedSummaryStore()?.lastSummarizedMesId ?? -1,
+        getSummaryPanelConfig().trigger || {}, reason).triggered;
+    if (!initiallyTriggered) return;
+    if (['saving', 'unconfirmed'].includes(getMemoryCommitState())) {
         await waitForMemoryCommit();
         if (isChatStale(chatId)) return;
     }
@@ -2976,10 +2993,10 @@ async function maybeAutoRunSummary(reason) {
 
     const store = getSummaryStore();
     const lastSummarized = store?.lastSummarizedMesId ?? -1;
-    const { target, triggered } = getAutoSummaryPlan(chat, lastSummarized, trig, reason);
+    const { target, triggered } = getAutoSummaryPlan(getContext().chat, lastSummarized, trig, reason);
     if (!triggered) return;
 
-    await autoRunSummaryWithRetry(target, { api: cfgAll.api, gen: cfgAll.gen, trigger: trig });
+    await autoRunSummaryWithRetry(target, { trigger: trig });
 }
 
 async function autoRunSummaryWithRetry(targetMesId, configForRun) {
@@ -2992,17 +3009,19 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
     }
     notifySummaryState();
 
+    let attempts = 0;
     try {
         let lastResult = null;
-        for (let attempt = 1; attempt <= 3; attempt++) {
+        for (let attempt = 1; attempt <= AUTO_SUMMARY_MAX_ATTEMPTS; attempt++) {
+            attempts = attempt;
             if (!isSummaryExecutionActive(execution)) {
                 postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: SUMMARY_FEEDBACK_COPY.summaryStopped });
                 return;
             }
-            await ensureCurrentSources(execution.controller.signal);
+            await prepareSummaryExecution(execution);
             const result = await runSummaryGeneration(targetMesId, configForRun, {
-                onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: `自动总结 ${attempt}/3：${text}` }),
-                onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: `自动总结 ${attempt}/3：${msg}` }),
+                onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: SUMMARY_FEEDBACK_COPY.summaryAttempt(attempt, AUTO_SUMMARY_MAX_ATTEMPTS, text) }),
+                onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: msg }),
                 onComplete: async ({ newEventIds, aliasChanged, store }) => {
                     assertSummaryExecutionActive(execution);
                     postToFrame({ type: "SUMMARY_FULL_DATA", payload: buildFramePayload(store) });
@@ -3042,23 +3061,19 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
                 return;
             }
 
-            if (attempt < 3) await sleep(1000);
+            if (attempt < AUTO_SUMMARY_MAX_ATTEMPTS) await sleep(1000);
         }
 
         if (!isSummaryExecutionActive(execution)) return;
-        if (reportUnconfirmedMemory()) return;
-        if (lastResult?.stale) {
-            await executeSlashCommand("/echo severity=warning 对话在总结期间持续变化，本次结果未保存；下次触发时会重新总结。");
-        } else {
-            await executeSlashCommand("/echo severity=error 剧情总结失败（已尝试 3 次）。请稍后再试。");
-        }
+        const message = reportSummaryExecutionFailure(execution, lastResult?.error, {
+            automatic: true, attempts, stale: lastResult?.stale,
+        });
+        if (!shouldNotifyMemoryFailure(lastResult?.error, getMemoryCommitState())) return;
+        window.toastr?.[lastResult?.stale ? 'warning' : 'error'](message, SUMMARY_FEEDBACK_COPY.title);
     } catch (error) {
-        xbLog.error(MODULE_ID, '自动总结执行失败', error);
-        postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: `自动总结执行失败：${formatErrorDetails(error, { includeStack: false })}` });
+        reportSummaryExecutionFailure(execution, error, { automatic: true, attempts });
     } finally {
-        finishSummaryExecution(execution);
-        release();
-        notifySummaryState();
+        finishSummaryExecution(execution, release);
     }
 }
 
@@ -3076,7 +3091,7 @@ async function updateFrameStatsAfterSummary(store, execution) {
 
 function reportMemorySaveFailure(error) {
     const message = memorySaveError(error);
-    if (!reportUnconfirmedMemory()) window.toastr?.error(message);
+    if (shouldNotifyMemoryFailure(error, getMemoryCommitState())) window.toastr?.error(message);
     postToFrame({ type: 'SUMMARY_ERROR', message });
     postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(readPublishedSummaryMemory().storySummary) });
     notifyStorySummaryChatState();
@@ -3087,8 +3102,42 @@ async function handleFrameMessage(event) {
     if (!isTrustedMessage(event, iframe, "LittleWhiteBox-StoryFrame")) return;
 
     const data = event.data;
+    if (data.type === 'SUMMARY_AGENT_SETTINGS') {
+        try {
+            let result;
+            if (data.action === 'load') result = await loadSharedAgentSettings();
+            else if (data.action === 'save') result = await saveSharedAgentSettings(data.payload);
+            else if (data.action === 'models') result = await pullModelsForProvider(data.payload);
+            else throw new Error('Unknown Agent settings action');
+            postToFrame({ type: 'SUMMARY_AGENT_SETTINGS_RESULT', requestId: data.requestId, result });
+        } catch (error) {
+            postToFrame({ type: 'SUMMARY_AGENT_SETTINGS_RESULT', requestId: data.requestId, error: error.message });
+        }
+        return;
+    }
+    if (data.type === 'TEXT_API_REQUEST') {
+        await handleTextApiRequest(data, 'summary', postToFrame);
+        return;
+    }
+    const chatAction = Object.keys(MEMORY_CHAT_MESSAGES).find(action => action !== 'state' && MEMORY_CHAT_MESSAGES[action] === data.type);
+    if (chatAction) {
+        const requestIdentity = chatAction === 'query' ? memoryMaintenance.chat.identity : data.identity;
+        try {
+            if (chatAction === 'query') postToFrame({ type: MEMORY_CHAT_MESSAGES.state, payload: memoryMaintenance.chat.query(data) });
+            else await memoryMaintenance.chat[chatAction](data);
+        } catch (error) {
+            memoryMaintenance.chat.report(error, requestIdentity);
+            xbLog.error(MODULE_ID, 'memory_chat_failed', error);
+        }
+        return;
+    }
 
     switch (data.type) {
+        case 'DISMISS_SUMMARY_STATUS':
+            if (data.statusId === lastSummaryStatus.statusId && lastSummaryStatus.type === 'SUMMARY_ERROR') {
+                postToFrame({ type: 'SUMMARY_STATUS', statusText: '' });
+            }
+            break;
         case 'MEMORY_MAINTENANCE_SOURCE':
             postToFrame({ type: 'MEMORY_MAINTENANCE_SOURCE_RESULT', payload: memoryMaintenance.source(data) });
             break;
@@ -3096,7 +3145,7 @@ async function handleFrameMessage(event) {
             await sendMemoryMaintenanceResults(data.offset);
             break;
         case 'MEMORY_MAINTENANCE_CANCEL':
-            memoryMaintenance.cancel();
+            memoryMaintenance.cancelAutomatic();
             break;
         case 'MEMORY_MAINTENANCE_REPAIR':
             try { await memoryMaintenance.repairIndexes(); }
@@ -3108,30 +3157,16 @@ async function handleFrameMessage(event) {
             flushPendingFrameMessages();
             notifySummaryState();
             postToFrame(lastSummaryStatus);
-            sendSavedConfigToFrame();
+            observeBackgroundTask(sendSavedConfigToFrame(), { source: import.meta.url, operation: 'handleFrameMessage' });
             sendVectorConfigToFrame();
-            sendVectorStatsToFrame();
-            sendAnchorStatsToFrame();
+            observeBackgroundTask(sendVectorStatsToFrame(), { source: import.meta.url, operation: 'handleFrameMessage' });
+            observeBackgroundTask(sendAnchorStatsToFrame(), { source: import.meta.url, operation: 'handleFrameMessage' });
             notifyStorySummaryChatState();
             break;
         }
 
-        case "SETTINGS_OPENED":
-        case "FULLSCREEN_OPENED":
-        case "EDITOR_OPENED":
-        case "CONFIRM_OPENED":
-            $(".xb-ss-close-btn").hide();
-            break;
-
         case "SETTINGS_CLOSED":
             removeBackupManagerModal();
-            $(".xb-ss-close-btn").show();
-            break;
-
-        case "FULLSCREEN_CLOSED":
-        case "EDITOR_CLOSED":
-        case "CONFIRM_CLOSED":
-            $(".xb-ss-close-btn").show();
             break;
 
         case "SET_CURRENT_CHAT_ENABLED": {
@@ -3149,6 +3184,7 @@ async function handleFrameMessage(event) {
             if (!isStorySummaryEnabledForCurrentChat()) {
                 postToFrame({ type: "SUMMARY_STATUS", statusText: "请先启用当前聊天的剧情总结" });
                 notifyStorySummaryChatState();
+                notifySummaryState();
                 break;
             }
             const ctx = getContext();
@@ -3158,32 +3194,13 @@ async function handleFrameMessage(event) {
         }
 
         case "REQUEST_CANCEL":
-            if (cancelActiveSummaryExecution()) {
+            if (activeSummaryExecution?.chatId === getContext()?.chatId && cancelActiveSummaryExecution()) {
                 postToFrame({ type: "SUMMARY_STATUS", statusText: "正在停止..." });
             }
             break;
 
-        case "FETCH_SUMMARY_MODELS":
-            (async () => {
-                try {
-                    const models = await fetchSummaryModelsForUi(data);
-                    postToFrame({
-                        type: "SUMMARY_MODELS",
-                        requestId: data.requestId || "",
-                        models,
-                    });
-                } catch (e) {
-                    postToFrame({
-                        type: "SUMMARY_MODELS_ERROR",
-                        requestId: data.requestId || "",
-                        message: String(e?.message || e || "拉取模型失败"),
-                    });
-                }
-            })();
-            break;
-
         case "VECTOR_TEST_ONLINE":
-            handleTestOnlineService(data.config, data.target || "embedding");
+            observeBackgroundTask(handleTestOnlineService(data.config, data.target || "embedding"), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
 
         case 'VECTOR_CANCEL_TEST':
@@ -3208,7 +3225,7 @@ async function handleFrameMessage(event) {
             }
             maybePreloadTokenizer();
             refreshEntityLexiconAndWarmup();
-            handleGenerateVectors(data.type === 'VECTOR_REPAIR' ? 'repair' : 'rebuild');
+            observeBackgroundTask(handleGenerateVectors(data.type === 'VECTOR_REPAIR' ? 'repair' : 'rebuild'), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
 
@@ -3234,7 +3251,7 @@ async function handleFrameMessage(event) {
             break;
 
         case "REQUEST_ANCHOR_STATS":
-            sendAnchorStatsToFrame();
+            observeBackgroundTask(sendAnchorStatsToFrame(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
 
         case "REQUEST_RECALL_LOG":
@@ -3242,7 +3259,7 @@ async function handleFrameMessage(event) {
             break;
 
         case "VECTOR_EXPORT":
-            (async () => {
+            observeBackgroundTask((async () => {
                 try {
                     const result = await exportVectors((status) => {
                         postToFrame({ type: "VECTOR_IO_STATUS", status });
@@ -3259,11 +3276,11 @@ async function handleFrameMessage(event) {
                 } catch (e) {
                     postToFrame({ type: "VECTOR_EXPORT_RESULT", success: false, error: e.message });
                 }
-            })();
+            })(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
 
         case "SUMMARY_COPY":
-            (async () => {
+            observeBackgroundTask((async () => {
                 try {
                     const store = getSummaryStore();
                     const payload = buildSummaryExportPackage(store);
@@ -3277,7 +3294,7 @@ async function handleFrameMessage(event) {
                 } catch (e) {
                     postToFrame({ type: "SUMMARY_COPY_RESULT", success: false, error: e.message });
                 }
-            })();
+            })(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
 
         case "SUMMARY_IMPORT_TEXT":
@@ -3285,7 +3302,7 @@ async function handleFrameMessage(event) {
                 postToFrame({ type: "SUMMARY_IMPORT_RESULT", success: false, error: "请等待当前总结/向量任务结束" });
                 break;
             }
-            (async () => {
+            observeBackgroundTask((async () => {
                 try {
                     const targetChatId = getContext()?.chatId || '';
                     const result = await runVectorWriteTask(
@@ -3315,12 +3332,12 @@ async function handleFrameMessage(event) {
                     postToFrame({ type: "SUMMARY_IMPORT_RESULT", success: false, error: memorySaveError(e) });
                     notifyStorySummaryChatState();
                 }
-            })();
+            })(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
 
         case "VECTOR_IMPORT_PICK":
             // 在 parent 创建 file picker，避免 iframe 传大文件
-            (async () => {
+            observeBackgroundTask((async () => {
                 const input = document.createElement("input");
                 input.type = "file";
                 input.accept = ".zip";
@@ -3372,10 +3389,10 @@ async function handleFrameMessage(event) {
                 };
 
                 input.click();
-            })();
+            })(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         case "VECTOR_BACKUP_SERVER":
-            (async () => {
+            observeBackgroundTask((async () => {
                 try {
                     const result = await backupToServer((status) => {
                         postToFrame({ type: "VECTOR_IO_STATUS", status });
@@ -3391,11 +3408,11 @@ async function handleFrameMessage(event) {
                 } catch (e) {
                     postToFrame({ type: "VECTOR_BACKUP_RESULT", success: false, error: e.message });
                 }
-            })();
+            })(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
 
         case "VECTOR_RESTORE_SERVER":
-            (async () => {
+            observeBackgroundTask((async () => {
                 try {
                     const targetChatId = getContext()?.chatId || '';
                     const result = await runVectorWriteTask(
@@ -3433,7 +3450,7 @@ async function handleFrameMessage(event) {
                 } catch (e) {
                     postToFrame({ type: "VECTOR_RESTORE_RESULT", success: false, error: e.message });
                 }
-            })();
+            })(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
 
         case "VECTOR_LIST_BACKUPS":
@@ -3441,7 +3458,7 @@ async function handleFrameMessage(event) {
             break;
 
         case "REQUEST_VECTOR_STATS":
-            sendVectorStatsToFrame();
+            observeBackgroundTask(sendVectorStatsToFrame(), { source: import.meta.url, operation: 'handleFrameMessage' });
             maybePreloadTokenizer();
             break;
 
@@ -3549,41 +3566,55 @@ async function handleFrameMessage(event) {
 
         case "UPDATE_SECTION": {
             if (!VALID_SECTIONS.includes(data.section)) break;
+            const context = getContext();
+            const { chatId } = context;
+            const chatIdentity = getChatIdentity(context);
             try {
-                const { chatId } = getContext();
-                await waitForMemoryCommit();
-                assertMemoryWritable(chatId);
-                getSummaryStore();
-                const previous = readSummaryMemory();
-                const next = structuredClone(previous);
-                const store = next.storySummary;
                 cancelRecallAndClearPrompt('summary-edited');
-                memoryMaintenance.cancel();
-                store.json ||= {};
-                const oldEvents = data.section === "events" ? previous.storySummary.json?.events || [] : null;
-                if (oldEvents) cancelEmbeddingWriteTasks('Summary events edited');
-                const oldFacts = store.json.facts || [];
-                store.json[data.section] = data.section === "characters"
-                    ? stampEditedCharacters(store.json.characters, data.data, getCurrentFloorHint())
-                    : data.section === "events" ? projectEditedSummaryEvents(data.data) : data.data;
-                if (data.section === "facts") store.json.facts = mergeEditedFactsWithTimestamps(oldFacts, data.data, getCurrentFloorHint());
-                if (data.section === "characters") {
-                    store.json.facts = mergeCharacterRelationshipsIntoFacts(store.json.facts, data?.data?.relationships || [], getCurrentFloorHint());
-                }
-                store.updatedAt = Date.now();
-                const committed = await runVectorWriteTask({ chatId, kind: 'summary-manual-edit', scope: VECTOR_WRITE_SCOPES.CONSISTENCY }, () =>
-                    commitSummaryMemory(chatId, next, { previous, invalidate: async () => {
+                if (data.section === "events") cancelEmbeddingWriteTasks('Summary events edited');
+                const committed = await runVectorWriteTask({ chatId, kind: 'summary-manual-edit', scope: VECTOR_WRITE_SCOPES.CONSISTENCY }, async () => {
+                    // Prepare against the state preceding writers actually published,
+                    // not a snapshot captured while this edit was still queued.
+                    do { await waitForMemoryCommit(); } while (getMemoryCommitState() === 'saving');
+                    if (getChatIdentity(getContext()) !== chatIdentity) return null;
+                    assertMemoryWritable(chatId);
+                    getSummaryStore();
+                    const previous = readSummaryMemory();
+                    const next = structuredClone(previous);
+                    const store = next.storySummary;
+                    store.json ||= {};
+                    const oldEvents = data.section === "events" ? previous.storySummary.json?.events || [] : null;
+                    const oldFacts = store.json.facts || [];
+                    const edited = applySummarySectionEdit(data.section, data.previous, data.data,
+                        buildFramePayload(previous.storySummary)[data.section]);
+                    store.json[data.section] = data.section === "characters"
+                        ? stampEditedCharacters(store.json.characters, edited, getCurrentFloorHint())
+                        : data.section === "events" ? projectEditedSummaryEvents(edited) : edited;
+                    if (data.section === "facts") store.json.facts = [
+                        ...oldFacts.filter(fact => fact.retracted),
+                        ...mergeEditedFactsWithTimestamps(oldFacts, edited.filter(fact => !fact.retracted), getCurrentFloorHint()),
+                    ];
+                    if (data.section === "characters") {
+                        store.json.facts = mergeCharacterRelationshipsIntoFacts(store.json.facts, edited.relationships, getCurrentFloorHint());
+                    }
+                    store.updatedAt = Date.now();
+                    await commitSummaryMemory(chatId, next, { previous, invalidate: async () => {
                         if (oldEvents) {
                             const nextById = new Map(store.json.events.map(event => [event.id, event]));
                             const ids = oldEvents.filter(event => buildEventVectorText(event) !== buildEventVectorText(nextById.get(event.id))).map(event => event.id);
                             await deleteEventVectorsByIds(chatId, ids);
                             invalidateLexicalIndex();
                         }
-                    } }));
+                    } });
+                    return { oldEvents, events: store.json.events };
+                });
+                if (getChatIdentity(getContext()) !== chatIdentity) break;
                 if (!committed) throw new Error('metadata_commit_cancelled');
-                if (oldEvents && getContext().chatId === chatId) await syncEventVectorsOnEdit(oldEvents, store.json.events);
+                postToFrame({ type: 'SUMMARY_FULL_DATA', payload: buildFramePayload(readPublishedSummaryMemory().storySummary) });
+                if (committed.oldEvents) await syncEventVectorsOnEdit(committed.oldEvents, committed.events);
             } catch (error) {
-                reportMemorySaveFailure(error);
+                if (getChatIdentity(getContext()) === chatIdentity) reportMemorySaveFailure(error);
+                else console.warn({ source: import.meta.url, operation: 'UPDATE_SECTION' }, error);
             }
             break;
         }
@@ -3631,7 +3662,7 @@ async function handleFrameMessage(event) {
 
             await applyHideState();
             const { chat } = getContext();
-            await sendFrameBaseData(getSummaryStore(), Array.isArray(chat) ? chat.length : 0);
+            await sendFrameBaseData(getPublishedSummaryStore(), Array.isArray(chat) ? chat.length : 0);
             break;
         }
 
@@ -3640,7 +3671,7 @@ async function handleFrameMessage(event) {
 
             await applyHideState();
             const { chat } = getContext();
-            await sendFrameBaseData(getSummaryStore(), Array.isArray(chat) ? chat.length : 0);
+            await sendFrameBaseData(getPublishedSummaryStore(), Array.isArray(chat) ? chat.length : 0);
             break;
         }
 
@@ -3658,7 +3689,7 @@ async function handleFrameMessage(event) {
                     );
                     const previousVectorConfig = transition.previousVectorConfig;
                     const savedConfig = transition.result;
-                    if (!savedConfig.memoryMaintenanceEnabled) memoryMaintenance.cancel();
+                    if (!savedConfig.memoryMaintenanceEnabled) memoryMaintenance.cancelAutomatic();
                     const nextVectorConfig = savedConfig?.vector || {};
                     const vectorEnabledChanged = !!previousVectorConfig?.enabled !== !!nextVectorConfig?.enabled;
                     const vectorFingerprintChanged = !!previousVectorConfig?.enabled
@@ -3694,7 +3725,7 @@ async function handleFrameMessage(event) {
             break;
 
         case "REQUEST_PANEL_CONFIG":
-            sendSavedConfigToFrame();
+            observeBackgroundTask(sendSavedConfigToFrame(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
     }
 }
@@ -3706,6 +3737,7 @@ async function handleFrameMessage(event) {
 async function handleManualGenerate(mesId, config) {
     if (isSummaryGenerating()) {
         postToFrame({ type: "SUMMARY_STATUS", statusText: "上一轮总结仍在进行中..." });
+        notifySummaryState();
         return;
     }
 
@@ -3719,7 +3751,7 @@ async function handleManualGenerate(mesId, config) {
     notifySummaryState();
 
     try {
-        await ensureCurrentSources(execution.controller.signal);
+        await prepareSummaryExecution(execution);
         const result = await runSummaryGeneration(mesId, config, {
             onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: text }),
             onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: msg }),
@@ -3746,20 +3778,16 @@ async function handleManualGenerate(mesId, config) {
             signal: execution.controller.signal,
             targetChatId: execution.chatId,
         });
-        if (result.committed && isStorySummaryConsumableForCurrentChat()) {
+        if ((result.committed || result.noContent) && isStorySummaryConsumableForCurrentChat()) {
             scheduleVectorIntegrityCheck();
         }
-    } catch (error) {
-        if (error?.name === 'AbortError' && execution.controller.signal.aborted) {
-            postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: SUMMARY_FEEDBACK_COPY.summaryStopped });
-            return;
+        if (!result.success && !result.cancelled) {
+            reportSummaryExecutionFailure(execution, result.error, { stale: result.stale });
         }
-        xbLog.error(MODULE_ID, '手动总结执行失败', error);
-        postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: `总结执行失败：${formatErrorDetails(error, { includeStack: false })}` });
+    } catch (error) {
+        reportSummaryExecutionFailure(execution, error);
     } finally {
-        finishSummaryExecution(execution);
-        release();
-        notifySummaryState();
+        finishSummaryExecution(execution, release);
     }
 }
 
@@ -3774,6 +3802,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '', {
     lastRecallLogText = "";
     postToFrame({ type: 'RECALL_LOG', text: '' });
     postToFrame({ type: 'SUMMARY_STATUS', statusText: '' });
+    notifySummaryState();
     await waitForVectorWrites();
     if (isChatStale(scheduledChatId)) return;
     const { chat } = getContext();
@@ -3799,7 +3828,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '', {
             scope: VECTOR_WRITE_SCOPES.CONSISTENCY,
         },
         async () => {
-            await waitForMemoryCommit();
+            if (!await waitForMemoryCommit(undefined, { recover: false })) return { status: 'deferred' };
             if (isChatStale(scheduledChatId)) return { status: 'stale' };
             const result = await rollbackSummaryIfNeeded();
             if (result.status !== 'failed' && !isChatStale(scheduledChatId)) {
@@ -3818,7 +3847,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '', {
         return null;
     });
     if (isChatStale(scheduledChatId)) return;
-    if (!rollback) return;
+    if (!rollback || rollback.status === 'deferred') return;
     if (rollback.status === 'failed') {
         notifyStorySummaryChatState();
         reportMemorySaveFailure({ code: rollback.reason, uncertain: getMemoryCommitState() === 'unconfirmed' });
@@ -3835,8 +3864,8 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '', {
         await sendFrameBaseData(store, newLength);
         sendFrameFullData(store, newLength);
 
-        sendAnchorStatsToFrame();
-        sendVectorStatsToFrame();
+        observeBackgroundTask(sendAnchorStatsToFrame(), { source: import.meta.url, operation: 'handleChatChanged:anchorStats' });
+        observeBackgroundTask(sendVectorStatsToFrame(), { source: import.meta.url, operation: 'handleChatChanged:vectorStats' });
     }
 
     // 实体词典注入 + 索引预热
@@ -3849,9 +3878,9 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '', {
     scheduleLexicalWarmup(CHAT_CHANGE_LEXICAL_WARMUP_MS);
 
     // Automatic initialization uses the same saved-config/runtime/probe path as testing.
-    void embeddingConnection.warmup({
+    observeBackgroundTask(embeddingConnection.warmup({
         isCurrent: () => !!events && !isChatStale(scheduledChatId) && isStorySummaryEnabledForCurrentChat(),
-    });
+    }), { source: import.meta.url, operation: "handleChatChanged" });
     logRecallRuntimeCheckpoint("chatChanged:after-warm-request", `chat=${activeChatId || "-"}`);
 
     scheduleVectorIntegrityCheck();
@@ -3865,7 +3894,7 @@ async function handleChatChanged(scheduledChatId = getContext()?.chatId || '', {
 async function truncateVectorDataFromFloor(chatId, newLength) {
     if (!chatId || !(newLength >= 0)) return;
     await syncOnMessageDeleted(chatId, newLength);
-    await invalidateSummaryAnchors(chatId, newLength);
+    await invalidateSummaryAnchors(chatId, newLength, 'source_changed', { persistence: 'host' });
 }
 
 /**
@@ -3903,9 +3932,7 @@ async function synchronizeCurrentSources(chatId, kind = 'observed', floor = null
     const change = retainSourceChange(messageSources, getContext(), { kind, floor });
     if (!change) return { status: 'unchanged' };
     for (const changedFloor of change.anchorFloors) rememberVectorMaintenance(chatId, changedFloor, 'source_changed');
-    // Only the writer waits for another save; current-round recall never does.
-    await waitForMemoryCommit();
-    if (isChatStale(chatId)) return { status: 'stale' };
+    // retainSourceChange already retired live anchors; only background cache work queues.
     // Reply replacement/continuation preserves an adopted round; historical edits do not.
     if (kind === 'edit') recallReuse.invalidate();
     else recallReuse.historyChanged(getContext(), change.historyFromFloor);
@@ -3931,6 +3958,7 @@ async function synchronizeCurrentSources(chatId, kind = 'observed', floor = null
         scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, chatId);
         return outcome || { status: 'stale' };
     }
+    if (outcome.status === 'deferred') return outcome;
     if (outcome.status === 'failed') {
         await clearHideState();
         const error = { code: outcome.result?.reason, uncertain: getMemoryCommitState() === 'unconfirmed' };
@@ -3944,15 +3972,36 @@ async function synchronizeCurrentSources(chatId, kind = 'observed', floor = null
     return outcome;
 }
 
-async function ensureCurrentSources(signal, { requireSummary = true } = {}) {
+async function waitForSummaryPreparation(task, signal) {
+    throwIfSignalAborted(signal);
+    if (!signal) return task();
+    let onAbort;
+    const cancelled = new Promise((_, reject) => {
+        onAbort = () => reject(createAbortError());
+        signal.addEventListener('abort', onAbort, { once: true });
+    });
+    // Stop only this waiter. Independent consistency work must finish, and a
+    // late failure remains in the log rather than reaching a newer run's UI.
+    const pending = Promise.resolve().then(() => {
+        throwIfSignalAborted(signal);
+        return task();
+    }).catch(error => {
+        if (signal.aborted && error?.name !== 'AbortError') xbLog.error(MODULE_ID, 'summary_preparation_failed_after_stop', error);
+        throw error;
+    });
+    try { return await Promise.race([pending, cancelled]); }
+    finally { signal.removeEventListener('abort', onAbort); }
+}
+
+async function ensureCurrentSources(signal, { requireSummary = true, recover = true } = {}) {
     throwIfSignalAborted(signal);
     const chatId = getContext().chatId;
     // Retire older embedding work before the caller registers its new task.
     if (messageSources.inspect(getContext())) cancelEmbeddingWriteTasks('Source synchronization');
-    await waitForMemoryCommit(signal);
+    if (!await waitForMemoryCommit(signal, { recover })) throw createAbortError();
     if (isChatStale(chatId)) throw createAbortError();
-    await synchronizeCurrentSources(chatId);
-    await waitForVectorWrites();
+    await waitForSummaryPreparation(() => synchronizeCurrentSources(chatId), signal);
+    await waitForSummaryPreparation(() => waitForVectorWrites(), signal);
     throwIfSignalAborted(signal);
     if (isChatStale(chatId) || messageSources.inspect(getContext())) {
         throw createAbortError();
@@ -4025,7 +4074,7 @@ const recallPrefetch = createRecallPrefetchCoordinator({
     prepare: prepareMemoryPrompt,
     createRetryNotice: createRecallRetryNotice,
     pollMs: 16,
-    maxAgeMs: RECALL_TIMEOUT_MS,
+    maxAgeMs: () => getVectorConfig().recallTimeoutSec * 1000,
     onJoinedCancel: (run) => {
         if (Object.values(RECALL_TIMEOUT_REASONS).includes(run.cancelReason)) return; // The interceptor owns failure reporting.
         const publish = getContext()?.chatId === run.chatId
@@ -4320,7 +4369,7 @@ async function runStorySummaryRecallInterceptor(_interceptorChat, _contextSize, 
             commit: commitMemoryPrompt,
             onProgress: diagnostics => runContext?.reportProgress?.(diagnostics),
             onFailure: async error => {
-                const failure = recallFailureNotice(run.cancelReason, error);
+                const failure = recallFailureNotice(run.cancelReason, error, run.timeoutMs);
                 if (!failure) {
                     joinStatus = `cancelled:${run.cancelReason}`;
                     return;
@@ -4402,7 +4451,8 @@ function runContentChangeSync(handler, ...args) {
     // A save-without-edit does not schedule maintenance. A real local edit
     // invalidates future reuse, not this generation's already running recall.
     if (!change) return undefined;
-    memoryMaintenance.cancel();
+    // Source changes retire caches, not the Agent reviewing the saved L2.
+    // Its live source reads and record-level writes retain their own boundaries.
     if (handler === handleMessageUpdated) {
         recallReuse.invalidate();
     } else {
@@ -4446,9 +4496,9 @@ function notifyStorySummaryAfterAi(data, source) {
     }
 
     // A continuation changes the same floor while send_date stays unchanged.
-    // Schedule directly from completion signals, not the after-AI gate's deduped
-    // UI notification. Render-only hints (including virtualized remounts) do not
-    // start maintenance. The timer rechecks the live continuation boundary.
+    // Keep completion deduplication separate from UI hints. The maintenance scheduler
+    // waits for host readiness and two frames before starting its quiet delay.
+    // Render-only hints (including virtualized remounts) do not start maintenance.
     if (source !== 'character_message_rendered' && isStorySummaryEnabledForCurrentChat() && getVectorConfig()?.enabled) {
         rememberVectorMaintenance(chatId, messageId, 'after_ai');
         scheduleAutoL0Backfill(AUTO_L0_BACKFILL_DELAY_MS, chatId);
@@ -4480,10 +4530,11 @@ function registerAfterAiGateHandler() {
 let storySummaryTeardown = null;
 
 function handleChatChange() {
+    vectorMaintenanceScheduler.clear();
     const reloaded = messageSources.switchChat(getContext());
     embeddingConnection.cancel();
     serviceTests.cancel();
-    memoryMaintenance.cancel();
+    memoryMaintenance.reset();
     if (!reloaded) cancelRecallAndClearPrompt('chat-changed');
     cancelActiveSummaryExecution();
     activeSummaryExecution = null;
@@ -4541,7 +4592,7 @@ async function registerEvents() {
             pendingFrameMessages = [];
             lastRecallLogText = "";
             invalidateLexicalIndex();
-            clearRecallRuntime().catch(() => {});
+            clearRecallRuntime().catch((caughtError) => { console.warn({ source: import.meta.url, operation: "clear" }, caughtError); });
         },
     });
 
@@ -4701,7 +4752,7 @@ async function handleChatDeleted(chatId) {
         await deleteServerBackup(filename, null);
         xbLog.info(MODULE_ID, `聊天删除，已清理服务器备份: ${filename}`);
     } catch (_) {
-        // 文件不存在或宿主不支持删除，静默处理
+        console.warn({ source: import.meta.url, operation: "handleChatDeleted" }, _);
     }
 }
 
@@ -4902,7 +4953,7 @@ function showBackupManagerModal() {
 // Toggle 监听
 // ═══════════════════════════════════════════════════════════════════════════
 
-$(document).on(STORY_SUMMARY_TOGGLE_EVENT, async (_e, enabled) => {
+$(document).on(STORY_SUMMARY_TOGGLE_EVENT, observeAsyncCallback(async (_e, enabled) => {
     if (enabled) {
         try {
             await registerEvents();
@@ -4916,14 +4967,14 @@ $(document).on(STORY_SUMMARY_TOGGLE_EVENT, async (_e, enabled) => {
         await unregisterEvents();
     }
     notifyStorySummaryChatState();
-});
+}, { source: import.meta.url, operation: "callback" }));
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 初始化
 // ═══════════════════════════════════════════════════════════════════════════
 
 function reportStartupFailure(error) {
-    const shouldNotify = Boolean(getSettings().storySummary?.enabled) && !reportUnconfirmedMemory();
+    const shouldNotify = Boolean(getSettings().storySummary?.enabled) && shouldNotifyMemoryFailure(error, getMemoryCommitState());
     notifySummaryStartupFailure(error, shouldNotify);
 }
 

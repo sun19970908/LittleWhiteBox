@@ -1,4 +1,6 @@
 import { createAbortError } from '../../shared/common/abort-utils.js';
+import { observeBackgroundTask } from '../../shared/common/async-errors.js';
+
 
 function appendPlan(baseText, planText) {
     const base = String(baseText ?? '').trimEnd();
@@ -57,8 +59,8 @@ export function createEnaPlannerSendInterceptor({
     const reportError = (error) => {
         try {
             onError(error);
-        } catch {
-            // Error reporting must not change the send outcome.
+        } catch (caughtError) {
+            console.warn({ source: import.meta.url, operation: "reportError" }, caughtError);
         }
     };
 
@@ -66,8 +68,8 @@ export function createEnaPlannerSendInterceptor({
         if (!run) return;
         try {
             run.cancelNotice?.();
-        } catch {
-            // Notice cleanup must not affect planner cancellation.
+        } catch (caughtError) {
+            console.warn({ source: import.meta.url, operation: "cancelRunNotice" }, caughtError);
         }
         run.cancelNotice = null;
     };
@@ -148,8 +150,8 @@ export function createEnaPlannerSendInterceptor({
         try {
             try {
                 run.cancelNotice = scheduleNotice();
-            } catch {
-                // A status notification must never block planning.
+            } catch (caughtError) {
+                console.warn({ source: import.meta.url, operation: "startPlanning" }, caughtError);
             }
 
             const storyMemoryText = String(readStorySummary() || '');
@@ -157,7 +159,6 @@ export function createEnaPlannerSendInterceptor({
                 signal: controller.signal,
                 storyMemoryText,
                 onDelta(_piece, full) {
-                    if (!getSettings()?.api?.stream) return;
                     const preview = filterPreview(full);
                     writeInput(run, appendPlan(run.raw, preview));
                 },
@@ -212,7 +213,7 @@ export function createEnaPlannerSendInterceptor({
         const eligible = getEligibleSend();
         if (!eligible) return;
         stopSendEvent(event);
-        void startPlanning(eligible);
+        observeBackgroundTask(startPlanning(eligible), { source: import.meta.url, operation: "handleClick" });
     };
 
     const handleKeydown = event => {
@@ -233,7 +234,7 @@ export function createEnaPlannerSendInterceptor({
         const eligible = getEligibleSend();
         if (!eligible) return;
         stopSendEvent(event);
-        void startPlanning(eligible);
+        observeBackgroundTask(startPlanning(eligible), { source: import.meta.url, operation: "handleKeydown" });
     };
 
     const install = () => {

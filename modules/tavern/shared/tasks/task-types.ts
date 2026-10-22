@@ -224,7 +224,6 @@ export type TavernTaskErrorCode =
     | 'task_response_json_invalid'
     | 'task_response_shape_invalid'
     | 'task_response_items_invalid'
-    | 'task_response_truncated'
     | 'task_response_invalid';
 
 export class TavernTaskError extends Error {
@@ -564,8 +563,9 @@ export function normalizeTavernTaskListings(value: unknown, options: { min?: num
 }
 
 function parseJsonCandidate(value: string): unknown {
-    try {return JSON.parse(value);} catch { /* try one conservative repair */ }
-    return JSON.parse(value.replace(/,(\s*[}\]])/g, '$1'));
+    try {return JSON.parse(value);} catch {
+        return JSON.parse(value.replace(/,(\s*[}\]])/g, '$1'));
+    }
 }
 
 function extractJsonValues(textValue: string): unknown[] {
@@ -588,7 +588,7 @@ function extractJsonValues(textValue: string): unknown[] {
             if (character === '{') {depth += 1;}
             if (character === '}') {depth -= 1;}
             if (depth === 0) {
-                try {values.push(parseJsonCandidate(source.slice(start, index + 1)));} catch { /* try next brace */ }
+                try {values.push(parseJsonCandidate(source.slice(start, index + 1)));} catch (caughtError) { console.warn({ source: import.meta.url, operation: "extractJsonValues" }, caughtError); }
                 start = index;
                 break;
             }
@@ -668,7 +668,7 @@ export function parseTavernTaskCandidatesResponse(value: string, options: TaskCa
                 if (names.has(name)) {continue;}
                 names.add(name);
                 normalized.push({ ...candidate, id: createId('candidate') });
-            } catch { /* keep other valid entries */ }
+            } catch (caughtError) { console.warn({ source: import.meta.url, operation: "parseTavernTaskCandidatesResponse" }, caughtError); }
         }
         if (normalized.length) {return normalized;}
     }

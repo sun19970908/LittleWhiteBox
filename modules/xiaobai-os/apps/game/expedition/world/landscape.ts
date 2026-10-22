@@ -6,8 +6,8 @@ import { type WorldMap, worldFault } from './types.js';
 
 export interface Footprint { x: number; z: number; width: number; depth: number }
 export type LandscapeKind = 'clinic' | 'storehouse' | 'tree' | 'planter' | 'wall' | 'tower' | 'water'
-    | 'wagon' | 'supplies' | 'bench' | 'ruin' | 'thicket' | 'arch' | 'column' | 'beacon' | 'bunk' | 'root'
-    | 'dwelling' | 'workshop' | 'stove' | 'medicine' | 'cargo' | 'fuel' | 'ledger'
+    | 'wagon' | 'supplies' | 'bench' | 'ruin' | 'thicket' | 'arch' | 'bridge' | 'column' | 'beacon' | 'bunk' | 'root'
+    | 'dwelling' | 'workshop' | 'stove' | 'medicine' | 'cargo' | 'fuel' | 'ledger' | 'kiln' | 'hoist' | 'cliff'
     | 'bed' | 'cabinet' | 'wardrobe' | 'toolrack' | 'table' | 'chair' | 'basin' | 'screen' | 'workbench' | 'door';
 export interface LandscapeFeature {
     id: string;
@@ -18,6 +18,7 @@ export interface LandscapeFeature {
     wallUse?: 'homes' | 'room';
     damaged?: boolean;
     entrance?: boolean;
+    facing?: 'south' | 'north' | 'east' | 'west';
 }
 export interface LandscapeRoad { points: readonly (readonly [number, number])[]; width: number }
 /** Suspended between existing masonry; no posts or ground-level collision. */
@@ -27,8 +28,8 @@ export interface Landscape {
     features: readonly LandscapeFeature[];
     roads: readonly LandscapeRoad[];
     gates: readonly (SceneGate & { footprint: Footprint })[];
-    vista: 'camp' | 'ramparts' | 'interior' | 'garden' | 'room';
-    surface: 'grass' | 'paving' | 'wet' | 'marble' | 'street' | 'boards';
+    vista: 'camp' | 'ramparts' | 'interior' | 'garden' | 'room' | 'furnace' | 'snow';
+    surface: 'grass' | 'paving' | 'wet' | 'marble' | 'street' | 'boards' | 'snow' | 'iron';
     suspended?: readonly SuspendedDetail[];
 }
 
@@ -46,7 +47,7 @@ export function defineLandscapeScene(scene: Omit<SceneDefinition, 'map' | 'gates
         || ![f.x - f.width / 2, f.z - f.depth / 2, f.width, f.depth].every(Number.isInteger))) { worldFault('map_invalid'); }
     const ids = landscape.features.map(f => f.id);
     if (new Set(ids).size !== ids.length) { worldFault('map_invalid'); }
-    if (landscape.features.some(f => ['tree', 'tower', 'wall', 'arch', 'column', 'root'].includes(f.kind)
+    if (landscape.features.some(f => ['tree', 'tower', 'wall', 'arch', 'column', 'root', 'kiln', 'hoist', 'cliff'].includes(f.kind)
         && (f.height === undefined || !Number.isFinite(f.height) || f.height <= 0))) { worldFault('map_invalid'); }
     for (const f of footprints.slice(1)) {
         if (f.x - f.width / 2 < origin.x || f.z - f.depth / 2 < origin.y
@@ -60,7 +61,8 @@ export function defineLandscapeScene(scene: Omit<SceneDefinition, 'map' | 'gates
         let line = '';
         for (let column = 0; column < bounds.width; column++) {
             const p = { x: origin.x + column + .5, y: origin.y + row + .5 };
-            line += landscape.features.some(f => f.kind !== 'arch' && insideFootprint(p, f.footprint)) ? '#' : '.';
+            line += landscape.features.some(f => f.kind !== 'arch' && insideFootprint(p, f.footprint)
+                && (f.kind !== 'bridge' || Math.abs(p.y - f.footprint.z) >= f.footprint.depth / 2 - 1)) ? '#' : '.';
         }
         rows.push(line);
     }

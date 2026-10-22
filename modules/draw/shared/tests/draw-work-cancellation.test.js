@@ -1,132 +1,72 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { indexedDB, IDBObjectStore } from 'fake-indexeddb';
+import { indexedDB } from 'fake-indexeddb';
 import { drawCancellationJournal as journal } from '../draw-cancellation-journal.js';
-import { cancelDrawWork, holdDrawCancellation, resumeDrawCancellations, waitForDrawCancellation } from '../draw-work-cancellation.js';
-import { recordPendingImageJob, createAdoptingPendingImageJob, markPendingImageJobActive,
-    getPendingImageJob, forgetPendingImageJob, PendingJobState } from '../pending-image-jobs.js';
+import { cancelDrawWork, resumeDrawCancellations, settleDrawRunCancellations } from '../draw-work-cancellation.js';
+import { createAdoptingPendingImageJob, forgetPendingImageJob, getPendingImageJob } from '../pending-image-jobs.js';
 
 globalThis.indexedDB = indexedDB;
+const client = { cancelWork: async () => {} };
 
-// The intent and delivery journals are separate databases. Verify their actual
-// transaction order and crash-safe retry, not only calls on fake journals.
-for (const replay of [false, true]) test(`cancellation ACK survives delivery-journal failure (${replay ? 'replay' : 'foreground'})`, async t => {
-    const suffix = replay ? 'replay' : 'foreground';
-    const direct = await recordPendingImageJob({ jobId: `direct-${suffix}`, provider: 'novelai', delivery: { mode: 'gallery' },
-        items: [{ index: 0, slotId: `direct-slot-${suffix}`, imgId: `direct-img-${suffix}` }] });
-    await markPendingImageJobActive(direct.jobId, direct.leaseId);
-    const child = await createAdoptingPendingImageJob({ jobId: `child-${suffix}`, provider: 'novelai', delivery: { mode: 'gallery' },
-        originRunId: `parent-${suffix}`, sourceHash: 'source',
-        chatTarget: { kind: 'group', chatId: 'chat', body: { id: 'chat' } },
-        items: [{ index: 0, slotId: `child-slot-${suffix}`, imgId: `child-img-${suffix}` }] });
-    t.after(async () => { for (const record of [direct, child]) await forgetPendingImageJob(record.jobId, record.leaseId); });
-    const targets = { owner: 'alice', jobIds: [direct.jobId], runIds: [child.originRunId] };
-    const before = await Promise.all([direct, child].map(record => getPendingImageJob(record.jobId)));
-    let backendAcknowledged = false, projectionWrites = 0;
-    const client = { async cancelWork() {
-        assert.deepEqual(await Promise.all([direct, child].map(record => getPendingImageJob(record.jobId))), before);
-        backendAcknowledged = true;
-    } };
-    const put = IDBObjectStore.prototype.put;
-    const injected = t.mock.method(IDBObjectStore.prototype, 'put', function(value, ...args) {
-        const request = put.call(this, value, ...args);
-        if ([direct.jobId, child.jobId].includes(value.jobId) && value.cancelRequested && ++projectionWrites === 2) {
-            assert.equal(backendAcknowledged, true);
-            this.transaction.abort();
-        }
-        return request;
-    });
-    if (replay) {
-        await journal.record(targets);
-        const outcome = await resumeDrawCancellations(client, 'alice');
-        assert.equal(outcome.failures.length, 1);
-        assert.deepEqual([...outcome.blockedJobIds], targets.jobIds);
-        assert.deepEqual([...outcome.blockedRunIds], targets.runIds);
-    } else await assert.rejects(cancelDrawWork(targets, client));
-    injected.mock.restore();
-    assert.equal(projectionWrites, 2);
-    assert.deepEqual(await Promise.all([direct, child].map(record => getPendingImageJob(record.jobId))), before);
+test('acknowledged runs remain durable across chat switches until each marker or delivery is reconciled', async () => {
+    await cancelDrawWork({ owner: 'alice', jobIds: ['manual'], runIds: ['chat-a', 'chat-b'] }, client);
     assert.equal((await journal.list()).length, 1);
-    await resumeDrawCancellations(client, 'alice');
-    assert.deepEqual(await journal.list(), []);
-    const updated = await Promise.all([direct, child].map(record => getPendingImageJob(record.jobId)));
-    assert.equal(updated[0].state, PendingJobState.CANCELLING);
-    assert.equal(updated[1].state, PendingJobState.ADOPTING);
-    for (let index = 0; index < updated.length; index++) {
-        assert.equal(updated[index].cancelRequested, true);
-        assert.equal(updated[index].leaseId, before[index].leaseId);
-        assert.deepEqual(updated[index].items, before[index].items);
-    }
-});
-
-test('a lost cancellation response retains the exact set for reload; retry never submits image work', async () => {
-    const targets = { owner: 'alice', jobIds: ['running', 'queued'], runIds: ['planner'] };
-    await assert.rejects(cancelDrawWork(targets, { cancelWork: async () => { throw new Error('response lost'); } }));
-    targets.jobIds.push('new-work');
-    const saved = await journal.list();
-    assert.equal(saved.length, 1);
-    const calls = [];
-    await resumeDrawCancellations({ cancelWork: async targets => calls.push(targets) }, 'alice');
-    assert.deepEqual(calls, [{ owner: 'alice', jobIds: ['running', 'queued'], runIds: ['planner'] }]);
+    const replay = await resumeDrawCancellations(client, 'alice');
+    assert.deepEqual([...replay.acknowledgedRunIds], ['chat-a', 'chat-b']);
+    await settleDrawRunCancellations('alice', ['chat-a']);
+    const remaining = await journal.list();
+    assert.deepEqual(remaining.map(entry => ({ owner: entry.owner, jobIds: entry.jobIds, runIds: entry.runIds })),
+        [{ owner: 'alice', jobIds: ['manual'], runIds: ['chat-b'] }]);
+    await settleDrawRunCancellations('bob', ['chat-b']);
+    assert.deepEqual(await journal.list(), remaining);
+    await settleDrawRunCancellations('alice', ['chat-b']);
     assert.deepEqual(await journal.list(), []);
 });
 
-test('persistence failure prevents transport and leaves a visible rejection', async () => {
-    let calls = 0;
-    const failure = new Error('storage blocked');
-    await assert.rejects(cancelDrawWork({ owner: 'alice', jobIds: ['a'], runIds: [] }, { cancelWork: async () => calls++ }, {
-        record: async () => { throw failure; },
-    }), error => error === failure);
-    assert.equal(calls, 0);
-});
-
-test('failed sets stay whole while unrelated cancellation entries still replay', async () => {
-    const first = await journal.record({ owner: 'alice', jobIds: ['a', 'b'], runIds: ['plan'] });
-    await journal.record({ owner: 'alice', jobIds: ['c'], runIds: [] });
-    const calls = [];
-    const outcome = await resumeDrawCancellations({ cancelWork: async targets => {
-        calls.push(targets.jobIds);
-        if (targets.jobIds.includes('a')) throw Object.assign(new Error('limit'), { code: 'cancellation_limit' });
-    } }, 'alice');
-    assert.deepEqual(calls, [['a', 'b'], ['c']]);
-    assert.deepEqual([...outcome.blockedJobIds], ['a', 'b']);
-    assert.deepEqual([...outcome.blockedRunIds], ['plan']);
-    assert.equal(outcome.failures.length, 1);
-    assert.deepEqual(await journal.list(), [first]);
-    await journal.forget(first.id);
-});
-
-test('another profile cannot replay or forget an intent; returning to its owner resumes it', async () => {
-    const entry = await journal.record({ owner: 'alice', jobIds: ['a'], runIds: ['plan'] });
-    const calls = [];
-    const client = { cancelWork: async targets => calls.push(targets) };
+test('a lost ACK never becomes confirmed cancellation, and a later replay retains the run until cleanup', async () => {
+    const targets = { owner: 'alice', jobIds: [], runIds: ['lost-ack'] };
+    await assert.rejects(cancelDrawWork(targets, { cancelWork: async () => { throw new Error('offline'); } }));
+    await settleDrawRunCancellations('alice', targets.runIds);
+    assert.equal((await journal.list()).length, 1);
     const other = await resumeDrawCancellations(client, 'bob');
-    assert.deepEqual(calls, []);
-    assert.deepEqual(await journal.list(), [entry]);
-    assert.equal(other.blockedJobIds.has('a'), true);
-    assert.equal(other.blockedRunIds.has('plan'), true);
-    assert.equal(other.failures.length, 0);
-    await resumeDrawCancellations(client, 'alice');
-    assert.deepEqual(calls, [{ owner: 'alice', jobIds: ['a'], runIds: ['plan'] }]);
+    assert.equal(other.acknowledgedRunIds.size, 0);
+    assert.equal(other.blockedRunIds.has('lost-ack'), true);
+    const replay = await resumeDrawCancellations(client, 'alice');
+    assert.equal(replay.acknowledgedRunIds.has('lost-ack'), true);
+    await settleDrawRunCancellations('alice', targets.runIds);
     assert.deepEqual(await journal.list(), []);
 });
 
-test('both running monitors wait for the whole-set cancellation, not each others HTTP arrival', async () => {
-    const a = new AbortController(), b = new AbortController();
-    const gate = Promise.withResolvers(), events = [];
-    const grouped = holdDrawCancellation([a.signal, b.signal], async () => { await gate.promise; events.push('group'); });
-    const monitor = async signal => { await waitForDrawCancellation(signal); events.push('monitor'); };
-    a.abort(); b.abort();
-    const pending = Promise.all([monitor(a.signal), monitor(b.signal)]);
-    await Promise.resolve();
-    assert.deepEqual(events, []);
-    gate.resolve(); await grouped; await pending;
-    assert.deepEqual(events, ['group', 'monitor', 'monitor']);
+test('a child adopted after cancellation inherits the ACK without losing its delivery items', async () => {
+    const runId = 'late-adopted-parent';
+    await cancelDrawWork({ owner: 'alice', jobIds: [], runIds: [runId] }, client);
+    const record = await createAdoptingPendingImageJob({ jobId: 'late-child', provider: 'sd-webui',
+        originRunId: runId, sourceHash: 'source', delivery: { mode: 'gallery' },
+        chatTarget: { kind: 'group', chatId: 'chat', body: { id: 'chat' } },
+        items: [{ index: 0, slotId: 'slot-late-child', imgId: 'img-late-child' }] });
+    await settleDrawRunCancellations('alice', [runId]);
+    const current = await getPendingImageJob(record.jobId);
+    assert.equal(current.cancelRequested, true);
+    assert.equal(current.state, record.state);
+    assert.deepEqual(current.items, record.items);
+    assert.deepEqual(await journal.list(), []);
+    await forgetPendingImageJob(record.jobId, record.leaseId);
 });
 
-test('failed grouped cancellation detaches monitors instead of allowing partial cancellation', async () => {
-    const a = new AbortController(), b = new AbortController();
-    const operation = holdDrawCancellation([a.signal, b.signal], async () => { throw new Error('offline'); });
-    const results = await Promise.allSettled([operation, waitForDrawCancellation(a.signal), waitForDrawCancellation(b.signal)]);
-    assert.ok(results.every(result => result.status === 'rejected' && result.reason.detached));
+test('reconciling one acknowledged intent cannot forget an overlapping unacknowledged cancellation group', async t => {
+    const owner = 'overlapping-owner', runIds = ['overlapping-run'];
+    t.after(async () => {
+        for (const entry of await journal.list()) if (entry.owner === owner) await journal.forget(entry.id);
+    });
+    await cancelDrawWork({ owner, jobIds: [], runIds }, client);
+    await assert.rejects(cancelDrawWork({ owner, jobIds: ['new-unconfirmed-job'], runIds }, {
+        cancelWork: async () => { throw new Error('second cancellation response lost'); },
+    }));
+    const unconfirmed = (await journal.list()).find(entry => entry.jobIds.includes('new-unconfirmed-job'));
+    await settleDrawRunCancellations(owner, runIds);
+    assert.deepEqual(await journal.list(), [unconfirmed]);
+    const replay = await resumeDrawCancellations(client, owner);
+    assert.equal(replay.acknowledgedRunIds.has(runIds[0]), true);
+    await settleDrawRunCancellations(owner, runIds);
+    assert.deepEqual(await journal.list(), []);
 });

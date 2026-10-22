@@ -3,13 +3,13 @@ import { createStreamingMessageController } from '../../../../agent-core/runtime
 import type { AgentMessage } from '../../../../agent-core/runtime/conversation.js';
 import type { LearningMessage } from './messages.js';
 import { estimateConversationTokens } from '../../../../agent-core/runtime/context-tokens.js';
-import { isResponseTruncated } from '../../../../agent-core/runtime/response-completion.js';
 import type { XiaobaiOsAgentSession } from '../../../capabilities/agent/gateway.js';
 import { classifyProviderFailure } from '../../../capabilities/agent/provider-failure.js';
 import { safePromptJson } from '../../../capabilities/maintenance/prompt-safety.js';
 import type { LearningFailureDetails, LearningProgress } from '../application/feedback.js';
 import { isLearningContextOverflow, learningHistoryMessage, learningTurnMessages, type LearningTurn } from './history.js';
-import { LEARNING_PRESERVED_TURNS, LEARNING_SUMMARY_TRIGGER_TOKENS, summariseLearningHistory } from './history-compaction.js';
+import { LEARNING_SUMMARY_TRIGGER_TOKENS, summariseLearningHistory } from './history-compaction.js';
+import { recentTurnArchiveCounts, hasChatAnswer } from '../../../../agent-core/runtime/recent-turns.js';
 
 type RecordValue = Record<string, unknown>;
 const MAX_TOOL_ROUNDS = 48;
@@ -78,8 +78,8 @@ export async function runLearningProviderLoop(options: {
     async function compact(round: number) {
         if (summaryExhausted) { return false; }
         advance({ stage: 'summary', round });
-        // Prefer keeping recent exchanges verbatim, but a short oldest exchange alone may not shrink.
-        for (let count = Math.max(1, history.length - LEARNING_PRESERVED_TURNS); count <= history.length; count++) {
+        for (const count of recentTurnArchiveCounts(history, turn => turn.status === 'finished' && hasChatAnswer(learningTurnMessages(turn)))) {
+            if (!count) { continue; }
             const next = await summariseLearningHistory({ summary, turns: history.slice(0, count),
                 systemPrompt: options.summaryPrompt, openSession: options.reopen!, signal, guard: () => !cancelled() });
             if (cancelled()) { return false; }
@@ -136,7 +136,6 @@ export async function runLearningProviderLoop(options: {
                 if (cancelled()) { return { status: 'cancelled' }; }
                 if (assistant) { assistant.error = true; stream.finalizeStreamingAssistantMessage(assistant); }
                 if (progress.stage === 'summary') { return failure('learning_summary_failed', error); }
-                if (isResponseTruncated(error)) { return failure('learning_response_truncated', error); }
                 if (isLearningContextOverflow(error)) {
                     if (history.length && options.reopen) {
                         try { if (!await compact(round)) { return failure('learning_context_full', error); } }
@@ -186,7 +185,11 @@ export async function runLearningProviderLoop(options: {
                     const entry: AgentMessage = { role: 'tool', toolCallId: call.id, toolName: call.name, content: '', streaming: true };
                     state.messages.push(entry); stream.scheduleStreamRender();
                     let args: unknown = null;
-                    try { args = JSON.parse(call.arguments); } catch { /* The owning tool records an invalid proposal. */ }
+                    try { args = JSON.parse(call.arguments); } catch (caughtError) {
+                        if (!(caughtError instanceof SyntaxError)) {
+                            console.warn({ source: import.meta.url, operation: 'runLearningProviderLoop' }, caughtError);
+                        }
+                    }
                     let value: unknown;
                     try { value = tools.has(call.name) ? await options.executeTool(call.name, args)
                         : { ok: false, message: 'Choose a tool from the supplied definitions.', tools: [...tools] }; }

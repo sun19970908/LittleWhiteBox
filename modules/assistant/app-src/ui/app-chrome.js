@@ -1,6 +1,7 @@
 import { describeMemoryFile, findMemoryFileByPath } from '../memory/memory-files.js';
 import { ACTIVITY_COPY as C } from './activity-copy.js';
 import { updateChromeIcon } from './chrome-icons.js';
+import { WORKSPACE_COPY as W } from '../workspace/workspace-copy.js';
 
 function appendSvgPath(svg, d) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -146,7 +147,7 @@ export function renderAppChrome(root, state, options = {}) {
     } = options;
 
     const sendButton = root.querySelector('#xb-assistant-send');
-    sendButton.disabled = false;
+    sendButton.disabled = !!state.isClearingConversation || !!state.isClosingAssistant;
     sendButton.classList.toggle('is-busy', state.isBusy);
     sendButton.textContent = state.isBusy ? '■' : '➤';
     sendButton.title = state.isBusy ? '终止' : '发送';
@@ -186,15 +187,18 @@ export function renderAppChrome(root, state, options = {}) {
     addLocalDirectoryButton.title = supportsDirectoryImport ? '导入本地文件夹源码' : '当前环境不支持文件夹导入';
 
     const clearButton = root.querySelector('#xb-assistant-clear');
-    clearButton.disabled = state.isBusy || !state.messages.length;
+    clearButton.disabled = state.isBusy || state.isPreparingRun || state.isClearingConversation || !state.messages.length;
 
     const workspaceButton = root.querySelector('#xb-assistant-open-workspace');
     if (workspaceButton) {
         workspaceButton.disabled = false;
-        workspaceButton.textContent = localSourceSummary.modifiedFileCount
-            ? `工作区 ${localSourceSummary.modifiedFileCount}`
-            : '工作区';
-        workspaceButton.title = state.isWorkspaceOpen ? '关闭工作区' : '打开工作区';
+        updateChromeIcon(workspaceButton, 'workspace');
+        const label = W.toggle(state.isWorkspaceOpen);
+        const modifiedCount = localSourceSummary.modifiedFileCount;
+        workspaceButton.title = modifiedCount ? `${label} · ${W.modifiedFiles(modifiedCount)}` : label;
+        workspaceButton.setAttribute('aria-label', workspaceButton.title);
+        workspaceButton.setAttribute('aria-expanded', String(!!state.isWorkspaceOpen));
+        workspaceButton.classList.toggle('has-changes', modifiedCount > 0);
         workspaceButton.classList.toggle('is-active', !!state.isWorkspaceOpen);
     }
 
@@ -308,7 +312,7 @@ export function renderAppChrome(root, state, options = {}) {
     }
 
     const workspacePanel = root.querySelector('#xb-assistant-workspace-panel');
-    renderWorkspace(workspacePanel, { disabled: state.isBusy });
+    renderWorkspace(workspacePanel, { disabled: state.isBusy || state.isClosingAssistant });
 
     const workspaceShell = root.querySelector('#xb-assistant-workspace');
     const workspaceBackdrop = root.querySelector('#xb-assistant-workspace-backdrop');

@@ -4,7 +4,6 @@ import { isLearningContextOverflow, learningTurnMessages, type LearningTurn } fr
 
 // Same proactive trigger as ebook, not a claimed provider capacity or a request rejection limit.
 export const LEARNING_SUMMARY_TRIGGER_TOKENS = 158_000;
-export const LEARNING_PRESERVED_TURNS = 2;
 
 /** Independent summary generation; the calling teacher loop measures replay savings before adoption. */
 export async function summariseLearningHistory(options: {
@@ -36,7 +35,6 @@ export async function summariseLearningHistory(options: {
                 reasoning: { mode: 'inherit', output: 'hide' }, signal: options.signal });
             assertCurrent();
             const text = typeof result.text === 'string' ? result.text.trim() : '';
-            // Adapters enforce protocol completion; a summary must also be non-refused text without tool actions.
             if (result.refused === true || !text || Array.isArray(result.toolCalls) && result.toolCalls.length) {
                 throw new Error('learning_summary_incomplete');
             }

@@ -1,82 +1,81 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createRecallDiagnostics, formatRecallDiagnostics, formatRecallReuseDiagnostics, recordRecallFallback } from '../recall-diagnostics.js';
-import { createMetrics, detectIssues, finalizeMetricsTiming } from '../vector/retrieval/metrics.js';
+import {
+    createRecallDiagnostics, recordRecallObservation, recordRecallIndexProgress,
+    recordRecallRuntimeProgress, recallProgressStage,
+} from '../recall-diagnostics.js';
 
-test('recall reports distinguish empty, failed, cancelled and degraded with real reasons', () => {
-    const d = createRecallDiagnostics('chat-a');
+// The UI identifies the actual vector backend, not every task on the main thread.
+test('backend observation distinguishes cold/warm worker and fallback without changing recall stages', () => {
+    for (const backend of ['worker', 'main-fallback']) {
+        const d = createRecallDiagnostics();
+        recordRecallRuntimeProgress(d, { phase: 'worker-start', backend: 'worker', reused: false });
+        assert.equal(recallProgressStage(d), 'worker-start');
+        recordRecallRuntimeProgress(d, { phase: 'backend-ready', backend, reused: false, error: backend === 'main-fallback' ? 'fixture' : undefined });
+        recordRecallRuntimeProgress(d, { phase: 'load-start', backend });
+        assert.equal(recallProgressStage(d), backend === 'worker' ? 'worker-load' : 'main-load');
+        d.stage = 'round1-retrieval';
+        assert.equal(recallProgressStage(d), backend === 'worker' ? 'worker-retrieval' : 'main-retrieval');
+        assert.equal(d.stage, 'round1-retrieval');
+        d.stage = 'lexical-search';
+        assert.equal(recallProgressStage(d), 'lexical-search');
+        recordRecallRuntimeProgress(d, { phase: 'backend-ready', backend, reused: true, error: 'fixture' });
+        recordRecallRuntimeProgress(d, { phase: 'release-start', backend });
+        recordRecallRuntimeProgress(d, { phase: 'release-end', backend });
+        assert.equal(d.stage, 'lexical-search');
+        assert.equal(d.fallbacks.length, backend === 'main-fallback' ? 1 : 0);
+        assert.equal(d.observations.filter(e => e.phase === 'backend-ready').at(-1).reused, true);
+    }
+});
+
+test('parallel indexing never steals foreground progress; actual waiting exposes acquisition mode', () => {
+    const d = createRecallDiagnostics();
     d.stage = 'round1-embed';
-    d.reason = '没有可用的查询内容';
-    d.metrics = createMetrics();
-    const empty = formatRecallDiagnostics(d, { status: 'empty' });
-    assert.match(empty, /status: empty/);
-    assert.match(empty, /没有可用的查询内容/);
-    assert.match(empty, /部分指标/);
-    assert.doesNotMatch(empty, /potential_issues: none/);
-    const error = new Error('request failed', { cause: new Error('HTTP 429') });
-    const failed = formatRecallDiagnostics(d, { status: 'failed', error });
-    assert.match(failed, /status: failed/);
-    assert.match(failed, /Caused by: Error: HTTP 429/);
-    assert.match(formatRecallDiagnostics(d, { status: 'cancelled', reason: 'user-stop' }), /reason: user-stop/);
-    d.reason = '';
-    assert.match(formatRecallDiagnostics(d, { status: 'success' }), /status: success/);
-    recordRecallFallback(d, 'event-rerank', error);
-    assert.match(formatRecallDiagnostics(d, { status: 'success' }), /status: degraded/);
+    recordRecallIndexProgress(d, { phase: 'build', mode: 'build' });
+    assert.equal(recallProgressStage(d), 'round1-embed');
+    d.stage = 'index-wait';
+    assert.equal(recallProgressStage(d), 'index-build');
+    recordRecallIndexProgress(d, { phase: 'update', mode: 'update' });
+    assert.equal(recallProgressStage(d), 'index-update');
+    recordRecallIndexProgress(d, { phase: 'wait', mode: 'update' });
+    assert.equal(recallProgressStage(d), 'index-wait');
+    recordRecallIndexProgress(d, { phase: 'ready', mode: 'update', documentCount: 400 });
+    d.stage = 'lexical-search';
+    assert.equal(recallProgressStage(d), 'lexical-search');
+    recordRecallIndexProgress(d, { phase: 'hit', documentCount: 400 });
+    assert.equal(d.observations.at(-1).documentCount, 400);
+    assert.equal(d.stage, 'lexical-search');
 });
 
-test('external status and actual lexical gates appear in the copyable report', () => {
-    const d = createRecallDiagnostics('chat-a');
-    d.metrics = createMetrics();
-    d.metrics.lexical.denseGateThresholds = { event: 0.61, floor: 0.47 };
-    d.metrics.external.failures.push({ stage: 'event-rerank', kind: 'http', status: 429, batchIndex: 1, elapsedMs: 25 });
-    const text = formatRecallDiagnostics(d, { status: 'success' });
-    assert.match(text, /event-rerank: http \| HTTP 429 \| batch=2 \| 25ms/);
-    assert.match(text, /0\.61/);
-    assert.match(text, /0\.47/);
-    assert.doesNotMatch(text, /threshold=0\.50/);
+test('completed run ignores late producer results but records the later host rendezvous', () => {
+    const d = createRecallDiagnostics();
+    d.stage = 'round1-embed';
+    d.finishedAt = performance.now();
+    const count = d.observations.length;
+    recordRecallIndexProgress(d, { phase: 'failed', error: new Error('late') });
+    recordRecallRuntimeProgress(d, { phase: 'load-start', backend: 'main-fallback' });
+    d.stage = 'lexical-search';
+    assert.equal(d.observations.length, count);
+    assert.equal(d.backend, null);
+    assert.equal(d.stage, 'round1-embed');
+    recordRecallObservation(d, 'host', { phase: 'interceptor-start' });
+    assert.equal(d.observations.at(-1).phase, 'interceptor-start');
+    recordRecallRuntimeProgress(d, { phase: 'release-start', backend: 'worker' });
+    recordRecallRuntimeProgress(d, { phase: 'release-end', backend: 'worker' });
+    assert.deepEqual(d.observations.slice(-2).map(e => e.phase), ['release-start', 'release-end']);
+    assert.equal(d.stage, 'round1-embed');
 });
 
-test('timing counts assembly and local L1 selection once, with the query attributed to API time', () => {
-    const m = createMetrics();
-    Object.assign(m.timing, {
-        round1Embed: 700,
-        directEvidenceRetrieval: 90,
-        evidenceAssembly: 30, constraintFilter: 10, formatting: 10, runtimeEndSession: 5,
-    });
-    m.query.buildTime = 15;
-    finalizeMetricsTiming(m, 900);
-    assert.equal(m.timing.total, 900);
-    assert.equal(m.timing.externalTotal, 700);
-    assert.equal(m.timing.localKnownTotal, 160);
-    assert.equal(m.timing.unattributed, 40);
-    finalizeMetricsTiming(m, 900);
-    assert.equal(m.timing.localKnownTotal, 160);
-    m.evidence.directEvidenceStatus = 'failed';
-    finalizeMetricsTiming(m, 900);
-    assert.equal(m.timing.localKnownTotal, 160);
-    assert.equal(m.timing.unattributed, 40);
-});
-
-test('event-only recall is not diagnosed as total retrieval failure', () => {
-    const m = createMetrics();
-    m.event.selected = 1;
-    m.event.byRecallType.lexical = 1;
-    assert.doesNotMatch(detectIssues(m).join('\n'), /all retrieval paths|No floor or event candidates|No DIRECT or CAUSAL/i);
-});
-
-test('reuse identifies the source and preserves degradation as an original report, without new retrieval metrics', () => {
-    const original = createRecallDiagnostics('chat-a');
-    recordRecallFallback(original, 'lexical-index', new Error('IndexedDB read failed'));
-    const memory = { sourceIndex: 5, report: formatRecallDiagnostics(original, { status: 'success' }) };
-    const reused = createRecallDiagnostics('chat-a', 'continue');
-    reused.finishedAt = reused.startedAt + 1;
-    const text = formatRecallReuseDiagnostics(reused, memory);
-    assert.match(text, /复用本轮记忆/);
-    assert.match(text, /来源楼层: 6/);
-    assert.match(text, /以下状态及耗时属于首次召回/);
-    assert.match(text, /status: degraded/);
-    assert.match(text, /IndexedDB read failed/);
-    assert.equal(text.split('[Recall Result]').length, 2);
-    assert.equal(formatRecallReuseDiagnostics(reused, memory), text);
-    assert.equal(reused.metrics, null);
+test('trace retains bounded timing receipts, never arbitrary producer payloads', () => {
+    const d = createRecallDiagnostics();
+    for (let i = 0; i < 300; i++) {
+        recordRecallObservation(d, 'index', { phase: 'wait', mode: 'update', documentCount: i, text: 'private', vector: [1], apiKey: 'secret' });
+    }
+    assert.equal(d.observations.length, 256);
+    assert.equal(d.observations.at(-1).documentCount, 299);
+    assert.ok(d.observations.every(e => Number.isFinite(e.at) && e.at >= 0));
+    assert.ok(d.observations.every(e => !('text' in e) && !('vector' in e) && !('apiKey' in e)));
+    const serialized = JSON.parse(JSON.stringify(d));
+    assert.equal(serialized.stage, 'prepare');
+    assert.equal(serialized.observations.length, 256);
 });

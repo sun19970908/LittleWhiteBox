@@ -1,4 +1,5 @@
-/* eslint-disable no-restricted-syntax */
+import { generateFeatureText, handleTextApiRequest } from '../text-api/host.js';
+import { getTextApiRepository } from '../text-api/repository.js';
 /**
  * ============================================================================
  * Story Outline 模块 - 小白板
@@ -25,7 +26,6 @@ import { extension_settings, saveMetadataDebounced } from "../../../../../extens
 import { chat_metadata, name1, processCommands, eventSource, event_types as st_event_types } from "../../../../../../script.js";
 import { loadWorldInfo, saveWorldInfo, world_names, world_info } from "../../../../../world-info.js";
 import { getContext } from "../../../../../st-context.js";
-import { streamingGeneration } from "../streaming-generation.js";
 import { EXT_ID, extensionFolderPath } from "../../core/constants.js";
 import { createModuleEvents, event_types } from "../../core/event-manager.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
@@ -39,7 +39,8 @@ import {
     buildOverlayHtml, MOBILE_LAYOUT_STYLE, DESKTOP_LAYOUT_STYLE, getPromptConfigPayload, setPromptConfig
 } from "./story-outline-prompt.js";
 import { postToIframe, isTrustedMessage } from "../../core/iframe-messaging.js";
-import { getDefaultApiPrefix, getModelListCandidateUrls, resolveApiBaseUrl } from "../../shared/common/openai-url-utils.js";
+import { observeBackgroundTask } from '../../shared/common/async-errors.js';
+
 
 const events = createModuleEvents('storyOutline');
 const IFRAME_PATH = `${extensionFolderPath}/modules/story-outline/story-outline.html`;
@@ -329,9 +330,13 @@ function getOutlineStore() {
 }
 
 /** 全局/通讯设置读写 */
-const getGlobalSettings = () => getStore(STORAGE_KEYS.global, { apiUrl: '', apiKey: '', model: '', mode: 'assist' });
+const getGlobalSettings = () => ({ mode: getStore(STORAGE_KEYS.global, {}).mode || 'assist' });
 const saveGlobalSettings = s => setStore(STORAGE_KEYS.global, s);
-const getCommSettings = () => ({ historyCount: 50, npcPosition: 0, npcOrder: 100, stream: false, ...getStore(STORAGE_KEYS.comm, {}) });
+const getCommSettings = () => {
+    const settings = { historyCount: 50, npcPosition: 0, npcOrder: 100, ...getStore(STORAGE_KEYS.comm, {}) };
+    delete settings.stream;
+    return settings;
+};
 const saveCommSettings = s => setStore(STORAGE_KEYS.comm, s);
 
 /** 获取角色卡信息 */
@@ -354,152 +359,23 @@ function getCharSmsHistory() {
 
 // ==================== 5. LLM调用 ====================
 
-const STREAM_DONE_EVT = 'xiaobaix_streaming_completed';
-let streamLlmQueue = Promise.resolve();
-
-function createStreamingWaiter(sessionId, timeoutMs = 180000) {
-    let done = false;
-    let timer = null;
-    let handler = null;
-
-    const cleanup = () => {
-        if (done) return;
-        done = true;
-        try { if (timer) clearTimeout(timer); } catch { }
-        try { eventSource.removeListener?.(STREAM_DONE_EVT, handler); } catch { }
-    };
-
-    const promise = new Promise((resolve, reject) => {
-        handler = (payload) => {
-            if (!payload || payload.sessionId !== sessionId) return;
-            cleanup();
-            resolve(String(payload.finalText ?? ''));
-        };
-        timer = setTimeout(() => {
-            cleanup();
-            reject(new Error('Streaming timeout'));
-        }, timeoutMs);
-        try { eventSource.on?.(STREAM_DONE_EVT, handler); } catch (e) {
-            cleanup();
-            reject(e);
-        }
-    });
-
-    return { promise, cleanup };
-}
-
-/** 调用LLM */
-async function callLLM(promptOrMsgs, useRaw = false) {
-    const { apiUrl, apiKey, model } = getGlobalSettings();
-    const useStream = !!getCommSettings()?.stream;
-    const resolvedApiUrl = apiUrl?.trim()
-        ? resolveApiBaseUrl(apiUrl.trim(), getDefaultApiPrefix('openai'))
-        : '';
-
-    const normalize = r => {
-        if (r == null) return '';
-        if (typeof r === 'string') return r;
-        if (typeof r === 'object') {
-            if (r.data && typeof r.data === 'object') return normalize(r.data);
-            if (typeof r.text === 'string') return r.text;
-            if (typeof r.response === 'string') return r.response;
-            const inner = r.content?.trim?.() || r.reasoning_content?.trim?.() || r.choices?.[0]?.message?.content?.trim?.() || r.choices?.[0]?.message?.reasoning_content?.trim?.() || null;
-            if (inner != null) return String(inner);
-            return safe(() => JSON.stringify(r)) || String(r);
-        }
-        return String(r);
-    };
-
-    const baseOpts = { lock: 'on' };
-    if (!useStream) baseOpts.nonstream = 'true';
-    if (resolvedApiUrl) Object.assign(baseOpts, { api: 'openai', apiurl: resolvedApiUrl, ...(apiKey && { apipassword: apiKey }), ...(model && { model }) });
-
-    if (!useStream) {
-        const opts = { ...baseOpts };
-
-        if (useRaw) {
-            const messages = Array.isArray(promptOrMsgs)
-                ? promptOrMsgs
-                : [{ role: 'user', content: String(promptOrMsgs || '').trim() }];
-
-            const roleMap = { user: 'user', assistant: 'assistant', system: 'sys' };
-            const topParts = messages
-                .filter(m => m?.role && typeof m.content === 'string' && m.content.trim())
-                .map(m => {
-                    const role = roleMap[m.role] || m.role;
-                    return `${role}={${m.content}}`;
-                });
-            const topParam = topParts.join(';');
-            opts.top = topParam;
-
-            const raw = await streamingGeneration.xbgenrawCommand(opts, '');
-            const text = normalize(raw).trim();
-
-            if (isDebug()) {
-                try {
-                    console.groupCollapsed('[StoryOutline] callLLM(useRaw via xbgenrawCommand)');
-                    console.log('opts.top.length', topParam.length);
-                    console.log('raw', raw);
-                    console.log('normalized.length', text.length);
-                    console.groupEnd();
-                } catch { }
-            }
-            return text;
-        }
-
-        opts.as = 'user';
-        opts.position = 'history';
-        return normalize(await streamingGeneration.xbgenCommand(opts, promptOrMsgs)).trim();
-    }
-
-    const runStreaming = async () => {
-        const sessionId = 'xb10';
-        const waiter = createStreamingWaiter(sessionId);
-        const opts = { ...baseOpts, id: sessionId };
-        try {
-            if (useRaw) {
-                const messages = Array.isArray(promptOrMsgs)
-                    ? promptOrMsgs
-                    : [{ role: 'user', content: String(promptOrMsgs || '').trim() }];
-
-                const roleMap = { user: 'user', assistant: 'assistant', system: 'sys' };
-                const topParts = messages
-                    .filter(m => m?.role && typeof m.content === 'string' && m.content.trim())
-                    .map(m => {
-                        const role = roleMap[m.role] || m.role;
-                        return `${role}={${m.content}}`;
-                    });
-                opts.top = topParts.join(';');
-                await streamingGeneration.xbgenrawCommand(opts, '');
-                return (await waiter.promise).trim();
-            }
-
-            opts.as = 'user';
-            opts.position = 'history';
-            await streamingGeneration.xbgenCommand(opts, promptOrMsgs);
-            return (await waiter.promise).trim();
-        } finally {
-            waiter.cleanup();
-        }
-    };
-
-    streamLlmQueue = streamLlmQueue.then(runStreaming, runStreaming);
-    return streamLlmQueue;
+async function callLLM(messages) {
+    return String((await generateFeatureText('outline', { messages })).text || '').trim();
 }
 
 /** 调用LLM并解析JSON */
-async function callLLMJson({ messages, useRaw = true, isArray = false, validate }) {
+async function callLLMJson({ messages, isArray = false, validate }) {
     try {
-        const result = await callLLM(messages, useRaw);
+        const result = await callLLM(messages);
         if (isDebug()) {
             try {
                 const s = String(result ?? '');
                 console.groupCollapsed('[StoryOutline] callLLMJson');
-                console.log({ useRaw, isArray, length: s.length });
+                console.log({ isArray, length: s.length });
                 console.log('result.head', s.slice(0, 500));
                 console.log('result.tail', s.slice(Math.max(0, s.length - 500)));
                 console.groupEnd();
-            } catch { }
+            } catch (caughtError) { console.warn({ source: import.meta.url, operation: "callLLMJson" }, caughtError); }
         }
         const parsed = extractJson(result, isArray);
         if (isDebug()) {
@@ -508,10 +384,10 @@ async function callLLMJson({ messages, useRaw = true, isArray = false, validate 
                 console.log('parsed', parsed);
                 console.log('validate', !!(parsed && validate?.(parsed)));
                 console.groupEnd();
-            } catch { }
+            } catch (caughtError) { console.warn({ source: import.meta.url, operation: "callLLMJson" }, caughtError); }
         }
         if (parsed && validate(parsed)) return parsed;
-    } catch { }
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "callLLMJson" }, caughtError); }
     return null;
 }
 
@@ -697,7 +573,7 @@ function setupSTEvents() {
     };
     eventSource.on(st_event_types.OAI_PRESET_CHANGED_AFTER, onChanged);
     eventSource.on(st_event_types.OAI_PRESET_EXPORT_READY, onExport);
-    presetCleanup = () => { try { eventSource.removeListener(st_event_types.OAI_PRESET_CHANGED_AFTER, onChanged); } catch { } try { eventSource.removeListener(st_event_types.OAI_PRESET_EXPORT_READY, onExport); } catch { } };
+    presetCleanup = () => { try { eventSource.removeListener(st_event_types.OAI_PRESET_CHANGED_AFTER, onChanged); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "setupSTEvents" }, caughtError); } try { eventSource.removeListener(st_event_types.OAI_PRESET_EXPORT_READY, onExport); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "setupSTEvents" }, caughtError); } };
 }
 
 const injectOutline = () => updatePromptContent();
@@ -800,7 +676,7 @@ function tickSimCountdown(store) {
     saveMetadataDebounced?.();
     sendSimStateOnly();
     if (prev > 0 && next <= 0) {
-        try { processCommands?.('/echo 该进行世界推演啦！'); } catch { }
+        try { observeBackgroundTask(processCommands?.('/echo 该进行世界推演啦！'), { source: "modules/story-outline/story-outline.js", operation: "tickSimCountdown" }); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "tickSimCountdown" }, caughtError); }
     }
 }
 
@@ -830,58 +706,6 @@ function normalizeStep2Maps(data) {
 }
 
 // --- 处理器 ---
-
-async function handleFetchModels({ apiUrl, apiKey }) {
-    try {
-        let models = [];
-        if (!apiUrl) {
-            for (const ep of ['/api/backends/chat-completions/models', '/api/openai/models']) {
-                try { const r = await fetch(ep, { headers: { 'Content-Type': 'application/json' } }); if (r.ok) { const j = await r.json(); models = (j.data || j || []).map(m => m.id || m.name || m).filter(m => typeof m === 'string'); if (models.length) break; } } catch { }
-            }
-            if (!models.length) throw new Error('无法从酒馆获取模型列表');
-        } else {
-            const h = { 'Content-Type': 'application/json', ...(apiKey && { Authorization: `Bearer ${apiKey}` }) };
-            let lastStatus = '';
-            for (const url of getModelListCandidateUrls(apiUrl, getDefaultApiPrefix('openai'))) {
-                try {
-                    const r = await fetch(url, { headers: h });
-                    if (!r.ok) {
-                        lastStatus = `HTTP ${r.status}`;
-                        continue;
-                    }
-                    const j = await r.json();
-                    models = (j.data || j || []).map(m => m.id || m.name || m).filter(m => typeof m === 'string');
-                } catch {
-                    continue;
-                }
-                if (models.length) break;
-            }
-            if (!models.length) throw new Error(lastStatus || '未获取到模型列表');
-        }
-        postFrame({ type: "FETCH_MODELS_RESULT", models });
-    } catch (e) { postFrame({ type: "FETCH_MODELS_RESULT", error: e.message }); }
-}
-
-async function handleTestConn({ apiUrl, apiKey, model }) {
-    try {
-        if (!apiUrl) { for (const ep of ['/api/backends/chat-completions/status', '/api/openai/models', '/api/backends/chat-completions/models']) { try { if ((await fetch(ep, { headers: { 'Content-Type': 'application/json' } })).ok) { postFrame({ type: "TEST_CONN_RESULT", success: true, message: `连接成功${model ? ` (模型: ${model})` : ''}` }); return; } } catch { } } throw new Error('无法连接到酒馆API'); }
-        const h = { 'Content-Type': 'application/json', ...(apiKey && { Authorization: `Bearer ${apiKey}` }) };
-        let connected = false;
-        for (const url of getModelListCandidateUrls(apiUrl, getDefaultApiPrefix('openai'))) {
-            try {
-                const r = await fetch(url, { headers: h });
-                if (!r.ok) continue;
-                await r.json();
-                connected = true;
-                break;
-            } catch {
-                continue;
-            }
-        }
-        if (!connected) throw new Error('连接失败');
-        postFrame({ type: "TEST_CONN_RESULT", success: true, message: `连接成功${model ? ` (模型: ${model})` : ''}` });
-    } catch (e) { postFrame({ type: "TEST_CONN_RESULT", success: false, message: `连接失败: ${e.message}` }); }
-}
 
 async function handleCheckUid({ uid, requestId }) {
     const num = parseInt(uid, 10);
@@ -1224,7 +1048,8 @@ async function handleSimWorld({ requestId, currentData, isAuto }) {
     } catch (e) { replyErr('SIMULATE_WORLD_RESULT', requestId, `推演失败: ${e.message}`); }
 }
 
-function handleSaveSettings(d) {
+async function handleSaveSettings(d) {
+    await (await getTextApiRepository()).load();
     if (d.globalSettings) saveGlobalSettings(d.globalSettings);
     if (d.commSettings) saveCommSettings(d.commSettings);
     const store = getOutlineStore();
@@ -1237,18 +1062,18 @@ function handleSaveSettings(d) {
     }
     injectOutline();
     try {
-        StoryOutlineStorage?.set?.('settings', {
+        observeBackgroundTask(StoryOutlineStorage?.set?.('settings', {
             globalSettings: getGlobalSettings(),
             commSettings: getCommSettings(),
-        });
-    } catch { }
+        }), { source: "modules/story-outline/story-outline.js", operation: "handleSaveSettings" });
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleSaveSettings" }, caughtError); }
 }
 
 async function handleSavePrompts(d) {
     // Back-compat: full payload (old iframe)
     if (d?.promptConfig) {
         const payload = setPromptConfig?.(d.promptConfig, false) || d.promptConfig;
-        try { await StoryOutlineStorage?.set?.('promptConfig', payload); } catch { }
+        try { await StoryOutlineStorage?.set?.('promptConfig', payload); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleSavePrompts" }, caughtError); }
         postFrame({ type: "PROMPT_CONFIG_UPDATED", promptConfig: getPromptConfigPayload?.() });
         return;
     }
@@ -1258,7 +1083,7 @@ async function handleSavePrompts(d) {
     if (!key) return;
 
     let current = null;
-    try { current = await StoryOutlineStorage?.get?.('promptConfig', null); } catch { }
+    try { current = await StoryOutlineStorage?.get?.('promptConfig', null); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleSavePrompts" }, caughtError); }
     const next = (current && typeof current === 'object') ? {
         jsonTemplates: { ...(current.jsonTemplates || {}) },
         promptSources: { ...(current.promptSources || {}) },
@@ -1276,7 +1101,7 @@ async function handleSavePrompts(d) {
     }
 
     const payload = setPromptConfig?.(next, false) || next;
-    try { await StoryOutlineStorage?.set?.('promptConfig', payload); } catch { }
+    try { await StoryOutlineStorage?.set?.('promptConfig', payload); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "handleSavePrompts" }, caughtError); }
     postFrame({ type: "PROMPT_CONFIG_UPDATED", promptConfig: getPromptConfigPayload?.() });
 }
 
@@ -1321,8 +1146,6 @@ const handlers = {
     SAVE_PROMPTS: handleSavePrompts,
     SAVE_CONTACTS: handleSaveContacts,
     SAVE_ALL_DATA: handleSaveAllData,
-    FETCH_MODELS: handleFetchModels,
-    TEST_CONNECTION: handleTestConn,
     CHECK_WORLDBOOK_UID: handleCheckUid,
     SEND_SMS: handleSendSms,
     LOAD_SMS_HISTORY: handleLoadSmsHistory,
@@ -1347,7 +1170,11 @@ const handleMsg = (event) => {
     const iframe = document.getElementById("xiaobaix-story-outline-iframe");
     if (!isTrustedMessage(event, iframe, "LittleWhiteBox-OutlineFrame")) return;
     const { data } = event;
-    handlers[data.type]?.(data);
+    if (data.type === 'TEXT_API_REQUEST') {
+        observeBackgroundTask(handleTextApiRequest(data, 'outline', postFrame), { source: import.meta.url, operation: 'text-api' });
+        return;
+    }
+    observeBackgroundTask(Promise.resolve().then(() => handlers[data.type]?.(data)), { source: import.meta.url, operation: data.type });
 };
 
 // ==================== 10. UI管理 ====================
@@ -1358,7 +1185,7 @@ function setupDrag(el, { onStart, onMove, onEnd, shouldHandle }) {
     let state = null;
     el.addEventListener('pointerdown', e => { if (shouldHandle && !shouldHandle()) return; e.preventDefault(); e.stopPropagation(); state = onStart(e); state.pointerId = e.pointerId; el.setPointerCapture(e.pointerId); });
     el.addEventListener('pointermove', e => state && onMove(e, state));
-    const end = () => { if (!state) return; onEnd?.(state); try { el.releasePointerCapture(state.pointerId); } catch { } state = null; };
+    const end = () => { if (!state) return; onEnd?.(state); try { el.releasePointerCapture(state.pointerId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "end" }, caughtError); } state = null; };
     ['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => el.addEventListener(ev, end));
 }
 
@@ -1394,8 +1221,7 @@ function createOverlay() {
         onEnd: () => { setPtr(''); saveCurrentOutlineOverlayLayout(); }
     });
 
-    // Guarded by isTrustedMessage (origin + source).
-    // eslint-disable-next-line no-restricted-syntax
+    // eslint-disable-next-line no-restricted-syntax -- Guarded by isTrustedMessage (origin + source).
     window.addEventListener("message", handleMsg);
 }
 
@@ -1538,7 +1364,7 @@ async function initPromptConfigFromServer() {
         if (!cfg) return;
         setPromptConfig?.(cfg, false);
         postFrame({ type: "PROMPT_CONFIG_UPDATED", promptConfig: getPromptConfigPayload?.() });
-    } catch { }
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "initPromptConfigFromServer" }, caughtError); }
 }
 
 async function initSettingsFromServer() {
@@ -1547,7 +1373,7 @@ async function initSettingsFromServer() {
         if (!s || typeof s !== 'object') return;
         if (s.globalSettings) saveGlobalSettings(s.globalSettings);
         if (s.commSettings) saveCommSettings(s.commSettings);
-    } catch { }
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "initSettingsFromServer" }, caughtError); }
 }
 
 function configureStoryOutlineRuntime({ ownsMessageButtons = true } = {}) {
@@ -1556,8 +1382,8 @@ function configureStoryOutlineRuntime({ ownsMessageButtons = true } = {}) {
 
 jQuery(() => {
     if (!getSettings().storyOutline?.enabled) return;
-    initSettingsFromServer();
-    initPromptConfigFromServer();
+    observeBackgroundTask(initSettingsFromServer(), { source: "modules/story-outline/story-outline.js", operation: "callback" });
+    observeBackgroundTask(initPromptConfigFromServer(), { source: "modules/story-outline/story-outline.js", operation: "callback" });
     registerEvents();
     setTimeout(injectOutline, 200);
     window.registerModuleCleanup?.('storyOutline', cleanup);

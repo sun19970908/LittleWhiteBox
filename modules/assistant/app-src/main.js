@@ -4,6 +4,7 @@ import {
     formatToolResultDisplay,
 } from './tooling.js';
 import { createAssistantRuntime } from './runtime.js';
+import { settleAssistantRunFailure } from './runtime/run-failure.js';
 import { buildCurrentPlansContextText } from '../../agent-core/current-plans.js';
 import { mergeThoughtBlocks } from '../../agent-core/runtime/protocol.js';
 import { resetMessageWindow } from '../../agent-core/ui/message-windowing.js';
@@ -24,6 +25,9 @@ import {
     shouldRequireSlashCommandApproval,
 } from './slash-command-policy.js';
 import { createSessionStore } from './state/session-store.js';
+import { createWorkspaceStore } from './workspace/workspace-store.js';
+import { closeAssistantWorkspace } from './workspace/workspace-lifecycle.js';
+import { ACTIVITY_COPY } from './ui/activity-copy.js';
 import { createAttachmentsManager } from './attachments.js';
 import { renderAppChrome, renderContextHint, resolveWorkspaceWidth } from './ui/app-chrome.js';
 import { bindContextMeter, renderContextMeter } from './ui/context-meter.js';
@@ -34,6 +38,7 @@ import { syncAgentSettingsPanelFeedback } from '../../agent-core/ui/settings-mar
 import { setHostChatCompletionsRequestHeadersProvider } from '../../../shared/host-llm/chat-completions/client.js';
 import { createLocalSourcesManager } from './workspace/local-sources.js';
 import { buildWorkspaceTree } from './workspace/local-workspace-tree.js';
+import { WORKSPACE_COPY } from './workspace/workspace-copy.js';
 import {
     destroyWorkspaceEditorCache,
     renderWorkspace as renderWorkspaceUi,
@@ -51,6 +56,8 @@ import {
 } from '../shared/workspace-protocol.js';
 import { createPlanLedger } from '../../agent-core/plan-ledger.js';
 import { plansTable as assistantPlansTable } from './state/session-db.js';
+import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
+
 
 const SOURCE = 'xb-assistant-app';
 const ROOT_ID = 'xb-assistant-root';
@@ -58,8 +65,6 @@ const REQUEST_TIMEOUT_MS = 180000;
 const MAX_TOOL_ROUNDS = 64;
 const MAX_CONTEXT_TOKENS = 258000;
 const SUMMARY_TRIGGER_TOKENS = 228000;
-const DEFAULT_PRESERVED_TURNS = 2;
-const MIN_PRESERVED_TURNS = 1;
 const MAX_IMAGE_ATTACHMENTS = 3;
 const MAX_IMAGE_FILE_BYTES = 4 * 1024 * 1024;
 const ACCEPTED_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/webp', 'image/gif'];
@@ -89,6 +94,8 @@ const state = {
     },
     isBusy: false,
     isPreparingRun: false,
+    isClearingConversation: false,
+    isClosingAssistant: false,
     currentRound: 0,
     progressLabel: '',
     activeRun: null,
@@ -154,7 +161,6 @@ let contextStatsRenderTimer = null;
 let lastContextStatsRenderAt = 0;
 const workspaceToolBridge = {
     callHostTool: null,
-    postHostToolCallWithoutResponse: null,
 };
 const WORKSPACE_KERNEL_RELOAD_KEY = 'xb-assistant-workspace-kernel-reload';
 
@@ -254,6 +260,13 @@ function ensureWorkspaceKernelVersion(runtime = state.runtime) {
 }
 
 let sessionStore = null;
+const workspaceStore = createWorkspaceStore({ state });
+
+async function persistWorkspaceUiState() {
+    const result = await workspaceStore.persistWorkspaceUiState();
+    if (!result.ok) showToast(WORKSPACE_COPY.saveFailed(result.error));
+    return result;
+}
 
 function persistSession() {
     return sessionStore?.persistSession();
@@ -268,13 +281,13 @@ function restoreSession() {
 }
 
 async function closeAssistantAfterWorkspaceFlush() {
-    const ok = await flushPendingWorkspaceChanges();
-    if (!ok) {
-        showToast('工作区还有未保存修改，已取消关闭。');
-        return false;
-    }
-    post('xb-assistant:close');
-    return true;
+    return closeAssistantWorkspace({
+        state, cancelRun: () => cancelActiveRun(''),
+        flushEditorChanges: flushPendingWorkspaceChanges,
+        flushHostWrites: () => requestHost(WORKSPACE_MESSAGE_TYPES.FLUSH),
+        workspaceStore, hasPendingChanges: hasPendingWorkspaceChanges,
+        close: () => post('xb-assistant:close'), render, showToast, describeError,
+    });
 }
 
 function renderWorkspaceOnly() {
@@ -284,7 +297,7 @@ function renderWorkspaceOnly() {
     if (!workspacePanel) return;
     if (!state.isWorkspaceOpen) {
         renderWorkspacePanelWhenOpen(workspacePanel, {
-            disabled: state.isBusy,
+            disabled: state.isBusy || state.isClosingAssistant,
             onEditorSelectionChange: handleWorkspaceEditorSelectionChange,
         });
         renderContextHint(root, state);
@@ -296,7 +309,7 @@ function renderWorkspaceOnly() {
         ensureWorkspaceSelection();
     }
     renderWorkspacePanelWhenOpen(workspacePanel, {
-        disabled: state.isBusy,
+        disabled: state.isBusy || state.isClosingAssistant,
         onEditorSelectionChange: handleWorkspaceEditorSelectionChange,
     });
     renderContextHint(root, state);
@@ -384,7 +397,7 @@ function setWorkspacePanelMode(mode = 'workspace', options = {}) {
         ensureSkillSelection();
     }
     if (options.persist !== false) {
-        persistSession();
+        observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "setWorkspacePanelMode" });
     }
     if (options.render !== false) {
         renderWorkspaceOnly();
@@ -408,7 +421,7 @@ function selectSkillFile(targetPath = '', options = {}) {
     state.selectedTreePath = '';
     state.mobileWorkspacePane = 'viewer';
     if (options.persist !== false) {
-        persistSession();
+        observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "selectSkillFile" });
     }
     return true;
 }
@@ -425,7 +438,7 @@ function updateSkillFileContent(targetPath, content) {
         };
     });
     if (changed) {
-        persistSession();
+        observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "updateSkillFileContent" });
     }
     return changed;
 }
@@ -443,7 +456,7 @@ function restoreSkillFile(targetPath = '') {
         };
     });
     if (changed) {
-        persistSession();
+        observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "restoreSkillFile" });
         renderWorkspaceOnly();
     }
     return changed;
@@ -545,13 +558,6 @@ async function saveSkillFile(targetPath = '') {
     }
 }
 
-function getWorkspacePanelModes() {
-    return [
-        { key: 'workspace', label: '工作区' },
-        { key: 'memory', label: '记忆区' },
-    ];
-}
-
 function renderWorkspacePanel(container, options = {}) {
     if (state.workspacePanelMode === 'memory') {
         ensureSkillSelection({ fallbackToFirst: false });
@@ -579,15 +585,10 @@ function renderWorkspacePanel(container, options = {}) {
             summary,
             workspaceTree,
             selectedMatch,
-            panelModes: getWorkspacePanelModes(),
             activePanelMode: 'memory',
-            navTitle: '记忆区',
             hideNavActions: true,
             hideTreeActions: true,
-            emptyTreeText: summary.fileCount ? '当前筛选下没有记忆文件' : '还没有记忆文件',
-            emptyViewerTitle: '还没有选中记忆文件',
-            emptyViewerDescription: '从左侧记忆树里点一个文件，我会在这里显示并允许编辑正文。',
-            viewerMetaLabel: '记忆区',
+            emptyTreeText: summary.fileCount ? WORKSPACE_COPY.emptyFilter : WORKSPACE_COPY.emptyMemory,
             workspaceState: {
                 selectedSourceId: 'all',
                 selectedFilePath: state.selectedSkillFilePath,
@@ -609,13 +610,13 @@ function renderWorkspacePanel(container, options = {}) {
             onSearchChange: (value) => {
                 state.fileSearchQuery = String(value || '');
                 ensureSkillSelection();
-                persistSession();
+                observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "onSearchChange" });
                 renderWorkspaceOnly();
             },
             onToggleModifiedOnly: (value) => {
                 state.showModifiedOnly = !!value;
                 ensureSkillSelection();
-                persistSession();
+                observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "onToggleModifiedOnly" });
                 renderWorkspaceOnly();
             },
             onToggleNode: (nodeKey) => {
@@ -623,7 +624,7 @@ function renderWorkspacePanel(container, options = {}) {
                 if (next.has(nodeKey)) next.delete(nodeKey);
                 else next.add(nodeKey);
                 state.skillTreeExpandedKeys = Array.from(next);
-                persistSession();
+                observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "onToggleNode" });
                 renderWorkspaceOnly();
             },
             onSelectFile: (targetPath) => {
@@ -633,7 +634,7 @@ function renderWorkspacePanel(container, options = {}) {
             onSelectNode: () => {},
             onSetViewerMode: (mode) => {
                 state.viewerMode = mode;
-                persistSession();
+                observeBackgroundTask(persistWorkspaceUiState(), { source: import.meta.url, operation: "onSetViewerMode" });
                 renderWorkspaceOnly();
             },
             onShowTree: () => {
@@ -647,7 +648,7 @@ function renderWorkspacePanel(container, options = {}) {
             },
             onUpdateFileContent: (targetPath, content) => updateSkillFileContent(targetPath, content),
             onSaveFile: (targetPath) => {
-                void saveSkillFile(targetPath);
+                observeBackgroundTask(saveSkillFile(targetPath), { source: import.meta.url, operation: "onSaveFile" });
             },
             canSaveFile: (file) => isTrackedFileModified(file),
             showDownloadButton: true,
@@ -659,108 +660,10 @@ function renderWorkspacePanel(container, options = {}) {
         return;
     }
 
-    ensureWorkspaceSelection();
-    const normalizedSources = normalizeLocalSources(state.localSources);
-    const summary = summarizeLocalSources(normalizedSources);
-    const workspaceTree = buildWorkspaceTree(normalizedSources, {
-        selectedSourceId: 'all',
-        searchQuery: state.fileSearchQuery,
-        modifiedOnly: state.showModifiedOnly,
-        isModifiedFile: isTrackedFileModified,
-    });
-    const selectedMatch = findTrackedFileByPath(normalizedSources, state.selectedFilePath);
-    renderWorkspaceUi(container, {
+    localSourcesManager.renderWorkspace(container, {
         ...options,
-        localSources: normalizedSources,
-        summary,
-        workspaceTree,
-        selectedMatch,
-        panelModes: getWorkspacePanelModes(),
         activePanelMode: 'workspace',
-        navTitle: '文件工作区',
-        workspaceState: {
-            selectedSourceId: 'all',
-            selectedFilePath: state.selectedFilePath,
-            selectedTreePath: state.selectedTreePath,
-            fileSearchQuery: state.fileSearchQuery,
-            showModifiedOnly: state.showModifiedOnly,
-            viewerMode: state.viewerMode,
-            mobileWorkspacePane: state.mobileWorkspacePane,
-            treeExpandedKeys: state.treeExpandedKeys,
-        },
-        isModifiedFile: isTrackedFileModified,
-        hasOriginalSnapshot,
-        onSelectPanelMode: (mode) => {
-            setWorkspacePanelMode(mode);
-        },
-        onDownloadAll: () => {
-            downloadAllLocalSources();
-        },
-        onClearAll: () => {
-            void clearLocalSources();
-        },
-        onCloseWorkspace: () => {
-            closeWorkspace();
-        },
-        onSearchChange: (value) => {
-            state.fileSearchQuery = String(value || '');
-            ensureWorkspaceSelection();
-            persistSession();
-            renderWorkspaceOnly();
-        },
-        onToggleModifiedOnly: (value) => {
-            state.showModifiedOnly = !!value;
-            ensureWorkspaceSelection();
-            persistSession();
-            renderWorkspaceOnly();
-        },
-        onToggleNode: (nodeKey) => {
-            const next = new Set(Array.isArray(state.treeExpandedKeys) ? state.treeExpandedKeys : []);
-            if (next.has(nodeKey)) next.delete(nodeKey);
-            else next.add(nodeKey);
-            state.treeExpandedKeys = Array.from(next);
-            persistSession();
-            renderWorkspaceOnly();
-        },
-        onSelectFile: (targetPath) => {
-            selectWorkspaceFile(targetPath, {
-                preserveSourceFilter: true,
-                preserveSearch: true,
-                preserveModifiedOnly: true,
-            });
-            renderWorkspaceOnly();
-        },
-        onSelectNode: (targetPath) => {
-            selectWorkspaceNode(targetPath);
-        },
-        onSetViewerMode: (mode) => {
-            state.viewerMode = mode;
-            ensureWorkspaceSelection();
-            persistSession();
-            renderWorkspaceOnly();
-        },
-        onShowTree: () => {
-            setMobileWorkspacePane('tree', { render: true });
-        },
-        onDownloadFile: (targetPath) => {
-            downloadLocalFile(targetPath);
-        },
-        onRestoreFile: (targetPath) => {
-            void restoreLocalFile(targetPath);
-        },
-        onUpdateFileContent: (targetPath, content, nextOptions = {}) => updateLocalFileContent(targetPath, content, nextOptions),
-        onCreateFile: (targetPath) => {
-            void createLocalFileAt(targetPath);
-        },
-        onCreateDirectory: (targetPath) => {
-            void createLocalDirectoryAt(targetPath);
-        },
-        onRenamePath: (targetPath) => {
-            void renameLocalPath(targetPath);
-        },
-        onDeletePath: (targetPath) => {
-            void deleteLocalPath(targetPath);
-        },
+        onSelectPanelMode: mode => setWorkspacePanelMode(mode),
         showDownloadButton: true,
         showRestoreButton: true,
         showRenameButton: true,
@@ -993,6 +896,7 @@ function beginConfigSave(requestId) {
             requestId,
             error: '保存超时，请重试',
         };
+        settingsPanel.completePresetSave(requestId, { ok: false });
         render();
         scheduleConfigSaveReset();
     }, CONFIG_SAVE_TIMEOUT_MS);
@@ -1003,6 +907,7 @@ function completeConfigSave(requestId, { ok, error = '' } = {}) {
     if (requestId && state.configSave.requestId && state.configSave.requestId !== requestId) {
         return;
     }
+    if (!ok) settingsPanel.completePresetSave(requestId, { ok: false });
     if (configSaveTimeout) {
         clearTimeout(configSaveTimeout);
         configSaveTimeout = null;
@@ -1052,7 +957,7 @@ const localSourcesManager = createLocalSourcesManager({
     setImportProgress: setLocalImportProgress,
     render,
     renderWorkspaceOnly,
-    persistSession,
+    persistWorkspaceUiState,
     onWorkspaceClosed: clearWorkspaceSelectionContext,
     onWorkspaceSelectionChanged: () => {
         clearWorkspaceSelectionContext();
@@ -1060,7 +965,6 @@ const localSourcesManager = createLocalSourcesManager({
     },
     post,
     callHostTool: (...args) => workspaceToolBridge.callHostTool?.(...args),
-    postHostToolCallWithoutResponse: (...args) => workspaceToolBridge.postHostToolCallWithoutResponse?.(...args),
     renderWorkspaceUi,
 });
 
@@ -1076,18 +980,9 @@ const {
     ensureWorkspaceSelection,
     getWorkspaceSummary,
     flushPendingWorkspaceChanges,
-    postPendingWorkspaceWritesForUnload,
-    selectWorkspaceFile,
-    selectWorkspaceNode,
+    hasPendingWorkspaceChanges,
+    captureRunWorkspaceBaseline,
     setMobileWorkspacePane,
-    updateLocalFileContent,
-    downloadLocalFile,
-    downloadAllLocalSources,
-    restoreLocalFile,
-    createLocalFileAt,
-    createLocalDirectoryAt,
-    renameLocalPath,
-    deleteLocalPath,
 } = localSourcesManager;
 
 function describeError(error) {
@@ -1137,7 +1032,7 @@ const settingsPanel = createSettingsPanel({
     describeError,
     saveConfig: ({ requestId, payload }) => {
         beginConfigSave(requestId);
-        post('xb-assistant:save-config', payload);
+        post('xb-assistant:save-config', { ...payload, requestId });
     },
     getRuntimeSummaryText: ({ draft, providerLabel }) => state.runtime
         ? `预设「${draft.currentPresetName || DEFAULT_PRESET_NAME}」 · ${providerLabel} · 已索引 ${state.runtime.indexedFileCount || 0} 个前端源码文件`
@@ -1430,8 +1325,6 @@ const runtime = createAssistantRuntime({
     HISTORY_SUMMARY_PREFIX,
     MAX_CONTEXT_TOKENS,
     SUMMARY_TRIGGER_TOKENS,
-    DEFAULT_PRESERVED_TURNS,
-    MIN_PRESERVED_TURNS,
     MAX_TOOL_ROUNDS,
     REQUEST_TIMEOUT_MS,
     TOOL_DEFINITIONS,
@@ -1448,11 +1341,9 @@ const {
     getActiveContextMessages,
     runAssistantLoop,
     callHostTool,
-    postHostToolCallWithoutResponse,
 } = runtime;
 
 workspaceToolBridge.callHostTool = callHostTool;
-workspaceToolBridge.postHostToolCallWithoutResponse = postHostToolCallWithoutResponse;
 
 sessionStore = createSessionStore({
     state,
@@ -1474,20 +1365,32 @@ function applyConfig(config) {
 }
 
 async function createAssistantRun() {
-    return {
+    const run = {
         id: createRequestId('run'),
         controller: new AbortController(),
         toolRequestIds: new Set(),
-        userContextSnapshotText: await getRunUserContextSnapshotText(),
+        workspaceBaseline: captureRunWorkspaceBaseline(),
+        userContextSnapshotText: '',
         cancelNotice: '',
         lightBrakeMessage: '',
         lastLightBrakeKey: '',
         toolErrorStreakKey: '',
         toolErrorStreakCount: 0,
     };
+    state.activeRun = run;
+    try {
+        run.userContextSnapshotText = await getRunUserContextSnapshotText();
+        return run.controller.signal.aborted ? null : run;
+    } catch (error) {
+        if (state.activeRun === run) state.activeRun = null;
+        throw error;
+    } finally {
+        if (run.controller.signal.aborted && state.activeRun === run) state.activeRun = null;
+    }
 }
 
 async function executeAssistantRun(run) {
+    if (run.controller.signal.aborted) return;
     state.activeRun = run;
     state.isBusy = true;
     state.currentRound = 0;
@@ -1499,19 +1402,9 @@ async function executeAssistantRun(run) {
     try {
         await runAssistantLoop(run);
     } catch (error) {
-        if (isAbortError(error)) {
-            if (run.cancelNotice) {
-                pushMessage({
-                    role: 'assistant',
-                    content: run.cancelNotice,
-                });
-            }
-        } else {
-            pushMessage({
-                role: 'assistant',
-                content: describeError(error),
-            });
-        }
+        settleAssistantRunFailure({ messages: state.messages,
+            notice: isAbortError(error) ? run.cancelNotice : describeError(error),
+            pushMessage, persistSession });
     } finally {
         if (state.activeRun?.id === run.id) {
             state.activeRun = null;
@@ -1608,7 +1501,11 @@ function render() {
     if (!root) {
         return;
     }
-    if (!root.firstChild) {
+    if (!state.config) {
+        root.textContent = state.configLoadError ? ACTIVITY_COPY.configLoadFailed(state.configLoadError) : '';
+        return;
+    }
+    if (!root.querySelector('#xb-assistant-form')) {
         root.replaceChildren(buildSanitizedHtmlFragment(buildAssistantAppMarkup(state)));
         bindEvents(root);
     }
@@ -1633,7 +1530,7 @@ function render() {
             toggleWorkspacePanel();
         },
         onClearLocalSources: () => {
-            clearLocalSources();
+            observeBackgroundTask(clearLocalSources(), { source: import.meta.url, operation: "onClearLocalSources" });
         },
     });
     syncAgentSettingsPanelFeedback(root, {
@@ -1777,7 +1674,7 @@ function bindEvents(root) {
     });
 
     root.querySelector('#xb-assistant-mobile-close')?.addEventListener('click', () => {
-        void closeAssistantAfterWorkspaceFlush();
+        observeBackgroundTask(closeAssistantAfterWorkspaceFlush(), { source: import.meta.url, operation: "callback" });
     });
 
     root.querySelector('#xb-assistant-open-workspace')?.addEventListener('click', () => {
@@ -1868,7 +1765,7 @@ function bindEvents(root) {
         const messageIndex = Number.parseInt(actionButton.dataset.messageIndex || '', 10);
         const action = String(actionButton.dataset.messageAction || '').trim();
         if (!Number.isInteger(messageIndex) || messageIndex < 0 || !action) return;
-        if (state.isBusy && action !== 'cancel-edit') return;
+        if (state.isClosingAssistant || state.isClearingConversation || (state.isBusy && action !== 'cancel-edit')) return;
         const message = state.messages[messageIndex];
         if (!isEditableAssistantTextMessage(message)) return;
 
@@ -1940,15 +1837,18 @@ function bindEvents(root) {
 
             state.isPreparingRun = true;
             try {
+                const run = await createAssistantRun();
+                if (!run) return;
                 state.messages = nextMessages;
                 state.pendingApproval = null;
                 state.editingMessageIndex = -1;
                 await persistSession();
                 render();
 
-                const run = await createAssistantRun();
                 state.isPreparingRun = false;
                 await executeAssistantRun(run);
+            } catch (error) {
+                showToast(WORKSPACE_COPY.saveFailed(describeError(error)));
             } finally {
                 state.isPreparingRun = false;
             }
@@ -1960,18 +1860,35 @@ function bindEvents(root) {
     bindSettingsPanelEvents(root);
 
     root.querySelector('#xb-assistant-clear').addEventListener('click', async () => {
-        if (state.isBusy) return;
-        state.messages = [];
-        state.draftAttachments = [];
-        state.historySummary = '';
-        state.archivedTurnCount = 0;
-        resetMessageWindow(state);
-        state.pendingApproval = null;
-        state.editingMessageIndex = -1;
-        resetCompactionState();
-        await clearSession();
-        showToast('对话已清空');
+        if (state.isClosingAssistant || state.isBusy || state.isPreparingRun || state.isClearingConversation) return;
+        state.isClearingConversation = true;
         render();
+        try {
+            if (!await flushPendingWorkspaceChanges()) {
+                showToast(WORKSPACE_COPY.pendingBeforeClear);
+                return;
+            }
+            const savedWorkspace = await workspaceStore.flushWorkspace();
+            if (!savedWorkspace.ok) {
+                showToast(WORKSPACE_COPY.saveFailed(savedWorkspace.error));
+                return;
+            }
+            const result = await clearSession();
+            if (!result.ok) {
+                showToast(ACTIVITY_COPY.clearFailed(result.error));
+                return;
+            }
+            state.draftAttachments = [];
+            state.pendingApproval = null;
+            state.editingMessageIndex = -1;
+            resetCompactionState();
+            showToast(ACTIVITY_COPY.conversationCleared);
+        } catch (error) {
+            showToast(ACTIVITY_COPY.clearFailed(describeError(error)));
+        } finally {
+            state.isClearingConversation = false;
+            render();
+        }
     });
 
     root.querySelector('#xb-assistant-add-image').addEventListener('click', () => {
@@ -2065,25 +1982,28 @@ function bindEvents(root) {
             cancelActiveRun('本轮请求已终止。');
             return;
         }
-        if (state.isPreparingRun) return;
+        if (state.isClosingAssistant || state.isPreparingRun || state.isClearingConversation) return;
         const value = input.value.trim();
         const attachments = normalizeAttachments(state.draftAttachments);
         if (!value && !attachments.length) return;
 
         state.isPreparingRun = true;
-        resetMessageWindow(state);
-        pushMessage({ role: 'user', content: value, attachments });
-        input.value = '';
-        state.draftAttachments = [];
-        state.composeMenuOpen = false;
-        resizeComposer();
-        render();
-
-        state.editingMessageIndex = -1;
         try {
             const run = await createAssistantRun();
+            if (!run) return;
+            resetMessageWindow(state);
+            pushMessage({ role: 'user', content: value, attachments });
+            input.value = '';
+            state.draftAttachments = [];
+            state.composeMenuOpen = false;
+            resizeComposer();
+            render();
+
+            state.editingMessageIndex = -1;
             state.isPreparingRun = false;
             await executeAssistantRun(run);
+        } catch (error) {
+            showToast(WORKSPACE_COPY.saveFailed(describeError(error)));
         } finally {
             state.isPreparingRun = false;
         }
@@ -2116,15 +2036,14 @@ function bindEvents(root) {
     resizeComposer();
 }
 
-// Guarded by origin/source checks below.
-// eslint-disable-next-line no-restricted-syntax
+// eslint-disable-next-line no-restricted-syntax -- Guarded by origin/source checks below.
 window.addEventListener('message', (event) => {
     if (event.origin !== window.location.origin || event.source !== parent) {
         return;
     }
     const data = event.data || {};
     if (data.type === 'xb-assistant:prepare-close') {
-        void closeAssistantAfterWorkspaceFlush();
+        observeBackgroundTask(closeAssistantAfterWorkspaceFlush(), { source: import.meta.url, operation: "callback" });
         return;
     }
     if (data.type === 'xb-assistant:config') {
@@ -2165,7 +2084,10 @@ window.addEventListener('message', (event) => {
     }
 
     if (data.type === 'xb-assistant:config-saved') {
-        applyConfig(data.payload?.config || {});
+        if (data.payload?.requestId !== state.configSave.requestId || state.configSave.status !== 'saving') return;
+        if (!settingsPanel.completePresetSave(data.payload?.requestId || '', { ok: true, config: data.payload?.config })) {
+            applyConfig(data.payload?.config || {});
+        }
         completeConfigSave(data.payload?.requestId || '', { ok: true });
         showToast('配置已保存');
         return;
@@ -2226,11 +2148,12 @@ window.addEventListener('message', (event) => {
                 kernelVersion: String(data.payload?.kernelVersion || getWorkspaceRuntimeMeta().kernelVersion || WORKSPACE_KERNEL_VERSION),
             },
         };
-        void applyExternalLocalSources(data.payload?.localSources || []);
+        observeBackgroundTask(applyExternalLocalSources(data.payload?.localSources || []), { source: import.meta.url, operation: "callback" });
         return;
     }
 
     if (data.type === 'xb-assistant:config-save-error') {
+        if (data.payload?.requestId !== state.configSave.requestId || state.configSave.status !== 'saving') return;
         completeConfigSave(data.payload?.requestId || '', { ok: false, error: data.payload?.error || '网络异常' });
         showToast(`保存失败：${data.payload?.error || '网络异常'}`);
         return;
@@ -2244,7 +2167,7 @@ window.addEventListener('message', (event) => {
     if (data.type === 'xb-assistant:tool-result') {
         const entry = pendingToolCalls.get(data.payload?.requestId || '');
         if (!entry) return;
-        entry.resolve(data.payload.result);
+        entry.resolve(data.payload.result, data.payload.workspaceObservations, data.payload.workspaceConflictSnapshot);
         return;
     }
 
@@ -2255,15 +2178,15 @@ window.addEventListener('message', (event) => {
     }
 });
 
-window.addEventListener('beforeunload', () => {
-    postPendingWorkspaceWritesForUnload();
-    void flushPendingWorkspaceChanges();
+window.addEventListener('beforeunload', (event) => {
+    if (!hasPendingWorkspaceChanges()) return;
+    event.preventDefault();
+    event.returnValue = '';
 });
 
 async function bootstrap() {
-    await restoreSession();
+    await Promise.all([restoreSession(), workspaceStore.restoreWorkspace()]);
     injectAssistantStyles(ROOT_ID);
-    render();
     post(WORKSPACE_MESSAGE_TYPES.HYDRATE, {
         localSources: normalizeLocalSources(state.localSources),
         kernelVersion: WORKSPACE_KERNEL_VERSION,
@@ -2275,13 +2198,5 @@ async function bootstrap() {
 
 bootstrap().catch((error) => {
     console.error('[Assistant] 启动失败:', error);
-    injectAssistantStyles(ROOT_ID);
-    render();
-    post(WORKSPACE_MESSAGE_TYPES.HYDRATE, {
-        localSources: normalizeLocalSources(state.localSources),
-        kernelVersion: WORKSPACE_KERNEL_VERSION,
-    });
-    post('xb-assistant:ready', {
-        kernelVersion: WORKSPACE_KERNEL_VERSION,
-    });
+    document.getElementById(ROOT_ID).textContent = ACTIVITY_COPY.restoreFailed;
 });

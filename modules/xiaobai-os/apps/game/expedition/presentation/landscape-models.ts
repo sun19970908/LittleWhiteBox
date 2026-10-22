@@ -5,6 +5,7 @@ import { LAND } from './world-palette.js';
 import { cookstove, medicineBench, streetHouse, wallHomes } from './street-models.js';
 import { bunkBelongings, supplyFurniture } from './supply-models.js';
 import { roomDoor, roomFurniture, roomWall } from './room-models.js';
+import { furnaceFeature } from './furnace-models.js';
 
 export function lamp(k: SceneKit, root: Group, x: number, z: number, height = 2.8) {
     k.mesh(root, 'cylinder', LAND.shadow, [.055, height, .055], [x, height / 2, z]);
@@ -114,6 +115,7 @@ function tower(k: SceneKit, root: Group, item: LandscapeFeature) {
 export function landscapeFeature(k: SceneKit, ground: Group, upper: Group, item: LandscapeFeature, interior: boolean) {
     const f = item.footprint, base = k.group(ground, [f.x, 0, f.z]), model = k.group(upper, [f.x, 0, f.z]);
     switch (item.kind) {
+        case 'kiln': case 'hoist': case 'cliff': furnaceFeature(k, model, item); break;
         case 'door': roomDoor(k, model); break;
         case 'screen': roomFurniture(k, model, item); break;
         case 'bed': case 'cabinet': case 'wardrobe': case 'toolrack': case 'table': case 'chair': case 'basin': case 'workbench':
@@ -184,6 +186,20 @@ export function landscapeFeature(k: SceneKit, ground: Group, upper: Group, item:
                 k.mesh(model, 'rock', LAND.brass, [r * .16, h * .16, .15], [0, h * .4, r * .68], true);
                 for (let i = 0; i < 7; i++) {
                     k.mesh(model, 'crown', i % 2 ? LAND.leaf : LAND.leafLight, [1.4, .8, 1.2], [Math.sin(i * 2) * r, h * .55 + i * .4, Math.cos(i * 2) * r]);
+                }
+            }
+            break;
+        }
+        case 'bridge': {
+            // The two one-unit parapets also define collision; the flush deck joins either bank.
+            k.mesh(base, 'box', LAND.light, [f.width, .06, f.depth - 2], [0, -.01, 0]);
+            for (const side of [-1, 1]) {
+                const z = side * (f.depth / 2 - .5);
+                k.mesh(base, 'box', LAND.stone, [f.width, .72, 1], [0, .36, z]);
+                k.mesh(base, 'box', LAND.light, [f.width, .15, 1], [0, .795, z]);
+                for (const x of [-f.width / 2 + .5, f.width / 2 - .5]) {
+                    k.mesh(base, 'box', LAND.mortar, [.8, 1.05, 1], [x, .525, z]);
+                    k.mesh(base, 'box', LAND.light, [1, .13, 1], [x, 1.115, z]);
                 }
             }
             break;

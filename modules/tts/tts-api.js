@@ -1,4 +1,5 @@
-﻿/**
+import { createIdentifier } from '../../shared/common/identifier.js';
+/**
  * 火山引擎 TTS API 封装
  * V3 单向流式 + V1试用
  */
@@ -158,7 +159,7 @@ export async function synthesizeV3(params, authHeaders = {}) {
                 audioChunks.push(bytes);
             }
             if (json.code === 20000000 && json.usage) usage = json.usage;
-        } catch {}
+        } catch (caughtError) { console.debug({ source: import.meta.url, operation: "readLine" }, caughtError); }
     };
     try {
         while (true) {
@@ -174,7 +175,7 @@ export async function synthesizeV3(params, authHeaders = {}) {
         params.signal?.throwIfAborted();
         readLine(buffer + decoder.decode());
     } finally {
-        await reader.cancel().catch(() => {});
+        await reader.cancel().catch((caughtError) => { console.debug({ source: import.meta.url, operation: "synthesizeV3" }, caughtError); });
         reader.releaseLock();
     }
 
@@ -302,7 +303,7 @@ export async function synthesizeV3Stream(params, authHeaders = {}, options = {})
                 if (json.code === 20000000 && json.usage) {
                     usage = json.usage;
                 }
-            } catch {}
+            } catch (caughtError) { console.debug({ source: import.meta.url, operation: "synthesizeV3Stream" }, caughtError); }
         }
     }
 
@@ -328,7 +329,7 @@ export async function synthesizeFreeV1(params, options = {}) {
         text: String(text || ''),
         speed: Number(speed) || 1.0,
         uid: 'xb_' + Date.now(),
-        reqid: crypto.randomUUID?.() || `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+        reqid: createIdentifier(),
     };
 
     if (emotion) {

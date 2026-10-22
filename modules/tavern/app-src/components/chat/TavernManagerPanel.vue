@@ -8,6 +8,8 @@ import TavernScrollControls from '../TavernScrollControls.vue';
 import { useTavernChatContext, useTavernManagerContext, useTavernSessionContext, useTavernShellContext } from '../tavern-app-context';
 import { useTavernEphemeralDisclosureScope } from '../useTavernEphemeralDisclosureScope';
 import { getTavernManagerRun, type TavernManagerRunRecord } from '../../../shared/session-db';
+import { observeBackgroundTask } from '../../../../../shared/common/async-errors.js';
+
 
 const emit = defineEmits<{
     (event: 'open-contract'): void;
@@ -102,30 +104,30 @@ const {
     visibleManagerChatItems,
 } = manager;
 
-function setManagerScrollRef(element: Element | null) {
+function setManagerScrollRef(element: unknown) {
     managerScrollRef.value = element instanceof HTMLElement ? element : null;
 }
 
-function setManagerWorkRef(element: Element | null) {
+function setManagerWorkRef(element: unknown) {
     managerWorkRef.value = element instanceof HTMLElement ? element : null;
 }
 
-function setManagerComposeTextareaRef(element: Element | null) {
+function setManagerComposeTextareaRef(element: unknown) {
     managerComposeTextareaRef.value = element instanceof HTMLTextAreaElement ? element : null;
 }
 
 function handleManagerWorkBandToggle(event: Event) {
     managerWorkDisclosure.setOpenFromEvent(managerWorkDisclosureId(), event);
     if ((event.currentTarget as HTMLDetailsElement | null)?.open) {
-        void loadCurrentManagerWorkRunDetail();
+        observeBackgroundTask(loadCurrentManagerWorkRunDetail(), { source: import.meta.url, operation: "handleManagerWorkBandToggle" });
     } else {
         managerWorkRunDetailRequest += 1;
         managerWorkRunDetail.value = null;
     }
-    void nextTick(() => {
+    observeBackgroundTask(nextTick(() => {
         enhanceManagerMarkdown();
         updateManagerScrollButtons();
-    });
+    }), { source: import.meta.url, operation: "handleManagerWorkBandToggle" });
 }
 
 function openContractModal() {
@@ -340,7 +342,7 @@ watch(
         managerWorkRunDetailRequest += 1;
         managerWorkRunDetail.value = null;
         if (managerWorkDisclosure.isOpen(managerWorkDisclosureId())) {
-            void loadCurrentManagerWorkRunDetail();
+            observeBackgroundTask(loadCurrentManagerWorkRunDetail(), { source: import.meta.url, operation: "callback" });
         }
     },
 );

@@ -1,4 +1,4 @@
-import type { CapabilityToken, CapabilityTransactionAccess, CapturedChatBinding, ChatReferencePort, JsonUserFilePort, KernelWriteFailure, PartitionRegistration,
+import type { CapabilityToken, CapabilityTransactionAccess, CapturedChatBinding, ChatReferencePort, ChatPersistence, JsonUserFilePort, KernelWriteFailure, PartitionRegistration,
     PartitionSnapshot, PartitionStore, PendingCommitRecoveryOptions, PendingCommitRecoveryResult, ScopedTransaction,
     ScopedTransactionResult, TransactionOptions, XiaobaiOsFileControls, XiaobaiOsFileState, XiaobaiOsFileStateChange } from './contracts.js';
 import { cloneJsonValue } from './envelope.js';
@@ -7,6 +7,8 @@ import { preparePartitionCommand } from './partition-command.js';
 import { parseRegisteredPartition, serializeRegisteredPartition, type XiaobaiOsPartitionRegistry } from './partition-registry.js';
 import type { TransactionCapabilityBinder } from './transaction-coordinator.js';
 import { parseUserDocument, sameUserDocument, USER_DOCUMENT_FILENAME, type UserDocument } from './user-document.js';
+import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
+
 
 export interface UserTransactions extends XiaobaiOsFileControls {
     prepare(): Promise<void>;
@@ -51,7 +53,7 @@ export function createUserTransactions(options: {
     partitions: XiaobaiOsPartitionRegistry;
     binder: TransactionCapabilityBinder;
     references: ChatReferencePort;
-    resolveStory(write: boolean): Promise<CapturedChatBinding>;
+    resolveStory(write: boolean, chatPersistence?: ChatPersistence): Promise<CapturedChatBinding>;
     initialPartitions(): Promise<Record<string, unknown>>;
     createId?: () => string;
 }): UserTransactions {
@@ -64,7 +66,7 @@ export function createUserTransactions(options: {
     const createId = options.createId ?? createStorageId;
     function enqueue<T>(work: () => Promise<T>): Promise<T> {
         const task = queue.then(work, work);
-        queue = task.catch(() => undefined);
+        queue = task.catch((caughtError) => { console.debug({ source: import.meta.url, operation: "enqueue" }, caughtError); });
         return task;
     }
     function publish(next: XiaobaiOsFileState, error?: KernelWriteFailure) {
@@ -213,7 +215,7 @@ export function createUserTransactions(options: {
                 const guard = async () => await commitGuard() && await bindingGuard();
                 if (!await guard()) { return { status: 'failed', error: changed() }; }
                 await prepare();
-                const current = storyOwned ? await options.resolveStory(true) : null;
+                const current = storyOwned ? await options.resolveStory(true, transactionOptions.chatPersistence ?? 'immediate') : null;
                 if (storyOwned && current?.identityKey === requested?.identityKey && !requested?.reference) { requested = current; }
                 if (!await guard()) { return { status: 'failed', error: changed() }; }
                 const scope = current?.reference?.osId;
@@ -244,14 +246,14 @@ export function createUserTransactions(options: {
                     const abandon = () => {
                         // Never unlock while an upload or recovery is still in flight, and
                         // never release a different operation that acquired this document.
-                        void enqueue(async () => {
+                        observeBackgroundTask(enqueue(async () => {
                             if (pending !== entry) { return; }
                             pending = null;
                             settle(entry, 'abandoned');
                             // Keep the last snapshot, not the unconfirmed candidate. prepare()
                             // re-reads the server before every subsequent command or read.
                             publish('ready');
-                        });
+                        }), { source: import.meta.url, operation: "abandon" });
                     };
                     entry.onSettled = status => {
                         signal.removeEventListener('abort', abandon);

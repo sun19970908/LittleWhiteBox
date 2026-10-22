@@ -17,6 +17,8 @@ import type {
     FourthWallGlobalSettings,
 } from '../types.js';
 import './fourth-wall.css';
+import { observeBackgroundTask } from '../../../../../shared/common/async-errors.js';
+
 
 const PERSISTENT_REQUEST_TIMEOUT_MS = 35_000;
 
@@ -142,14 +144,14 @@ function handleComposerKeydown(event: KeyboardEvent): void {
     }
     event.preventDefault();
     if (!isGenerating.value) {
-        void send();
+        observeBackgroundTask(send(), { source: import.meta.url, operation: "handleComposerKeydown" });
     }
 }
 
 function confirmDelete(index: number): void {
     const hint = index < activeSession.value.archivedCount ? '这条消息已记入皮下记忆；删除消息不会让对方忘记，需要遗忘的内容请到皮下记忆中删除。\n' : '';
     if (window.confirm(`${hint}确定删除这条消息吗？`)) {
-        void requestState('fourth-wall/delete-message', { ...binding(), revision: state.value.history.revision, messageIndex: index });
+        observeBackgroundTask(requestState('fourth-wall/delete-message', { ...binding(), revision: state.value.history.revision, messageIndex: index }), { source: import.meta.url, operation: "confirmDelete" });
     }
 }
 
@@ -198,11 +200,11 @@ async function saveMemory(content: string): Promise<void> {
 }
 
 function updateChat(patch: FourthWallChatState['settings']): void {
-    void requestState('fourth-wall/update-chat-settings', { ...binding(), patch });
+    observeBackgroundTask(requestState('fourth-wall/update-chat-settings', { ...binding(), patch }), { source: import.meta.url, operation: "updateChat" });
 }
 
 function updateGlobal(patch: Partial<FourthWallGlobalSettings>): void {
-    void requestState('fourth-wall/update-global-settings', { ...binding(), patch });
+    observeBackgroundTask(requestState('fourth-wall/update-global-settings', { ...binding(), patch }), { source: import.meta.url, operation: "updateGlobal" });
 }
 
 onMounted(() => {
@@ -291,7 +293,9 @@ onBeforeUnmount(() => { unsubscribe(); clearTimeout(previewTimer); });
                         <path d="M4 7h16M9 7V4h6v3m3 0-1 13H7L6 7m4 4v5m4-5v5" />
                     </svg>
                 </button>
-                <button type="button" title="设置" @click="settingsOpen = true">⚙</button>
+                <button type="button" title="设置" aria-label="设置" @click="settingsOpen = true">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m10 3-.6 2.2-1.5.9-2.2-.6-2 3.5 1.6 1.6v1.8L3.7 14l2 3.5 2.2-.6 1.5.9.6 2.2h4l.6-2.2 1.5-.9 2.2.6 2-3.5-1.6-1.6v-1.8L20.3 9l-2-3.5-2.2.6-1.5-.9L14 3Z" /><circle cx="12" cy="11.5" r="3" /></svg>
+                </button>
             </div>
         </header>
         <div v-if="errorMessage" class="fourth-wall-error" role="alert">
@@ -334,8 +338,11 @@ onBeforeUnmount(() => { unsubscribe(); clearTimeout(previewTimer); });
                 @compositionend="composing = false"
                 @keydown="handleComposerKeydown"
             />
-            <button type="button" :class="{ 'is-stop': isGenerating }" :disabled="saving" @click="isGenerating ? cancel() : send()">
-                {{ isGenerating ? '■' : '↑' }}
+            <button type="button" :class="{ 'is-stop': isGenerating }" :aria-label="isGenerating ? '停止生成' : '发送'" :disabled="saving" @click="isGenerating ? cancel() : send()">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <rect v-if="isGenerating" x="5" y="5" width="14" height="14" rx="2" fill="currentColor" />
+                    <path v-else d="M12 19V5m-6 6 6-6 6 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+                </svg>
             </button>
         </footer>
         <FourthWallSettings

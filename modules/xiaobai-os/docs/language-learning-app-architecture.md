@@ -2,7 +2,7 @@
 
 ## 1. 文档分工与功能边界
 
-[产品设计](./language-learning-app-target-design.md)是用户体验与业务要求的唯一来源。本文只记录当前实现的职责、接缝和验证方式，不保留分批施工日志、旧版界面基线或阶段测试数量；历史决策从 Git 历史查找。
+[产品设计](./language-learning-app-target-design.md)是用户体验与业务要求的唯一来源。本文定义实现职责、模块接口和验证方式。
 
 语伴由 Learning 自有领域、应用、存储、Prompt、工具和 UI 组成。它复用宿主上下文、Agent Capability、共享联网、TTS 和 Economy，不拥有主剧情、私信或四次元壁的会话。没有新增依赖、通用教育框架或跨应用任务平台。
 
@@ -64,7 +64,7 @@
 
 - 保留语言设置、语法/词汇学习项及其证据；缺失的排程历史不推算，按升级规则重新开始。
 - 不保留旧课程、其他技能学习项和旧完成凭据，包括其未领奖励。
-- 日常业务不携带 v1 分支；兼容对象仅为这份已发布文件格式。规则与样本在 document 及 [learning-storage.test.js](../tests/learning-storage.test.js)，不为旧 UI 或工具留兼容壳。
+- 日常业务不携带 v1 分支；兼容对象仅为这份已发布文件格式。规则在 document，不为旧 UI 或工具留兼容壳。
 
 删知识项、原答、课程、语言和全部数据分别走应用服务，处理依赖反馈、排程及仍有其他引用的证据。conversation-references 从本轮实际资料派生访问范围，交流还继承其所用历史与摘要的范围；该权限随记忆保存，不再用来源是否仍存在来决定记忆是否有效。显式删除仍按引用清理相关交流与摘要；替换文章不走对话删除。清空 Learning 不撤销 Economy 已到账流水。
 
@@ -193,8 +193,8 @@ payPending 统一消费当前语言全部已确认、未领取的完成记录，
 | 教材适配、批改准确、范文等级、角色自然和泄题 | 授权真实模型样本及独立语义评审 |
 | 联网服务实际可达、TTS 音质与设备播放 | 对应真实服务/设备验证，不能由本地模拟背书 |
 
-常规检查：npm run test:xiaobai-os、npm run lint:xiaobai-os、变更 JS 的 ESLint、npm run lint:imports、npm run build:xiaobai-os、git diff --check。仅改变 TTS/Core 时补其对应检查，不越界重构。
+常规检查：npm run build、npm run check、git diff --check。总检查覆盖各模块，不再单独维护 APP 的 lint、构建与测试命令。
 
 隔离预览使用实际 Learning 组件、runtime 和内存仓库，Provider 仅给固定响应。它证明交互、状态和失败处理，不证明模型教学质量或真实新闻可获取。浏览器截图及临时探针放 output/playwright，不作为长期设计或验收日志提交。
 
-真实付费模型/联网/TTS 调用需要明确的服务授权。未取得实际输出时，交付必须写“未验证”，不能用结构测试、HTTP 成功或固定脚本代替质量结论；同样不得把桌面 Chromium 检查冒充实体手机/WebView 验收。
+模型教学质量、联网取材和 TTS 音质使用获授权的真实服务输出评估；实体手机与 WebView 单独验证。结构测试、HTTP 成功和桌面预览不覆盖这些质量指标。

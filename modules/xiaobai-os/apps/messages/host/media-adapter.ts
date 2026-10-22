@@ -11,15 +11,17 @@ interface TtsFacade {
     playTransient(text: string, emotion: string, options: { requestId: string; onState: (state: string) => void }): { stop?: () => void };
 }
 
-export function createMessagesMedia(getFacades = () => window as Window & { xiaobaixDraw?: DrawFacade; xiaobaixTts?: TtsFacade }) {
+interface MessagesMediaFacades { xiaobaixDraw?: DrawFacade; xiaobaixTts?: TtsFacade }
+
+export function createMessagesMedia(getFacades: () => MessagesMediaFacades = () => window as MessagesMediaFacades) {
     const images = new Map<string, AbortController>();
     let voice: { stop?: () => void } | null = null;
     let voiceState: ((state: string) => void) | null = null;
     let voiceToken = 0;
     function capabilities() {
         let image = false; let voice = false;
-        try {const draw = getFacades().xiaobaixDraw?.getStatus(); image = draw?.enabled === true && draw.ready === true;} catch { /* Optional media must not take down the APP. */ }
-        try {voice = getFacades().xiaobaixTts?.isEnabled() === true;} catch { /* The transcript remains available. */ }
+        try {const draw = getFacades().xiaobaixDraw?.getStatus(); image = draw?.enabled === true && draw.ready === true;} catch (caughtError) { console.debug({ source: import.meta.url, operation: "capabilities" }, caughtError); }
+        try {voice = getFacades().xiaobaixTts?.isEnabled() === true;} catch (caughtError) { console.debug({ source: import.meta.url, operation: "capabilities" }, caughtError); }
         return { image, voice };
     }
     function imageData(value: unknown): string | null {

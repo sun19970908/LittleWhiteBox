@@ -2,6 +2,12 @@ import { getContext } from '../../../../../../../extensions.js';
 import { registerToToolbar, removeFromToolbar } from '../../../../widgets/message-toolbar.js';
 import { formatScenePlannerProgress } from '../../shared/draw-common.js';
 import { DRAW_CAPSULE_COPY } from '../../shared/draw-capsule-copy.js';
+import { pickPresetMaxImages } from '../../shared/max-images-override.js';
+import {
+    MAX_IMAGES_INPUT_CLASS,
+    MAX_IMAGES_INPUT_CSS,
+    createMaxImagesController,
+} from '../../shared/max-images-input.js';
 import {
     resolveCurrentDrawRunActivityTarget,
     subscribeDrawRunActivity,
@@ -33,6 +39,8 @@ import {
 
 import { FloorImageBusyError } from '../../shared/floor-image-job.js';
 import { DRAW_SLOT_COPY } from '../../shared/image-record.js';
+import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+
 
 const FLOAT_POS_KEY = 'xb_comfy_float_pos';
 const AUTO_RESET_DELAY = 8000;
@@ -355,6 +363,7 @@ const STYLES = `
 .nd-select:focus { border-color: rgba(255, 255, 255, 0.3); }
 .nd-select option { background: #1a1a1e; color: #eee; text-align: left; }
 .nd-select.size { font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 11px; }
+${MAX_IMAGES_INPUT_CSS}
 .nd-inner-sep { display: none; }
 .nd-controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 .nd-auto {
@@ -487,6 +496,19 @@ function fillSizeSelect(selectEl) {
     });
 }
 
+const maxImages = createMaxImagesController({
+    getOverride: () => getSettings().overrideMaxImages,
+    getPresetMaxImages: () => {
+        const settings = getSettings();
+        return pickPresetMaxImages(settings.presets, settings.selectedPresetId);
+    },
+    persistOverride: (next, { okText }) => updateSettingsPersistent(
+        (settings) => { settings.overrideMaxImages = next; },
+        okText,
+    ),
+    listInputs: () => [...panelMap.values()].map((data) => data.cache?.maxImagesInput).concat(floatingCache.maxImagesInput),
+    notify: (message) => globalThis.toastr?.warning?.(message),
+});
 function createFloorPanelData(messageId) {
     return {
         messageId,
@@ -573,7 +595,7 @@ function createMenu(isAuto = false) {
     const sizeSelect = createEl('select', 'nd-select size nd-size-select');
     fillSizeSelect(sizeSelect);
     rowSize.appendChild(sizeSelect);
-    card.append(rowPreset, innerSep, rowSize);
+    card.append(rowPreset, innerSep, rowSize, maxImages.createRow());
 
     const controls = createEl('div', 'nd-controls');
     const autoToggle = createEl('div', `nd-auto${isAuto ? ' on' : ''} nd-auto-toggle`);
@@ -600,6 +622,7 @@ function cachePanelDOM(panelData) {
         time: el.querySelector('.nd-time'),
         presetSelect: el.querySelector('.nd-preset-select'),
         sizeSelect: el.querySelector('.nd-size-select'),
+        maxImagesInput: el.querySelector(`.${MAX_IMAGES_INPUT_CLASS}`),
         autoToggle: el.querySelector('.nd-auto-toggle'),
     };
 }
@@ -675,7 +698,7 @@ function syncDrawRunActivity(detail = {}) {
     const lastMessageId = findLastAIMessageId();
     if (panelMap.has(currentTarget.messageId)
         || (floatingEl && currentTarget.messageId === lastMessageId)) {
-        void syncDrawRunPanelState(currentTarget.messageId, detail);
+        observeBackgroundTask(syncDrawRunPanelState(currentTarget.messageId, detail), { source: import.meta.url, operation: "syncDrawRunActivity" });
     }
 }
 
@@ -690,7 +713,7 @@ export function refreshDrawRunUiState() {
             setFloatingState(FloatState.IDLE);
         }
     }
-    if (messageId >= 0) void syncDrawRunPanelState(messageId);
+    if (messageId >= 0) observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "refreshDrawRunUiState" });
 }
 
 function resolveCooldownEndTime({ cooldownUntil, duration } = {}) {
@@ -906,7 +929,7 @@ function bindFloorPanelEvents(panelData) {
     const { messageId, root: el } = panelData;
     el.querySelector('.nd-btn-draw')?.addEventListener('click', (e) => {
         e.stopPropagation();
-        void handleFloorDrawClick(messageId);
+        observeBackgroundTask(handleFloorDrawClick(messageId), { source: import.meta.url, operation: "callback" });
     });
     // idle 层的菜单按钮 + 非空闲状态常驻的菜单按钮，行为完全一致
     el.querySelectorAll('.nd-btn-menu').forEach((menuBtn) => menuBtn.addEventListener('click', (e) => {
@@ -915,13 +938,14 @@ function bindFloorPanelEvents(panelData) {
         if (!el.classList.contains('expanded')) {
             refreshFloorPresetSelect(messageId);
             refreshFloorSizeSelect(messageId);
+            refreshFloorMaxImagesInput(messageId);
         }
         el.classList.toggle('expanded');
     }));
     el.querySelector('.nd-layer-active')?.addEventListener('click', (e) => {
         e.stopPropagation();
         if ([FloatState.SUBMITTING, FloatState.ACCEPTED, FloatState.UNCERTAIN, FloatState.QUEUED, FloatState.LLM, FloatState.GEN, FloatState.COOLDOWN, FloatState.RECONNECTING].includes(panelData.state)) {
-            void handleFloorAbort(messageId);
+            observeBackgroundTask(handleFloorAbort(messageId), { source: import.meta.url, operation: "callback" });
         } else if ([FloatState.SUCCESS, FloatState.PARTIAL, FloatState.ERROR].includes(panelData.state)) {
             updateFloorDetailPopup(messageId);
             el.classList.toggle('show-detail');
@@ -933,13 +957,14 @@ function bindFloorPanelEvents(panelData) {
     panelData.cache.sizeSelect?.addEventListener('change', async (e) => {
         await setQuickSize(e.target.value);
     });
+    const maxImagesBinding = maxImages.bind(panelData.cache.maxImagesInput);
     panelData.cache.autoToggle?.addEventListener('click', async () => {
         await toggleQuickAutoMode();
     });
     el.querySelector('.nd-settings-btn')?.addEventListener('click', (e) => {
         e.stopPropagation();
         el.classList.remove('expanded');
-        void openSettings();
+        observeBackgroundTask(openSettings(), { source: import.meta.url, operation: "callback" });
     });
     const closeMenu = (e) => {
         if (!el.contains(e.target)) {
@@ -948,6 +973,7 @@ function bindFloorPanelEvents(panelData) {
     };
     document.addEventListener('click', closeMenu, { passive: true });
     panelData._cleanup = () => {
+        maxImagesBinding.destroy();
         document.removeEventListener('click', closeMenu);
     };
 }
@@ -960,8 +986,12 @@ function refreshFloorSizeSelect(messageId) {
     fillSizeSelect(panelMap.get(messageId)?.cache?.sizeSelect);
 }
 
-async function persistQuickSetting(mutator, afterSave) {
-    const ok = await updateSettingsPersistent(mutator);
+function refreshFloorMaxImagesInput(messageId) {
+    maxImages.fill(panelMap.get(messageId)?.cache?.maxImagesInput);
+}
+
+async function persistQuickSetting(mutator, afterSave, okText) {
+    const ok = await updateSettingsPersistent(mutator, okText);
     if (ok && typeof afterSave === 'function') afterSave();
     return ok;
 }
@@ -990,7 +1020,7 @@ function mountFloorPanel(messageEl, messageId) {
     if (panelMap.has(messageId)) {
         const existing = panelMap.get(messageId);
         if (existing.root?.isConnected) {
-            void syncDrawRunPanelState(messageId);
+            observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "mountFloorPanel" });
             return existing;
         }
         existing._cleanup?.();
@@ -1008,7 +1038,7 @@ function mountFloorPanel(messageEl, messageId) {
     cachePanelDOM(panelData);
     bindFloorPanelEvents(panelData);
     panelMap.set(messageId, panelData);
-    void syncDrawRunPanelState(messageId);
+    observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "mountFloorPanel" });
     return panelData;
 }
 
@@ -1089,7 +1119,7 @@ function getFloatingPosition() {
     try {
         const raw = localStorage.getItem(FLOAT_POS_KEY);
         if (raw) return JSON.parse(raw);
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "getFloatingPosition" }, caughtError); }
     const debug = document.getElementById('xiaobaix-debug-mini');
     if (debug) {
         const r = debug.getBoundingClientRect();
@@ -1106,7 +1136,7 @@ function saveFloatingPosition() {
             left: Math.round(r.left),
             top: Math.round(r.top),
         }));
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "saveFloatingPosition" }, caughtError); }
 }
 
 // 胶囊宽度有 0.35s 过渡，夹取位置要用过渡结束后的目标宽度（空闲 74px / 非空闲 98px，含边框）
@@ -1290,7 +1320,7 @@ function onFloatingPointerDown(e) {
         moved: false,
         originalTarget: e.target,
     };
-    try { e.currentTarget.setPointerCapture(e.pointerId); } catch {}
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "onFloatingPointerDown" }, caughtError); }
     e.preventDefault();
 }
 
@@ -1313,7 +1343,7 @@ function onFloatingPointerMove(e) {
 function onFloatingPointerUp(e) {
     if (!floatingDragState || floatingDragState.pointerId !== e.pointerId) return;
     const { moved, originalTarget } = floatingDragState;
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
+    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "onFloatingPointerUp" }, caughtError); }
     floatingDragState = null;
     if (moved) {
         saveFloatingPosition();
@@ -1324,17 +1354,18 @@ function onFloatingPointerUp(e) {
 
 function routeFloatingClick(target) {
     if (target.closest('.nd-btn-draw')) {
-        void handleFloatingDrawClick();
+        observeBackgroundTask(handleFloatingDrawClick(), { source: import.meta.url, operation: "routeFloatingClick" });
     } else if (target.closest('.nd-btn-menu')) {
         floatingEl.classList.remove('show-detail');
         if (!floatingEl.classList.contains('expanded')) {
             refreshFloatingPresetSelect();
             refreshFloatingSizeSelect();
+            refreshFloatingMaxImagesInput();
         }
         floatingEl.classList.toggle('expanded');
     } else if (target.closest('.nd-layer-active')) {
         if ([FloatState.SUBMITTING, FloatState.ACCEPTED, FloatState.UNCERTAIN, FloatState.QUEUED, FloatState.LLM, FloatState.GEN, FloatState.COOLDOWN, FloatState.RECONNECTING].includes(floatingState)) {
-            void handleFloatingAbort();
+            observeBackgroundTask(handleFloatingAbort(), { source: import.meta.url, operation: "routeFloatingClick" });
         } else if ([FloatState.SUCCESS, FloatState.PARTIAL, FloatState.ERROR].includes(floatingState)) {
             updateFloatingDetailPopup();
             floatingEl.classList.toggle('show-detail');
@@ -1399,6 +1430,10 @@ function refreshFloatingSizeSelect() {
     fillSizeSelect(floatingCache.sizeSelect);
 }
 
+function refreshFloatingMaxImagesInput() {
+    maxImages.fill(floatingCache.maxImagesInput);
+}
+
 function cacheFloatingDOM() {
     if (!floatingEl) return;
     floatingCache = {
@@ -1411,6 +1446,7 @@ function cacheFloatingDOM() {
         detailTime: floatingEl.querySelector('.nd-time'),
         presetSelect: floatingEl.querySelector('.nd-preset-select'),
         sizeSelect: floatingEl.querySelector('.nd-size-select'),
+        maxImagesInput: floatingEl.querySelector(`.${MAX_IMAGES_INPUT_CLASS}`),
         autoToggle: floatingEl.querySelector('.nd-auto-toggle'),
     };
 }
@@ -1472,20 +1508,22 @@ function createFloatingButton() {
     floatingCache.sizeSelect?.addEventListener('change', async (e) => {
         await setQuickSize(e.target.value);
     });
+    floatingCache.maxImagesBinding = maxImages.bind(floatingCache.maxImagesInput);
     floatingCache.autoToggle?.addEventListener('click', async () => {
         await toggleQuickAutoMode();
     });
     floatingEl.querySelector('.nd-settings-btn')?.addEventListener('click', () => {
         floatingEl.classList.remove('expanded');
-        void openSettings();
+        observeBackgroundTask(openSettings(), { source: import.meta.url, operation: "callback" });
     });
     document.addEventListener('click', handleFloatingOutsideClick, { passive: true });
     window.addEventListener('resize', applyFloatingPosition);
     const messageId = findLastAIMessageId();
-    if (messageId >= 0) void syncDrawRunPanelState(messageId);
+    if (messageId >= 0) observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "createFloatingButton" });
 }
 
 function destroyFloatingButton() {
+    floatingCache.maxImagesBinding?.destroy();
     clearFloatingCooldownTimer();
     if (floatingAutoResetTimer) {
         clearTimeout(floatingAutoResetTimer);
@@ -1503,11 +1541,17 @@ function destroyFloatingButton() {
 function updateAllPresetSelects() {
     panelMap.forEach((data) => fillPresetSelect(data.cache?.presetSelect));
     fillPresetSelect(floatingCache.presetSelect);
+    // “数目”输入框的提示里带当前预设的出图数，切换预设后一并刷新。
+    updateAllMaxImagesInputs();
 }
 
 function updateAllSizeSelects() {
     panelMap.forEach((data) => fillSizeSelect(data.cache?.sizeSelect));
     fillSizeSelect(floatingCache.sizeSelect);
+}
+
+function updateAllMaxImagesInputs() {
+    maxImages.updateAll();
 }
 
 export function updateAutoModeUI() {
@@ -1581,6 +1625,7 @@ export {
     SIZE_OPTIONS,
     updateAllPresetSelects,
     updateAllSizeSelects,
+    updateAllMaxImagesInputs,
     createFloatingButton,
     destroyFloatingButton,
 };

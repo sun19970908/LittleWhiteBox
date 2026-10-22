@@ -1,22 +1,28 @@
-/* global Buffer */
+import { createTestModuleUrl } from './helpers/bundle-module.js';
 // Real summary/anchor/history transaction, HTTP confirmation and IndexedDB boundary.
 // Protects import undo, source retirement and ambiguous saves; no model calls or source-text assertions.
 import assert from 'node:assert/strict';
 import { beforeEach, after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { setImmediate as nextTurn } from 'node:timers/promises';
+import { setImmediate } from 'node:timers';
 import path from 'node:path';
 import { build } from 'esbuild';
 import 'fake-indexeddb/auto';
 import { maintenanceFixture, joinedEventPatch } from './fixtures/memory-maintenance.js';
 import { memoryPolicy } from '../data/memory-policy.js';
 import { entry } from './helpers/story-summary-entry.js';
+import { hostSaveEntry } from './helpers/host-save-entry.js';
 import { createHideStateController } from '../hide-state.js';
 import { memorySaveError } from '../data/memory-copy.js';
+import { shouldNotifyMemoryFailure } from '../user-feedback.js';
 import * as vectorWrites from '../vector/runtime/maintenance-coordinator.js';
 import { createAbortError, throwIfSignalAborted } from '../../../shared/common/abort-utils.js';
 import { METADATA_CONFIRMATION_TIMEOUT_MS } from '../data/metadata-confirmation.js';
 import { SUMMARY_FEEDBACK_COPY } from '../feedback-copy.js';
+import { getChatIdentity } from '../data/chat-identity.js';
+import { applySummarySectionEdit } from '../data/section-edits.js';
+import { mergeEditedFactsWithTimestamps } from '../data/fact-edits.js';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
 const host = globalThis.__memoryStorageTest = { metadata: {}, context: {} };
@@ -27,9 +33,11 @@ const shims = {
     'runtime.js': 'export const applyRecallRuntimeMutationBestEffort=(chatId,change)=>globalThis.__memoryStorageTest.mutations.push({chatId,...change}); export const clearRecallRuntime=async()=>{};',
     'modules/story-summary/data/config.js': 'export const getTextFilterRules=()=>[]; export const getVectorConfig=()=>globalThis.__memoryStorageTest.vectorConfig; export const getSummaryPanelConfig=()=>({memoryMaintenanceEnabled:false,trigger:{},ui:{hideSummarized:true,keepVisibleCount:0}}); export const getSettings=()=>({storySummary:{enabled:true}}); export const DEFAULT_MEMORY_PROMPT_TEMPLATE="{$剧情记忆}";',
     'modules/story-summary/generate/llm.js': 'export const generateSummary=(...args)=>globalThis.__memoryStorageTest.generate(...args); export const parseSummaryJson=JSON.parse; export const isSummaryGenerationCancelledError=()=>false;',
-    'modules/story-summary/maintenance/runner.js': 'export const createSharedMemoryAgent=()=>{throw Error("unexpected Agent request");}; export const runMemoryAgent=createSharedMemoryAgent;',
+    'modules/story-summary/maintenance/runner.js': 'export const createSharedMemoryAgent=()=>{throw Error("unexpected Agent request");}; export const runMemoryAgent=createSharedMemoryAgent; let sequence=0; export const memoryRunId=()=>"memory-storage-test-"+(++sequence);',
     'modules/story-summary/vector/utils/embedder.js': 'export const getEngineFingerprint=()=>"test-engine";',
     'modules/story-summary/vector/llm/siliconflow.js': 'export const embed=(texts)=>globalThis.__memoryStorageTest.embed(texts);',
+    'modules/story-summary/vector/llm/atom-extraction.js': 'export const extractAtomsForRound=()=>{throw Error("unexpected anchor request");};',
+    'shared/common/async-errors.js': 'export const observeBackgroundTask=task=>globalThis.__memoryStorageTest.background.push(Promise.resolve(task).catch(error=>{globalThis.__memoryStorageTest.backgroundErrors.push(error);}));',
     'modules/story-summary/vector/retrieval/recall.js': 'export const recallMemory=(...args)=>globalThis.__memoryStorageTest.recall(...args); export const hydrateDirectEvidence=()=>{throw Error("unexpected hydration");}; export const releaseDirectEvidenceContext=async()=>{};',
 };
 const bundled = await build({
@@ -52,6 +60,7 @@ const bundled = await build({
         "export * from './modules/story-summary/generate/generator.js';",
         "export { buildVectorPromptText } from './modules/story-summary/generate/prompt.js';",
         "export * from './modules/story-summary/vector/storage/state-store.js';",
+        "export { initStateIntegration } from './modules/story-summary/vector/pipeline/state-integration.js';",
         "export { db, stateVectorsTable, chunksTable, chunkVectorsTable, metaTable } from './modules/story-summary/data/db.js';",
         "export { deleteChunksFromFloor, deleteChunksAtFloor, updateMeta, clearAllChunks, clearEventVectors } from './modules/story-summary/vector/storage/chunk-store.js';",
         "export { reload } from 'script.js';",
@@ -67,16 +76,22 @@ const bundled = await build({
     } }],
 });
 // eslint-disable-next-line no-unsanitized/method -- Generated local test bundle, never external code.
-const mod = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
+const mod = await import(await createTestModuleUrl(bundled.outputFiles[0].text));
 const originalFetch = globalThis.fetch;
-after(() => { mod.db.close(); globalThis.fetch = originalFetch; delete globalThis.__memoryStorageTest; });
+after(() => { mod.db.close(); globalThis.fetch = originalFetch; delete globalThis.__memoryStorageTest; delete globalThis.LWB_StateRollbackHook; });
 const ext = () => host.metadata.extensions.LittleWhiteBox;
 const disk = () => host.files.get(host.context.chatId).extensions.LittleWhiteBox;
 
-beforeEach(async () => {
+beforeEach(async t => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const expireReadback = () => {
+        // Transport-failure integration cases advance the real transaction's
+        // deadline; retry timing itself is covered by metadata-confirmation tests.
+        setImmediate(() => t.mock.timers.tick(10_000));
+    };
     for (const table of mod.db.tables) await table.clear();
     const fixture = maintenanceFixture();
-    Object.assign(host, { fixture, mode: 'save', reads: 0, writes: 0, mutations: [], afterSave: null, files: new Map(), metadata: { extensions: { LittleWhiteBox: {} } } });
+    Object.assign(host, { fixture, mode: 'save', expireReadback: false, reads: 0, writes: 0, mutations: [], background: [], backgroundErrors: [], afterSave: null, files: new Map(), metadata: { extensions: { LittleWhiteBox: {} } } });
     host.vectorConfig = { enabled: false, embeddingApi: {} };
     host.generate = () => assert.fail('unexpected summary request');
     host.embed = () => assert.fail('unexpected embedding request');
@@ -92,7 +107,8 @@ beforeEach(async () => {
     host.files.set(fixture.chatId, structuredClone(host.metadata));
     globalThis.fetch = async (url, request) => {
         host.reads++;
-        if (host.mode === 'read_fail') throw new Error('read offline');
+        if (host.mode === 'read_fail') { expireReadback(); throw new Error('read offline'); }
+        if (['old', 'different'].includes(host.mode) || host.expireReadback) expireReadback();
         const key = JSON.parse(request.body).file_name;
         return new Response(JSON.stringify([{ chat_metadata: host.files.get(key) }]));
     };
@@ -104,6 +120,183 @@ async function importFixture() {
     const next = mod.prepareImportedSummary(mod.readSummaryMemory(), host.fixture.json, host.fixture.cutoff);
     await mod.commitSummaryMemory(host.context.chatId, next);
     return structuredClone(ext().storySummary.json);
+}
+
+// Acceptance: queued panel edits must preserve preceding source retirement and
+// unrelated panel edits. Cost: silently unsaved changes or resurrected stale anchors.
+function manualPanelEntry(errors) {
+    return entry(['handleFrameMessage', 'buildFramePayload'], {
+        ...mod, structuredClone, document: { getElementById: () => ({}) }, isTrustedMessage: () => true,
+        getContext: () => host.context, getChatIdentity, VALID_SECTIONS: ['keywords', 'arcs', 'facts'],
+        applySummarySectionEdit, mergeEditedFactsWithTimestamps, getCurrentFloorHint: () => host.context.chat.length - 1,
+        cancelRecallAndClearPrompt() {}, memoryMaintenance: { cancel: () => assert.fail('manual edit cancelled maintenance') },
+        runVectorWriteTask: vectorWrites.runVectorWriteTask, VECTOR_WRITE_SCOPES: vectorWrites.VECTOR_WRITE_SCOPES,
+        postToFrame() {}, reportMemorySaveFailure: error => errors.push(error.code),
+    });
+}
+
+function editSection(panel, section, data, previous = structuredClone(ext().storySummary.json[section])) {
+    return panel.handleFrameMessage({ data: { type: 'UPDATE_SECTION', section, previous, data } });
+}
+
+for (const preceding of ['source-sync', 'panel-edit']) {
+    test(`manual summary edit uses the memory published by preceding ${preceding}`, async () => {
+        await importFixture(); await seedAnchors();
+        const errors = [];
+        const panel = manualPanelEntry(errors);
+        const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
+        let release;
+        const blocked = new Promise(resolve => { release = resolve; });
+        const blocking = vectorWrites.runVectorWriteTask({ scope: vectorWrites.VECTOR_WRITE_SCOPES.IO }, () => blocked);
+        let first;
+        if (preceding === 'source-sync') {
+            host.context.chat[1].mes += ' edited prose';
+            first = vectorWrites.runVectorWriteTask({ scope: vectorWrites.VECTOR_WRITE_SCOPES.CONSISTENCY },
+                () => mod.synchronizeSourceCaches(tracker, host.context, { kind: 'edit', floor: 1 }));
+        } else {
+            first = editSection(panel, 'arcs', [{ name: '新的故事线', moments: [] }]);
+        }
+        const second = editSection(panel, 'keywords', [{ text: '新的关键词', weight: '一般' }]);
+        try { await nextTurn(); }
+        finally { release(); }
+        await Promise.all([blocking, first, second]);
+        assert.deepEqual(errors, []);
+        assert.deepEqual(disk().storySummary.json.keywords, [{ text: '新的关键词', weight: '一般' }]);
+        if (preceding === 'source-sync') {
+            assert.equal(disk().stateAtoms.some(atom => atom.floor === 1), false);
+            assert.equal(disk().l0Index.byFloor[1], undefined);
+            assert.equal(tracker.inspect(host.context), null);
+        } else assert.deepEqual(disk().storySummary.json.arcs, [{ name: '新的故事线', moments: [] }]);
+        assert.deepEqual(disk(), ext());
+    });
+}
+
+// Acceptance: a queued edit must never be applied to another character's chat,
+// even when filenames match. Cost: cross-chat data corruption.
+test('queued manual summary edit stays with its original character', async () => {
+    await importFixture();
+    const errors = [], panel = manualPanelEntry(errors);
+    const before = structuredClone(ext()), saves = host.writes;
+    let release;
+    const blocked = new Promise(resolve => { release = resolve; });
+    const blocking = vectorWrites.runVectorWriteTask({ scope: vectorWrites.VECTOR_WRITE_SCOPES.IO }, () => blocked);
+    const editing = editSection(panel, 'keywords', [{ text: '旧聊天的修改', weight: '一般' }]);
+    try {
+        await nextTurn();
+        host.context = { ...host.context, characterId: 1,
+            characters: [...host.context.characters, { name: '另一角色', avatar: 'another.png', chat: host.context.chatId }] };
+    } finally { release(); }
+    await Promise.all([blocking, editing]);
+    assert.equal(host.writes, saves);
+    assert.deepEqual(ext(), before);
+    assert.deepEqual(errors, []);
+});
+
+// Acceptance: an editor opened before a rollback must save only the user's
+// changes, never revive untouched withdrawn facts. Cost: corrupt canonical memory.
+for (const timing of ['queued', 'finished']) test(`manual edit preserves source rollback (${timing})`, async () => {
+    await importFixture();
+    const context = host.context;
+    context.chat.push({ mes: '次日', is_user: true }, { mes: '共同出发', is_user: false });
+    host.generate = async () => JSON.stringify({ events: [], factUpdates: [{ s: '旅人', p: '行程', o: '共同出发', isState: false }] });
+    await mod.runSummaryGeneration(25, { trigger: { delayFloors: 0 } });
+    const previous = structuredClone(ext().storySummary.json.facts);
+    const edited = structuredClone(previous);
+    edited.find(fact => fact.p === '物品').o = '代为保管药箱';
+    const tracker = mod.createMessageSourceTracker(); tracker.reset(context);
+    context.chat[25].mes = '独自留下';
+    const errors = [], panel = manualPanelEntry(errors);
+    let release;
+    const blocking = vectorWrites.runVectorWriteTask({ scope: vectorWrites.VECTOR_WRITE_SCOPES.IO },
+        () => new Promise(resolve => { release = resolve; }));
+    await nextTurn();
+    const rollback = vectorWrites.runVectorWriteTask({ scope: vectorWrites.VECTOR_WRITE_SCOPES.CONSISTENCY },
+        () => mod.synchronizeSourceCaches(tracker, context, { kind: 'swipe', floor: 25 }));
+    let editing;
+    if (timing === 'queued') editing = editSection(panel, 'facts', edited, previous);
+    release(); await Promise.all([blocking, rollback]);
+    if (timing === 'finished') editing = editSection(panel, 'facts', edited, previous);
+    await editing;
+    assert.deepEqual(errors, []);
+    assert.equal(disk().storySummary.lastSummarizedMesId, 23);
+    assert.equal(disk().storySummary.json.facts.some(fact => fact.p === '行程'), false);
+    assert.equal(disk().storySummary.json.facts.find(fact => fact.p === '物品').o, '代为保管药箱');
+});
+
+// Acceptance: manual edits and independent Agent edits may commit in either
+// order without stopping the run or losing either result. Cost: lost maintenance.
+for (const order of ['agent-first', 'user-first']) test(`manual edit coexists with maintenance (${order})`, async () => {
+    await importFixture();
+    const previous = structuredClone(ext().storySummary.json.facts);
+    const edited = structuredClone(previous);
+    edited.find(fact => fact.p === '物品').o = '代为保管药箱';
+    const session = mod.createMemorySession(readMaintenanceState()); session.initial();
+    session.runTool('EditMemory', { edits: [fixFact] });
+    const errors = [], panel = manualPanelEntry(errors);
+    if (order === 'agent-first') await saveMaintenanceSession(session);
+    await editSection(panel, 'facts', edited, previous);
+    if (order === 'user-first') await saveMaintenanceSession(session);
+    assert.deepEqual(errors, []);
+    assert.equal(disk().storySummary.json.facts[0].o, fixFact.patch.o);
+    assert.equal(disk().storySummary.json.facts.find(fact => fact.p === '物品').o, '代为保管药箱');
+});
+
+// Acceptance: a user-edited target makes only the Agent's stale edit reread;
+// the maintenance session remains usable. Cost: overwriting user edits or wasted runs.
+test('maintenance can reread a manually changed target and continue', async () => {
+    await importFixture();
+    const session = mod.createMemorySession(readMaintenanceState()); session.initial();
+    session.runTool('EditMemory', { edits: [fixFact] });
+    const edited = structuredClone(ext().storySummary.json.facts);
+    edited[0].o = '用户补充的信息';
+    const errors = [];
+    await editSection(manualPanelEntry(errors), 'facts', edited);
+    assert.deepEqual(errors, []);
+    await assert.rejects(saveMaintenanceSession(session), { code: 'memory_updated' });
+    session.discard();
+    const latest = session.runTool('ReadMemory', { collection: 'facts', key: fixFact.key }, readMaintenanceState());
+    assert.equal(latest.items[0].value.o, '用户补充的信息');
+    session.runTool('EditMemory', { edits: [fixFact] });
+    const saved = await saveMaintenanceSession(session);
+    assert.equal(saved.receipt.operations.length, 1);
+    assert.equal(disk().storySummary.json.facts[0].o, fixFact.patch.o);
+});
+
+// Acceptance: editing visible facts cannot reactivate a hidden retracted fact.
+// Cost: withdrawn memory becomes active again without the user's knowledge.
+test('manual facts edit preserves retracted records without reviving them', async () => {
+    await importFixture();
+    const withdrawn = mod.readSummaryMemory(); withdrawn.storySummary.json.facts[0].retracted = true;
+    await mod.commitSummaryMemory(host.context.chatId, withdrawn);
+    const previous = structuredClone(ext().storySummary.json.facts.filter(fact => !fact.retracted));
+    const edited = structuredClone(previous); edited[0].o = '代为保管药箱';
+    const errors = [];
+    await editSection(manualPanelEntry(errors), 'facts', edited, previous);
+    assert.deepEqual(errors, []);
+    assert.deepEqual(disk().storySummary.json.facts[0], withdrawn.storySummary.json.facts[0]);
+});
+
+// Acceptance: opt-in success feedback means both persistence and follow-up
+// work finished. Cost: a hidden failed save or misleading completion signal.
+for (const scenario of ['default', 'enabled', 'save-failed', 'followup-failed', 'chat-changed']) {
+    test(`summary completion notification observes the actual result: ${scenario}`, async t => {
+        await importFixture();
+        host.context.chat.push({ mes: '次日', is_user: true }, { mes: '共同出发', is_user: false });
+        host.generate = async () => JSON.stringify({ events: [], factUpdates: [] });
+        const notices = [], previousWindow = globalThis.window;
+        globalThis.window = { toastr: { success: value => notices.push(value) } };
+        t.after(() => { globalThis.window = previousWindow; });
+        if (scenario === 'save-failed') host.mode = 'old';
+        const result = await mod.runSummaryGeneration(25, {
+            trigger: { delayFloors: 0, ...(scenario === 'default' ? {} : { notifyOnComplete: true }) },
+        }, { onComplete: async () => {
+            assert.equal(notices.length, 0);
+            if (scenario === 'followup-failed') throw new Error('index unavailable');
+            if (scenario === 'chat-changed') host.context = { ...host.context, chatId: 'another-chat' };
+        } });
+        assert.equal(notices.length, scenario === 'enabled' ? 1 : 0);
+        if (scenario === 'enabled' || scenario === 'default') assert.equal(result.success, true);
+    });
 }
 
 test('switching characters with the same filename does not roll back or save the target summary', async () => {
@@ -123,7 +316,7 @@ for (const edited of [false, true]) test(`invalid L2 history does not block raw-
     ext().storySummary.summaryInvalid = true;
     const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
     if (edited) host.context.chat[0].mes += ' edited';
-    const gate = entry(['ensureCurrentSources'], {
+    const gate = entry(['ensureCurrentSources', 'waitForSummaryPreparation'], {
         ...mod, ...vectorWrites, createAbortError, throwIfSignalAborted, memorySaveError,
         getContext: () => host.context, messageSources: tracker, isChatStale: () => false,
         isStorySummaryConsumableForCurrentChat: () => mod.isSummaryConsumable(mod.getSummaryStore(), host.context.chat.length),
@@ -149,9 +342,36 @@ test('an uncertain save can be confirmed on the next operation without replaying
     mod.assertMemoryWritable();
 });
 
+test('a stalled host save releases the task after sixty seconds and can be confirmed without replay', async t => {
+    await importFixture();
+    let release, entered;
+    const started = new Promise(resolve => { entered = resolve; });
+    host.afterSave = () => { entered(); return new Promise(resolve => { release = resolve; }); };
+    t.after(() => release?.());
+    const writes = host.writes;
+    const next = mod.readSummaryMemory(); next.storySummary.json.facts[0].o = 'host save still pending';
+    const saving = mod.commitSummaryMemory(host.context.chatId, next).catch(error => error);
+    await started;
+    t.mock.timers.tick(6000); await nextTurn();
+    assert.equal(mod.getMemoryCommitState(), 'saving');
+    t.mock.timers.tick(54_000);
+    const error = await saving;
+    assert.equal(error.code, 'metadata_save_unconfirmed');
+    assert.equal(error.cause.code, 'metadata_save_timeout');
+    assert.equal(mod.getMemoryCommitState(), 'unconfirmed');
+    assert.equal(host.writes, writes + 1);
+    // The server already has the exact candidate, even though the host promise
+    // has not settled. Read-only recovery may confirm it without another write.
+    await mod.waitForMemoryCommit();
+    assert.equal(mod.getMemoryCommitState(), 'ready');
+    assert.equal(mod.getPublishedSummaryStore().json.facts[0].o, 'host save still pending');
+    assert.equal(host.writes, writes + 1);
+    release(); await nextTurn();
+    assert.equal(mod.getMemoryCommitState(), 'ready');
+});
+
 test('stalled readback releases the writer within its deadline, including a noncooperative transport', async t => {
     await importFixture();
-    t.mock.timers.enable({ apis: ['setTimeout'] });
     let entered, signal, otherWrite = false;
     const reading = new Promise(resolve => { entered = resolve; });
     globalThis.fetch = (_url, options) => {
@@ -226,6 +446,7 @@ for (const scenario of [
     await seedCacheRange(chatId, chat.map((_, floor) => floor));
     const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
     scenario.change(chat);
+    const beforeIO = { writes: host.writes, reads: host.reads };
     tracker.observeCompletion(host.context, chat.length - 1);
     assert.ok(tracker.inspect(host.context));
     const result = await mod.synchronizeSourceCaches(tracker, host.context, scenario);
@@ -238,6 +459,8 @@ for (const scenario of [
     assert.equal(await mod.chunkVectorsTable.where('chatId').equals(chatId).count(), chunks.length);
     assert.ok(ext().stateAtoms.every(atom => !removedAnchor(atom.floor)));
     assert.ok((await mod.getAllStateVectors(chatId)).every(row => !removedAnchor(row.floor)));
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, beforeIO);
+    await host.context.saveMetadata(); // The next normal host save carries live retirement.
     assert.deepEqual(disk(), ext());
     const writes = observeCacheWrites(t), saves = host.writes;
     assert.equal((await mod.synchronizeSourceCaches(tracker, host.context, scenario)).status, 'unchanged');
@@ -250,8 +473,8 @@ function memoryVisibility() {
     const errors = [], rendered = [], saves = [];
     let warnings = 0;
     host.context.saveChat = async () => saves.push(host.context.chat.map(message => message.is_system));
-    const ui = entry(['hideState', 'applyHideState', 'clearHideState', 'isStorySummaryConsumableForCurrentChat'], {
-        ...mod, createHideStateController, memorySaveError,
+    const ui = entry(['hideState', 'applyHideState', 'clearHideState', 'isStorySummaryEnabledForCurrentChat'], {
+        ...mod, createHideStateController, memorySaveError, shouldNotifyMemoryFailure,
         getContext: () => host.context,
         getStorySummaryEnablement: () => ({ context: host.context, effectiveEnabled: true }),
         getHideUiSettings: () => ({ hideSummarized: true, useVectorBoundary: false, keepVisibleCount: 4 }),
@@ -264,7 +487,7 @@ function memoryVisibility() {
     return { ...ui, errors, rendered, saves, warnings: () => warnings };
 }
 
-for (const uncertain of [false, true]) test(`first swipe during initial visibility waits for its own save (uncertain: ${uncertain})`, async () => {
+for (const unavailable of [false, true]) test(`first swipe during initial visibility needs no plugin save (readback unavailable: ${unavailable})`, async () => {
     await importFixture();
     const context = host.context;
     context.chat.push({ mes: '次日', is_user: true }, { mes: '原回复', is_user: false, swipe_id: 0 });
@@ -276,40 +499,285 @@ for (const uncertain of [false, true]) test(`first swipe during initial visibili
     const initial = context.chat.map(message => message.is_system);
     const tracker = mod.createMessageSourceTracker(); tracker.reset(context);
     const ui = memoryVisibility();
-    let release, entered;
-    const saveStarted = new Promise(resolve => { entered = resolve; });
-    host.afterSave = () => { entered(); return new Promise(resolve => { release = resolve; }); };
-    if (uncertain) host.mode = 'read_fail';
+    const beforeIO = { writes: host.writes, reads: host.reads };
+    if (unavailable) host.mode = 'read_fail';
     context.chat[25].swipe_id = 1;
     const syncing = mod.synchronizeSourceCaches(tracker, context, { kind: 'swipe', floor: 25 });
-    const synced = uncertain ? assert.rejects(syncing, { code: 'metadata_save_unconfirmed' }) : syncing;
-    await saveStarted;
-    const updating = ui.applyHideState();
-    try {
-        assert.equal(mod.getMemoryCommitState(), 'saving');
-        assert.deepEqual(context.chat.map(message => message.is_system), initial);
-        assert.deepEqual(ui.rendered, []);
-        assert.deepEqual(ui.saves, []);
-        assert.deepEqual(ui.errors, []);
-        assert.equal(ui.warnings(), 0);
-    } finally {
-        host.afterSave = null;
-        release();
-        await synced;
-        await updating;
-    }
-    assert.deepEqual(ui.saves, []); // Never write an unconfirmed draft with a visibility save.
-    assert.equal(ui.warnings(), uncertain ? 1 : 0);
-    assert.deepEqual(ui.errors, uncertain ? ['metadata_unconfirmed'] : []);
-    assert.equal(mod.getMemoryCommitState(), uncertain ? 'unconfirmed' : 'ready');
-    assert.equal(mod.isSummaryConsumable(mod.getSummaryStore(), context.chat.length), !uncertain);
-    if (uncertain) assert.ok(context.chat.every(message => !message.is_system));
-    else {
-        assert.equal(tracker.inspect(context), null);
-        assert.deepEqual(context.chat.map(message => message.is_system), initial);
-        assert.deepEqual(ui.rendered, []);
-        assert.deepEqual(disk(), ext());
-    }
+    assert.equal(ext().l0Index.byFloor[25], undefined);
+    assert.equal(mod.getMemoryCommitState(), 'ready');
+    assert.equal((await syncing).status, 'synced');
+    await ui.applyHideState();
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, beforeIO);
+    assert.deepEqual(ui.saves, []);
+    assert.equal(ui.warnings(), 0);
+    assert.deepEqual(ui.errors, []);
+    assert.equal(mod.getMemoryCommitState(), 'ready');
+    assert.equal(mod.isSummaryConsumable(mod.getSummaryStore(), context.chat.length), true);
+    // The changed tail is beyond the published summary; uncertainty cannot unhide it.
+    assert.deepEqual(context.chat.map(message => message.is_system), initial);
+    assert.deepEqual(ui.rendered, []);
+    assert.equal(tracker.inspect(context), null);
+    await host.context.saveMetadata();
+    assert.deepEqual(disk(), ext());
+});
+
+// Acceptance: failure of the new range cannot alter the previous 980 floors.
+// Cost: lost memory / unusable summaries. Run the real retry, generator and commit.
+function summaryExecutionHarness(overrides = {}) {
+    const messages = [], errors = [], toasts = [];
+    let running = false;
+    const noop = () => {};
+    const ui = entry(['AUTO_SUMMARY_MAX_ATTEMPTS', 'autoRunSummaryWithRetry', 'handleManualGenerate', 'ensureCurrentSources',
+        'isSummaryGenerating', 'beginSummaryExecution', 'cancelActiveSummaryExecution', 'isSummaryExecutionActive',
+        'finishSummaryExecution', 'notifySummaryState', 'postSummaryExecution', 'reportSummaryExecutionFailure',
+        'assertSummaryExecutionActive', 'handleFrameMessage', 'prepareSummaryExecution', 'waitForSummaryPreparation',
+        'sendFrameBaseData', 'sendFrameFullData', 'buildFramePayload', 'updateFrameStatsAfterSummary'], {
+        ...mod, ...vectorWrites, AbortController, createAbortError, throwIfSignalAborted,
+        createSummaryGenerationCancelledError: createAbortError, memorySaveError, SUMMARY_FEEDBACK_COPY,
+        activeSummaryExecution: null, currentMesId: null, MODULE_ID: 'summary',
+        getContext: () => host.context, document: { getElementById: noop }, isTrustedMessage: () => true,
+        isStorySummaryEnabledForCurrentChat: () => true,
+        isStorySummaryConsumableForCurrentChat: () => mod.isSummaryConsumable(mod.getSummaryStore(), host.context.chat.length),
+        isChatStale: id => id !== host.context.chatId, messageSources: { inspect: () => null },
+        synchronizeCurrentSources: async () => {},
+        guard: { isRunning: () => running, acquire: () => {
+            if (running) return null;
+            running = true;
+            return () => { running = false; };
+        } },
+        postToFrame: message => messages.push(message), cancelPendingHide: noop,
+        notifyStorySummaryChatState: () => messages.push({ type: 'CHAT_SUMMARY_STATE' }),
+        xbLog: { error: (_module, _text, error) => errors.push(error) },
+        window: { toastr: { error: text => toasts.push(text), warning: text => toasts.push(text) } },
+        shouldNotifyMemoryFailure, sleep: async () => {},
+        refreshEntityLexiconAndWarmup: noop, addEventDocuments: noop, replaceEventDocuments: noop,
+        getHideUiSettings: () => ({ hideSummarized: true, keepVisibleCount: 4 }), getVectorConfig: () => host.vectorConfig,
+        applyHideState: noop, applyHideStateDebounced: noop,
+        autoVectorizeMissingEvents: noop, rebuildActiveVectorCacheAfterSummary: noop,
+        scheduleVectorIntegrityCheck: noop, ...overrides,
+    });
+    return { ...ui, messages, errors, toasts, isRunning: () => running };
+}
+
+for (const failure of ['request', 'empty', 'structure']) {
+    test(`1000 floors with 980 summarized: ${failure} failure preserves memory and permits manual retry`, async () => {
+        host.context.chat = Array.from({ length: 1000 }, (_, i) => ({ mes: `floor ${i + 1}`, is_user: i % 2 === 0 }));
+        await mod.commitSummaryMemory(host.context.chatId, mod.prepareImportedSummary(mod.readSummaryMemory(), host.fixture.json, 979));
+        const visibility = memoryVisibility();
+        await visibility.applyHideState();
+        const before = mod.readSummaryMemory(), flags = host.context.chat.map(message => message.is_system);
+        const writes = host.writes, requests = [];
+        host.generate = async request => {
+            requests.push(request);
+            if (failure === 'request') throw new Error('provider key=never-display-this-secret');
+            return failure === 'empty' ? '' : '{}';
+        };
+        const run = summaryExecutionHarness();
+        const config = { trigger: { delayFloors: 0 } };
+        await run.autoRunSummaryWithRetry(999, config);
+        assert.equal(requests.length, 3);
+        assert.equal(run.isRunning(), false);
+        assert.equal(run.messages.at(-2).isGenerating, false);
+        assert.equal(run.messages.at(-1).type, 'CHAT_SUMMARY_STATE');
+        assert.equal(run.messages.filter(message => message.type === 'SUMMARY_ERROR').at(-1).uncertain, false);
+        assert.equal(JSON.stringify(run.messages).includes('never-display-this-secret'), false);
+        assert.deepEqual(mod.readSummaryMemory(), before);
+        assert.deepEqual(host.context.chat.map(message => message.is_system), flags);
+        assert.equal(host.writes, writes);
+        await visibility.applyHideState();
+        assert.deepEqual(host.context.chat.map(message => message.is_system), flags);
+        const pending = mod.buildIncrementalSlice(999, before.storySummary.lastSummarizedMesId, 100, 0);
+        assert.equal(pending.count, 20);
+        host.generate = async request => {
+            requests.push(request);
+            assert.equal(request.newHistoryText, pending.text);
+            return JSON.stringify({ events: [], factUpdates: [{ s: '旅人', p: '行程', o: '继续出发', isState: false }] });
+        };
+        await run.handleManualGenerate(999, config);
+        assert.equal(requests.length, 4);
+        assert.equal(mod.getPublishedSummaryStore().lastSummarizedMesId, pending.endMesId);
+        assert.equal(run.isRunning(), false);
+    });
+}
+
+test('unconfirmed new summary keeps published hiding and never saves its draft through visibility', async () => {
+    await importFixture();
+    host.context.chat.push({ mes: 'new question', is_user: true }, { mes: 'new answer', is_user: false });
+    const visibility = memoryVisibility();
+    await visibility.applyHideState();
+    const flags = host.context.chat.map(message => message.is_system), before = mod.readPublishedSummaryMemory();
+    let finishSave;
+    host.mode = 'read_fail';
+    host.afterSave = () => new Promise(resolve => { finishSave = resolve; });
+    const next = mod.readSummaryMemory();
+    next.storySummary.lastSummarizedMesId = 25;
+    next.storySummary.json.facts[0].o = 'unpublished';
+    const saving = assert.rejects(mod.commitSummaryMemory(host.context.chatId, next), { uncertain: true });
+    while (!finishSave) await Promise.resolve();
+    const projecting = visibility.applyHideState();
+    assert.deepEqual(mod.readPublishedSummaryMemory(), before);
+    assert.deepEqual(host.context.chat.map(message => message.is_system), flags);
+    finishSave(); await saving; await projecting;
+    assert.deepEqual(host.context.chat.map(message => message.is_system), flags);
+    const saveCount = visibility.saves.length, writes = host.writes;
+    await visibility.clearHideState();
+    assert.ok(host.context.chat.every(message => !message.is_system));
+    await visibility.applyHideState();
+    assert.deepEqual(host.context.chat.map(message => message.is_system), flags);
+    assert.equal(visibility.saves.length, saveCount);
+    assert.equal(host.writes, writes);
+    assert.deepEqual(mod.readPublishedSummaryMemory(), before);
+});
+
+// Acceptance: confirmation without new content must publish the recovered view.
+// Cost: stale summary / wrong hidden range, or a duplicate paid model request.
+for (const automatic of [false, true]) test(`confirmed retry refreshes data and hiding without another model request (automatic: ${automatic})`, async () => {
+    await importFixture();
+    host.context.chat.push({ mes: 'new question', is_user: true }, { mes: 'new answer', is_user: false });
+    const visibility = memoryVisibility();
+    await visibility.applyHideState();
+    const flags = host.context.chat.map(message => message.is_system);
+    let requests = 0;
+    host.generate = async () => {
+        requests++;
+        return JSON.stringify({ events: [], factUpdates: [{ s: '旅人', p: '行程', o: '继续出发', isState: false }] });
+    };
+    const run = summaryExecutionHarness({ applyHideState: visibility.applyHideState });
+    host.mode = 'read_fail';
+    await run.handleManualGenerate(25, { trigger: { delayFloors: 0 } });
+    const next = mod.readSummaryMemory();
+    assert.equal(mod.getMemoryCommitState(), 'unconfirmed');
+    assert.equal(mod.getPublishedSummaryStore().lastSummarizedMesId, 23);
+    assert.deepEqual(host.context.chat.map(message => message.is_system), flags);
+    const writes = host.writes;
+    await run.handleManualGenerate(25, { trigger: { delayFloors: 0 } });
+    assert.equal(run.isRunning(), false);
+    assert.equal(run.messages.filter(message => message.type === 'SUMMARY_ERROR').at(-1).uncertain, true);
+    const messageCount = run.messages.length;
+    host.mode = 'save';
+    await (automatic ? run.autoRunSummaryWithRetry : run.handleManualGenerate)(25, { trigger: { delayFloors: 0 } });
+    assert.equal(mod.getMemoryCommitState(), 'ready');
+    assert.deepEqual(mod.readPublishedSummaryMemory(), next);
+    assert.equal(host.writes, writes);
+    assert.equal(requests, 1);
+    assert.equal(run.isRunning(), false);
+    const recoveryMessages = run.messages.slice(messageCount);
+    const data = recoveryMessages.find(message => message.type === 'SUMMARY_FULL_DATA')?.payload;
+    assert.equal(data?.lastSummarizedMesId, 25);
+    assert.deepEqual(data.facts, next.storySummary.json.facts);
+    const stats = recoveryMessages.find(message => message.type === 'SUMMARY_BASE_DATA')?.stats;
+    assert.equal(stats?.summarizedUpTo, 26);
+    assert.equal(stats.pendingFloors, 0);
+    assert.equal(stats.hiddenCount, 22);
+    assert.deepEqual(host.context.chat.map(message => !!message.is_system), host.context.chat.map((_, floor) => floor < 22));
+});
+
+// Acceptance: stop frees this run while independent consistency/IO work continues.
+// Cost: locked retry entry, cross-chat late results, or duplicate model requests.
+for (const stage of ['source', 'writer']) for (const automatic of [false, true]) {
+    test(`stop during ${stage} preparation frees the run before independent work settles (automatic: ${automatic})`, async t => {
+        await importFixture();
+        let finish, entered, requests = 0;
+        const pending = new Promise(resolve => { finish = resolve; });
+        const started = new Promise(resolve => { entered = resolve; });
+        let completed = false;
+        const writing = vectorWrites.runVectorWriteTask({ chatId: host.context.chatId, scope: vectorWrites.VECTOR_WRITE_SCOPES.IO }, async () => {
+            entered(); await pending; completed = true;
+        });
+        t.after(async () => { finish(); await writing; });
+        await started;
+        const run = summaryExecutionHarness({
+            synchronizeCurrentSources: stage === 'source' ? () => writing : async () => {},
+            runSummaryGeneration: async () => { requests++; return { success: true }; },
+        });
+        const generate = automatic ? run.autoRunSummaryWithRetry : run.handleManualGenerate;
+        const first = generate(23, {});
+        await nextTurn();
+        await run.handleFrameMessage({ data: { type: 'REQUEST_CANCEL' } });
+        await nextTurn();
+        assert.equal(run.isRunning(), false);
+        assert.equal(completed, false);
+        assert.equal(requests, 0);
+        await first;
+        // Another request owns a new run while the cancelled waiter remains pending.
+        const second = generate(23, {});
+        await nextTurn();
+        assert.equal(run.isRunning(), true);
+        finish(); await writing; await second;
+        assert.equal(requests, 1);
+        assert.equal(run.isRunning(), false);
+        assert.equal(run.messages.some(message => message.type === 'SUMMARY_ERROR'), false);
+    });
+}
+
+test('a cancelled source waiter logs a late failure without touching the new chat or run', async () => {
+    await importFixture();
+    let rejectSource;
+    const source = new Promise((_resolve, reject) => { rejectSource = reject; });
+    const run = summaryExecutionHarness({ synchronizeCurrentSources: () => source });
+    const first = run.handleManualGenerate(23, {});
+    await nextTurn();
+    run.cancelActiveSummaryExecution();
+    host.context = { ...host.context, chatId: 'another-chat' };
+    await first;
+    const messageCount = run.messages.length;
+    const error = new Error('independent source repair failed');
+    rejectSource(error);
+    await nextTurn();
+    assert.equal(run.isRunning(), false);
+    assert.equal(run.messages.length, messageCount);
+    assert.ok(run.errors.includes(error));
+});
+
+test('reconfirmation publishes the saved range even when the remaining-range request fails', async () => {
+    await importFixture();
+    host.context.chat.push(...Array.from({ length: 4 }, (_, i) => ({ mes: `new ${i}`, is_user: i % 2 === 0 })));
+    const visibility = memoryVisibility();
+    const run = summaryExecutionHarness({ applyHideState: visibility.applyHideState });
+    host.mode = 'read_fail';
+    let requests = 0;
+    host.generate = async () => {
+        requests++;
+        return JSON.stringify({ events: [], factUpdates: [{ s: '旅人', p: '行程', o: '继续出发', isState: false }] });
+    };
+    await run.handleManualGenerate(27, { trigger: { delayFloors: 0, maxPerRun: 2 } });
+    assert.equal(mod.getMemoryCommitState(), 'unconfirmed');
+    const next = mod.readSummaryMemory(), writes = host.writes;
+    host.mode = 'save';
+    host.generate = async request => {
+        requests++;
+        assert.equal(request.newHistoryText, mod.buildIncrementalSlice(27, 25, 2, 0).text);
+        throw new Error('provider offline');
+    };
+    const messageCount = run.messages.length;
+    await run.handleManualGenerate(27, { trigger: { delayFloors: 0, maxPerRun: 2 } });
+    const recovery = run.messages.slice(messageCount);
+    assert.equal(recovery.find(message => message.type === 'SUMMARY_FULL_DATA')?.payload.lastSummarizedMesId, 25);
+    assert.equal(recovery.find(message => message.type === 'SUMMARY_BASE_DATA')?.stats.hiddenCount, 22);
+    assert.deepEqual(mod.readPublishedSummaryMemory(), next);
+    assert.equal(requests, 2);
+    assert.equal(host.writes, writes);
+    assert.equal(run.isRunning(), false);
+});
+
+test('late generation failure after a chat switch does not report into or cancel from the new chat', async () => {
+    await importFixture();
+    host.context.chat.push({ mes: 'new question', is_user: true }, { mes: 'new answer', is_user: false });
+    let rejectRequest;
+    host.generate = () => new Promise((_resolve, reject) => { rejectRequest = reject; });
+    const run = summaryExecutionHarness();
+    const generating = run.handleManualGenerate(25, { trigger: { delayFloors: 0 } });
+    while (!rejectRequest) await nextTurn();
+    host.context = { ...host.context, chatId: 'another-chat' };
+    run.notifySummaryState();
+    assert.equal(run.messages.at(-1).isGenerating, false);
+    const messageCount = run.messages.length;
+    await run.handleFrameMessage({ data: { type: 'REQUEST_CANCEL' } });
+    assert.equal(run.messages.length, messageCount);
+    rejectRequest(new Error('late failure'));
+    await generating;
+    assert.equal(run.messages.slice(messageCount).some(message => message.type === 'SUMMARY_ERROR' || message.type === 'SUMMARY_STATUS'), false);
+    assert.equal(run.isRunning(), false);
 });
 
 test('same-chat reload preserves every persisted L0/L1 row and extraction receipt with zero writes', async t => {
@@ -331,7 +799,30 @@ test('same-chat reload preserves every persisted L0/L1 row and extraction receip
     assert.equal(writes(), 0);
 });
 
-for (const failure of ['cache', 'save']) test(`failed ${failure} never confirms source safety`, async t => {
+// Acceptance: variable-driven edit/swipe/delete hooks retire anchors before returning,
+// never wait for cache IO or save, and retain failed cleanup ranges. Cost: stale memory or blocked chat.
+for (const failure of [false, true]) test(`variable rollback notification is live-only and nonblocking (cache failure: ${failure})`, async t => {
+    await seedAnchors();
+    const io = { writes: host.writes, reads: host.reads };
+    let finish;
+    const cleaning = new Promise((resolve, reject) => { finish = failure ? reject : resolve; });
+    t.mock.method(mod.stateVectorsTable, 'where', () => ({ between: () => ({ delete: () => cleaning }) }));
+    mod.initStateIntegration();
+    assert.equal(globalThis.LWB_StateRollbackHook(1), undefined);
+    assert.equal(ext().stateAtoms.some(atom => atom.floor >= 1), false);
+    assert.equal(ext().l0Index.byFloor[1], undefined);
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, io);
+    await nextTurn();
+    finish(failure ? new Error('cache offline') : 0);
+    await Promise.all(host.background);
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, io);
+    if (failure) {
+        assert.equal(mod.getRuntimeInvalidSourceFloor(), 1);
+        assert.equal(host.backgroundErrors[0].code, 'memory_cache_invalidation_failed');
+    } else assert.deepEqual(host.backgroundErrors, []);
+});
+
+for (const failure of ['cache', 'save']) test(`source safety depends on cache cleanup, not an extra ${failure} save`, async t => {
     await seedAnchors();
     await seedCacheRange(host.context.chatId, [0, 1, 2, 3]);
     const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
@@ -341,9 +832,16 @@ for (const failure of ['cache', 'save']) test(`failed ${failure} never confirms 
         mod.chunkVectorsTable.hook('deleting', fail);
         t.after(() => mod.chunkVectorsTable.hook('deleting').unsubscribe(fail));
     } else host.mode = 'old';
-    await assert.rejects(mod.synchronizeSourceCaches(tracker, host.context));
-    assert.ok(tracker.inspect(host.context));
-    assert.equal(mod.isSummaryConsumable(ext().storySummary, host.context.chat.length), false);
+    const beforeIO = { writes: host.writes, reads: host.reads };
+    if (failure === 'cache') {
+        await assert.rejects(mod.synchronizeSourceCaches(tracker, host.context));
+        assert.ok(tracker.inspect(host.context));
+        assert.equal(mod.isSummaryConsumable(ext().storySummary, host.context.chat.length), false);
+    } else {
+        assert.equal((await mod.synchronizeSourceCaches(tracker, host.context)).status, 'synced');
+        assert.equal(tracker.inspect(host.context), null);
+    }
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, beforeIO);
 });
 
 for (const kind of ['edit', 'swipe']) test(`queued ${kind} survives leaving and returning before the consistency writer runs`, async () => {
@@ -363,10 +861,12 @@ for (const kind of ['edit', 'swipe']) test(`queued ${kind} survives leaving and 
         assert.equal(result.status, 'synced');
         assert.equal(tracker.inspect(context), null);
         assert.equal(mod.isSummaryConsumable(ext().storySummary, context.chat.length), true);
+        await context.saveMetadata();
     } else {
         // Historical swipe crossed the imported baseline: preserve, but block L2.
         assert.equal(result.status, 'failed');
-        assert.equal(ext().storySummary.sourceInvalidFromFloor, 1);
+        assert.equal(ext().storySummary.sourceRollbackFromFloor, 1);
+        assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
         assert.equal(mod.isSummaryConsumable(ext().storySummary, context.chat.length), false);
     }
     assert.deepEqual(disk(), ext());
@@ -392,7 +892,7 @@ for (const order of ['event-first', 'background-first']) for (const sameText of 
     assert.equal(first.status, 'failed');
     assert.equal(mod.isSummaryConsumable(ext().storySummary, context.chat.length), false);
     assert.equal((await mod.synchronizeSourceCaches(tracker, context, { kind: 'swipe', floor: 1 })).status, 'failed');
-    assert.equal(ext().storySummary.sourceInvalidFromFloor, 1);
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, 1);
     assert.deepEqual(disk(), ext());
 });
 
@@ -421,6 +921,8 @@ for (const generated of [false, true]) test(`unselected swipe deletion then imme
     assert.deepEqual(ext().storySummary, before);
     assert.equal(mod.isSummaryConsumable(ext().storySummary, context.chat.length), true);
     assert.equal(await mod.chunksTable.where('[chatId+floor]').equals([context.chatId, floor]).count(), 0);
+    assert.equal(host.writes, metadataWrites);
+    await context.saveMetadata();
     assert.deepEqual(disk(), ext());
 });
 
@@ -483,6 +985,7 @@ for (const kind of ['swipe', 'delete']) for (const stage of ['queued', 'failed']
     assert.equal(await mod.chunksTable.where('[chatId+floor]').equals([context.chatId, 1]).count(), 0);
     assert.ok(ext().stateAtoms.every(atom => atom.floor !== 1));
     assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, undefined);
     if (action === 'import') {
         assert.equal(mod.isSummaryConsumable(ext().storySummary, context.chat.length), true);
         assert.deepEqual(ext().storySummary.json, imported);
@@ -566,15 +1069,16 @@ test('ordinary tail edits without affected memory do not add a memory save or re
     assert.deepEqual(host.mutations, []);
 });
 
-test('an extraction status alone still requires a confirmed source invalidation', async () => {
+test('an empty extraction status is retired live and persisted by the next host save', async () => {
     await importFixture();
     const memory = mod.readSummaryMemory();
     memory.l0Index.byFloor[23] = { floor: 23, status: 'empty', atoms: 0 };
     await mod.commitSummaryMemory(host.context.chatId, memory);
     const saves = host.writes;
     await mod.rollbackSummaryIfNeeded({ invalidateFloors: [22, 23] });
-    assert.equal(host.writes, saves + 1);
+    assert.equal(host.writes, saves);
     assert.equal(ext().l0Index.byFloor[23], undefined);
+    await host.context.saveMetadata();
     assert.deepEqual(disk(), ext());
 });
 
@@ -596,6 +1100,7 @@ test('ordinary edit preserves later memory/vectors and retires only the affected
     }
     assert.equal(await mod.chunkVectorsTable.where('chatId').equals(chatId).count(), 4);
     assert.equal((await mod.metaTable.get(chatId)).lastChunkFloor, 0);
+    await host.context.saveMetadata();
     assert.deepEqual(disk(), ext());
 });
 
@@ -668,6 +1173,74 @@ async function saveMaintenanceSession(session) {
     });
 }
 
+for (const change of ['append', 'edit']) test(`content-sync entry keeps maintenance alive while retiring ${change} caches`, async () => {
+    await importFixture(); await seedAnchors();
+    const original = structuredClone(ext().storySummary.json);
+    const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
+    const session = mod.createMemorySession(readMaintenanceState()); session.initial();
+    session.runTool('ReadSource', { floor: 2 }, readMaintenanceState());
+    let syncing;
+    const sync = () => { syncing = mod.synchronizeSourceCaches(tracker, host.context); return syncing; };
+    const gate = entry(['runContentChangeSync'], {
+        getContext: () => host.context, isStorySummaryEnabledForCurrentChat: () => true,
+        messageSources: tracker, memoryMaintenance: { cancel: () => assert.fail('source-only change cancelled maintenance') },
+        handleMessageUpdated: sync, recallReuse: { invalidate() {}, historyChanged() {} },
+        cancelPendingHide() {}, cancelEmbeddingWriteTasks: vectorWrites.cancelEmbeddingWriteTasks,
+        isChatStale: () => false, clearHideState: async () => {}, reportMemorySaveFailure: assert.fail,
+        xbLog: { error: assert.fail },
+    });
+    if (change === 'append') host.context.chat.push({ mes: '新的尾楼', is_user: false });
+    else host.context.chat[1].mes = '修改后的真实原因，原先只是传闻。';
+    gate.runContentChangeSync(sync);
+    assert.equal((await syncing).status, 'synced');
+    assert.deepEqual(ext().storySummary.json, original);
+    assert.equal(ext().storySummary.lastSummarizedMesId, 23);
+    assert.equal(session.runTool('ReadSource', { floor: 2 }, readMaintenanceState()).items[0].text, host.context.chat[1].mes);
+    session.runTool('EditMemory', { edits: [fixFact] });
+    const saved = await saveMaintenanceSession(session);
+    assert.equal(saved.receipt.operations.length, 1);
+    assert.equal(disk().storySummary.json.facts[0].o, fixFact.patch.o);
+});
+
+test('source edits after reading do not reject confirmed maintenance completion', async () => {
+    await importFixture();
+    const session = mod.createMemorySession(readMaintenanceState()); session.initial();
+    session.runTool('ReadSource', { floor: 2 }, readMaintenanceState());
+    host.context.chat = structuredClone(host.context.chat);
+    host.context.chat[1].mes += ' 原文修订';
+    host.context.chat[20].mes += ' 未读原文修订';
+    host.context.chat.push({ mes: '边界以后的新楼', is_user: false });
+    session.runTool('ReadSource', { floor: 2 }, readMaintenanceState());
+    session.runTool('CompleteMaintenance', { from: 1, to: 24 });
+    const saved = await saveMaintenanceSession(session);
+    assert.deepEqual(saved.ranges.completed, [{ from: 1, to: 24 }]);
+    assert.deepEqual(saved.ranges, progress());
+    assert.deepEqual(disk(), ext());
+});
+
+test('an existing source warning does not erase newly confirmed maintenance on later saves', async () => {
+    await importFixture(); await completeRange();
+    mod.noteInvalidMemorySource(5);
+    const marked = mod.readSummaryMemory(); marked.storySummary.sourceInvalidFromFloor = 5;
+    await mod.commitSummaryMemory(host.context.chatId, marked);
+    assert.deepEqual(progress().pending, [{ from: 6, to: 24 }]);
+    const session = mod.createMemorySession(readMaintenanceState()); session.initial();
+    session.runTool('CompleteMaintenance', { from: 6, to: 24 });
+    const saved = await saveMaintenanceSession(session);
+    assert.deepEqual(saved.ranges, progress());
+    assert.deepEqual(progress().pending, []);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, 5);
+    assert.equal(mod.isSummaryConsumable(ext().storySummary, host.context.chat.length), false);
+    const unrelated = mod.readSummaryMemory(); unrelated.storySummary.updatedAt = Date.now();
+    await mod.commitSummaryMemory(host.context.chatId, unrelated);
+    assert.deepEqual(progress().pending, []);
+    assert.deepEqual(disk(), ext());
+    const expanded = mod.readSummaryMemory(); expanded.storySummary.sourceInvalidFromFloor = 2;
+    await mod.commitSummaryMemory(host.context.chatId, expanded);
+    assert.deepEqual(progress().pending, [{ from: 3, to: 24 }]);
+    assert.deepEqual(disk(), ext());
+});
+
 for (const action of ['completion', 'outcome', 'anchor', 'summary']) {
     test(`pending generation survives ${action} maintenance unless its summary input changed`, async () => {
         await importFixture(); await seedAnchors();
@@ -719,6 +1292,7 @@ for (const scenario of ['completion', 'outcome', 'anchor', 'summary', 'source-ed
         const saveStarted = new Promise(resolve => { saveEntered = resolve; });
         host.afterSave = () => { saveEntered(); return new Promise(resolve => { finishSave = resolve; }); };
         if (scenario === 'save-rejected') {
+            host.expireReadback = true;
             host.mode = 'old';
             const saveMetadata = host.context.saveMetadata;
             host.context.saveMetadata = async () => {
@@ -751,7 +1325,7 @@ for (const scenario of ['completion', 'outcome', 'anchor', 'summary', 'source-ed
             host.afterSave = null;
             finishSave?.();
             try { maintenance = await saved; }
-            finally { host.mode = 'save'; result = await generating; }
+            finally { host.mode = 'save'; host.expireReadback = false; result = await generating; }
         }
         const commits = ['completion', 'outcome', 'anchor', 'save-rejected', 'save-unconfirmed'].includes(scenario);
         assert.equal(result.success, commits, JSON.stringify(result));
@@ -800,7 +1374,7 @@ test('index status and repair include earlier runs regardless of results paginat
     });
     await mod.commitSummaryMemory(host.context.chatId, next, { maintenanceWrite: true });
     host.vectorConfig.enabled = true;
-    const maintenance = mod.createMemoryMaintenanceHost({ canRun: () => true, changed() {} });
+    const maintenance = mod.createMemoryMaintenanceHost({ isEnabled: () => true, changed() {} });
     const first = await maintenance.results(), older = await maintenance.results(10);
     assert.equal(first.items.length, 10); assert.equal(older.items.length, 1);
     assert.deepEqual(first.index, { status: 'pending', count: 2 });
@@ -982,7 +1556,7 @@ test('source replacement across baseline preserves imported content and persists
     const result = await mod.rollbackSummaryIfNeeded({ changedFromFloor: 20 });
     assert.equal(result.reason, 'source_boundary_invalid');
     assert.deepEqual(ext().storySummary.json, original);
-    assert.equal(ext().storySummary.sourceInvalidFromFloor, 20);
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, 20);
     assert.equal(ext().storySummary.summaryInvalid, undefined);
     assert.equal(mod.isSummaryConsumable(ext().storySummary, 24), false);
     assert.deepEqual(disk(), ext());
@@ -993,7 +1567,7 @@ test('undoing baseline maintenance cannot clear an unresolved source boundary', 
     await mod.rollbackSummaryIfNeeded({ changedFromFloor: 20 });
     assert.equal((await mod.rollbackSummaryOnce(host.context.chatId)).success, true);
     assert.deepEqual(ext().storySummary.json, original);
-    assert.equal(ext().storySummary.sourceInvalidFromFloor, 20);
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, 20);
     assert.equal(mod.isSummaryConsumable(ext().storySummary, 24), false);
 });
 
@@ -1019,6 +1593,7 @@ test('ordinary source edit with failed vector cleanup blocks old anchors without
     assert.equal(ext().storySummary.summaryInvalid, undefined);
     assert.equal(ext().storySummary.sourceInvalidFromFloor, 1);
     assert.equal(mod.isSummaryConsumable(ext().storySummary, 24), false);
+    await host.context.saveMetadata();
     assert.deepEqual(disk(), ext());
     cacheFailure.mock.restore();
     await mod.clearSummaryData(host.context.chatId);
@@ -1026,13 +1601,14 @@ test('ordinary source edit with failed vector cleanup blocks old anchors without
     assert.equal(mod.getMemoryCommitState(), 'ready');
 });
 
-test('ordinary source edit with failed metadata save remains blocked until invalid anchors are cleared', async () => {
+test('ordinary source edit never calls a failing host save', async () => {
     await importFixture(); await seedAnchors(); await maintain([fixAnchor]);
     host.mode = 'old';
+    const beforeIO = { writes: host.writes, reads: host.reads };
     host.context.chat[1].mes = 'edited source';
-    await assert.rejects(mod.rollbackSummaryIfNeeded({ invalidateFromFloor: 1 }), { code: 'metadata_not_saved' });
-    assert.equal(mod.getMemoryCommitState(), 'source_invalid');
-    assert.equal(mod.isSummaryConsumable(ext().storySummary, 24), false);
+    assert.equal((await mod.rollbackSummaryIfNeeded({ invalidateFromFloor: 1 })).status, 'not_needed');
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, beforeIO);
+    assert.equal(mod.isSummaryConsumable(ext().storySummary, 24), true);
     host.mode = 'save';
     await mod.clearSummaryData(host.context.chatId);
     assert.equal(ext().stateAtoms.length, 0);
@@ -1040,7 +1616,7 @@ test('ordinary source edit with failed metadata save remains blocked until inval
     assert.equal(mod.getMemoryCommitState(), 'ready');
 });
 
-test('a local L1 cleanup failure preserves memory and blocks the old source through the confirmed save boundary', async t => {
+test('a local L1 cleanup failure preserves L2 but cannot restore the retired anchor', async t => {
     await importFixture(); await seedAnchors();
     const chatId = host.context.chatId;
     await seedCacheRange(chatId, [0, 1, 3]);
@@ -1050,11 +1626,148 @@ test('a local L1 cleanup failure preserves memory and blocks the old source thro
     t.after(() => mod.chunkVectorsTable.hook('deleting').unsubscribe(fail));
     await assert.rejects(mod.rollbackSummaryIfNeeded({ invalidateFloors: [1],
         invalidateSourceCache: () => mod.deleteChunksAtFloor(chatId, 1) }));
-    assert.deepEqual(ext().stateAtoms, before.stateAtoms);
+    assert.deepEqual(ext().stateAtoms, before.stateAtoms.filter(atom => atom.floor !== 1));
     assert.deepEqual(ext().storySummary.json, before.storySummary.json);
     assert.equal(ext().storySummary.sourceInvalidFromFloor, 1);
     assert.equal(mod.isSummaryConsumable(ext().storySummary, 24), false);
+    await host.context.saveMetadata();
     assert.deepEqual(disk(), ext());
+    mod.chunkVectorsTable.hook('deleting').unsubscribe(fail);
+    await mod.clearSummaryData(chatId);
+    assert.deepEqual((await mod.chunksTable.where('chatId').equals(chatId).toArray()).map(row => row.floor), [0]);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, undefined);
+    assert.deepEqual(disk(), ext());
+});
+
+async function generatedSourceRecoveryFixture() {
+    const baseline = await importFixture(); await seedAnchors();
+    host.context.chat.push({ mes: '次日', is_user: true }, { mes: '共同出发', is_user: false });
+    host.generate = async () => JSON.stringify({ events: [], factUpdates: [{ s: '旅人', p: '行程', o: '共同出发', isState: false }] });
+    await mod.runSummaryGeneration(25, { trigger: { delayFloors: 0 } });
+    return baseline;
+}
+
+function reloadSourceRecovery() {
+    host.metadata = structuredClone(host.files.get(host.context.chatId));
+    host.context.chat = structuredClone(host.context.chat);
+    mod.reload(); mod.getSummaryStore();
+    const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
+    assert.equal(tracker.inspect(host.context), null); // No old page-local observation survives.
+}
+
+for (const recovery of ['same-page', 'reload', 'runtime-only']) test(`ordinary edit cleanup failure retries without L2 undo: ${recovery}`, async t => {
+    await generatedSourceRecoveryFixture();
+    const before = structuredClone(ext().storySummary);
+    const chatId = host.context.chatId;
+    await seedCacheRange(chatId, [0, 1, 3, 25]);
+    const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
+    host.context.chat[1].mes += ' ordinary correction';
+    const fail = () => { throw new Error('L1 storage unavailable'); };
+    mod.chunkVectorsTable.hook('deleting', fail);
+    t.after(() => mod.chunkVectorsTable.hook('deleting').unsubscribe(fail));
+    if (recovery === 'runtime-only') host.mode = 'old';
+    await assert.rejects(mod.synchronizeSourceCaches(tracker, host.context));
+    assert.deepEqual(ext().storySummary.json, before.json);
+    mod.chunkVectorsTable.hook('deleting').unsubscribe(fail);
+    host.mode = 'save';
+    if (recovery === 'reload') {
+        await host.context.saveMetadata(); // The host persists the pending cleanup boundary, not the plugin.
+        reloadSourceRecovery();
+        assert.equal((await mod.rollbackSummaryIfNeeded()).status, 'not_needed');
+    } else {
+        assert.equal((await mod.synchronizeSourceCaches(tracker, host.context)).status, 'synced');
+        assert.equal(tracker.inspect(host.context), null);
+    }
+    assert.deepEqual(ext().storySummary.json, before.json);
+    assert.deepEqual(ext().storySummary.summaryHistory, before.summaryHistory);
+    assert.equal(ext().storySummary.lastSummarizedMesId, before.lastSummarizedMesId);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, undefined);
+    assert.equal(mod.isSummaryConsumable(ext().storySummary, host.context.chat.length), true);
+    assert.deepEqual((await mod.chunksTable.where('chatId').equals(chatId).toArray()).map(row => row.floor), [0]);
+    assert.equal((await mod.getAllStateVectors(chatId)).some(vector => vector.floor === 1), false);
+    await host.context.saveMetadata();
+    assert.deepEqual(disk(), ext());
+});
+
+for (const mixed of [false, true]) test(`failed real swipe remains recoverable after reload without over-rolling L2 (earlier cache failure: ${mixed})`, async t => {
+    const baseline = await generatedSourceRecoveryFixture();
+    const chatId = host.context.chatId;
+    await seedCacheRange(chatId, [0, 1, 3, 25]);
+    const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
+    const failure = t.mock.method(mod.stateVectorsTable, 'where', () => { throw new Error('state cache offline'); });
+    if (mixed) {
+        host.context.chat[1].mes += ' earlier ordinary edit';
+        await assert.rejects(mod.synchronizeSourceCaches(tracker, host.context));
+    }
+    host.context.chat[25].swipe_id = 1;
+    assert.equal((await mod.synchronizeSourceCaches(tracker, host.context)).status, 'failed');
+    assert.equal(ext().storySummary.lastSummarizedMesId, 25);
+    assert.equal(disk().storySummary.sourceRollbackFromFloor, 25);
+    failure.mock.restore();
+    reloadSourceRecovery();
+    assert.equal((await mod.rollbackSummaryIfNeeded()).status, 'rolled_back');
+    assert.equal(ext().storySummary.lastSummarizedMesId, 23);
+    assert.deepEqual(ext().storySummary.json, baseline);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, undefined);
+    assert.equal(mod.isSummaryConsumable(ext().storySummary, host.context.chat.length), true);
+    assert.equal(await mod.chunksTable.where('[chatId+floor]').equals([chatId, mixed ? 1 : 25]).count(), 0);
+    assert.deepEqual(disk(), ext());
+});
+
+test('an imported baseline retains the actual swipe boundary after reload without re-clearing healthy caches', async () => {
+    const original = await importFixture();
+    const chatId = host.context.chatId;
+    await seedCacheRange(chatId, [0, 1, 3, 23]);
+    const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
+    host.context.chat[1].swipe_id = 1;
+    assert.equal((await mod.synchronizeSourceCaches(tracker, host.context)).status, 'failed');
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
+    assert.equal(await mod.chunksTable.where('[chatId+floor]').equals([chatId, 3]).count(), 1);
+    const cacheBefore = await Promise.all(mod.db.tables.map(table => table.toArray()));
+    reloadSourceRecovery();
+    const result = await mod.rollbackSummaryIfNeeded();
+    assert.equal(result.status, 'failed');
+    assert.equal(result.reason, 'source_boundary_invalid');
+    assert.equal(ext().storySummary.sourceRollbackFromFloor, 1);
+    assert.deepEqual(ext().storySummary.json, original);
+    assert.equal(mod.isSummaryConsumable(ext().storySummary, host.context.chat.length), false);
+    assert.deepEqual(await Promise.all(mod.db.tables.map(table => table.toArray())), cacheBefore);
+    assert.deepEqual(disk(), ext());
+});
+
+test('manual L2 undo does not claim pending raw-source caches were cleaned', async () => {
+    const baseline = await generatedSourceRecoveryFixture();
+    const chatId = host.context.chatId;
+    await seedCacheRange(chatId, [0, 1, 3]);
+    const next = mod.readSummaryMemory(); next.storySummary.sourceInvalidFromFloor = 1;
+    await mod.commitSummaryMemory(chatId, next);
+    assert.equal((await mod.rollbackSummaryOnce(chatId)).success, true);
+    assert.deepEqual(ext().storySummary.json, baseline);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, 1);
+    assert.equal(await mod.chunksTable.where('[chatId+floor]').equals([chatId, 1]).count(), 1);
+    assert.equal((await mod.rollbackSummaryIfNeeded()).status, 'not_needed');
+    assert.deepEqual(ext().storySummary.json, baseline);
+    assert.equal(ext().storySummary.lastSummarizedMesId, 23);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
+    assert.equal(await mod.chunksTable.where('[chatId+floor]').equals([chatId, 1]).count(), 0);
+    await host.context.saveMetadata();
+    assert.deepEqual(disk(), ext());
+});
+
+test('saving a cache marker cannot discard an unpersisted runtime rollback boundary', async () => {
+    await generatedSourceRecoveryFixture();
+    host.mode = 'old';
+    await assert.rejects(mod.rollbackSummaryIfNeeded({ changedFromFloor: 25 }), { code: 'metadata_not_saved' });
+    host.mode = 'save';
+    const cacheOnly = mod.readSummaryMemory(); cacheOnly.storySummary.sourceInvalidFromFloor = 1;
+    await mod.commitSummaryMemory(host.context.chatId, cacheOnly);
+    assert.equal(mod.getRuntimeSourceRollbackFloor(), 25);
+    assert.equal((await mod.rollbackSummaryIfNeeded()).status, 'rolled_back');
+    assert.equal(ext().storySummary.lastSummarizedMesId, 23);
+    assert.equal(mod.getMemoryCommitState(), 'ready');
 });
 
 for (const cancel of [false, true]) test(`manual summary owns cancellation while an earlier edit is saving (cancel: ${cancel})`, async () => {
@@ -1070,9 +1783,10 @@ for (const cancel of [false, true]) test(`manual summary owns cancellation while
     while (!finishSave) await Promise.resolve();
     const messages = [], errors = [];
     const noop = () => {};
-    const ui = entry(['handleFrameMessage', 'handleManualGenerate', 'ensureCurrentSources',
+    const ui = entry(['handleFrameMessage', 'handleManualGenerate', 'ensureCurrentSources', 'waitForSummaryPreparation',
+        'prepareSummaryExecution', 'assertSummaryExecutionActive', 'isSummaryExecutionActive',
         'isSummaryGenerating', 'beginSummaryExecution', 'cancelActiveSummaryExecution',
-        'finishSummaryExecution', 'notifySummaryState', 'postSummaryExecution'], {
+        'finishSummaryExecution', 'notifySummaryState', 'postSummaryExecution', 'reportSummaryExecutionFailure'], {
         ...mod, ...vectorWrites, messageSources, AbortController, createAbortError, throwIfSignalAborted,
         memorySaveError, SUMMARY_FEEDBACK_COPY, activeSummaryExecution: null, currentMesId: null,
         getContext: () => host.context, document: { getElementById: noop }, isTrustedMessage: () => true,
@@ -1084,10 +1798,12 @@ for (const cancel of [false, true]) test(`manual summary owns cancellation while
             running = true;
             return () => { running = false; };
         } },
-        postToFrame: message => messages.push(message), cancelPendingHide: noop,
-        reportUnconfirmedMemory: noop, reportMemorySaveFailure: error => errors.push(error),
-        formatErrorDetails: error => error.message, xbLog: { error: (_module, _text, error) => errors.push(error) }, MODULE_ID: 'summary',
-        runSummaryGeneration: async () => { requests++; return { committed: false }; },
+        postToFrame: message => messages.push(message), cancelPendingHide: noop, notifyStorySummaryChatState: noop,
+        applyHideState: noop, replaceEventDocuments: noop, refreshEntityLexiconAndWarmup: noop,
+        sendFrameFullData: noop, updateFrameStatsAfterSummary: noop, createSummaryGenerationCancelledError: createAbortError,
+        reportMemorySaveFailure: error => errors.push(error),
+        xbLog: { error: (_module, _text, error) => errors.push(error) }, MODULE_ID: 'summary',
+        runSummaryGeneration: async () => { requests++; return { success: true, committed: false }; },
     });
     const request = ui.handleFrameMessage({ data: { type: 'REQUEST_GENERATE' } });
     await nextTurn();
@@ -1112,15 +1828,15 @@ for (const cancel of [false, true]) test(`manual summary owns cancellation while
     assert.deepEqual(disk(), next); // Stopping summary does not cancel the separate edit's save.
 });
 
-test('in-flight saves publish no draft receipt and reject another writer without overwriting it', async () => {
+test('in-flight saves publish no draft receipt and queue another writer without overwriting it', async () => {
     await importFixture(); await seedAnchors();
     const before = mod.readPublishedSummaryMemory();
-    let finish;
-    host.afterSave = () => new Promise(resolve => { finish = resolve; });
+    const releases = [];
+    host.afterSave = () => new Promise(resolve => releases.push(resolve));
     const next = mod.readSummaryMemory(); next.storySummary.json.facts[0].o = 'pending';
     next.stateAtoms = [];
     const saving = mod.commitSummaryMemory(host.context.chatId, next);
-    while (!finish) await Promise.resolve();
+    while (!releases.length) await Promise.resolve();
     let resumed = false;
     const waiting = mod.waitForMemoryCommit().then(() => { resumed = true; });
     const controller = new AbortController();
@@ -1134,12 +1850,50 @@ test('in-flight saves publish no draft receipt and reject another writer without
     assert.deepEqual(mod.getPublishedSummaryStore(), before.storySummary);
     assert.deepEqual(mod.getPublishedStateAtoms(), before.stateAtoms);
     assert.deepEqual(mod.getFacts(), before.storySummary.json.facts.filter(fact => !fact.retracted));
-    await assert.rejects(mod.commitSummaryMemory(host.context.chatId, mod.readSummaryMemory()), { code: 'metadata_saving' });
-    finish(); await saving;
+    // Busy is not an error: the second writer queues behind the in-flight save.
+    // Fold the outcome into a value so the pre-fix code fails with a telling
+    // message instead of an unhandled rejection.
+    const queued = mod.commitSummaryMemory(host.context.chatId, mod.readSummaryMemory())
+        .then(() => 'settled', error => `rejected:${error.code}`);
+    releases.forEach(resolve => resolve());
+    await saving;
     await waiting;
+    for (let i = 0; i < 100 && releases.length < 2; i++) await Promise.resolve();
+    assert.equal(releases.length, 2, 'the queued writer must reach its own host save');
+    releases.forEach(resolve => resolve());
+    assert.equal(await queued, 'settled');
     assert.equal(resumed, true);
     assert.equal(mod.readPublishedSummaryMemory().storySummary.json.facts[0].o, 'pending');
     assert.deepEqual(mod.getPublishedStateAtoms(), []);
+});
+
+test('a writer arriving during an in-flight save queues behind it instead of being rejected as busy', async () => {
+    await importFixture(); await seedAnchors();
+    const chatId = host.context.chatId;
+    // The host save is slow (TT queues saveMetadata behind full chat saves), so the
+    // first writer holds the transaction across many event-loop turns.
+    const releases = [];
+    host.afterSave = () => new Promise(resolve => releases.push(resolve));
+    const first = mod.readSummaryMemory();
+    first.storySummary.json.facts[0].o = 'first-writer';
+    const saving = mod.commitSummaryMemory(chatId, first);
+    while (!releases.length) await Promise.resolve(); // installed; host save in flight
+    // The second writer drafts from the installed state: its payload is valid and
+    // it only lost the race for the transaction, not the data.
+    const second = mod.readSummaryMemory();
+    second.storySummary.json.facts[0].o = 'second-writer';
+    const queued = mod.commitSummaryMemory(chatId, second)
+        .then(() => 'settled', error => `rejected:${error.code}`);
+    releases.forEach(resolve => resolve());
+    await saving;
+    // Pre-fix the entry rejected the writer at this point; post-fix it is still queued.
+    const early = await Promise.race([queued, Promise.resolve('still-queued')]);
+    assert.equal(early, 'still-queued', 'busy is not an error: the writer must queue behind the in-flight save');
+    for (let i = 0; i < 100 && releases.length < 2; i++) await Promise.resolve();
+    assert.equal(releases.length, 2, 'the queued writer must reach its own host save');
+    releases.forEach(resolve => resolve());
+    assert.equal(await queued, 'settled');
+    assert.equal(mod.readPublishedSummaryMemory().storySummary.json.facts[0].o, 'second-writer');
 });
 
 for (const mode of ['save', 'old']) test(`recall started before a ${mode} commit never follows its unpublished draft`, async () => {
@@ -1212,11 +1966,11 @@ for (const mode of ['read_fail', 'different']) {
         assert.deepEqual(mod.getPublishedStateAtoms(), before.stateAtoms);
         assert.deepEqual(mod.getFacts(), before.storySummary.json.facts.filter(fact => !fact.retracted));
         if (mode === 'read_fail') await assert.rejects(mod.waitForMemoryCommit(), { code: 'metadata_save_unconfirmed' });
-        else await mod.waitForMemoryCommit();
+        else await assert.rejects(mod.waitForMemoryCommit(), { code: 'metadata_save_conflict' });
         assert.throws(() => mod.assertMemoryWritable(), { uncertain: true });
         assert.equal(ext().storySummary.summaryInvalid, undefined);
         assert.equal(mod.isSummaryConsumable(ext().storySummary, 24), false);
-        assert.equal(host.reads - reads, mode === 'read_fail' ? 6 : 1);
+        assert.ok(host.reads > reads);
         const writes = host.writes;
         await assert.rejects(mod.clearSummaryData(host.context.chatId), { uncertain: true });
         await assert.rejects(mod.invalidateSummaryAnchors(host.context.chatId), { uncertain: true });
@@ -1272,6 +2026,36 @@ test('L0 results remain draft-only, merge with newer summary, but cannot overwri
     assert.equal(ext().l0Index.byFloor[3], undefined);
 });
 
+// Acceptance: waiting writers must not overwrite restored data or another chat (cost: data loss).
+for (const mode of ['old', 'switch']) test(`queued writer after ${mode} save preserves the settled chat`, async () => {
+    await importFixture();
+    const chatId = host.context.chatId;
+    const baseline = mod.readSummaryMemory();
+    let release;
+    if (mode === 'old') host.mode = 'old';
+    host.afterSave = () => new Promise(resolve => { release = resolve; });
+    const first = structuredClone(baseline); first.storySummary.json.facts[0].o = 'first';
+    const saving = mod.commitSummaryMemory(chatId, first).then(() => null, error => error);
+    while (!release) await nextTurn();
+    const second = mod.readSummaryMemory(); second.storySummary.json.facts[0].o = 'second';
+    const queued = mod.commitSummaryMemory(chatId, second).then(() => null, error => error);
+    if (mode === 'switch') {
+        host.metadata = { extensions: { LittleWhiteBox: { storySummary: { json: { facts: ['other chat'] } } } } };
+        host.context = { ...host.context, chatId: 'other' }; mod.reload();
+    }
+    release();
+    await saving;
+    const error = await queued;
+    assert.equal(error.code, mode === 'old' ? 'metadata_draft_conflict' : 'summary_chat_changed_before_save');
+    if (mode === 'switch') assert.deepEqual(ext().storySummary.json.facts, ['other chat']);
+    else {
+        assert.deepEqual(mod.readSummaryMemory(), baseline);
+        host.mode = 'save'; host.afterSave = null;
+        await mod.commitSummaryMemory(chatId, first);
+        assert.equal(mod.readPublishedSummaryMemory().storySummary.json.facts[0].o, 'first');
+    }
+});
+
 test('a chat switch during confirmation never restores or installs into the newly opened chat', async () => {
     await importFixture();
     const old = host.metadata;
@@ -1284,4 +2068,218 @@ test('a chat switch during confirmation never restores or installs into the newl
     assert.equal(old.extensions.LittleWhiteBox.storySummary.json.facts[0].o, 'first chat');
     assert.deepEqual(ext().storySummary.json.facts, ['other chat']);
     assert.equal(mod.getMemoryCommitState(), 'ready');
+});
+
+// Acceptance: automatic L0 adds no full-chat IO; explicit bulk work survives a slow save.
+// Cost: chat stalls or silently lost manual work.
+for (const persistence of ['host', 'confirmed']) test(`anchor extraction persistence is explicit: ${persistence}`, async t => {
+    await importFixture();
+    const beforeIO = { writes: host.writes, reads: host.reads };
+    const draft = mod.createAnchorExtractionDraft(host.context.chatId, host.context.chat, { persistence });
+    draft.addAtoms(host.fixture.atoms.slice(0, 1));
+    draft.setStatus(1, { status: 'ok', atoms: 1 });
+    let release, finished = false;
+    if (persistence === 'confirmed') host.afterSave = () => new Promise(resolve => { release = resolve; });
+    const writing = draft.commit().then(() => { finished = true; });
+    await nextTurn();
+    if (persistence === 'confirmed') {
+        assert.ok(release);
+        t.mock.timers.tick(30_000); await nextTurn();
+        assert.equal(finished, false);
+        assert.equal(host.reads, beforeIO.reads);
+        release();
+    }
+    await writing;
+    assert.equal(ext().stateAtoms.length, 1);
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, {
+        writes: beforeIO.writes + Number(persistence === 'confirmed'),
+        reads: beforeIO.reads + Number(persistence === 'confirmed'),
+    });
+    host.afterSave = null;
+    if (persistence === 'host') {
+        assert.equal(disk().stateAtoms.length, 0);
+        await host.context.saveMetadata();
+    }
+    assert.deepEqual(disk(), ext());
+});
+
+// Acceptance: source changes win over both outcomes of a submitted manual/Agent save.
+// Cost: old-branch anchors resurrected or unrelated durable edits lost.
+for (const outcome of ['saved-original', 'saved-retired', 'not-saved', 'conflict']) {
+    test(`retirement during a durable save preserves its actual outcome: ${outcome}`, async () => {
+        await importFixture(); await seedAnchors(); await maintain([fixAnchor]);
+        const chatId = host.context.chatId;
+        const previous = mod.readSummaryMemory();
+        const next = structuredClone(previous);
+        next.storySummary.json.facts[0].o = 'durable edit';
+        if (outcome === 'not-saved') host.mode = 'old';
+        let release;
+        host.afterSave = () => new Promise(resolve => { release = resolve; });
+        const writing = mod.commitSummaryMemory(chatId, next).then(() => null, error => error.code);
+        while (!release) await nextTurn();
+        const beforeIO = { writes: host.writes, reads: host.reads };
+        host.context.chat[1].mes += ' replaced source';
+        mod.retireSummaryMemorySources(chatId, { floors: [1] });
+        assert.equal(mod.getPublishedStateAtoms().some(atom => atom.floor === 1), false);
+        assert.equal(ext().l0Index.byFloor[1], undefined);
+        assert.deepEqual({ writes: host.writes, reads: host.reads }, beforeIO);
+        if (outcome === 'saved-retired') host.files.set(chatId, structuredClone(host.metadata));
+        if (outcome === 'conflict') { disk().storySummary.json.facts[1].o = 'unrelated external edit'; host.expireReadback = true; }
+        release();
+        const error = await writing;
+        assert.equal(error, outcome === 'not-saved' ? 'metadata_not_saved' : outcome === 'conflict' ? 'metadata_save_conflict' : null);
+        assert.equal(ext().stateAtoms.some(atom => atom.floor === 1), false);
+        assert.equal(mod.getPublishedStateAtoms().some(atom => atom.floor === 1), false);
+        assert.equal(mod.readPublishedSummaryMemory().storySummary.json.facts[0].o,
+            outcome.startsWith('saved') ? 'durable edit' : previous.storySummary.json.facts[0].o);
+        assert.ok(mod.readPublishedSummaryMemory().storySummary.summaryHistory[0].maintenance[0].operations[0].changes[0].retired);
+    });
+}
+
+test('an entirely superseded manual extraction is not reported as saved', async () => {
+    await importFixture();
+    const draft = mod.createAnchorExtractionDraft(host.context.chatId, host.context.chat, { persistence: 'confirmed' });
+    draft.addAtoms(host.fixture.atoms.slice(0, 1)); draft.setStatus(1, { status: 'ok', atoms: 1 });
+    let release;
+    host.afterSave = () => new Promise(resolve => { release = resolve; });
+    const writing = draft.commit().then(() => null, error => error.code);
+    while (!release) await nextTurn();
+    mod.retireSummaryMemorySources(host.context.chatId, { floors: [1] });
+    release();
+    assert.equal(await writing, 'metadata_source_changed');
+    assert.equal(ext().stateAtoms.length, 0);
+    assert.equal(mod.getMemoryCommitState(), 'ready');
+});
+
+for (const mixed of [false, true]) test(`Agent reports the post-swipe receipt, preserving unrelated edits: ${mixed}`, async () => {
+    await importFixture(); await seedAnchors();
+    const session = mod.createMemorySession(readMaintenanceState()); session.initial();
+    session.runTool('EditMemory', { edits: mixed ? [fixAnchor, fixFact] : [fixAnchor] });
+    session.conclude({ status: 'completed' });
+    let release;
+    host.afterSave = () => new Promise(resolve => { release = resolve; });
+    const writing = saveMaintenanceSession(session).then(saved => ({ saved }), error => ({ error: error.code }));
+    while (!release) await nextTurn();
+    mod.retireSummaryMemorySources(host.context.chatId, { floors: [1] });
+    release();
+    const result = await writing;
+    assert.equal(result.error, undefined);
+    session.acknowledge(result.saved);
+    assert.equal(session.savedCount, mixed ? 1 : 0);
+    assert.equal(result.saved.outcome.status, mixed ? 'partially_superseded' : 'superseded');
+    const history = mod.projectMaintenanceRun(ext().storySummary, 'session-test');
+    assert.equal(history.outcome.status, result.saved.outcome.status);
+    assert.equal(history.counts.anchors, 0);
+    if (mixed) {
+        assert.equal(result.error, undefined);
+        assert.equal(result.saved.current.atoms.some(atom => atom.floor === 1), false);
+        assert.deepEqual(result.saved.impact.atomIds, []);
+        assert.equal(result.saved.current.json.facts[0].o, fixFact.patch.o);
+        assert.ok(result.saved.receipt.operations[0].changes[0].retired);
+    } else assert.equal(result.saved.current.atoms.some(atom => atom.floor === 1), false);
+    assert.equal(mod.getMemoryCommitState(), 'ready');
+});
+
+// Acceptance: a later suffix cleanup cannot acknowledge an earlier failed range;
+// variable notifications share the writer and preserve failed work across retries.
+// Cost: stale source chunks become consumable with no pending cleanup marker.
+test('overlapping variable cleanup is serialized, and failed earlier work remains retryable', async t => {
+    await importFixture(); await seedAnchors();
+    await seedCacheRange(host.context.chatId, [1, 3, 20]);
+    const io = { writes: host.writes, reads: host.reads };
+    let release, calls = 0;
+    const cleaning = new Promise(resolve => { release = resolve; });
+    const mock = t.mock.method(mod.stateVectorsTable, 'where', () => ({ between: () => ({ delete: () =>
+        ++calls === 1 ? cleaning : Promise.reject(new Error('cache offline')) }) }));
+    mod.initStateIntegration();
+    globalThis.LWB_StateRollbackHook(20);
+    await nextTurn();
+    globalThis.LWB_StateRollbackHook(1);
+    await nextTurn();
+    assert.equal(calls, 1);
+    assert.equal(ext().stateAtoms.length, 0);
+    release(0);
+    await Promise.all(host.background);
+    assert.equal(calls, 2);
+    assert.equal(mod.getRuntimeInvalidSourceFloor(), 1);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, 1);
+    assert.deepEqual((await mod.chunksTable.where('chatId').equals(host.context.chatId).toArray()).map(row => row.floor), [1, 3]);
+    mock.mock.restore();
+    globalThis.LWB_StateRollbackHook(20); // A later request must include the retained earlier gap.
+    await Promise.all(host.background);
+    assert.equal(await mod.chunksTable.where('chatId').equals(host.context.chatId).count(), 0);
+    assert.equal(mod.getRuntimeInvalidSourceFloor(), undefined);
+    assert.equal(ext().storySummary.sourceInvalidFromFloor, undefined);
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, io);
+});
+
+test('cleanup releases only the source boundary it actually handled', async t => {
+    await importFixture(); await seedAnchors();
+    let release;
+    const cleaning = new Promise(resolve => { release = resolve; });
+    const mock = t.mock.method(mod.stateVectorsTable, 'where', () => ({ between: () => ({ delete: () => cleaning }) }));
+    const cleanup = mod.rollbackSummaryIfNeeded({ invalidateFromFloor: 20 });
+    await nextTurn();
+    mod.noteInvalidMemorySource(1);
+    release(0);
+    assert.equal((await cleanup).status, 'deferred');
+    assert.equal(mod.getRuntimeInvalidSourceFloor(), 1);
+    mock.mock.restore();
+});
+
+test('queued variable cleanup never retires a different loaded chat', async t => {
+    await seedAnchors();
+    let release, calls = 0;
+    const cleaning = new Promise(resolve => { release = resolve; });
+    t.mock.method(mod.stateVectorsTable, 'where', () => ({ between: () => ({ delete: () => { calls++; return cleaning; } }) }));
+    mod.initStateIntegration();
+    globalThis.LWB_StateRollbackHook(20);
+    await nextTurn();
+    globalThis.LWB_StateRollbackHook(1);
+    const other = { storySummary: { lastSummarizedMesId: -1 }, stateAtoms: [{ atomId: 'other', floor: 1 }], l0Index: { version: 1, byFloor: {} } };
+    host.context = { ...host.context, chatId: 'other-chat' };
+    host.metadata = { extensions: { LittleWhiteBox: structuredClone(other) } };
+    mod.reload();
+    release(0); await Promise.all(host.background);
+    assert.equal(calls, 1);
+    assert.deepEqual(ext(), other);
+});
+
+test('automatic preparation waits for an active save but never recovers an uncertain one', async () => {
+    await importFixture();
+    host.mode = 'read_fail';
+    const next = mod.readSummaryMemory(); next.storySummary.json.facts[0].o = 'awaiting confirmation';
+    await assert.rejects(mod.commitSummaryMemory(host.context.chatId, next), { code: 'metadata_save_unconfirmed' });
+    const beforeIO = { writes: host.writes, reads: host.reads };
+    assert.equal(await mod.waitForMemoryCommit(undefined, { recover: false }), false);
+    assert.equal((await mod.rollbackSummaryIfNeeded({ invalidateFloors: [1] })).status, 'deferred');
+    assert.deepEqual({ writes: host.writes, reads: host.reads }, beforeIO);
+});
+
+// Acceptance: pinned native saves carry automatic metadata, without a preceding plugin save.
+// Cost: lost L0 or extra whole-chat traffic on supported hosts.
+for (const version of ['1.14.0', '1.18.0']) test(`official ST ${version} saves live swipe retirement and automatic extraction together`, async () => {
+    await seedAnchors();
+    const { chatId, chat } = host.context;
+    const posted = [];
+    const native = hostSaveEntry(version, { read: () => host.context, metadata: () => host.metadata,
+        fetch: async (url, request) => { posted.push({ url, body: JSON.parse(request.body) }); return { ok: true }; } });
+    host.context.saveMetadata = native.context.saveMetadata;
+    const beforeReads = host.reads;
+    const tracker = mod.createMessageSourceTracker(); tracker.reset(host.context);
+    chat[1].swipe_id = 1; chat[1].mes = 'replacement branch';
+    const retiring = mod.synchronizeSourceCaches(tracker, host.context, { kind: 'swipe', floor: 1 });
+    assert.equal(ext().stateAtoms.some(atom => atom.floor === 1), false);
+    assert.equal((await retiring).status, 'synced');
+    const draft = mod.createAnchorExtractionDraft(chatId, chat, { persistence: 'host' });
+    draft.setStatus(1, { status: 'empty', atoms: 0 });
+    await draft.commit();
+    assert.deepEqual(posted, []);
+    assert.equal(host.reads, beforeReads);
+    await native.context.saveChatConditional();
+    assert.equal(posted.length, 1);
+    assert.equal(posted[0].url, '/api/chats/save');
+    assert.deepEqual(JSON.parse(JSON.stringify(posted[0].body.chat[0].chat_metadata.extensions.LittleWhiteBox)), ext());
+    assert.equal(host.reads, beforeReads);
+    assert.deepEqual(native.errors, []);
 });

@@ -1,4 +1,5 @@
-import { requireResponseCompletion } from '../runtime/response-completion.js';
+import { readResponseCompletion } from '../runtime/response-completion.js';
+import { buildSamplingParameters } from '../sampling.js';
 import {
     assertHostChatCompletionsClient,
     browserHostChatCompletionsClient,
@@ -17,7 +18,6 @@ import {
     accumulateStreamedAssistantSnapshot,
     applyOpenAICompatibleReasoningControls,
     assertSignedToolCallsIntact,
-    buildTaggedToolCallDraft,
     buildToolCallResultsFromOpenAI,
     buildNativeMessages,
     buildProviderPayload,
@@ -25,12 +25,11 @@ import {
     buildTaggedMessages,
     captureRawAssistantMessage,
     extractResponseTaggedToolCalls,
-    extractThinkTaggedContent,
+    analyzeAssistantText,
     extractThoughtsFromMessage,
     flattenTextContent,
     getStreamedSnapshotText,
     getStreamedSnapshotToolCalls,
-    stripTaggedToolCallsForDisplay,
 } from './openai-compatible.js';
 
 function emitStreamProgress(task, payload, effectiveReasoning) {
@@ -46,12 +45,12 @@ function emitStreamProgress(task, payload, effectiveReasoning) {
 }
 
 function cleanTextForToolMode(content, standardToolCalls = [], streaming = false) {
-    const thinkTagged = extractThinkTaggedContent(content);
+    const thinkTagged = analyzeAssistantText(content, { streaming });
     return {
         thinkTagged,
         cleanedText: standardToolCalls.length
             ? thinkTagged.cleaned
-            : stripTaggedToolCallsForDisplay(thinkTagged.cleaned, { streaming }),
+            : thinkTagged.text,
     };
 }
 
@@ -96,6 +95,7 @@ export class SillyTavernOpenAICompatibleAdapter {
                 reasoning,
             ) ? undefined : task.temperature,
         };
+        const samplingParams = buildSamplingParameters('sillytavern-openai-compatible', this.config.sampling);
         const payload = buildHostOpenAICompatibleGeneratePayload(
             this.config,
             taggedMode
@@ -108,6 +108,7 @@ export class SillyTavernOpenAICompatibleAdapter {
             messages,
             typeof task.onStreamProgress === 'function',
         );
+        Object.assign(payload, samplingParams);
         return applyOpenAICompatibleReasoningControls(payload, reasoning);
     }
 
@@ -183,7 +184,7 @@ export class SillyTavernOpenAICompatibleAdapter {
             );
             const progressToolCalls = standardToolCalls.length
                 ? standardToolCalls
-                : buildTaggedToolCallDraft(thinkTagged.cleaned);
+                : thinkTagged.draft;
             emitStreamProgress(task, {
                 text: cleanedText,
                 thoughts: isReasoningOutputVisible(effectiveReasoning)
@@ -198,7 +199,6 @@ export class SillyTavernOpenAICompatibleAdapter {
             onResponseAccepted: options.onResponseAccepted,
         });
 
-        requireResponseCompletion('openai', lastFinishReason, !!assistantSnapshot.refusal, extractThinkTaggedContent(getStreamedSnapshotText(assistantSnapshot)).cleaned);
         assertSignedToolCallsIntact(assistantSnapshot);
         const standardToolCalls = getStreamedSnapshotToolCalls(assistantSnapshot);
         const { thinkTagged, cleanedText } = cleanTextForToolMode(
@@ -207,13 +207,13 @@ export class SillyTavernOpenAICompatibleAdapter {
         );
         const thoughts = extractThoughtsFromMessage(assistantSnapshot, {});
         thinkTagged.thoughts.forEach((item) => thoughts.push(item));
-        const taggedToolCalls = standardToolCalls.length ? [] : extractResponseTaggedToolCalls(task, thinkTagged.cleaned, assistantSnapshot);
+        const taggedToolCalls = standardToolCalls.length ? [] : extractResponseTaggedToolCalls(task, thinkTagged, assistantSnapshot);
 
         return {
             text: cleanedText,
             toolCalls: [...standardToolCalls, ...taggedToolCalls],
             thoughts: isReasoningOutputVisible(effectiveReasoning) ? thoughts : [],
-            finishReason: lastFinishReason,
+            ...readResponseCompletion('openai', lastFinishReason, !!assistantSnapshot.refusal),
             model: lastModel,
             provider: 'sillytavern-openai-compatible',
             providerPayload: buildProviderPayload(assistantSnapshot),
@@ -228,21 +228,20 @@ export class SillyTavernOpenAICompatibleAdapter {
         );
         const choice = response.choices?.[0] || {};
         const message = choice.message || {};
-        requireResponseCompletion('openai', choice.finish_reason, !!message.refusal, extractThinkTaggedContent(flattenTextContent(message.content)).cleaned);
         assertSignedToolCallsIntact(message);
         const thoughts = extractThoughtsFromMessage(message, choice);
         const standardToolCalls = buildToolCallResultsFromOpenAI(message.tool_calls || []);
         const contentText = flattenTextContent(message.content);
         const { thinkTagged, cleanedText } = cleanTextForToolMode(contentText, standardToolCalls);
         thinkTagged.thoughts.forEach((item) => thoughts.push(item));
-        const taggedToolCalls = standardToolCalls.length ? [] : extractResponseTaggedToolCalls(task, thinkTagged.cleaned, message);
+        const taggedToolCalls = standardToolCalls.length ? [] : extractResponseTaggedToolCalls(task, thinkTagged, message);
         const replayableMessage = buildReplayableAssistantMessage(message, choice);
 
         return {
             text: cleanedText,
             toolCalls: [...standardToolCalls, ...taggedToolCalls],
             thoughts: isReasoningOutputVisible(effectiveReasoning) ? thoughts : [],
-            finishReason: choice.finish_reason,
+            ...readResponseCompletion('openai', choice.finish_reason, !!message.refusal),
             model: response.model || this.config.model,
             provider: 'sillytavern-openai-compatible',
             providerPayload: buildProviderPayload(replayableMessage),

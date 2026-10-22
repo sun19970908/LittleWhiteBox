@@ -2,7 +2,7 @@
 
 ## 0. 文档用途
 
-本文定义 Tasks 的产品、领域、工具、资金与保存契约。底座见 [Kernel](./os-kernel-target-design.md)，资金范围见 [Economy 平台](./economy-platform-target-design.md)；任务模型不再使用旧 metadata 业务根。实现入口由 module、partition 与 Host/Shell catalog 注册，不另保留施工文档。
+本文定义 Tasks 的产品、领域、工具、资金与保存契约。底座见 [Kernel](./os-kernel-target-design.md)，资金范围见 [Economy 平台](./economy-platform-target-design.md)。实现入口由 module、partition 与 Host/Shell catalog 注册。
 
 ## 1. 定位与不可越界项
 
@@ -451,7 +451,7 @@ Candidates 编译规则：
 
 Board 只要至少一项合法即为 changed，因此完整六项为 updated、保留部分合法项为 partial；它没有 unchanged 结果。Candidates 先按五个规范字段和顺序与当前列表比较，不把 candidateId 参与比较：空数组或三至四个合法项、无 skipped 且内容完全相同时返回既有列表及 IDs/unchanged；有 skipped 或非空合法结果少于三人时状态优先为 partial，即使合法 survivors 与当前列表相同，此时`changed:false`且 data mode 为 unchanged；内容确实不同时返回无 ID drafts。完整合法为 updated，协议不完整但有可用 sibling 为 partial。`failed`始终表示没有可提交候选。
 
-Request 只有在 compiler 给出 changed 的 updated/partial 后才调用应用服务。世界书和世界新闻固定使用本次请求取得的参考素材，提交检查不重扫概率世界书。Application 在授权 token、可变上下文（玩家、角色、近期剧情、总结和地图）、board/task CAS、主生成和 Kernel 文件写状态第一次检查全部通过后，使用 Tasks 私有 ID factory 为本次 board/listing 或 candidate batch 分配并查重 ID，再进入唯一 Scoped transaction；上传前 guard 失败时整批候选不安装。unchanged 不分配 ID、不产生事件或保存。Provider 明确以 length/max_tokens 截断时优先使用`response_truncated`，不伪装成普通 JSON 错误。
+Request 只有在 compiler 给出 changed 的 updated/partial 后才调用应用服务。世界书和世界新闻固定使用本次请求取得的参考素材，提交检查不重扫概率世界书。Application 在授权 token、可变上下文（玩家、角色、近期剧情、总结和地图）、board/task CAS、主生成和 Kernel 文件写状态第一次检查全部通过后，使用 Tasks 私有 ID factory 为本次 board/listing 或 candidate batch 分配并查重 ID，再进入唯一 Scoped transaction；上传前 guard 失败时整批候选不安装。unchanged 不分配 ID、不产生事件或保存。完整性按实际收到的 JSON 判断：未闭合内容使用`response_truncated`；完整且符合 schema 的内容不因供应商的输出上限或缺失结束标记而失败。
 
 ## 8. 活动任务 Prompt、工具与 Session
 
@@ -674,7 +674,7 @@ Provider 原文、错误堆栈、内部 code 和工具 hint 只进日志。原�
 - 创建聊天分支得到新 osId，不复制经济资产或未结任务；共享钱包不另开户，具体范围见 Economy 平台设计；
 - 编辑、删除、换 swipe 不回滚已提交任务，不退托管、不追回报酬；
 - conflict 的「采用服务端数据」属于 Kernel 文件级动作：服务端 Envelope 读取并验证成功后才替换本地候选并恢复 ready；失败继续 conflict；
-- 删除 Tasks 功能时使用当时当前 schema 的一次性退场流程，不在本阶段预埋永久 migration：先在 Tasks module 与 Economy Capability 仍注册时，为所有 active 世界任务写 failed + 原 world counterparty refund；玩家发布的 recruiting 写 cancelled + player refund，active 写 failed + player refund；整批以一次 Scoped transaction 保存成合法的终态 Tasks/Economy 分区，confirmed 前不得进入下一步；
+- 删除 Tasks 功能时按当前 schema 一次性清理：先在 Tasks module 与 Economy Capability 仍注册时，为所有 active 世界任务写 failed + 原 world counterparty refund；玩家发布的 recruiting 写 cancelled + player refund，active 写 failed + player refund；整批以一次 Scoped transaction 保存成合法的终态 Tasks/Economy 分区，confirmed 前不得进入下一步；
 - 随后的移除版本在升级边界删除`tasks`分区和 Tasks 设置，同时停止注册 Tasks/Economy 交叉检查。既有与清理产生的 Tasks Economy 流水按明确产品策略处理；若保留，则继续由 Economy 通用不变量校验，但不再要求一个已删除的 Tasks 分区反向证明；
 - 退场中断时保留完整`tasks`分区并可重试，不能留下仍有余额的`escrow:task:*`。过渡版本完成后删除一次性退场代码，不留下旧类型、旧设置字段或永久兼容读取器。
 

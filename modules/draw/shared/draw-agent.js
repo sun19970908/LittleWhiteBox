@@ -8,6 +8,7 @@ import {
     assertDrawScenePlannerTask,
     beginDrawScenePlannerDiagnostic,
     callDrawScenePlannerAgentRuntime,
+    getDrawAgentDiagnosticHistory,
     getLastDrawAgentDiagnostic,
     normalizeScenePlannerTimeout,
     resetDrawAgentRuntimeForTests as resetPureDrawAgentRuntimeForTests,
@@ -40,7 +41,7 @@ async function loadDefaultRequestHeadersProvider() {
 }
 
 export async function loadAgentCoreBrowser() {
-    agentCoreModulePromise ||= import('../../agent-core/dist/agent-core-browser.js');
+    agentCoreModulePromise ||= import('../../agent-core/browser-entry.js');
     try {
         return await agentCoreModulePromise;
     } catch (error) {
@@ -207,6 +208,7 @@ export async function callDrawScenePlannerAgent(options = {}) {
 
 export {
     beginDrawScenePlannerDiagnostic,
+    getDrawAgentDiagnosticHistory,
     getLastDrawAgentDiagnostic,
 };
 

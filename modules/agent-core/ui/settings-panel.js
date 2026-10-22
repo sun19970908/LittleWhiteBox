@@ -1,10 +1,5 @@
-import {
-    HOST_CHAT_COMPLETIONS_SOURCE_CLAUDE,
-    HOST_CHAT_COMPLETIONS_SOURCE_MAKERSUITE,
-    HOST_CHAT_COMPLETIONS_SOURCE_OPENAI,
-    HOST_CHAT_COMPLETIONS_DEFAULT_REVERSE_PROXY,
-    fetchHostChatCompletionsModels,
-} from '../../../shared/host-llm/chat-completions/client.js';
+import { pullModelsForProvider } from '../model-list.js';
+export { pullModelsForProvider } from '../model-list.js';
 import {
     AGENT_JSAPI_PERMISSION_OPTIONS,
     AGENT_PERMISSION_MODE_OPTIONS,
@@ -21,7 +16,6 @@ import {
     AGENT_REQUEST_TIMEOUT_MS,
     TOOL_MODE_OPTIONS,
     getProviderLabel,
-    isSillyTavernProvider,
     normalizeTemperature,
     shouldSendTemperature,
 } from '../provider-resolution.js';
@@ -36,32 +30,10 @@ import {
 } from '../reasoning-config.js';
 import { WEB_PROVIDERS, normalizeWebSettings } from '../web/settings.js';
 import { bindWebSettingsGuide, readWebSettingsForm, syncWebSettingsForm } from './web-settings.js';
-import { resolveAgentAuth } from '../provider-auth.js';
+import { buildPresetListRowsMarkup, syncPresetListControls } from './settings-markup.js';
 import { MODEL_LIST_AUTH_OPTIONS, normalizeModelListAuth, supportsModelListAuth } from '../model-list-auth.js';
-
-const MODEL_FILTERS = {
-    chat: {
-        exclude: [
-            'embedding', 'embed', 'rerank', 'reranker', 'tts', 'speech', 'audio',
-            'whisper', 'transcription', 'stt', 'image', 'sdxl', 'flux', 'moderation',
-        ],
-    },
-};
-const SILLYTAVERN_CLAUDE_FALLBACK_MODELS = Object.freeze([
-    'claude-opus-4-7',
-    'claude-opus-4-6',
-    'claude-opus-4-5',
-    'claude-opus-4-5-20251101',
-    'claude-sonnet-4-6',
-    'claude-sonnet-4-5',
-    'claude-sonnet-4-5-20250929',
-    'claude-opus-4-1',
-    'claude-opus-4-1-20250805',
-    'claude-opus-4-0',
-    'claude-opus-4-20250514',
-    'claude-sonnet-4-0',
-    'claude-sonnet-4-20250514',
-]);
+import { SAMPLING_PARAMETERS, normalizeSampling } from '../sampling.js';
+import { readSamplingForm, syncSamplingForm, bindSamplingSettings, validateSamplingForm } from './sampling-settings.js';
 
 function refillSelect(select, options, placeholderLabel = '') {
     select.replaceChildren();
@@ -113,282 +85,67 @@ function normalizeReasoningDraft(source = {}) {
     return normalizeReasoningConfig(source);
 }
 
-function filterModels(models = []) {
-    const normalized = [...new Set(models.filter(Boolean).map((model) => String(model).trim()).filter(Boolean))];
-    const rule = MODEL_FILTERS.chat;
-    const filtered = normalized.filter((modelId) => {
-        const lower = modelId.toLowerCase();
-        return !rule.exclude.some((keyword) => lower.includes(keyword));
-    });
-    return filtered.length ? filtered : normalized;
-}
-
 function normalizeConfigPage(value = '') {
     return value === 'delegate' ? 'delegate' : 'main';
-}
-
-function normalizeBaseUrl(rawBaseUrl) {
-    return String(rawBaseUrl || '').trim().replace(/\/+$/, '');
 }
 
 function isToolModeProvider(provider = '') {
     return provider === 'openai-compatible' || provider === 'sillytavern-openai-compatible';
 }
 
-function getSillyTavernChatCompletionSource(provider = '') {
-    if (provider === 'sillytavern-claude') return HOST_CHAT_COMPLETIONS_SOURCE_CLAUDE;
-    if (provider === 'sillytavern-google') return HOST_CHAT_COMPLETIONS_SOURCE_MAKERSUITE;
-    return HOST_CHAT_COMPLETIONS_SOURCE_OPENAI;
-}
-
-function uniqueUrls(urls = []) {
-    return [...new Set(urls.filter(Boolean).map((url) => String(url).trim()).filter(Boolean))];
-}
-
-function buildOpenAICandidateUrls(baseUrl) {
-    const normalized = normalizeBaseUrl(baseUrl);
-    if (!normalized) return [];
-    if (normalized.endsWith('/v1')) {
-        const root = normalized.slice(0, -3);
-        return uniqueUrls([
-            `${normalized}/models`,
-            `${root}/v1/models`,
-            `${root}/models`,
-        ]);
-    }
-    return uniqueUrls([
-        `${normalized}/v1/models`,
-        `${normalized}/models`,
-    ]);
-}
-
-function buildAnthropicCandidateUrls(baseUrl) {
-    const normalized = normalizeBaseUrl(baseUrl);
-    if (!normalized) return [];
-    if (normalized.endsWith('/v1')) {
-        const root = normalized.slice(0, -3);
-        return uniqueUrls([
-            `${normalized}/models`,
-            `${root}/v1/models`,
-            `${root}/models`,
-        ]);
-    }
-    return uniqueUrls([
-        `${normalized}/v1/models`,
-        `${normalized}/models`,
-    ]);
-}
-
-function buildGoogleCandidateUrls(baseUrl, apiKey) {
-    const normalized = normalizeBaseUrl(baseUrl);
-    if (!normalized) return [];
-    const root = normalized.endsWith('/v1beta') ? normalized.slice(0, -7) : normalized;
-    const keyQuery = apiKey ? `?key=${encodeURIComponent(apiKey)}` : '';
-    return uniqueUrls([
-        `${normalized}/models${keyQuery}`,
-        `${normalized}/models`,
-        `${root}/v1beta/models${keyQuery}`,
-        `${root}/v1beta/models`,
-        `${root}/models${keyQuery}`,
-        `${root}/models`,
-    ]);
-}
-
-function extractErrorSnippet(payload, rawText) {
-    const candidates = [
-        payload?.error?.message,
-        payload?.message,
-        payload?.detail,
-        payload?.details,
-        payload?.error,
-    ];
-    const found = candidates.find((item) => typeof item === 'string' && item.trim());
-    if (found) return found.trim();
-    return String(rawText || '').trim().slice(0, 160);
-}
-
-async function fetchJsonWithDiagnostics(url, options = {}) {
-    const response = await fetch(url, options);
-    const rawText = await response.text();
-    let data = null;
-    let parseError = null;
-
-    try {
-        data = rawText ? JSON.parse(rawText) : {};
-    } catch (error) {
-        parseError = error;
-    }
-
-    return {
-        ok: response.ok,
-        status: response.status,
-        url,
-        data,
-        rawText,
-        parseError,
-        errorSnippet: extractErrorSnippet(data, rawText),
-    };
-}
-
-function extractOpenAIModels(data) {
-    return filterModels((data?.data || []).map((item) => String(item?.id || '').trim()).filter(Boolean));
-}
-
-function extractAnthropicModels(data) {
-    return filterModels((data?.data || []).map((item) => String(item?.id || '').trim()).filter(Boolean));
-}
-
-function extractGoogleModels(data) {
-    return filterModels(
-        ((data?.models || data?.data || []).map((item) => String(item?.id || item?.name || '')))
-            .map((item) => item.split('/').pop() || '')
-            .filter(Boolean),
-    );
-}
-
-async function tryCandidateFetches({ urls, requestOptionsList, extractModels, providerLabel }) {
-    let lastFailure = null;
-
-    candidates: for (const url of urls) {
-        for (const requestOptions of requestOptionsList) {
-            const result = await fetchJsonWithDiagnostics(url, requestOptions);
-            if (!result.ok) {
-                lastFailure = result;
-                if (result.status === 401 || result.status === 403) break candidates;
-                continue;
-            }
-            if (result.parseError) {
-                lastFailure = {
-                    ...result,
-                    errorSnippet: '返回的不是 JSON',
-                };
-                continue;
-            }
-            const models = extractModels(result.data);
-            if (models.length) {
-                return models;
-            }
-            lastFailure = {
-                ...result,
-                errorSnippet: '返回成功，但模型列表为空',
-            };
-        }
-    }
-
-    if (lastFailure) {
-        const suffix = lastFailure.url ? ` (${lastFailure.url})` : '';
-        const detail = lastFailure.errorSnippet ? `：${lastFailure.errorSnippet}` : '';
-        throw new Error(`${providerLabel} 拉取模型失败：${lastFailure.status || 'unknown'}${detail}${suffix}`);
-    }
-
-    throw new Error(`${providerLabel} 拉取模型失败：未获取到模型列表。`);
-}
-
-async function pullAnthropicModels(baseUrl, providerConfig, options = {}) {
-    const authProvider = normalizeModelListAuth(providerConfig.modelListAuth) === 'bearer' ? 'openai-compatible' : 'anthropic';
-    return await tryCandidateFetches({
-        urls: buildAnthropicCandidateUrls(baseUrl),
-        requestOptionsList: [{
-            headers: {
-                ...resolveAgentAuth(authProvider, providerConfig.apiKey).headers,
-                'anthropic-version': '2023-06-01',
-                Accept: 'application/json',
-            },
-            signal: options.signal,
-        }],
-        extractModels: extractAnthropicModels,
-        providerLabel: 'Anthropic',
-    });
-}
-
-async function pullSillyTavernClaudeModels(providerConfig, options = {}) {
-    const auth = resolveAgentAuth('anthropic', providerConfig.apiKey);
-    const customBaseUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
-    const baseUrl = normalizeBaseUrl(
-        customBaseUrl || HOST_CHAT_COMPLETIONS_DEFAULT_REVERSE_PROXY[HOST_CHAT_COMPLETIONS_SOURCE_CLAUDE],
-    );
-
-    if (baseUrl && (auth.apiKey || customBaseUrl)) {
-        try {
-            return await pullAnthropicModels(baseUrl, providerConfig, options);
-        } catch (error) {
-            if (customBaseUrl) {
-                throw error;
-            }
-            // SillyTavern does not expose Claude model listing through /status.
-            // Browser-side official Anthropic fetches may also be blocked by CORS, so keep the config page usable.
-        }
-    }
-
-    return [...SILLYTAVERN_CLAUDE_FALLBACK_MODELS];
-}
-
-export async function pullModelsForProvider(providerConfig, options = {}) {
-    const provider = providerConfig.provider;
-    const baseUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
-    const auth = resolveAgentAuth(provider, providerConfig.apiKey);
-    const { apiKey } = auth;
-
-    if (provider === 'sillytavern-claude') {
-        return filterModels(await pullSillyTavernClaudeModels(providerConfig, options));
-    }
-
-    if (isSillyTavernProvider(provider)) {
-        return filterModels(await fetchHostChatCompletionsModels(
-            providerConfig,
-            getSillyTavernChatCompletionSource(provider),
-            { signal: options.signal },
-        ));
-    }
-
-    if (!baseUrl) {
-        throw new Error('请先填写 Base URL。');
-    }
-
-    if (provider === 'google') {
-        return await tryCandidateFetches({
-            urls: buildGoogleCandidateUrls(baseUrl, apiKey),
-            requestOptionsList: [
-                {
-                    headers: {
-                        Accept: 'application/json',
-                        ...auth.headers,
-                    },
-                    signal: options.signal,
-                },
-                ...(apiKey ? [{
-                    headers: {
-                        Accept: 'application/json',
-                        ...resolveAgentAuth('openai-compatible', apiKey).headers,
-                    },
-                    signal: options.signal,
-                }] : []),
-            ],
-            extractModels: extractGoogleModels,
-            providerLabel: 'Google AI',
-        });
-    }
-
-    if (supportsModelListAuth(provider)) {
-        return await pullAnthropicModels(baseUrl, providerConfig, options);
-    }
-
-    return await tryCandidateFetches({
-        urls: buildOpenAICandidateUrls(baseUrl),
-        requestOptionsList: [{
-            headers: {
-                ...auth.headers,
-                Accept: 'application/json',
-            },
-            signal: options.signal,
-        }],
-        extractModels: extractOpenAIModels,
-        providerLabel: provider === 'openai-responses' ? 'OpenAI Responses' : 'OpenAI-Compatible',
-    });
-}
-
 function defaultDescribeError(error) {
     return error instanceof Error ? error.message : String(error || 'unknown_error');
+}
+
+// 预设表（对象，键 = 预设名）的纯变换：都返回新对象并按给定顺序重建键，
+// 因为落盘后的顺序就是对象的键顺序（normalizeAgentConfig 的 presetNames = Object.keys）。
+function reorderRecord(record, names) {
+    const next = {};
+    names.forEach((name) => {
+        if (Object.hasOwn(record, name)) next[name] = record[name];
+    });
+    Object.keys(record).forEach((name) => {
+        if (!Object.hasOwn(next, name)) next[name] = record[name];
+    });
+    return next;
+}
+
+function renameRecordKey(record, from, to) {
+    const next = {};
+    Object.entries(record).forEach(([key, value]) => {
+        next[key === from ? to : key] = value;
+    });
+    return next;
+}
+
+function omitRecordKey(record, omitted) {
+    const next = {};
+    Object.entries(record).forEach(([key, value]) => {
+        if (key !== omitted) next[key] = value;
+    });
+    return next;
+}
+
+function insertRecordAfter(record, afterKey, key, value) {
+    const next = {};
+    Object.entries(record).forEach(([entryKey, entryValue]) => {
+        next[entryKey] = entryValue;
+        if (entryKey === afterKey) next[key] = value;
+    });
+    return next;
+}
+
+function clonePlain(value) {
+    return value && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value;
+}
+
+function pickCopyName(baseName, takenNames) {
+    const first = `${baseName} 副本`;
+    if (!takenNames.includes(first)) return first;
+    for (let index = 2; ; index += 1) {
+        const candidate = `${first} ${index}`;
+        if (!takenNames.includes(candidate)) return candidate;
+    }
 }
 
 export function createAgentSettingsPanel(deps = {}) {
@@ -401,7 +158,13 @@ export function createAgentSettingsPanel(deps = {}) {
         pullModels = pullModelsForProvider,
         describeError = defaultDescribeError,
         getRuntimeSummaryText,
+        // 预设区布局：默认是下拉框 + 图标按钮；'list' 是可排序的预设列表（opt-in，需配套 markup 的 presetLayout: 'list'）。
+        presetLayout = 'select',
+        // 列表布局的交互件（拖拽排序 / 行菜单 / 自动滚动）由宿主注入，agent-core 不依赖具体页面的共享模块：
+        // { createSortableList, createMenuController, moveStep, autoScroll }
+        presetListKit = null,
     } = deps;
+    const isListLayout = presetLayout === 'list';
 
     function requestConfigFormSync() {
         state.configFormSyncPending = true;
@@ -435,8 +198,7 @@ export function createAgentSettingsPanel(deps = {}) {
         return Array.isArray(state.modelOptionsByProvider?.[key]) ? state.modelOptionsByProvider[key] : [];
     }
 
-    function resolveExistingPresetName(presetName, fallbackName) {
-        const presets = state.config?.presets || {};
+    function resolveExistingPresetName(presetName, fallbackName, presets = state.config?.presets || {}) {
         const normalizedName = normalizePresetName(presetName || fallbackName || DEFAULT_PRESET_NAME);
         if (presets[normalizedName]) return normalizedName;
         if (fallbackName && presets[fallbackName]) return fallbackName;
@@ -465,6 +227,7 @@ export function createAgentSettingsPanel(deps = {}) {
             delegateReasoningEffort: reasoningFields.reasoningEffort,
             delegateReasoningBudgetTokens: reasoningFields.reasoningBudgetTokens,
             delegateToolMode: delegateProviderConfig.toolMode || 'native',
+            delegateSampling: normalizeSampling(delegateProviderConfig.sampling),
         };
     }
 
@@ -482,6 +245,7 @@ export function createAgentSettingsPanel(deps = {}) {
             sendTemperature: shouldSendTemperature(providerConfig),
             ...reasoningFields,
             toolMode: providerConfig.toolMode || 'native',
+            sampling: normalizeSampling(providerConfig.sampling),
         };
     }
 
@@ -501,6 +265,7 @@ export function createAgentSettingsPanel(deps = {}) {
             delegateReasoningEffort: reasoningFields.reasoningEffort,
             delegateReasoningBudgetTokens: reasoningFields.reasoningBudgetTokens,
             delegateToolMode: providerConfig.toolMode || 'native',
+            delegateSampling: normalizeSampling(providerConfig.sampling),
         };
     }
 
@@ -582,6 +347,7 @@ export function createAgentSettingsPanel(deps = {}) {
             toolMode: isToolModeProvider(provider)
                 ? (root.querySelector('#xb-assistant-tool-mode')?.value || draft.toolMode || 'native')
                 : undefined,
+            sampling: readSamplingForm(root, provider, draft.sampling),
         };
         const delegateProviderConfig = {
             baseUrl: delegateBaseUrl,
@@ -597,6 +363,7 @@ export function createAgentSettingsPanel(deps = {}) {
             toolMode: isToolModeProvider(delegateProvider)
                 ? (root.querySelector('#xb-assistant-delegate-tool-mode')?.value || draft.delegateToolMode || 'native')
                 : undefined,
+            sampling: readSamplingForm(root, delegateProvider, draft.delegateSampling, 'delegate'),
         };
         const modelConfigs = {
             ...normalizeModelConfigs(draft.modelConfigs || {}),
@@ -629,6 +396,7 @@ export function createAgentSettingsPanel(deps = {}) {
             reasoningEffort: providerConfig.reasoning.effort || '',
             reasoningBudgetTokens: providerConfig.reasoning.budgetTokens,
             toolMode: providerConfig.toolMode || draft.toolMode || 'native',
+            sampling: providerConfig.sampling,
             ...readWebSettingsForm(root, draft),
             permissionMode: normalizePermissionMode(root.querySelector('#xb-assistant-permission-mode')?.value || draft.permissionMode),
             jsApiPermission: normalizeJsApiPermission(root.querySelector('#xb-assistant-jsapi-permission')?.value || draft.jsApiPermission),
@@ -646,6 +414,7 @@ export function createAgentSettingsPanel(deps = {}) {
             delegateReasoningEffort: delegateProviderConfig.reasoning.effort || '',
             delegateReasoningBudgetTokens: delegateProviderConfig.reasoning.budgetTokens,
             delegateToolMode: delegateProviderConfig.toolMode || draft.delegateToolMode || 'native',
+            delegateSampling: delegateProviderConfig.sampling,
         };
     }
 
@@ -672,6 +441,7 @@ export function createAgentSettingsPanel(deps = {}) {
             toolMode: isToolModeProvider(draft.provider)
                 ? (draft.toolMode || 'native')
                 : undefined,
+            sampling: normalizeSampling(draft.sampling),
         };
     }
 
@@ -692,6 +462,7 @@ export function createAgentSettingsPanel(deps = {}) {
             toolMode: isToolModeProvider(draft.delegateProvider)
                 ? (draft.delegateToolMode || 'native')
                 : undefined,
+            sampling: normalizeSampling(draft.delegateSampling),
         };
     }
 
@@ -723,6 +494,7 @@ export function createAgentSettingsPanel(deps = {}) {
             maxTokens: normalizeMaxTokens(draft.maxTokens),
             timeoutMs: AGENT_REQUEST_TIMEOUT_MS,
             toolMode: draft.toolMode || 'native',
+            sampling: normalizeSampling(draft.sampling),
             reasoning: resolveRuntimeReasoning({
                 provider: draft.provider,
                 baseUrl: draft.baseUrl,
@@ -749,6 +521,7 @@ export function createAgentSettingsPanel(deps = {}) {
             maxTokens: normalizeMaxTokens(draft.delegateMaxTokens),
             timeoutMs: AGENT_REQUEST_TIMEOUT_MS,
             toolMode: draft.delegateToolMode || 'native',
+            sampling: normalizeSampling(draft.delegateSampling),
             reasoning: resolveRuntimeReasoning({
                 provider: draft.delegateProvider,
                 baseUrl: draft.delegateBaseUrl,
@@ -949,8 +722,6 @@ export function createAgentSettingsPanel(deps = {}) {
         const baseUrlInput = root.querySelector('#xb-assistant-base-url');
         const modelInput = root.querySelector('#xb-assistant-model');
         const apiKeyInput = root.querySelector('#xb-assistant-api-key');
-        const temperatureInput = root.querySelector('#xb-assistant-temperature');
-        const sendTemperatureInput = root.querySelector('#xb-assistant-send-temperature');
         const toolModeWrap = root.querySelector('#xb-assistant-tool-mode-wrap');
         const toolModeSelect = root.querySelector('#xb-assistant-tool-mode');
         const permissionModeSelect = root.querySelector('#xb-assistant-permission-mode');
@@ -968,14 +739,17 @@ export function createAgentSettingsPanel(deps = {}) {
         const delegateMaxTokensInput = root.querySelector('#xb-assistant-delegate-max-tokens');
         const delegateToolModeWrap = root.querySelector('#xb-assistant-delegate-tool-mode-wrap');
         const delegateToolModeSelect = root.querySelector('#xb-assistant-delegate-tool-mode');
-        if (!presetSelect || !presetNameInput) return;
+        if ((!presetSelect && !(isListLayout && root.querySelector('#xb-assistant-preset-list'))) || !presetNameInput) return;
         const presetOptions = (state.config.presetNames || []).map((name) => ({ value: name, label: name }));
 
-        refillSelect(
-            presetSelect,
-            presetOptions,
-        );
-        presetSelect.value = draft.currentPresetName || state.config.currentPresetName || DEFAULT_PRESET_NAME;
+        if (presetSelect) {
+            refillSelect(
+                presetSelect,
+                presetOptions,
+            );
+            presetSelect.value = draft.currentPresetName || state.config.currentPresetName || DEFAULT_PRESET_NAME;
+        }
+        if (isListLayout) syncPresetList(root);
         if (delegatePresetSelect) {
             refillSelect(delegatePresetSelect, presetOptions);
             delegatePresetSelect.value = resolveExistingPresetName(draft.delegatePresetName, draft.currentPresetName);
@@ -987,8 +761,6 @@ export function createAgentSettingsPanel(deps = {}) {
         if (apiKeyInput) apiKeyInput.value = draft.apiKey || '';
         syncModelListAuthControls(root, provider, draft.modelListAuth);
         if (maxTokensInput) maxTokensInput.value = String(normalizeMaxTokens(draft.maxTokens));
-        if (temperatureInput) temperatureInput.value = String(normalizeTemperature(draft.temperature, 1));
-        if (sendTemperatureInput) sendTemperatureInput.checked = Boolean(draft.sendTemperature ?? true);
         syncWebSettingsForm(root, draft);
         if (toolModeWrap) toolModeWrap.style.display = isToolModeProvider(provider) ? '' : 'none';
         if (toolModeSelect) {
@@ -1013,11 +785,7 @@ export function createAgentSettingsPanel(deps = {}) {
         if (delegateModelInput) delegateModelInput.value = draft.delegateModel || '';
         if (delegateApiKeyInput) delegateApiKeyInput.value = draft.delegateApiKey || '';
         syncModelListAuthControls(root, delegateProvider, draft.delegateModelListAuth, 'delegate');
-        const delegateTemperatureInput = root.querySelector('#xb-assistant-delegate-temperature');
-        const delegateSendTemperatureInput = root.querySelector('#xb-assistant-delegate-send-temperature');
         if (delegateMaxTokensInput) delegateMaxTokensInput.value = String(normalizeMaxTokens(draft.delegateMaxTokens));
-        if (delegateTemperatureInput) delegateTemperatureInput.value = String(normalizeTemperature(draft.delegateTemperature, 1));
-        if (delegateSendTemperatureInput) delegateSendTemperatureInput.checked = Boolean(draft.delegateSendTemperature ?? true);
         if (delegateToolModeWrap) {
             delegateToolModeWrap.style.display = isToolModeProvider(delegateProvider) ? '' : 'none';
         }
@@ -1033,7 +801,294 @@ export function createAgentSettingsPanel(deps = {}) {
         syncInlinePullStatus(root, '#xb-assistant-model-pull-status', getPullState(provider));
         syncInlinePullStatus(root, '#xb-assistant-delegate-model-pull-status', getPullState(delegateProvider, 'delegate'));
 
+        syncSamplingForm(root, draft);
+        syncSamplingForm(root, {
+            provider: draft.delegateProvider, temperature: draft.delegateTemperature,
+            sendTemperature: draft.delegateSendTemperature, sampling: draft.delegateSampling,
+        }, 'delegate');
+
         syncRuntimeText(root);
+    }
+
+    // 预设操作由两种布局共用；保存确认前不改变预设表，不把表单草稿顺带写入。
+    // 切换预设时 state.config 会掺进草稿里的全局项（见 buildSelectionConfig），所以另存一份“已保存基线”，
+    // 行操作的落盘内容以基线为准；基线靠引用识别：state.config 被外部（保存 / 刷新）换掉就重新取。
+    let presetBaseline = null;
+    let presetOwned = null;
+    let pendingPresetSave = null;
+    let presetMenu = null;
+    let presetSortable = null;
+    const presetListOffs = [];
+
+    function getSavedConfig() {
+        if (!presetBaseline || state.config !== presetOwned) {
+            presetBaseline = state.config;
+            presetOwned = null;
+        }
+        return presetBaseline;
+    }
+
+    // 面板自己改写 state.config 的唯一入口：先把外部换进来的基线记下，再覆盖。
+    function commitPanelConfig(next, { saved = false } = {}) {
+        getSavedConfig();
+        state.config = next;
+        presetOwned = state.config;
+        if (saved) presetBaseline = next;
+    }
+
+    function getPresetNames(config = state.config) {
+        return Array.isArray(config?.presetNames) && config.presetNames.length
+            ? config.presetNames.map(String)
+            : Object.keys(config?.presets || {});
+    }
+
+    function getSelectedPresetName(names) {
+        const candidates = [state.configDraft?.currentPresetName, state.config?.currentPresetName];
+        return candidates.find(name => names.includes(name)) ?? names[0] ?? '';
+    }
+
+    function syncPresetList(root) {
+        const list = root?.querySelector?.('#xb-assistant-preset-list');
+        if (!list || !state.config) return;
+        const names = getPresetNames();
+        const selectedName = getSelectedPresetName(names);
+        const isBusy = state.configSave?.status === 'saving';
+        const canDeletePreset = names.length > 1;
+        const rows = Array.from(list.querySelectorAll('[data-preset-item]'));
+        if (rows.length !== names.length || rows.some((row, index) => row.dataset.presetName !== names[index])) {
+            presetMenu?.close(); // 整体重绘会换掉所有行，已打开的菜单随之失效
+            // eslint-disable-next-line no-unsanitized/property -- First-party markup escapes preset names before rendering.
+            list.innerHTML = buildPresetListRowsMarkup({ names, selectedName, isBusy, canDeletePreset });
+            return;
+        }
+        // 顺序没变只改高亮，不重绘：被点的按钮留在原处，键盘焦点不丢。
+        rows.forEach((row) => {
+            const selected = row.dataset.presetName === selectedName;
+            row.classList.toggle('is-selected', selected);
+            const nameButton = row.querySelector('.xb-assistant-preset-name');
+            if (selected) nameButton?.setAttribute('aria-current', 'true');
+            else nameButton?.removeAttribute('aria-current');
+        });
+        syncPresetListControls(root, { isBusy, canDeletePreset });
+    }
+
+    function guardPresetBusy() {
+        if (!pendingPresetSave && state.configSave?.status !== 'saving') return false;
+        showToast?.('正在保存，请稍后再试');
+        return true;
+    }
+
+    function confirmAction(message) {
+        return typeof window !== 'undefined' && typeof window.confirm === 'function'
+            ? window.confirm(message)
+            : true;
+    }
+
+    /**
+     * 保存确认后再发布预设表；失败不改变本地配置或草稿。
+     * selectName 用于删除当前预设后选中邻居，以及新建后选中新预设。
+     */
+    function commitPresetChange(root, { transform, remap = name => name, requestPrefix, selectName = '', activate = false }) {
+        const saved = getSavedConfig();
+        const remapNames = (config, presets) => ({
+            ...config,
+            presets,
+            currentPresetName: remap(config.currentPresetName),
+            delegatePresetName: remap(config.delegatePresetName),
+        });
+        const nextSaved = normalizeAgentConfig(remapNames(saved, transform(saved.presets)));
+        if (activate) nextSaved.currentPresetName = selectName;
+        if (typeof saveConfig !== 'function') return;
+        const requestId = createRequestId(requestPrefix);
+        pendingPresetSave = { requestId, complete(outcome) {
+            if (!outcome.ok) {
+                syncConfigDirty(saved);
+                syncPresetList(root);
+                return;
+            }
+            const confirmed = normalizeAgentConfig(outcome.config || nextSaved);
+            const draft = ensureConfigDraft();
+            state.config = normalizeAgentConfig(remapNames(state.config, confirmed.presets));
+            presetBaseline = confirmed;
+            presetOwned = state.config;
+            state.configDraft = {
+                ...draft,
+                currentPresetName: remap(draft.currentPresetName),
+                presetDraftName: remap(draft.presetDraftName),
+                delegatePresetName: remap(draft.delegatePresetName),
+            };
+            if (selectName) {
+                commitPanelConfig(buildSelectionConfig(state.configDraft, selectName));
+                state.configDraft = activate
+                    ? { ...state.configDraft, currentPresetName: selectName, presetDraftName: selectName }
+                    : buildDraftFromPreset(selectName, state.config.presets[selectName], state.config);
+            }
+            syncConfigDirty(confirmed);
+            requestConfigFormSync();
+            syncConfigToForm(root);
+            render?.();
+        } };
+        let result;
+        try {
+            result = saveConfig({
+                requestId,
+                config: nextSaved,
+                payload: buildConfigSavePayload(nextSaved),
+            });
+        } catch (error) {
+            completePresetSave(requestId, { ok: false });
+            showToast?.(describeError(error));
+            return;
+        }
+        Promise.resolve(result).then((outcome) => {
+            // Message-based hosts complete explicitly when their receipt arrives.
+            if (outcome) completePresetSave(requestId, outcome);
+        }).catch((error) => {
+            completePresetSave(requestId, { ok: false });
+            showToast?.(describeError(error));
+        });
+    }
+
+    function completePresetSave(requestId, outcome) {
+        if (!pendingPresetSave || pendingPresetSave.requestId !== requestId) return false;
+        const pending = pendingPresetSave;
+        pendingPresetSave = null;
+        pending.complete(outcome);
+        return true;
+    }
+
+    function reorderPresets(root, orderedNames) {
+        if (guardPresetBusy()) return;
+        const current = getPresetNames();
+        const requested = (Array.isArray(orderedNames) ? orderedNames.map(String) : [])
+            .filter((name, index, all) => current.includes(name) && all.indexOf(name) === index);
+        const next = [...requested, ...current.filter(name => !requested.includes(name))];
+        if (next.every((name, index) => name === current[index])) return;
+        // 纯数字样的键名会被 JS 固定排在对象最前，自定义顺序存不住：直接拒绝，免得界面和落盘不一致。
+        const probe = Object.keys(reorderRecord(state.config.presets, next));
+        if (probe.some((name, index) => name !== next[index])) {
+            showToast?.('名称为纯数字的预设会固定排在最前，无法调整到这个顺序');
+            return;
+        }
+        commitPresetChange(root, {
+            transform: presets => reorderRecord(presets, next),
+            requestPrefix: 'reorder-preset',
+        });
+    }
+
+    function duplicatePresetRow(root, name) {
+        if (guardPresetBusy()) return;
+        if (!getSavedConfig().presets?.[name]) {
+            showToast?.('找不到要复制的预设');
+            return;
+        }
+        const copyName = pickCopyName(name, getPresetNames());
+        commitPresetChange(root, {
+            // 以该行“已保存”的内容为准，插在原行之后
+            transform: presets => insertRecordAfter(presets, name, copyName, clonePlain(presets[name])),
+            requestPrefix: 'duplicate-preset',
+        });
+    }
+
+    function rejectExistingPresetName(name) {
+        if (!getPresetNames().includes(name)) return false;
+        showToast?.(`已存在同名预设“${name}”`);
+        return true;
+    }
+
+    function renamePreset(root, name) {
+        if (guardPresetBusy()) return;
+        const nextName = promptForPresetName('输入预设名称：', name);
+        if (!nextName) {
+            showToast?.('预设名称不能为空');
+            return;
+        }
+        if (nextName === name) return;
+        if (rejectExistingPresetName(nextName)) return;
+        commitPresetChange(root, {
+            transform: presets => renameRecordKey(presets, name, nextName),
+            remap: current => (current === name ? nextName : current),
+            requestPrefix: 'rename-preset',
+        });
+    }
+
+    function deletePreset(root, name) {
+        const names = getPresetNames();
+        if (names.length <= 1) {
+            showToast?.('至少要保留一套预设');
+            return;
+        }
+        if (guardPresetBusy()) return;
+        if (!confirmAction(`确定删除预设“${name}”？`)) return;
+        const rest = names.filter(item => item !== name);
+        const neighbor = rest[Math.min(Math.max(names.indexOf(name), 0), rest.length - 1)];
+        commitPresetChange(root, {
+            transform: presets => omitRecordKey(presets, name),
+            remap: current => (current === name ? neighbor : current),
+            selectName: getSelectedPresetName(names) === name ? neighbor : '',
+            requestPrefix: 'delete-preset',
+        });
+    }
+
+    function getPresetMenu(doc) {
+        presetMenu ||= presetListKit?.createMenuController?.({ document: doc }) || null;
+        return presetMenu;
+    }
+
+    function bindPresetList(root) {
+        const list = root.querySelector('#xb-assistant-preset-list');
+        if (!list) return;
+        presetListOffs.splice(0).forEach(off => off());
+        presetSortable?.destroy?.();
+        presetSortable = null;
+        const doc = root.ownerDocument || globalThis.document;
+        const onClick = (event) => {
+            const trigger = event.target?.closest?.('[data-preset-action]');
+            if (!trigger || !list.contains(trigger) || trigger.hasAttribute('disabled')) return;
+            const name = trigger.closest('[data-preset-item]')?.dataset?.presetName;
+            if (!name) return;
+            const action = trigger.dataset.presetAction;
+            if (action === 'menu') {
+                getPresetMenu(doc)?.toggle(trigger);
+                return;
+            }
+            presetMenu?.close();
+            if (action === 'select') {
+                // 再点已选中的一行不重填表单，免得冲掉未保存的编辑
+                if (name === getSelectedPresetName(getPresetNames())) return;
+                switchPreset(root, name);
+                syncPresetList(root);
+            } else if (action === 'rename') renamePreset(root, name);
+            else if (action === 'duplicate') duplicatePresetRow(root, name);
+            else if (action === 'delete') deletePreset(root, name);
+        };
+        list.addEventListener('click', onClick);
+        presetListOffs.push(() => list.removeEventListener('click', onClick));
+        if (typeof presetListKit?.createSortableList === 'function') {
+            presetSortable = presetListKit.createSortableList({
+                container: list,
+                rowSelector: '[data-preset-item]',
+                handleSelector: '[data-preset-drag]',
+                getId: row => row.dataset.presetName,
+                onReorder: names => reorderPresets(root, names),
+                moveStep: presetListKit.moveStep,
+                autoScroll: event => presetListKit.autoScroll?.(list, event),
+                draggingClass: 'is-dragging',
+                beforeClass: 'is-drop-before',
+                afterClass: 'is-drop-after',
+                bodyClass: 'xb-preset-sorting',
+                document: doc,
+            });
+        }
+    }
+
+    function destroy() {
+        pendingPresetSave = null;
+        presetListOffs.splice(0).forEach(off => off());
+        presetSortable?.destroy?.();
+        presetSortable = null;
+        presetMenu?.destroy?.();
+        presetMenu = null;
     }
 
     function postSaveConfig(payload) {
@@ -1075,7 +1130,7 @@ export function createAgentSettingsPanel(deps = {}) {
             return false;
         }
 
-        state.config = normalizedConfig;
+        commitPanelConfig(normalizedConfig, { saved: true });
         const presetName = normalizePresetName(
             options.presetName || normalizedConfig.currentPresetName || DEFAULT_PRESET_NAME,
         );
@@ -1090,13 +1145,11 @@ export function createAgentSettingsPanel(deps = {}) {
         return true;
     }
 
-    function saveConfigFromForm(root, options = {}) {
-        const draft = syncConfigDraft(root);
-        const nextPresetName = normalizePresetName(options.presetName || draft.presetDraftName);
-        const currentPresetName = normalizePresetName(draft.currentPresetName || state.config?.currentPresetName || DEFAULT_PRESET_NAME);
+    function presetFromDraft(draft) {
+        const currentPresetName = draft.currentPresetName;
         const currentPreset = (state.config?.presets || {})[currentPresetName] || buildDefaultPreset();
         const draftModelConfigs = normalizeModelConfigs(draft.modelConfigs || currentPreset.modelConfigs || {});
-        const nextPreset = {
+        return {
             ...currentPreset,
             provider: draft.provider,
             permissionMode: normalizePermissionMode(draft.permissionMode),
@@ -1108,12 +1161,11 @@ export function createAgentSettingsPanel(deps = {}) {
                 },
             },
         };
-        const nextPresets = { ...(state.config?.presets || {}) };
-        if (options.renameCurrentPreset && nextPresetName !== currentPresetName) {
-            delete nextPresets[currentPresetName];
-        }
-        nextPresets[nextPresetName] = nextPreset;
-        const nextConfig = {
+    }
+
+    function configFromDraft(draft, options = {}) {
+        const nextPresetName = normalizePresetName(options.presetName || draft.presetDraftName);
+        return {
             ...state.config,
             jsApiPermission: normalizeJsApiPermission(draft.jsApiPermission),
             ...normalizeWebSettings(draft),
@@ -1121,9 +1173,43 @@ export function createAgentSettingsPanel(deps = {}) {
             delegatePresetName: resolveExistingPresetName(draft.delegatePresetName, nextPresetName),
             delegateConfig: buildDelegateConfigFromDraft(draft),
             delegateConfigured: options.configureDelegate === true || state.config?.delegateConfigured === true,
-            presets: nextPresets,
+            presets: { ...state.config?.presets, [nextPresetName]: presetFromDraft(draft) },
         };
-        validateAndSaveConfig(nextConfig, {
+    }
+
+    function configFormFingerprint(config) {
+        const payload = buildConfigSavePayload(normalizeAgentConfig(config));
+        // Compare form values, not whether a default was explicitly stored.
+        // This projection never changes the persisted configuration.
+        for (const preset of [...Object.values(payload.presets), payload.delegateConfig]) {
+            for (const [provider, modelConfig] of Object.entries(preset.modelConfigs)) {
+                const reasoning = buildReasoningDraftFields(provider, modelConfig);
+                modelConfig.reasoning = normalizeReasoningConfig({
+                    mode: reasoning.reasoningMode,
+                    effort: reasoning.reasoningEffort,
+                    budgetTokens: reasoning.reasoningBudgetTokens,
+                });
+                modelConfig.temperature = normalizeTemperature(modelConfig.temperature, 1);
+                modelConfig.sampling = Object.fromEntries(SAMPLING_PARAMETERS.map(parameter => [
+                    parameter.key, modelConfig.sampling[parameter.key] || { enabled: false, value: parameter.value },
+                ]));
+            }
+        }
+        return JSON.stringify(payload);
+    }
+
+    function syncConfigDirty(saved) {
+        state.configDirty = configFormFingerprint(configFromDraft(ensureConfigDraft())) !== configFormFingerprint(saved);
+    }
+
+    function saveConfigFromForm(root, options = {}) {
+        if (guardPresetBusy()) return;
+        if (!validateSamplingForm(root)) return;
+        const draft = syncConfigDraft(root);
+        const nextPresetName = normalizePresetName(options.presetName || draft.presetDraftName);
+        const currentPresetName = normalizePresetName(draft.currentPresetName || state.config?.currentPresetName || DEFAULT_PRESET_NAME);
+        if (nextPresetName !== currentPresetName && rejectExistingPresetName(nextPresetName)) return;
+        validateAndSaveConfig(configFromDraft(draft, options), {
             presetName: nextPresetName,
             requestPrefix: options.requestPrefix,
         });
@@ -1139,17 +1225,22 @@ export function createAgentSettingsPanel(deps = {}) {
     }
 
     function createPresetFromForm(root) {
+        if (guardPresetBusy()) return;
+        if (!validateSamplingForm(root)) return;
         const draft = syncConfigDraft(root);
         const nextPresetName = promptForPresetName('输入新预设名称：', `${draft.currentPresetName || DEFAULT_PRESET_NAME} 副本`);
         if (!nextPresetName) {
             showToast?.('预设名称不能为空');
             return;
         }
-        const presetNameInput = root.querySelector('#xb-assistant-preset-name');
-        if (!presetNameInput) return;
-        presetNameInput.value = nextPresetName;
-        saveConfigFromForm(root, {
-            presetName: nextPresetName,
+        if (rejectExistingPresetName(nextPresetName)) return;
+        const nextPreset = presetFromDraft(draft);
+        const reasoningErrors = getConfigReasoningErrors(normalizeAgentConfig({ presets: { [nextPresetName]: nextPreset } }));
+        if (reasoningErrors.length) { showToast?.(reasoningErrors[0]); return; }
+        commitPresetChange(root, {
+            transform: presets => insertRecordAfter(presets, draft.currentPresetName, nextPresetName, nextPreset),
+            selectName: nextPresetName,
+            activate: true,
             requestPrefix: 'create-preset',
         });
     }
@@ -1157,49 +1248,35 @@ export function createAgentSettingsPanel(deps = {}) {
     function renameCurrentPreset(root) {
         const draft = syncConfigDraft(root);
         const currentPresetName = normalizePresetName(draft.currentPresetName || state.config?.currentPresetName || DEFAULT_PRESET_NAME);
-        const nextPresetName = promptForPresetName('输入预设名称：', draft.presetDraftName || currentPresetName);
-        if (!nextPresetName) {
-            showToast?.('预设名称不能为空');
-            return;
-        }
-        if (nextPresetName === currentPresetName) {return;}
-        const presetNameInput = root.querySelector('#xb-assistant-preset-name');
-        if (!presetNameInput) return;
-        presetNameInput.value = nextPresetName;
-        saveConfigFromForm(root, {
-            presetName: nextPresetName,
-            renameCurrentPreset: true,
-            requestPrefix: 'rename-preset',
-        });
+        renamePreset(root, currentPresetName);
     }
 
     function deleteCurrentPreset(root) {
-        const presetNames = Object.keys(state.config?.presets || {});
-        if (presetNames.length <= 1) {
-            showToast?.('至少要保留一套预设');
-            return;
-        }
-
         const draft = syncConfigDraft(root);
-        const currentPresetName = normalizePresetName(state.configDraft?.currentPresetName || state.config?.currentPresetName || DEFAULT_PRESET_NAME);
-        const nextPresets = { ...(state.config?.presets || {}) };
-        delete nextPresets[currentPresetName];
-        const nextPresetName = Object.keys(nextPresets)[0] || DEFAULT_PRESET_NAME;
-        const nextConfig = {
-            ...state.config,
-            jsApiPermission: normalizeJsApiPermission(draft.jsApiPermission),
+        deletePreset(root, draft.currentPresetName);
+    }
+
+    // 切换预设时把草稿里的全局项（Web 设置 / JS 权限 / 分身）带进 state.config，预设内容则换成目标预设的已保存内容。
+    function buildSelectionConfig(draft, nextPresetName, baseConfig = state.config) {
+        return normalizeAgentConfig({
+            ...baseConfig,
             ...normalizeWebSettings(draft),
+            jsApiPermission: normalizeJsApiPermission(draft.jsApiPermission),
             currentPresetName: nextPresetName,
-            delegatePresetName: resolveExistingPresetName(draft.delegatePresetName, nextPresetName),
+            delegatePresetName: resolveExistingPresetName(draft.delegatePresetName, nextPresetName, baseConfig.presets),
             delegateConfig: buildDelegateConfigFromDraft(draft),
-            presets: nextPresets,
-        };
-        if (validateAndSaveConfig(nextConfig, {
-            presetName: nextPresetName,
-            requestPrefix: 'delete-preset',
-        })) {
-            render?.();
-        }
+        });
+    }
+
+    function switchPreset(root, rawName) {
+        if (guardPresetBusy()) { syncConfigToForm(root); return; }
+        const nextPresetName = normalizePresetName(rawName);
+        const nextPreset = (state.config?.presets || {})[nextPresetName] || buildDefaultPreset();
+        const draft = syncConfigDraft(root);
+        commitPanelConfig(buildSelectionConfig(draft, nextPresetName));
+        state.configDraft = buildDraftFromPreset(nextPresetName, nextPreset, state.config);
+        requestConfigFormSync();
+        render?.();
     }
 
     function bindSettingsPanelEvents(root) {
@@ -1219,21 +1296,10 @@ export function createAgentSettingsPanel(deps = {}) {
         });
 
         root.querySelector('#xb-assistant-preset-select')?.addEventListener('change', (event) => {
-            const nextPresetName = normalizePresetName(event.currentTarget.value);
-            const nextPreset = (state.config?.presets || {})[nextPresetName] || buildDefaultPreset();
-            const draft = syncConfigDraft(root);
-            state.config = normalizeAgentConfig({
-                ...state.config,
-                ...normalizeWebSettings(draft),
-                jsApiPermission: normalizeJsApiPermission(draft.jsApiPermission),
-                currentPresetName: nextPresetName,
-                delegatePresetName: resolveExistingPresetName(draft.delegatePresetName, nextPresetName),
-                delegateConfig: buildDelegateConfigFromDraft(draft),
-            });
-            state.configDraft = buildDraftFromPreset(nextPresetName, nextPreset, state.config);
-            requestConfigFormSync();
-            render?.();
+            switchPreset(root, event.currentTarget.value);
         });
+
+        if (isListLayout) bindPresetList(root);
 
         root.querySelector('#xb-assistant-preset-name')?.addEventListener('input', () => {
             syncPresetDraftName(root);
@@ -1262,14 +1328,6 @@ export function createAgentSettingsPanel(deps = {}) {
         }
 
         root.querySelector('#xb-assistant-max-tokens')?.addEventListener('input', () => {
-            syncConfigDraft(root);
-        });
-
-        root.querySelector('#xb-assistant-temperature')?.addEventListener('input', () => {
-            syncConfigDraft(root);
-        });
-
-        root.querySelector('#xb-assistant-send-temperature')?.addEventListener('change', () => {
             syncConfigDraft(root);
         });
 
@@ -1325,14 +1383,6 @@ export function createAgentSettingsPanel(deps = {}) {
         });
 
         root.querySelector('#xb-assistant-delegate-max-tokens')?.addEventListener('input', () => {
-            syncConfigDraft(root);
-        });
-
-        root.querySelector('#xb-assistant-delegate-temperature')?.addEventListener('input', () => {
-            syncConfigDraft(root);
-        });
-
-        root.querySelector('#xb-assistant-delegate-send-temperature')?.addEventListener('change', () => {
             syncConfigDraft(root);
         });
 
@@ -1483,6 +1533,8 @@ export function createAgentSettingsPanel(deps = {}) {
             });
         });
 
+        bindSamplingSettings(root, () => syncConfigDraft(root));
+
         root.querySelector('#xb-assistant-delete-preset')?.addEventListener('click', () => {
             deleteCurrentPreset(root);
         });
@@ -1495,6 +1547,9 @@ export function createAgentSettingsPanel(deps = {}) {
             return getActiveProviderConfig(options);
         },
         syncConfigToForm,
+        syncPresetList,
+        completePresetSave,
         bindSettingsPanelEvents,
+        destroy,
     };
 }

@@ -26,6 +26,7 @@ import { generateAndParseScenePlan, prepareScenePlannerInput } from "../../share
 import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
 import { stripDrawImageSlots } from "../../shared/image-marker-syntax.js";
 import { assertSceneSourceUnchanged } from "../../shared/scene-placement.js";
+import { retryScenePlanning } from "../../shared/planner-retry.js";
 import { WorldbookProcessor } from "../../shared/worldbook-processor.js";
 import {
     loadSharedDrawSettings,
@@ -33,7 +34,9 @@ import {
     updateSharedDrawSettingsPersistent,
     normalizeSharedCacheDays,
 } from "../../shared/draw-settings.js";
-import { getLastDrawAgentDiagnostic } from "../../shared/draw-agent.js";
+import { normalizeMaxImagesOverride, resolveEffectiveMaxImages } from "../../shared/max-images-override.js";
+import { getDrawAgentDiagnosticHistory } from "../../shared/draw-agent.js";
+import { createLlmRecordsView } from "../../shared/llm-records-view.js";
 import { characterLibraryFromSettings, selectEnabledCharacters } from "../../shared/character-library.js";
 import { attachDrawAgentSettingsSurface } from "../../shared/agent-settings-surface.js";
 import { createSerialImageRequestQueue } from "../../shared/serial-image-request-queue.js";
@@ -63,6 +66,11 @@ import { cancelFloorDrawWork, captureDrawCancellationTarget } from "../../shared
 import { createCharacterEnabledControl, getCharacterEnabledFromCard } from "../../shared/character-enabled-control.js";
 import { createCharacterLibraryUi } from "../../shared/character-library-ui.js";
 import { bindGroupPresetPanel } from "../../shared/character-group-presets-draft-binding.js";
+import { createApiPresetPage } from "../../shared/api-preset-page.js";
+import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
+import {
+    normalizeApiPresetState,
+} from "../../shared/api-presets.js";
 import {
     applyGroupPresetForCurrentChat,
     getActiveCharacterAvatars,
@@ -85,6 +93,7 @@ import {
     DEFAULT_MESSAGE_FILTER_RULES,
     joinTags,
     ensureDrawImageStyles,
+    showDrawTagEditor,
     classifyError,
     ErrorType,
     syncDrawSavedFromPreview,
@@ -119,9 +128,14 @@ import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImag
 import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
-import { persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
+import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
+import { getCharacterTagEditGroups, persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
+import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+
+const handleImageDelegatedClickEvent = observeAsyncCallback(handleImageDelegatedClick, { source: import.meta.url, operation: "handleImageDelegatedClick" });
+
 // comfy-draw.js
 
 
@@ -137,8 +151,11 @@ const DEFAULT_COMFY_DRAW_SETTINGS = {
     auth: '',
     timeout: 120000,
     useImageBackendJobs: false,
+    apiPresets: [],
+    activeApiPresetId: null,
     mode: 'manual',
     overrideSize: 'default',
+    overrideMaxImages: null,
     showFloorButton: true,
     showFloatingButton: true,
     selectedPresetId: 'default',
@@ -190,6 +207,8 @@ let pendingController = null;
 let resizeHandler = null;
 let eventsBound = false;
 let agentSettingsSurface = null;
+let llmRecordsView = null;
+let llmRecordsViewContainer = null;
 let characterLibraryUi = null;
 let groupPresetBinding = null;
 let promptChainPreviewFrame = 0;
@@ -372,6 +391,36 @@ function normalizePresets(rawPresets, rawSettings = {}) {
     }));
 }
 
+// API 配置预设：只保存“API 配置”页里的字段（含认证信息，仅存本地，与 auth 本身的存储位置相同）。
+const COMFY_API_PRESET_OPTIONS = Object.freeze({
+    fields: Object.freeze(Object.keys(normalizeComfyApiConfig())),
+    normalizeConfig: normalizeComfyApiConfig,
+});
+
+function normalizeComfyApiConfig(raw = {}) {
+    const source = raw && typeof raw === 'object' ? raw : {};
+    return {
+        connectionMode: source.connectionMode === 'direct' ? 'direct' : 'proxy',
+        host: String(source.host || '').trim(),
+        auth: String(source.auth ?? '').trim(),
+        timeout: normalizeNumber(source.timeout, DEFAULT_COMFY_DRAW_SETTINGS.timeout, 10000, 600000),
+        useImageBackendJobs: source.useImageBackendJobs === true,
+    };
+}
+
+const apiPresets = createApiPresetPage({
+    presetOptions: COMFY_API_PRESET_OPTIONS,
+    getSettings,
+    getSettingsDocument,
+    querySettings,
+    containerSelector: '#comfy-api-presets',
+    panelSelector: '[data-comfy-view-panel="api"]',
+    formSelector: '#comfy-api-form',
+    readConfig: readComfyApiConfigFromForm,
+    fillConfig: fillComfyApiConfigForm,
+    persist: (mutator) => withSaveTimeout(updateSettingsPersistent(mutator, API_PRESET_COPY.saved, { notify: false, silent: false })),
+});
+
 function normalizeSettings(raw = {}) {
     const presets = normalizePresets(raw.presets, raw);
     const workflowPresets = normalizeWorkflowPresets(raw.workflowPresets, raw.customWorkflow);
@@ -386,15 +435,13 @@ function normalizeSettings(raw = {}) {
         : DEFAULT_COMFY_DRAW_SETTINGS.builtinWorkflowId;
     const activeWorkflowPreset = workflowPresets.find((item) => item.id === selectedWorkflowPresetId) || workflowPresets[0] || createDefaultWorkflowPreset();
     const merged = {
-        host: String(raw.host || ''),
+        ...normalizeComfyApiConfig(raw),
         mode: raw.mode === 'auto' ? 'auto' : 'manual',
         overrideSize: String(raw.overrideSize || 'default'),
+        overrideMaxImages: normalizeMaxImagesOverride(raw.overrideMaxImages),
         showFloorButton: raw.showFloorButton !== false,
         showFloatingButton: raw.showFloatingButton !== false,
-        connectionMode: raw.connectionMode === 'direct' ? 'direct' : 'proxy',
-        auth: String(raw.auth ?? ''),
-        timeout: normalizeNumber(raw.timeout, DEFAULT_COMFY_DRAW_SETTINGS.timeout, 10000, 600000),
-        useImageBackendJobs: raw.useImageBackendJobs === true,
+        ...normalizeApiPresetState(raw, COMFY_API_PRESET_OPTIONS),
         selectedPresetId,
         selectedWorkflowPresetId,
         builtinWorkflowId,
@@ -471,9 +518,9 @@ export async function loadSettings() {
         const saved = await ComfyDrawStorage.getStrict(SERVER_FILE_KEY, null);
         const upgrade = installScenePlannerPresets(saved, DEFAULT_PROMPT_CONFIG, PROMPT_TEMPLATE_VERSION, { installVersion: 10 });
         settingsCache = normalizeSettings(upgrade.settings);
-        if (!saved || upgrade.changed) {
+        if (!saved || upgrade.changed || saved.activeApiPresetId !== settingsCache.activeApiPresetId) {
             const savedDefaults = await ComfyDrawStorage.setAndSave(SERVER_FILE_KEY, settingsCache, { silent: true });
-            if (!savedDefaults) throw new Error('新版提示词预设保存失败');
+            if (!savedDefaults) throw new Error(API_PRESET_COPY.saveFailed);
         }
         if (saved && upgrade.installed) {
             toastr.info(SCENE_PLANNER_PRESET_INSTALL_NOTICE, 'ComfyUI', { timeOut: 8000 });
@@ -542,18 +589,19 @@ export function getGenerationSnapshot() {
     };
 }
 
-async function persistSettings(nextSettings, okText = '已保存', { notify = true, silent = false } = {}) {
+let settingsUpdateQueue = Promise.resolve();
+
+async function persistSettingsNow(nextSettings, okText = '已保存', { notify = true, silent = false } = {}) {
     if (!settingsLoaded) {
         console.error('[ComfyDraw] 设置尚未成功加载，拒绝保存');
         if (notify) toastr.error('配置尚未成功加载，已禁止保存', 'ComfyUI');
         return false;
     }
     const next = normalizeSettings(nextSettings);
-    const previous = settingsCache ? cloneSettingsObject(settingsCache) : null;
     try {
-        settingsCache = next;
         const ok = await ComfyDrawStorage.setAndSave(SERVER_FILE_KEY, next, { silent });
         if (ok !== false) {
+            settingsCache = next;
             if (notify) {
                 toastr.success(okText, 'ComfyUI');
             }
@@ -562,10 +610,8 @@ async function persistSettings(nextSettings, okText = '已保存', { notify = tr
         if (notify) {
             toastr.error('保存失败', 'ComfyUI');
         }
-        settingsCache = previous;
         return false;
     } catch (error) {
-        settingsCache = previous;
         if (notify) {
             toastr.error(error?.message || '保存失败', 'ComfyUI');
         }
@@ -573,12 +619,22 @@ async function persistSettings(nextSettings, okText = '已保存', { notify = tr
     }
 }
 
-export async function updateSettingsPersistent(mutator, okText = '已保存', options = {}) {
-    const draft = cloneSettingsObject(getSettings());
-    if (typeof mutator === 'function') {
-        await mutator(draft);
-    }
-    return await persistSettings(draft, okText, options);
+function enqueueSettingsUpdate(update) {
+    const result = settingsUpdateQueue.then(update, update);
+    settingsUpdateQueue = result.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "enqueueSettingsUpdate" }, caughtError); });
+    return result;
+}
+
+function persistSettings(nextSettings, okText = '已保存', options = {}) {
+    return enqueueSettingsUpdate(() => persistSettingsNow(nextSettings, okText, options));
+}
+
+export function updateSettingsPersistent(mutator, okText = '已保存', options = {}) {
+    return enqueueSettingsUpdate(async () => {
+        const draft = cloneSettingsObject(getSettings());
+        if (typeof mutator === 'function') await mutator(draft);
+        return persistSettingsNow(draft, okText, options);
+    });
 }
 
 function getActivePreset(settings = getSettings()) {
@@ -633,7 +689,7 @@ export async function updateQuickSettings(patch = {}) {
         fp.updateAllPresetSelects?.();
         fp.updateAllSizeSelects?.();
         fp.updateAutoModeUI?.();
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "updateQuickSettings" }, caughtError); }
     return getQuickSettings();
 }
 
@@ -851,7 +907,7 @@ async function requestComfyTransport(path, body = {}, { signal, timeoutMs, gener
     const proxySignal = createComfyRequestSignal(signal, timeoutMs ?? settings.timeout ?? 120000);
     try {
         const payload = JSON.stringify({ url: settings.host, ...body });
-        attempt?.submit();
+        attempt?.submit(proxySignal.signal);
         const response = await fetch(`/api/sd/comfy/${path}`, {
             method: 'POST',
             headers: getRequestHeaders(),
@@ -883,7 +939,7 @@ async function fetchComfyDirectJson(path, { signal, timeoutMs, method = 'GET', b
     const directSignal = createComfyRequestSignal(signal, timeoutMs ?? settings.timeout ?? 120000);
     try {
         const url = createComfyUrl(path, {}, settings);
-        attempt?.submit();
+        attempt?.submit(directSignal.signal);
         const response = await fetch(url, {
             method,
             headers: {
@@ -1438,7 +1494,7 @@ function bindOverlayEvents() {
             try {
                 const fp = await import('./floating-panel.js');
                 fp.updateAutoModeUI?.();
-            } catch {}
+            } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
         });
     });
     querySettings('#comfy-show-floor')?.addEventListener('change', async (event) => {
@@ -1452,7 +1508,7 @@ function bindOverlayEvents() {
         try {
             const fp = await import('./floating-panel.js');
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
     });
     querySettings('#comfy-show-floating')?.addEventListener('change', async (event) => {
         const checked = event.target.checked === true;
@@ -1465,12 +1521,12 @@ function bindOverlayEvents() {
         try {
             const fp = await import('./floating-panel.js');
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindOverlayEvents" }, caughtError); }
     });
-    querySettings('#comfy-draw-save')?.addEventListener('click', async (event) => {
-        const ok = await saveAllSettings({ notify: true, triggerButton: event.currentTarget, statusElementId: 'comfy-draw-api-status' });
-        if (ok) fillForm(getSettings());
+    querySettings('#comfy-draw-save')?.addEventListener('click', async () => {
+        await apiPresets.save();
     });
+    apiPresets.bindFormRefresh();
     querySettings('#comfy-connection-mode')?.addEventListener('change', () => {
         updateConnectionModeUI(getValue('comfy-connection-mode'));
     });
@@ -1478,11 +1534,11 @@ function bindOverlayEvents() {
         updateConnectionModeUI(getValue('comfy-connection-mode'));
     });
     querySettings('#comfy-draw-test')?.addEventListener('click', async () => {
-        await saveAllSettings({ notify: false });
+        if (!await saveAllSettings({ notify: false })) return;
         await testConnection();
     });
     querySettings('#comfy-draw-test-generate')?.addEventListener('click', async () => {
-        await saveAllSettings({ notify: false });
+        if (!await saveAllSettings({ notify: false })) return;
         await testGenerateFromSettingsPanel();
     });
     querySettings('#comfy-draw-size-preset')?.addEventListener('change', () => {
@@ -2124,6 +2180,7 @@ function fillForm(settings) {
     updateConnectionModeUI(settings.connectionMode || 'proxy', settings.useImageBackendJobs === true);
     setValue('comfy-draw-host', settings.host);
     setValue('comfy-draw-timeout', settings.timeout);
+    apiPresets.ensureBar();
     setValue('comfy-draw-width', preset.width);
     setValue('comfy-draw-height', preset.height);
     updateSizePresetSelection();
@@ -2254,6 +2311,31 @@ function applySizePresetSelection() {
     }
     customRow.classList.add('hidden');
     refreshBuiltinWorkflowPanel(getSettings());
+}
+
+// ───────────── API 配置预设 ─────────────
+// 预设栏组件在 shared/api-presets-ui.js；这里提供表单读写与落盘。预设里含认证信息，仅存本地，不写日志 / 提示。
+
+/** 表单里现在的 API 配置（与 readForm 里的同名字段一致）。 */
+function readComfyApiConfigFromForm() {
+    return normalizeComfyApiConfig({
+        connectionMode: getValue('comfy-connection-mode'),
+        host: getValue('comfy-draw-host'),
+        auth: getValue('comfy-draw-auth'),
+        timeout: normalizeNumber(getValue('comfy-draw-timeout'), getSettings().timeout, 10000, 600000),
+        useImageBackendJobs: getChecked('comfy-use-image-backend-jobs'),
+    });
+}
+
+/** 只把 API 配置字段填进表单（不动绘图参数、工作流等其它未保存的修改），并刷新连接方式相关的提示与显隐。 */
+function fillComfyApiConfigForm(config) {
+    const next = normalizeComfyApiConfig(config);
+    setValue('comfy-connection-mode', next.connectionMode);
+    setValue('comfy-draw-host', next.host);
+    setValue('comfy-draw-auth', next.auth);
+    setValue('comfy-draw-timeout', next.timeout);
+    setChecked('comfy-use-image-backend-jobs', next.useImageBackendJobs);
+    updateConnectionModeUI(next.connectionMode, next.useImageBackendJobs);
 }
 
 function fillPresetSelect(settings = getSettings()) {
@@ -2454,7 +2536,7 @@ async function refreshComfyOptions({ notify = true, timeoutMs = getSettings().ti
                     : '没有找到“只选一个模型文件就能画”的模型；如果你的模型需要多个文件，请导入自定义工作流',
             );
         }
-        void refreshComfySamplerOptions({ notify: false, timeoutMs: Math.max(timeoutMs, 30000) });
+        observeBackgroundTask(refreshComfySamplerOptions({ notify: false, timeoutMs: Math.max(timeoutMs, 30000) }), { source: import.meta.url, operation: "refreshComfyOptions" });
         return true;
     } catch (error) {
         console.error('[ComfyDraw] refreshComfyOptions failed:', error);
@@ -2498,7 +2580,7 @@ function switchSettingsView(viewName = 'test') {
         panel.classList.toggle('active', panel.dataset.comfyViewPanel === normalized);
     });
     if (normalized === 'gallery') {
-        void renderGalleryManagement();
+        observeBackgroundTask(renderGalleryManagement(), { source: import.meta.url, operation: "switchSettingsView" });
     }
     if (normalized === 'llm') {
         ensureAgentSettingsSurface();
@@ -2576,17 +2658,17 @@ async function renderGalleryManagement() {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'gallery-slot-btn';
-            button.addEventListener('click', async () => {
+            button.addEventListener('click', observeAsyncCallback(async () => {
                 const latest = await getPreview(slotSummaries[slotId]?.latestImgId).catch(() => null);
                 await openGallery(slotId, Number(latest?.messageId || 0), buildSharedGalleryCallbacks(slotId, Number(latest?.messageId || 0)));
-            });
+            }, { source: import.meta.url, operation: "callback" }));
 
             const img = document.createElement('img');
             img.className = 'gallery-slot-thumb';
             img.alt = '';
             void getPreview(slotSummaries[slotId]?.latestImgId).then((latest) => {
                 if (latest) img.src = getPreviewDisplayUrl(latest);
-            }).catch(() => {});
+            }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "renderGalleryManagement" }, caughtError); });
 
             const label = document.createElement('div');
             label.className = 'gallery-slot-title';
@@ -2655,10 +2737,11 @@ function ensureCharacterLibraryUi() {
         document: doc,
         listElement: list,
         toolbarElement: toolbar,
+        searchInput: querySettings('#comfy-char-search'),
         readCharacters: readCharacterCardsFromForm,
         renderCard: renderCharacterCard,
         renderEmpty: createCharacterEmptyState,
-        onChange: () => refreshSettingsSummary(),
+        onChange: refreshSettingsSummary,
         notify: {
             success: (message) => toastr.success(message),
             warning: (message) => toastr.warning(message),
@@ -2733,25 +2816,26 @@ function createCharacterEmptyState() {
     const title = document.createElement('strong');
     title.textContent = '暂无角色配置';
     const desc = document.createElement('p');
-    desc.textContent = '点击左侧"添加角色"，开始建立你的共享角色标签库';
+    desc.textContent = '添加角色，保存外貌与服装标签。';
     empty.append(icon, title, desc);
     return empty;
 }
 
 function renderCharacterCard({ character: tag, ordinal }) {
     const index = ordinal - 1;
-    const card = document.createElement('div');
+    const card = document.createElement('details');
     card.className = 'sd-char-card';
+    card.open = !tag.name;
     card.dataset.characterId = String(tag.id || `comfy-char-${index + 1}`);
 
-    const top = document.createElement('div');
+    const top = document.createElement('summary');
     top.className = 'sd-char-card-header';
     const title = document.createElement('div');
     title.className = 'sd-char-card-title';
     const titleIcon = document.createElement('i');
-    titleIcon.className = 'fa-solid fa-user';
+    titleIcon.className = 'fa-solid fa-user-group';
     const titleText = document.createElement('span');
-    titleText.textContent = `角色 ${index + 1}`;
+    titleText.textContent = tag.name || `角色 ${index + 1}`;
     title.append(titleIcon, titleText);
     const delButton = document.createElement('button');
     delButton.className = 'btn btn-danger btn-sm';
@@ -2806,6 +2890,9 @@ function renderCharacterCard({ character: tag, ordinal }) {
     panel.className = 'danbooru-panel hidden';
     panel.dataset.charId = card.dataset.characterId;
     card.appendChild(panel);
+    card.addEventListener('input', event => {
+        if (event.target.dataset.sdCharField === 'name') titleText.textContent = event.target.value || `角色 ${index + 1}`;
+    });
     return card;
 }
 
@@ -3094,10 +3181,10 @@ function bindWorldbookUploadEvents() {
     dropzone.addEventListener('drop', (event) => {
         event.preventDefault();
         dropzone.classList.remove('dragover');
-        if (event.dataTransfer?.files?.length) void handleWorldbookFiles(event.dataTransfer.files);
+        if (event.dataTransfer?.files?.length) observeBackgroundTask(handleWorldbookFiles(event.dataTransfer.files), { source: import.meta.url, operation: "callback" });
     });
     fileInput.addEventListener('change', () => {
-        if (fileInput.files?.length) void handleWorldbookFiles(fileInput.files);
+        if (fileInput.files?.length) observeBackgroundTask(handleWorldbookFiles(fileInput.files), { source: import.meta.url, operation: "callback" });
         fileInput.value = '';
     });
 }
@@ -3140,7 +3227,7 @@ async function setComfyDanbooruLocalEnabled(enabled) {
         unloadLocalDanbooruDB();
         await updateSharedDrawSettingsPersistent((settings) => {
             settings.danbooruLocalDB = false;
-        }, 'Danbooru 本地库加载失败', { notify: false, silent: false }).catch(() => {});
+        }, 'Danbooru 本地库加载失败', { notify: false, silent: false }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "setComfyDanbooruLocalEnabled" }, caughtError); });
         if (checkbox) checkbox.checked = false;
         if (status) status.textContent = '加载失败';
         toastr.error('Danbooru 本地库加载失败');
@@ -3288,7 +3375,7 @@ function renderComfyDanbooruResults(results = [], characterId = '', container = 
         item.appendChild(info);
         item.addEventListener('click', () => {
             let appearanceTags = [];
-            try { appearanceTags = JSON.parse(item.dataset.tags || '[]'); } catch {}
+            try { appearanceTags = JSON.parse(item.dataset.tags || '[]'); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "renderComfyDanbooruResults" }, caughtError); }
             const tagInput = card.querySelector('[data-sd-char-field="danbooruTag"]');
             const appearanceInput = card.querySelector('[data-sd-char-field="appearance"]');
             if (tagInput) tagInput.value = item.dataset.tag || '';
@@ -3315,7 +3402,7 @@ function fillSharedDrawForm() {
     renderCharacterTagList(sharedDrawSettings.characterTags || [], sharedDrawSettings.characterGroups || []);
     ensureGroupPresetBinding();
     setPlannerRetryInput(sharedDrawSettings.plannerMaxRetries);
-    void ensureComfyDanbooruLoadedForForm(sharedDrawSettings);
+    observeBackgroundTask(ensureComfyDanbooruLoadedForForm(sharedDrawSettings), { source: import.meta.url, operation: "fillSharedDrawForm" });
 }
 
 async function saveSharedDrawSettings({ notify = false } = {}) {
@@ -3335,7 +3422,12 @@ async function saveSharedDrawSettings({ notify = false } = {}) {
     }, '共享规划设置已保存', { notify, silent: false });
 }
 
-async function saveAllSettings({ notify = false, triggerButton = null, statusElementId = '' } = {}) {
+async function saveAllSettings(options = {}) {
+    return apiPresets.runSave(() => persistAllSettings(options));
+}
+
+async function persistAllSettings({ notify = false, triggerButton = null, statusElementId = '' } = {}) {
+    const savedText = API_PRESET_COPY.saved;
     const saveTask = async () => {
         const [comfyOk, sharedOk] = await Promise.all([
             persistSettings(readForm(), 'ComfyUI 设置已保存', { notify: false, silent: false }),
@@ -3350,14 +3442,15 @@ async function saveAllSettings({ notify = false, triggerButton = null, statusEle
             const settings = getSettings();
             fp.updateButtonVisibility?.(settings.showFloorButton !== false, settings.showFloatingButton !== false);
             fp.updateAutoModeUI?.();
-        } catch {}
+        } catch (caughtError) { console.warn({ source: import.meta.url, operation: "runPostSaveHooks" }, caughtError); }
+        apiPresets.render();
     };
 
     if (triggerButton) {
         const ok = await runSaveButtonTask(triggerButton, saveTask, {
             statusElementId,
             pendingText: '正在保存...',
-            successText: '已保存到小白X服务端配置',
+            successText: savedText,
             errorText: '保存失败，请重试',
             notify,
         });
@@ -3378,7 +3471,7 @@ async function saveAllSettings({ notify = false, triggerButton = null, statusEle
         updateStatusText(
             statusElementId,
             ok ? 'success' : 'error',
-            ok ? '已保存到小白X服务端配置' : '保存失败，请重试',
+            ok ? savedText : '保存失败，请重试',
         );
     }
 
@@ -3431,7 +3524,7 @@ function refreshSettingsSummary() {
     const charResultEl = querySettings('#comfy-draw-character-result-count');
     if (presetEl) presetEl.textContent = activePreset?.name || '默认';
     if (charSideEl) charSideEl.textContent = String(characterCount);
-    if (charResultEl) charResultEl.textContent = `${characterCount} / ${characterCount}`;
+    if (charResultEl) charResultEl.textContent = `${characterLibraryUi?.getVisibleCardCount() ?? characterCount} / ${characterCount}`;
 }
 
 function setPlannerRetryInput(value) {
@@ -3494,6 +3587,7 @@ function populateSelect(id, options, { value, emptyLabel = '' } = {}) {
 export async function openSettings() {
     try {
         await loadSettings();
+        await settingsUpdateQueue;
         await loadSharedDrawSettings();
     } catch {
         return false;
@@ -3511,8 +3605,12 @@ export function hideSettings() {
     promptFieldPresetId = null;
     abortPendingRequest();
     agentSettingsSurface?.destroy();
+    apiPresets.destroy();
     destroyCharacterLibraryUi();
     agentSettingsSurface = null;
+    llmRecordsView?.destroy();
+    llmRecordsView = null;
+    llmRecordsViewContainer = null;
     if (promptChainPreviewFrame) cancelAnimationFrame(promptChainPreviewFrame);
     promptChainPreviewFrame = 0;
 
@@ -3530,7 +3628,7 @@ export function hideSettings() {
 }
 
 function abortPendingRequest() {
-    try { pendingController?.abort(); } catch {}
+    try { pendingController?.abort(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "abortPendingRequest" }, caughtError); }
     pendingController = null;
 }
 
@@ -3581,12 +3679,16 @@ function updateComfyOptionStatus(state, text) {
 }
 
 function renderLastLlmRequestPreview() {
-    const preview = getSettingsElement('comfy-llm-request-preview');
-    if (!preview) return;
-    const snapshot = getLastDrawAgentDiagnostic();
-    preview.textContent = snapshot
-        ? JSON.stringify(snapshot, null, 2)
-        : '暂无请求记录，请先触发一次画图分析。';
+    const container = getSettingsElement('comfy-llm-request-preview');
+    const doc = getSettingsDocument();
+    if (!container || !doc) return;
+    if (llmRecordsViewContainer !== container) {
+        llmRecordsView?.destroy();
+        llmRecordsView = createLlmRecordsView({ document: doc, container, getRecords: getDrawAgentDiagnosticHistory });
+        llmRecordsViewContainer = container;
+        return;
+    }
+    llmRecordsView.render(getDrawAgentDiagnosticHistory());
 }
 
 function ensureAgentSettingsSurface() {
@@ -3874,7 +3976,8 @@ async function buildComfyScenePlannerOptions({
             customPrompts: promptPreset,
             promptDefaults: DEFAULT_PROMPT_CONFIG,
             worldbookEntries,
-            maxImages: preset.maxImages || 0,
+            // 悬浮菜单“数目”覆盖优先于参数预设；覆盖为空时沿用预设（0 = 不指定）。
+            maxImages: resolveEffectiveMaxImages(comfySettings, preset),
             maxCharactersPerImage: preset.maxCharactersPerImage || 0,
             plannerProfile: COMFY_PLANNER_PROFILE,
             plannerRetry: { maxRetries: sharedDrawSettings.plannerMaxRetries },
@@ -4086,16 +4189,14 @@ function setImageState(container, state) {
     if (dropdown) {
         const saveItem = dropdown.querySelector('[data-action="save-image"]');
         if (state === ImageState.PREVIEW && !saveItem) {
-            // Static draw-owned markup, without user input.
-            // eslint-disable-next-line no-unsanitized/method
+            // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
             dropdown.insertAdjacentHTML('afterbegin', IMAGE_SAVE_BUTTON_HTML);
         } else if (state !== ImageState.PREVIEW && saveItem) {
             saveItem.remove();
         }
     }
     container.querySelector('.xb-nd-indicator')?.remove();
-    // Static draw-owned markup, without user input.
-    // eslint-disable-next-line no-unsanitized/method
+    // eslint-disable-next-line no-unsanitized/method -- Static draw-owned markup, without user input.
     if (state === ImageState.SAVING) container.insertAdjacentHTML('afterbegin', IMAGE_SAVING_INDICATOR_HTML);
     else if (state === ImageState.REFRESHING) container.insertAdjacentHTML('afterbegin', '<div class="xb-nd-indicator"><i class="fa-solid fa-rotate" aria-hidden="true"></i> 生成中...</div>');
 }
@@ -4130,7 +4231,7 @@ function syncContainerToPreview(container, preview, historyCount = 1, currentInd
     container.dataset.historyCount = String(historyCount);
     setImageState(container, preview.savedUrl ? ImageState.SAVED : ImageState.PREVIEW);
     updateNavControls(container, currentIndex, historyCount);
-    void warmSlotPreviewNeighbors(container.dataset.slotId, currentIndex).catch(() => {});
+    void warmSlotPreviewNeighbors(container.dataset.slotId, currentIndex).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "syncContainerToPreview" }, caughtError); });
 }
 
 function buildEditedPromptData(sceneTags, characterPrompts = [], params = getEffectiveParams(getSettings()), postPrompt = '') {
@@ -4160,6 +4261,7 @@ function appendEditGroup(container, { label, value, type, index = null }) {
 
     const textarea = document.createElement('textarea');
     textarea.className = 'xb-nd-edit-input';
+    textarea.setAttribute('aria-label', label);
     textarea.dataset.type = type;
     if (index !== null) textarea.dataset.index = String(index);
     textarea.value = value || '';
@@ -4189,9 +4291,9 @@ async function navigateToImage(container, targetIndex) {
     await setSlotSelection(slotId, targetPreview.imgId);
     const messageId = Number(container.dataset.mesid);
     if (targetPreview.savedUrl) {
-        void syncDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch(() => {});
+        void syncDrawSavedFromPreview(messageId, targetPreview, { slotId }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     } else {
-        void clearDrawSavedEntry(messageId, slotId).catch(() => {});
+        void clearDrawSavedEntry(messageId, slotId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     }
     imgEl.classList.remove(`sliding-${direction}`);
     imgEl.classList.add(`sliding-in-${direction === 'left' ? 'left' : 'right'}`);
@@ -4205,32 +4307,34 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
             if (cont) syncContainerToPreview(cont, selected, historyCount, 0);
             if (selected?.savedUrl) {
-                void syncDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch(() => {});
+                void syncDrawSavedFromPreview(msgId, selected, { slotId: sid }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             } else {
-                void clearDrawSavedEntry(msgId, sid).catch(() => {});
+                void clearDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onUse" }, caughtError); });
             }
         },
         onSave: async (imgId, url) => {
             const cont = document.querySelector(`.xb-nd-img[data-img-id="${imgId}"]`);
             if (cont) {
-                const img = cont.querySelector('img');
-                if (img) img.src = url;
                 setImageState(cont, ImageState.SAVED);
             }
             const preview = await getPreview(imgId).catch(() => null);
-            if (preview) await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch(() => {});
+            if (preview) {
+                const img = cont?.querySelector('img');
+                if (img) img.src = getPreviewDisplayUrl(preview);
+                await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onSave" }, caughtError); });
+            }
         },
         onDelete: async (sid, deletedImgId, remainingPreviews) => {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
             if (cont && cont.dataset.imgId === deletedImgId && remainingPreviews.length > 0) {
                 syncContainerToPreview(cont, remainingPreviews[0], remainingPreviews.length, 0);
             }
-            await syncDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch(() => {});
+            await syncDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onDelete" }, caughtError); });
         },
         onBecameEmpty: async (sid, msgId, lastImageInfo = {}) => {
             const cont = document.querySelector(`.xb-nd-img[data-slot-id="${sid}"]`);
             if (cont) {
-                // eslint-disable-next-line no-unsanitized/property
+                // eslint-disable-next-line no-unsanitized/property -- The draw renderer escapes text fields; slot/message identifiers come from this image record.
                 cont.outerHTML = buildFailedPlaceholderHtml({
                     slotId: sid, messageId: msgId,
                     tags: lastImageInfo.tags || '', positive: lastImageInfo.positive || '',
@@ -4241,8 +4345,8 @@ function buildSharedGalleryCallbacks(slotId, messageId) {
                 slotId: sid, messageId: msgId,
                 tags: lastImageInfo.tags || '', positive: lastImageInfo.positive || '',
                 errorType: 'deleted', errorMessage: '图片已删除，点击重试可重新生成',
-            }).catch(() => {});
-            await clearDrawSavedEntry(msgId, sid).catch(() => {});
+            }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
+            await clearDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
             if (getSettingsElement('comfy-gallery-container')) {
                 await renderGalleryManagement();
             }
@@ -4323,8 +4427,8 @@ async function handleImageDelegatedClick(event) {
     if (action === 'retry-image') { await retryFailedImage(container); return; }
     if (action === 'retry-floor-failed') { await retryFloorFailedImageCards("comfyui", container); return; }
     if (action === 'restore-image') { await restoreImageCard(container); return; }
-    if (action === 'edit-tags') { container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open'); toggleEditPanel(container, true); return; }
-    if (action === 'cancel-edit') { toggleEditPanel(container, false); return; }
+    if (action === 'edit-tags') { container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open'); observeBackgroundTask(toggleEditPanel(container, true), { source: import.meta.url, operation: 'handleImageDelegatedClick' }); return; }
+    if (action === 'cancel-edit') { observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'handleImageDelegatedClick' }); return; }
     if (action === 'save-tags') { await saveEditedTags(container); return; }
     if (action === 'save-tags-retry') { await saveTagsAndRetry(container); return; }
     if (action === 'save-image') { container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open'); await saveCurrentImage(container); return; }
@@ -4365,11 +4469,8 @@ async function toggleEditPanel(container, show) {
         scrollWrap.replaceChildren();
         appendEditGroup(scrollWrap, { label: '场景', value: currentTags, type: 'scene' });
 
-        if (preview?.characterPrompts?.length > 0) {
-            preview.characterPrompts.forEach((char, i) => {
-                const name = char.name || `角色 ${i + 1}`;
-                appendEditGroup(scrollWrap, { label: name, value: char.prompt || '', type: 'char', index: i });
-            });
+        for (const group of getCharacterTagEditGroups(preview?.characterPrompts)) {
+            appendEditGroup(scrollWrap, group);
         }
 
         // 追加位：与角色框一致，记录里实际存了 post_prompt 才渲染；为空的图不出框
@@ -4377,14 +4478,12 @@ async function toggleEditPanel(container, show) {
             appendEditGroup(scrollWrap, { label: '追加 (post_prompt)', value: preview.postPrompt, type: 'post_prompt' });
         }
 
-        editPanel.style.display = 'block';
-
         if (btnsPanel) {
             btnsPanel.style.opacity = '0.3';
             btnsPanel.style.pointerEvents = 'none';
         }
 
-        scrollWrap.querySelector('[data-type="scene"]')?.focus();
+        showDrawTagEditor(editPanel);
 
     } else {
         const scrollWrap = editPanel.querySelector('.xb-nd-edit-scroll');
@@ -4411,7 +4510,7 @@ async function saveEditedTags(container) {
             const data = buildEditedPromptData(tags, characters, undefined, postPrompt ?? record?.postPrompt ?? '');
             return { positive: data.positive, negativePrompt: data.negative ?? record?.negativePrompt ?? '' };
         });
-        toggleEditPanel(container, false);
+        observeBackgroundTask(toggleEditPanel(container, false), { source: import.meta.url, operation: 'saveEditedTags' });
         toastr.success(DRAW_SLOT_COPY.tagSaved);
         return true;
     } catch (error) {
@@ -4422,7 +4521,7 @@ async function saveEditedTags(container) {
 }
 
 async function refreshSingleImage(container) {
-    try { await redrawImageCard("comfyui", container); }
+    try { await withDrawActionFeedback(container, () => redrawImageCard("comfyui", container)); }
     catch (error) { console.error(DRAW_SLOT_COPY.redrawFailed, error); globalThis.toastr?.error(error.message); }
 }
 
@@ -4431,7 +4530,9 @@ async function retryFailedImage(container) {
 }
 
 async function saveTagsAndRetry(container) {
-    if (await saveEditedTags(container)) await retryFailedImage(container);
+    await withDrawActionFeedback(container, async () => {
+        if (await saveEditedTags(container)) await retryFailedImage(container);
+    });
 }
 
 async function removePlaceholder(container) {
@@ -4445,14 +4546,14 @@ async function deleteCurrentImage(container) {
     const imgId = container.dataset.imgId;
     const messageId = Number(container.dataset.mesid);
     if (!slotId) return;
-    if (imgId) { try { await deletePreview(imgId); } catch {} }
+    if (imgId) { try { await deletePreview(imgId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); } }
     const previews = await getPreviewsBySlot(slotId).catch(() => []);
     const successPreviews = previews.filter(hasPreviewImage);
     if (successPreviews.length > 0) {
         const nextPreview = successPreviews[0];
-        await setSlotSelection(slotId, nextPreview.imgId).catch(() => {});
+        await setSlotSelection(slotId, nextPreview.imgId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
         syncContainerToPreview(container, nextPreview, successPreviews.length, 0);
-        await syncDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews).catch(() => {});
+        await syncDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
         toastr.success(`已删除（剩余 ${successPreviews.length} 张）`);
         return;
     } else {
@@ -4482,9 +4583,10 @@ async function saveCurrentImage(container) {
             : String(ctx.characters?.[ctx.characterId]?.name || 'character');
         const url = await saveBase64AsFile(preview.base64, charName, `comfy_${imgId}`, 'png');
         await updatePreviewSavedUrl(imgId, url);
-        await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch(() => {});
+        preview.savedUrl = url;
+        await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "saveCurrentImage" }, caughtError); });
         const img = container.querySelector('img');
-        if (img) img.src = url;
+        if (img) img.src = getPreviewDisplayUrl(preview);
         container.dataset.state = 'saved';
         toastr.success('图片已保存到服务器');
     } catch (error) {
@@ -4496,12 +4598,12 @@ async function saveCurrentImage(container) {
 function setupImageDelegation() {
     if (imageDelegationBound) return;
     imageDelegationBound = true;
-    document.addEventListener('click', handleImageDelegatedClick, { capture: true });
+    document.addEventListener('click', handleImageDelegatedClickEvent, { capture: true });
 }
 
 function cleanupImageDelegation() {
     if (!imageDelegationBound) return;
-    document.removeEventListener('click', handleImageDelegatedClick, { capture: true });
+    document.removeEventListener('click', handleImageDelegatedClickEvent, { capture: true });
     imageDelegationBound = false;
 }
 
@@ -4603,13 +4705,17 @@ export async function generateAndInsertImages({
 
         job.phase = 'llm';
         onStateChange?.('llm', toScenePlannerProgress());
-        const { tasks, sceneSource } = await buildTasksFromMessage({
-            message, messageId: resolvedMessageId, signal, promptOverride, negativePromptOverride, onStateChange,
-        });
-        if (signal.aborted) throw new Error('已取消');
-
-
-        if (sceneSource) assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), sceneSource.sourceHash);
+        // 规划期间正文若被改动，按最新正文重新规划（指数退避，次数同 Agent 重试设置）。
+        const { tasks } = await retryScenePlanning(async (retryNumber) => {
+            // 换了楼层/分支就不再重试：这里会抛出原有的“原文或分支已变化”。
+            if (retryNumber) resolveFloorImageJobTarget(job, getContext());
+            const built = await buildTasksFromMessage({
+                message, messageId: resolvedMessageId, signal, promptOverride, negativePromptOverride, onStateChange,
+            });
+            if (signal.aborted) throw new Error('已取消');
+            if (built.sceneSource) assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), built.sceneSource.sourceHash);
+            return built;
+        }, { maxRetries: sharedSettingsSnapshot.plannerMaxRetries, signal, onStateChange });
         return await runPreparedComfySlots({ ctx, message, messageId: resolvedMessageId,
             sourceText: message.mes, tasks, settings: comfySettings,
             paramsOverride, promptOverride, negativePromptOverride, job, onStateChange });
@@ -4684,7 +4790,7 @@ export async function initComfyDraw() {
     }
     const [floatingPanel] = await Promise.all([
         import('./floating-panel.js'),
-        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch(() => {}),
+        openDB().then(() => clearExpiredCache(sharedDrawSettings.cacheDays)).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "initComfyDraw" }, caughtError); }),
     ]);
     if (initGeneration !== moduleLifecycleGeneration || window?.isXiaobaixEnabled === false) return false;
 
@@ -4774,7 +4880,7 @@ export function cleanupComfyDraw() {
     stopSharedDrawPreviewRuntime();
     backendJobMonitors.deactivate();
     abortPendingRequest();
-    abortGeneration(null, { reason: 'teardown' });
+    observeBackgroundTask(abortGeneration(null, { reason: 'teardown' }), { source: import.meta.url, operation: "cleanupComfyDraw" });
     clearFloorImageJobs(generationJobs);
     comfyImageRequestQueue.clear();
     hideSettings();

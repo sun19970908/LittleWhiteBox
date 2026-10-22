@@ -1,4 +1,7 @@
-export const CONFIRMABLE_CHAT_PHASE_TIMEOUT_MS = 15_000;
+import { getChatIdentity } from './chat-identity.js';
+
+// 大聊天的保存和读回分别允许等待一分钟；确认条件与聊天身份隔离不变。
+export const CONFIRMABLE_CHAT_PHASE_TIMEOUT_MS = 60_000;
 
 export class ConfirmableChatSaveUncertainError extends Error {
     constructor(reason, message, { cause, saveError } = {}) {
@@ -48,6 +51,7 @@ export function createConfirmableChatTarget(ctx) {
         return Object.freeze({
             kind: 'group',
             chatId,
+            identity: getChatIdentity(ctx),
             endpoint: '/api/chats/group/get',
             body: Object.freeze({ id: chatId }),
         });
@@ -64,6 +68,7 @@ export function createConfirmableChatTarget(ctx) {
     return Object.freeze({
         kind: 'character',
         chatId,
+        identity: getChatIdentity(ctx),
         endpoint: '/api/chats/get',
         body: Object.freeze({
             ch_name: String(character.name || ''),
@@ -115,16 +120,16 @@ async function saveWithinTimeout(ctx, timeoutMs) {
 }
 
 function chatSaveLockName(target) {
-    return `littlewhitebox:chat-save:${target.kind}:${target.chatId}`;
+    return `littlewhitebox:chat-save:${target.identity}`;
 }
 
 async function withLocalSaveLock(name, task) {
     const previous = localSaveQueues.get(name) || Promise.resolve();
     let release;
     const current = new Promise(resolve => { release = resolve; });
-    const tail = previous.catch(() => {}).then(() => current);
+    const tail = previous.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "tail" }, caughtError); }).then(() => current);
     localSaveQueues.set(name, tail);
-    await previous.catch(() => {});
+    await previous.catch((caughtError) => { console.warn({ source: import.meta.url, operation: "withLocalSaveLock" }, caughtError); });
     try {
         return await task();
     } finally {
@@ -153,6 +158,7 @@ export async function withConfirmableChatMutation(ctx, task) {
     const identity = {
         kind: isPresent(ctx?.groupId) ? 'group' : 'character',
         chatId: String(ctx.chatId),
+        identity: getChatIdentity(ctx),
     };
     return withLocalSaveLock(`${chatSaveLockName(identity)}:memory`, () => task(identity));
 }

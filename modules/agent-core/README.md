@@ -2,9 +2,7 @@
 
 `agent-core` 是小白 X 各 Agent App 共用的业务无关能力层；共享配置表单原语可以在这里，具体 App 的界面与宿主装配不属于这里。
 
-浏览器原生 ESM 消费者不得直接加载带 SDK 裸包 import 的 `provider-config.js`。纯配置解析从
-`provider-resolution.js` 导入；真正需要发起模型请求时，懒加载构建产物
-`dist/agent-core-browser.js`。浏览器入口只导出通用配置、Adapter factory、请求脱敏和
+浏览器消费者由插件统一构建，纯配置解析从 `provider-resolution.js` 导入；真正需要发起模型请求时，懒加载源码 `browser-entry.js`，由统一依赖图提取 SDK。原生动态入口通过构建清单的 `runtime/agent-core` 装载，不直接请求带裸包 import 的源码。浏览器入口只导出通用配置、Adapter factory、请求脱敏和
 SillyTavern 请求头注入，不得反向依赖任何具体功能模块。
 
 可以放这里：
@@ -68,6 +66,12 @@ Responses 的 `onStreamProgress` 快照用 `activity` 报告当前观察到的�
 ## OpenAI 兼容流式错误
 
 原生工具流收到供应商的 `error` 数据时，按现有 SDK 的错误契约向上抛出，保留原始错误消息、`code`、`type`、`param` 与请求诊断，不让它落成通用的响应未完成错误。即使此前已收到工具完成标记，这次请求仍以失败结束，不返回可执行工具结果。中止读取并释放流，不自动重试；HTTP 200 内的错误不虚构 HTTP 失败状态。此规则按传输协议处理，不根据 Claude 或其他模型名称猜测中转参数。
+
+## 回复内容与结束状态
+
+`runtime/response-completion.js` 统一解释各协议的结束原因。适配器返回实际收到的正文、思考、工具调用和回放数据，同时附带 `finishReason`、`completion`（`complete` / `incomplete`）及 `truncated`；这些是本次请求的元数据，不增加持久化字段。输出达到上限或缺失结束标记本身不抛错，不通过异常携带另一份回复，也不因此重发请求。明确拒绝、供应商错误、网络失败和取消仍向上抛出。
+
+消费者按内容契约判断可用性：闭合且合法的 XML / JSON 与完整工具调用可正常处理，不能仅凭结束标记废弃。工具入口使用 `resolveResultToolCalls`；异常结束时只接受完整 JSON 对象参数，不把半截参数宽松修补成可执行写入。适配器保留原始参数，不能用 SDK 的部分 JSON 投影替代。调用方缩减结果字段前须先走此共享入口，或保留结束元数据至该入口。
 
 ## 上下文计数边界
 

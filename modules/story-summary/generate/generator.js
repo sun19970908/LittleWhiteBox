@@ -3,7 +3,6 @@
 
 import { getContext } from "../../../../../../extensions.js";
 import { xbLog } from "../../../core/debug-core.js";
-import { formatErrorDetails } from '../../../core/error-details.js';
 import {
     addSummarySnapshot,
     getFacts,
@@ -28,9 +27,9 @@ import { normalizeSummaryDelayFloors } from '../data/summary-delay.js';
 import { prepareSummaryResult } from './summary-result.js';
 import { formatModelArcProgress } from './arc-progress.js';
 import { notifySummaryCommitted } from '../maintenance/notification.js';
+import { getChatIdentity } from '../data/chat-identity.js';
 
 const MODULE_ID = 'summaryGenerator';
-const SUMMARY_SESSION_ID = 'xb9';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 辅助函数
@@ -113,6 +112,7 @@ function staleSourceResult(onStatus) {
 export async function runSummaryGeneration(mesId, config, callbacks = {}, runtime = {}) {
     const { onStatus, onError, onComplete } = callbacks;
     const { signal = null, targetChatId = getContext()?.chatId || null } = runtime;
+    const targetIdentity = getChatIdentity(getContext());
 
     if (isSummaryRunInactive(signal, targetChatId)) {
         return cancelledResult(onStatus);
@@ -143,7 +143,6 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     const existingSummary = formatExistingSummaryForAI(store);
     const existingFacts = getFacts();
     const existingEventCount = store?.json?.events?.length || 0;
-    const useStream = config.trigger?.useStream !== false;
 
     let raw;
     try {
@@ -153,15 +152,6 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
             newHistoryText: slice.text,
             historyRange: slice.range,
             existingEventCount,
-            llmApi: {
-                provider: config.api?.provider,
-                url: config.api?.url,
-                key: config.api?.key,
-                model: config.api?.model,
-            },
-            genParams: config.gen || {},
-            useStream,
-            sessionId: SUMMARY_SESSION_ID,
             signal,
         });
         if (isSummaryRunInactive(signal, targetChatId)) {
@@ -176,7 +166,7 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
             return { success: false, cancelled: true };
         }
         xbLog.error(MODULE_ID, '生成失败', err);
-        onError?.(`生成失败：${formatErrorDetails(err, { includeStack: false })}`);
+        onError?.(SUMMARY_FEEDBACK_COPY.summaryFailed);
         return { success: false, error: err };
     }
 
@@ -218,8 +208,8 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
             endFloor: slice.endMesId + 1,
         });
     } catch (error) {
-        const message = `返回的JSON不是有效总结：${error.message}`;
-        xbLog.error(MODULE_ID, message);
+        const message = SUMMARY_FEEDBACK_COPY.summaryResultInvalid;
+        xbLog.error(MODULE_ID, message, error);
         onError?.(message);
         return { success: false, error: "structure", message };
     }
@@ -248,7 +238,9 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     }
 
     xbLog.info(MODULE_ID, `总结完成，已更新至 ${slice.endMesId + 1} 楼`);
-    notifySummaryCommitted({ chatId: targetChatId, start: lastSummarized + 1, cutoff: slice.endMesId });
+    if (!signal?.aborted && getChatIdentity(getContext()) === targetIdentity) {
+        notifySummaryCommitted({ chatId: targetChatId, identity: targetIdentity, start: lastSummarized + 1, cutoff: slice.endMesId });
+    }
 
     if (parsed.factUpdates?.length) {
         xbLog.info(MODULE_ID, `Facts 更新: ${parsed.factUpdates.length} 条`);
@@ -281,7 +273,7 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
             return cancelledResult(onStatus, true);
         }
         xbLog.warn(MODULE_ID, '总结已提交，但收尾任务失败', error);
-        onError?.(`总结已保存，但后续处理失败：${formatErrorDetails(error, { includeStack: false })}`);
+        onError?.(SUMMARY_FEEDBACK_COPY.summaryFollowupFailed);
         return result;
     }
 
@@ -290,5 +282,8 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     }
 
     onStatus?.(`总结完成，已保存至 ${slice.endMesId + 1} 楼`);
+    if (config.trigger?.notifyOnComplete) {
+        window.toastr?.success(SUMMARY_FEEDBACK_COPY.summaryCompleted(slice.endMesId + 1, newEventIds.length));
+    }
     return result;
 }

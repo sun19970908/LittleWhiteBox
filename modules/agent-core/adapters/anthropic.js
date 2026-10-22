@@ -1,7 +1,9 @@
+import { resolveApiBaseUrl, joinApiUrl } from '../../../shared/common/openai-url-utils.js';
 import Anthropic from '@anthropic-ai/sdk';
+import { buildSamplingParameters } from '../sampling.js';
 import { resolveModelFamily } from '../../../shared/host-llm/model-family.js';
 import { resolveAgentAuth } from '../provider-auth.js';
-import { requireResponseCompletion } from '../runtime/response-completion.js';
+import { readResponseCompletion } from '../runtime/response-completion.js';
 import {
     buildEffectiveReasoningConfig,
     buildSdkRequestInspection,
@@ -15,6 +17,7 @@ import {
     isReasoningOutputVisible,
     normalizeReasoningConfig,
 } from '../reasoning-config.js';
+import { stripToolProtocolMarker } from './tool-protocol-marker.js';
 
 const PROMPT_CACHE_CONTROL = Object.freeze({ type: 'ephemeral' });
 const CACHEABLE_MESSAGE_BLOCKS = new Set(['text', 'image', 'tool_use', 'tool_result']);
@@ -98,7 +101,7 @@ function buildMessageContent(content) {
 function resolveSystemPrompt(task) {
     const parts = [
         String(task.systemPrompt || '').trim(),
-        ...((task.messages || [])
+        ...(stripToolProtocolMarker(task.messages || [])
             .filter((message) => message.role === 'system')
             .map((message) => String(message.content || '').trim())),
     ].filter(Boolean);
@@ -143,7 +146,8 @@ function buildToolUseBlocksFromToolCalls(toolCalls = []) {
         .filter(Boolean);
 }
 
-export function buildAnthropicMessages(messages) {
+export function buildAnthropicMessages(sourceMessages) {
+    const messages = stripToolProtocolMarker(sourceMessages);
     const filtered = [];
 
     for (let index = 0; index < messages.length; index += 1) {
@@ -219,6 +223,10 @@ export function normalizeAnthropicSdkBaseUrl(baseUrl = '') {
         .trim()
         .replace(/\/+$/, '')
         .replace(/\/v1$/i, '');
+}
+
+function messagesUrl(config) {
+    return joinApiUrl(config.resolvedBaseUrl || resolveApiBaseUrl(config.baseUrl || 'https://api.anthropic.com', '/v1'), '/messages');
 }
 
 export function resolveAnthropicToolChoice(toolChoice = 'auto', tools = []) {
@@ -325,12 +333,15 @@ export class AnthropicAdapter {
                 display: isReasoningOutputVisible(reasoning) ? 'summarized' : 'omitted',
             };
         }
+        const samplingParams = buildSamplingParameters('anthropic', this.config.sampling, {
+            model: this.config.model, reasoning,
+        });
+        Object.assign(body, samplingParams);
         return body;
     }
 
     inspectRequest(task, options = {}) {
         const stream = typeof task.onStreamProgress === 'function';
-        const baseUrl = normalizeAnthropicSdkBaseUrl(this.config.baseUrl);
         const protocol = options.protocol || resolveAnthropicRequestProtocol(this.config, task);
         const body = options.body || this.buildRequestBody(task, protocol);
         const reasoning = protocol.effectiveReasoning;
@@ -338,7 +349,7 @@ export class AnthropicAdapter {
             provider: 'anthropic',
             model: this.config.model,
             transport: 'anthropic-sdk',
-            url: `${baseUrl}/v1/messages`,
+            url: messagesUrl(this.config),
             headers: {
                 'Content-Type': 'application/json',
                 ...this.auth.headers,
@@ -369,13 +380,15 @@ export class AnthropicAdapter {
         const body = this.buildRequestBody(task, protocol);
         const requestInspection = this.inspectRequest(task, { body, protocol });
         let response;
+        const toolDraftMap = new Map();
 
         if (typeof task.onStreamProgress === 'function') {
             const stream = this.client.messages.stream(body, {
                 signal: task.signal,
+                path: messagesUrl(this.config),
             });
             const thoughtMap = new Map();
-            const toolDraftMap = new Map();
+            let receivedMessage;
             let streamText = '';
             const buildThoughts = () => isReasoningOutputVisible(effectiveReasoning)
                 ? Array.from(thoughtMap.entries())
@@ -421,7 +434,8 @@ export class AnthropicAdapter {
                     ...(buildToolDrafts().length ? { text: streamText, toolCalls: buildToolDrafts(), toolCallDraft: true } : {}),
                 });
             });
-            stream.on('streamEvent', (event) => {
+            stream.on('streamEvent', (event, snapshot) => {
+                receivedMessage = snapshot;
                 if (event?.type === 'content_block_start' && event.content_block?.type === 'tool_use') {
                     const initialInput = event.content_block.input && typeof event.content_block.input === 'object'
                         ? event.content_block.input
@@ -455,20 +469,37 @@ export class AnthropicAdapter {
                     ...(buildToolDrafts().length ? { text: streamText, toolCalls: buildToolDrafts(), toolCallDraft: true } : {}),
                 });
             });
-            response = await stream.finalMessage();
+            try { response = await stream.finalMessage(); }
+            catch (error) {
+                // done() still rejects real transport/provider errors. A clean EOF
+                // without message_stop only prevents the SDK from publishing its
+                // final message; the accumulated content remains usable.
+                await stream.done();
+                if (!receivedMessage) { throw error; }
+                response = receivedMessage;
+            }
         } else {
             response = await this.client.messages.create(body, {
                 signal: task.signal,
+                path: messagesUrl(this.config),
             });
         }
 
+        const completion = readResponseCompletion('anthropic', response.stop_reason);
         const toolCalls = (response.content || [])
             .filter((item) => item.type === 'tool_use' && item.name)
-            .map((item, index) => ({
-                id: item.id || `anthropic-tool-${index + 1}`,
-                name: item.name,
-                arguments: JSON.stringify(item.input || {}),
-            }));
+            .map((item, index) => {
+                const rawInput = toolDraftMap.get(response.content.indexOf(item))?.inputJson;
+                // The SDK's partial JSON parser may complete cut-off input. Keep
+                // the actual received bytes for downstream argument validation.
+                return {
+                    id: item.id || `anthropic-tool-${index + 1}`,
+                    name: item.name,
+                    arguments: completion.completion === 'incomplete'
+                        ? rawInput ?? JSON.stringify(item.input || {})
+                        : rawInput || JSON.stringify(item.input || {}),
+                };
+            });
 
         const text = (response.content || [])
             .filter((item) => item.type === 'text')
@@ -484,7 +515,6 @@ export class AnthropicAdapter {
                 .filter((item) => item.text)
             : [];
 
-        const finishReason = requireResponseCompletion('anthropic', response.stop_reason, false, text);
         const usage = response.usage;
         console.info(ANTHROPIC_USAGE_LOG, {
             messageId: response.id,
@@ -496,7 +526,7 @@ export class AnthropicAdapter {
             text,
             toolCalls,
             thoughts,
-            finishReason,
+            ...completion,
             usage,
             model: response.model || this.config.model,
             provider: 'anthropic',

@@ -5,6 +5,15 @@ import { getContext } from "../../../../../../extensions.js";
 import { saveBase64AsFile } from "../../../../../../utils.js";
 import { hasPreviewImage, DRAW_SLOT_COPY, PreviewStatus } from './image-record.js';
 import { IMAGE_SAVE_LABEL_HTML } from './image-save-ui.js';
+import { normalizeMediaUrl } from './media-url.js';
+import { getSafeViewportStyles, observeViewport } from '../../../shared/common/viewport.js';
+import { getImageChatIdentity } from './chat-image-persistence.js';
+import { observeAsyncCallback } from '../../../shared/common/async-errors.js';
+
+const useCurrentGalleryImageEvent = observeAsyncCallback(useCurrentGalleryImage, { source: import.meta.url, operation: "useCurrentGalleryImage" });
+const saveCurrentGalleryImageEvent = observeAsyncCallback(saveCurrentGalleryImage, { source: import.meta.url, operation: "saveCurrentGalleryImage" });
+const deleteCurrentGalleryImageEvent = observeAsyncCallback(deleteCurrentGalleryImage, { source: import.meta.url, operation: "deleteCurrentGalleryImage" });
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
@@ -94,7 +103,7 @@ function blobToDataUrl(blob) {
 }
 
 async function savedUrlToDataUrl(savedUrl = '') {
-    const url = String(savedUrl || '').trim();
+    const url = normalizeMediaUrl(savedUrl);
     if (!url) return '';
     if (/^data:[^;]+;base64,/i.test(url)) return url;
     if (/^blob:/i.test(url)) {
@@ -124,7 +133,7 @@ function prunePreviewObjectUrls() {
     for (const [key, url] of previewObjectUrlCache.entries()) {
         if (previewObjectUrlCache.size <= PREVIEW_OBJECT_URL_LIMIT) break;
         if (isObjectUrlInUse(url)) continue;
-        try { URL.revokeObjectURL(url); } catch {}
+        try { URL.revokeObjectURL(url); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "prunePreviewObjectUrls" }, caughtError); }
         previewObjectUrlCache.delete(key);
     }
 }
@@ -135,7 +144,7 @@ function prunePreviewPreloads() {
         if (oldestKey === undefined) break;
         const cached = previewPreloadCache.get(oldestKey);
         if (cached?.img) {
-            try { cached.img.src = ''; } catch {}
+            try { cached.img.src = ''; } catch (caughtError) { console.warn({ source: import.meta.url, operation: "prunePreviewPreloads" }, caughtError); }
         }
         previewPreloadCache.delete(oldestKey);
     }
@@ -146,33 +155,32 @@ export function revokePreviewObjectUrl(imgId) {
     if (!key) return;
     const url = previewObjectUrlCache.get(key);
     if (url) {
-        try { URL.revokeObjectURL(url); } catch {}
+        try { URL.revokeObjectURL(url); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "revokePreviewObjectUrl" }, caughtError); }
         previewObjectUrlCache.delete(key);
     }
     const preload = previewPreloadCache.get(key);
     if (preload?.img) {
-        try { preload.img.src = ''; } catch {}
+        try { preload.img.src = ''; } catch (caughtError) { console.warn({ source: import.meta.url, operation: "revokePreviewObjectUrl" }, caughtError); }
     }
     previewPreloadCache.delete(key);
 }
 
 export function clearPreviewObjectUrls() {
     for (const url of previewObjectUrlCache.values()) {
-        try { URL.revokeObjectURL(url); } catch {}
+        try { URL.revokeObjectURL(url); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "clearPreviewObjectUrls" }, caughtError); }
     }
     previewObjectUrlCache.clear();
     for (const cached of previewPreloadCache.values()) {
         if (cached?.img) {
-            try { cached.img.src = ''; } catch {}
+            try { cached.img.src = ''; } catch (caughtError) { console.warn({ source: import.meta.url, operation: "clearPreviewObjectUrls" }, caughtError); }
         }
     }
     previewPreloadCache.clear();
 }
 
 export function getPreviewDisplayUrl(preview = {}) {
-    const savedUrl = String(preview?.savedUrl || '').trim();
+    const savedUrl = normalizeMediaUrl(preview?.savedUrl);
     if (savedUrl) return savedUrl;
-
     const parsed = parseBase64Image(preview?.base64);
     if (!parsed?.data) return '';
 
@@ -212,7 +220,7 @@ export async function preloadPreviewDisplayUrl(preview = {}) {
         const done = (ok) => resolve(ok);
         img.onload = async () => {
             if (typeof img.decode === 'function') {
-                try { await img.decode(); } catch {}
+                try { await img.decode(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "promise" }, caughtError); }
             }
             done(true);
         };
@@ -237,7 +245,7 @@ export async function warmSlotPreviewNeighbors(slotId, currentIndex = 0, range =
     for (let index = start; index <= end; index++) {
         if (index === currentIndex) continue;
         const preload = () => {
-            void preloadPreviewDisplayUrl(successPreviews[index]).catch(() => {});
+            void preloadPreviewDisplayUrl(successPreviews[index]).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "preload" }, caughtError); });
         };
         if (typeof requestIdleCallback === 'function') {
             requestIdleCallback(preload, { timeout: 500 });
@@ -333,7 +341,7 @@ function publishCacheChange(slotIds) {
     if (normalized !== null && normalized.length === 0) return;
     try {
         ensureCacheSyncChannel()?.postMessage({ type: 'invalidate', slotIds: normalized });
-    } catch {}
+    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "publishCacheChange" }, caughtError); }
 }
 
 export function subscribeGalleryCacheChanges(listener) {
@@ -389,7 +397,7 @@ export async function openDB() {
     }
 
     if (db) {
-        try { db.close(); } catch {}
+        try { db.close(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "openDB" }, caughtError); }
         db = null;
     }
 
@@ -610,6 +618,7 @@ export async function storePreview(opts) {
         negativePrompt = null,
         // 整图正向提示词追加位（ComfyUI 编译器拼在最后），落盘以便画廊编辑重生成时重建
         postPrompt = null,
+        placement,
         source = '',
         chatId = '',
         characterName = '',
@@ -627,7 +636,9 @@ export async function storePreview(opts) {
     return new Promise((resolve, reject) => {
         try {
             const tx = database.transaction(DB_STORE, 'readwrite');
-            tx.objectStore(DB_STORE).put({
+            const store = tx.objectStore(DB_STORE);
+            const previous = store.get(imgId);
+            previous.onsuccess = () => store.put({
                 imgId,
                 slotId: resolvedSlotId,
                 messageId,
@@ -648,6 +659,9 @@ export async function storePreview(opts) {
                 characterPrompts,
                 negativePrompt,
                 postPrompt,
+                // Only creation grants attachment authority. Progress/late paid
+                // results cannot restore authority withdrawn by save or editing.
+                placement: previous.result ? previous.result.placement ?? null : placement ?? null,
                 timestamp: Date.now()
             });
             tx.oncomplete = () => {
@@ -697,6 +711,30 @@ export async function getPreview(imgId) {
         } catch (e) {
             reject(e);
         }
+    });
+}
+
+// Bounded by the floor, never by the size of the chat or image archive.
+export async function getPreviewsForMessage(chatId, messageId) {
+    const database = await openDB();
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction(DB_STORE, 'readonly');
+        const store = tx.objectStore(DB_STORE);
+        // Intersect existing indexes before loading records. This also works
+        // with released databases, without another blocking schema upgrade.
+        const requests = [store.index('chatId').getAllKeys(String(chatId)),
+            store.index('messageId').getAllKeys(Number(messageId)), store.index('messageId').getAllKeys(String(messageId))];
+        const records = [];
+        let remaining = requests.length;
+        for (const request of requests) request.onsuccess = () => {
+            if (--remaining) return;
+            const chatKeys = new Set(requests[0].result);
+            for (const key of new Set(requests.slice(1).flatMap(item => item.result))) {
+                if (chatKeys.has(key)) store.get(key).onsuccess = event => records.push(event.target.result);
+            }
+        };
+        tx.oncomplete = () => resolve(records);
+        tx.onerror = tx.onabort = () => reject(tx.error || new Error(DRAW_SLOT_COPY.storageReadFailed));
     });
 }
 
@@ -768,7 +806,8 @@ export async function getDisplayPreviewForSlot(slotId) {
         selectedImgId,
         historyCount: successPreviews.length,
         hasData: false,
-        isFailed: true,
+        isFailed: preview?.status !== PreviewStatus.UNGENERATED,
+        isUngenerated: preview?.status === PreviewStatus.UNGENERATED,
         isPending: preview?.status === PreviewStatus.PENDING || preview?.status === PreviewStatus.UNKNOWN,
         failedInfo: {
             tags: preview?.tags || '',
@@ -820,6 +859,33 @@ export async function updatePreviewRecord(imgId, changes) {
             resolve(updated);
         };
         tx.onerror = tx.onabort = () => reject(failure || storageWriteError(tx));
+    });
+}
+
+// Revoke attachment only; never remove the paid image or its reusable input.
+// The transaction also serializes against late full-record transport writes.
+export async function clearPreviewPlacements(owner, slotIds) {
+    const database = await openDB();
+    const ids = [...new Set(slotIds)];
+    if (!owner || !ids.length) return;
+    return new Promise((resolve, reject) => {
+        const tx = database.transaction(DB_STORE, 'readwrite');
+        const store = tx.objectStore(DB_STORE);
+        for (const slotId of ids) {
+            const request = store.index('slotId').openCursor(slotId);
+            request.onsuccess = () => {
+                const cursor = request.result;
+                if (!cursor) return;
+                if (cursor.value.placement?.owner === owner) cursor.update({ ...cursor.value, placement: null });
+                cursor.continue();
+            };
+        }
+        tx.oncomplete = () => {
+            ids.forEach(invalidateCache);
+            publishCacheChange(ids);
+            resolve();
+        };
+        tx.onerror = tx.onabort = () => reject(storageWriteError(tx));
     });
 }
 
@@ -884,7 +950,8 @@ export async function updatePreviewSavedUrl(imgId, savedUrl) {
             const tx = database.transaction(DB_STORE, 'readwrite');
             tx.objectStore(DB_STORE).put(preview);
             tx.oncomplete = () => {
-                revokePreviewObjectUrl(imgId);
+                // 不在这里作废 blob URL：聊天里的图片卡（或尚未加载的懒加载图片）可能还在用它，
+                // 提前作废会让它加载失败；闲置的 blob 由 prunePreviewObjectUrls 回收。
                 invalidateCache(preview.slotId);
                 publishCacheChange([preview.slotId]);
                 resolve();
@@ -959,7 +1026,12 @@ export async function clearExpiredCache(cacheDays = 3) {
                     const isFailed = record.status === 'failed' || (!record.base64 && !record.savedUrl);
                     const shouldTrimSavedBase64 = !!record.savedUrl && !!record.base64;
 
-                    if (isExpiredUnsaved || (isFailed && record.timestamp < cutoff)) { 
+                    // Chat image rows are durable user inputs/results, not a
+                    // disposable request cache. Only explicit gallery/slot
+                    // deletion may remove the last copy of their TAG or image.
+                    const chatImage = record.chatId && record.messageId !== undefined
+                        && record.messageId !== null && record.messageId !== '' && !record.source;
+                    if (!chatImage && (isExpiredUnsaved || (isFailed && record.timestamp < cutoff))) {
                         revokePreviewObjectUrl(record.imgId);
                         cursor.delete(); 
                         cleaned++; 
@@ -1160,7 +1232,7 @@ function scanCharacterSlotOrder(charName) {
                         slot.latestTimestamp = timestamp;
                         slot.latestImgId = item.imgId;
                     }
-                } catch {}
+                } catch (caughtError) { console.warn({ source: import.meta.url, operation: "visit" }, caughtError); }
             };
             const source = store.indexNames.contains('characterName') && charName !== 'Unknown'
                 ? store.index('characterName').openCursor(charName)
@@ -1268,8 +1340,61 @@ function ensureGalleryStyles() {
     if (document.getElementById('nd-gallery-styles')) return;
     const style = document.createElement('style');
     style.id = 'nd-gallery-styles';
-    style.textContent = `#nd-gallery-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:100000;display:none;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px)}#nd-gallery-overlay.visible{display:flex;flex-direction:column;align-items:center;justify-content:center}.nd-gallery-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border:none;background:rgba(255,255,255,0.1);border-radius:50%;color:#fff;font-size:20px;cursor:pointer;z-index:10}.nd-gallery-close:hover{background:rgba(255,255,255,0.2)}.nd-gallery-main{display:flex;align-items:center;gap:16px;max-width:90vw;max-height:70vh}.nd-gallery-nav{width:48px;height:48px;border:none;background:rgba(255,255,255,0.1);border-radius:50%;color:#fff;font-size:24px;cursor:pointer;flex-shrink:0}.nd-gallery-nav:hover{background:rgba(255,255,255,0.2)}.nd-gallery-nav:disabled{opacity:0.3;cursor:not-allowed}.nd-gallery-img-wrap{position:relative;max-width:calc(90vw - 140px);max-height:70vh}.nd-gallery-img{max-width:100%;max-height:70vh;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5)}.nd-gallery-saved-badge{position:absolute;top:12px;left:12px;background:rgba(62,207,142,0.9);padding:4px 10px;border-radius:6px;font-size:11px;color:#fff;font-weight:600}.nd-gallery-thumbs{display:flex;gap:8px;margin-top:20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:12px;max-width:90vw;overflow-x:auto}.nd-gallery-thumb{width:64px;height:64px;border-radius:8px;object-fit:cover;cursor:pointer;border:2px solid transparent;opacity:0.6;transition:all 0.15s;flex-shrink:0}.nd-gallery-thumb:hover{opacity:0.9}.nd-gallery-thumb.active{border-color:#d4a574;opacity:1}.nd-gallery-thumb.saved{border-color:rgba(62,207,142,0.8)}.nd-gallery-actions{display:flex;gap:12px;margin-top:16px}.nd-gallery-btn{padding:10px 20px;border:1px solid rgba(255,255,255,0.2);border-radius:8px;background:rgba(255,255,255,0.1);color:#fff;font-size:13px;cursor:pointer;transition:all 0.15s}.nd-gallery-btn:hover{background:rgba(255,255,255,0.2)}.nd-gallery-btn.primary{background:rgba(212,165,116,0.3);border-color:rgba(212,165,116,0.5)}.nd-gallery-btn.danger{color:#f87171;border-color:rgba(248,113,113,0.3)}.nd-gallery-btn.danger:hover{background:rgba(248,113,113,0.15)}.nd-gallery-info{text-align:center;margin-top:12px;font-size:12px;color:rgba(255,255,255,0.6)}`;
+    style.textContent = `
+#nd-gallery-overlay{position:fixed;top:0;left:0;width:100vw;height:100vh;z-index:100000;display:none;background:rgba(0,0,0,0.85);backdrop-filter:blur(8px)}
+#nd-gallery-overlay.visible{display:flex;flex-direction:column;align-items:center;justify-content:center}
+.nd-gallery-close{position:absolute;top:16px;right:16px;width:40px;height:40px;border:none;background:rgba(255,255,255,0.1);border-radius:50%;color:#fff;font-size:20px;cursor:pointer;z-index:10}
+.nd-gallery-close:hover{background:rgba(255,255,255,0.2)}
+.nd-gallery-main{position:relative;display:flex;align-items:center;justify-content:center;width:100%;max-height:75%;flex:1;min-height:0;overflow:hidden}
+.nd-gallery-nav{position:absolute;top:50%;transform:translateY(-50%);z-index:10;width:48px;height:48px;border:none;background:rgba(0,0,0,0.35);backdrop-filter:blur(4px);border-radius:50%;color:#fff;font-size:24px;cursor:pointer}
+#nd-gallery-prev{left:16px}
+#nd-gallery-next{right:16px}
+.nd-gallery-nav:hover{background:rgba(255,255,255,0.2)}
+.nd-gallery-nav:disabled{opacity:0.3;cursor:not-allowed}
+/* 图片与角标共享居中的图片网格区域，不以撑满高度的外壳作为角标边界。 */
+.nd-gallery-img-wrap{position:relative;max-width:90%;height:100%;min-height:0;display:grid;grid-template-rows:minmax(0,max-content);align-content:center;justify-content:center;touch-action:none}
+.nd-gallery-img,.nd-gallery-saved-badge{grid-area:1/1}
+.nd-gallery-img{min-width:0;min-height:0;max-width:100%;max-height:100%;object-fit:contain;border-radius:12px;box-shadow:0 8px 32px rgba(0,0,0,0.5);user-select:none;-webkit-user-drag:none;will-change:transform}
+.nd-gallery-saved-badge{position:absolute;top:min(12px,10%);left:min(12px,10%);z-index:10;background:rgba(62,207,142,0.9);padding:min(4px,5%) min(10px,5%);white-space:nowrap;border-radius:6px;font-size:11px;color:#fff;font-weight:600}
+.nd-gallery-thumbs{flex-shrink:0;display:flex;gap:8px;margin-top:20px;padding:12px;background:rgba(0,0,0,0.3);border-radius:12px;box-sizing:border-box;max-width:90%;overflow-x:auto;transition:opacity 0.15s ease,visibility 0.15s ease}
+#nd-gallery-overlay.zoomed .nd-gallery-thumbs{opacity:0;pointer-events:none;visibility:hidden}
+.nd-gallery-thumb{width:64px;height:64px;border-radius:8px;object-fit:cover;cursor:pointer;border:2px solid transparent;opacity:0.6;transition:all 0.15s;flex-shrink:0}
+.nd-gallery-thumb:hover{opacity:0.9}
+.nd-gallery-thumb.active{border-color:#d4a574;opacity:1}
+.nd-gallery-thumb.saved{border-color:rgba(62,207,142,0.8)}
+.nd-gallery-actions{display:flex;flex-shrink:0;flex-wrap:wrap;justify-content:center;gap:12px;margin-top:16px;max-width:100%}
+.nd-gallery-btn{padding:10px 20px;border:1px solid rgba(255,255,255,0.2);border-radius:8px;background:rgba(255,255,255,0.1);color:#fff;font-size:13px;cursor:pointer;transition:all 0.15s}
+.nd-gallery-btn:hover{background:rgba(255,255,255,0.2)}
+.nd-gallery-btn.primary{background:rgba(212,165,116,0.3);border-color:rgba(212,165,116,0.5)}
+.nd-gallery-btn.danger{color:#f87171;border-color:rgba(248,113,113,0.3)}
+.nd-gallery-btn.danger:hover{background:rgba(248,113,113,0.15)}
+.nd-gallery-info{flex-shrink:0;text-align:center;margin:12px 0 8px;font-size:12px;color:rgba(255,255,255,0.6)}
+@media(max-height:500px){.nd-gallery-thumbs{margin-top:8px;padding:6px}.nd-gallery-thumb{width:40px;height:40px}.nd-gallery-actions{margin-top:8px}.nd-gallery-info{margin-top:6px}}`;
     document.head.appendChild(style);
+}
+
+let galleryZoomScale = 1;
+let galleryZoomX = 0;
+let galleryZoomY = 0;
+let galleryPanning = false;
+const galleryPointers = new Map();
+
+function applyGalleryZoom(smooth = false) {
+    const img = document.getElementById('nd-gallery-img');
+    if (!img) return;
+    img.style.transition = smooth ? 'transform 0.15s ease-out' : 'none';
+    img.style.transform = galleryZoomScale > 1 ? `translate3d(${galleryZoomX}px, ${galleryZoomY}px, 0) scale(${galleryZoomScale})` : '';
+    img.style.cursor = galleryZoomScale > 1 ? (galleryPanning ? 'grabbing' : 'grab') : '';
+    document.getElementById('nd-gallery-overlay')?.classList.toggle('zoomed', galleryZoomScale > 1);
+}
+
+function resetGalleryZoom(smooth = false) {
+    galleryZoomScale = 1;
+    galleryZoomX = 0;
+    galleryZoomY = 0;
+    galleryPanning = false;
+    galleryPointers.clear();
+    applyGalleryZoom(smooth);
 }
 
 function createGalleryOverlay() {
@@ -1279,25 +1404,116 @@ function createGalleryOverlay() {
 
     const overlay = document.createElement('div');
     overlay.id = 'nd-gallery-overlay';
-    // Template-only UI markup.
-    // eslint-disable-next-line no-unsanitized/property
+    // eslint-disable-next-line no-unsanitized/property -- Template-only UI markup.
     overlay.innerHTML = `<button class="nd-gallery-close" id="nd-gallery-close">✕</button><div class="nd-gallery-main"><button class="nd-gallery-nav" id="nd-gallery-prev">‹</button><div class="nd-gallery-img-wrap"><img class="nd-gallery-img" id="nd-gallery-img" src="" alt=""><div class="nd-gallery-saved-badge" id="nd-gallery-saved-badge" style="display:none">已保存</div></div><button class="nd-gallery-nav" id="nd-gallery-next">›</button></div><div class="nd-gallery-thumbs" id="nd-gallery-thumbs"></div><div class="nd-gallery-actions" id="nd-gallery-actions"><button class="nd-gallery-btn primary" id="nd-gallery-use">使用此图</button><button class="nd-gallery-btn" id="nd-gallery-save">${IMAGE_SAVE_LABEL_HTML}</button><button class="nd-gallery-btn danger" id="nd-gallery-delete">🗑️ 删除</button></div><div class="nd-gallery-info" id="nd-gallery-info"></div>`;
     document.body.appendChild(overlay);
 
     document.getElementById('nd-gallery-close').addEventListener('click', closeGallery);
     document.getElementById('nd-gallery-prev').addEventListener('click', () => navigateGallery(-1));
     document.getElementById('nd-gallery-next').addEventListener('click', () => navigateGallery(1));
-    document.getElementById('nd-gallery-use').addEventListener('click', useCurrentGalleryImage);
-    document.getElementById('nd-gallery-save').addEventListener('click', saveCurrentGalleryImage);
-    document.getElementById('nd-gallery-delete').addEventListener('click', deleteCurrentGalleryImage);
+    document.getElementById('nd-gallery-use').addEventListener('click', useCurrentGalleryImageEvent);
+    document.getElementById('nd-gallery-save').addEventListener('click', saveCurrentGalleryImageEvent);
+    document.getElementById('nd-gallery-delete').addEventListener('click', deleteCurrentGalleryImageEvent);
     overlay.addEventListener('click', (e) => { if (e.target === overlay) closeGallery(); });
+
+    const img = document.getElementById('nd-gallery-img');
+
+    img.addEventListener('wheel', (e) => {
+        if (!img.src) return;
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.2 : 0.833;
+        const newScale = Math.max(1, Math.min(6, galleryZoomScale * factor));
+        if (newScale === galleryZoomScale) return;
+        if (newScale <= 1.01) {
+            galleryZoomScale = 1;
+            galleryZoomX = 0;
+            galleryZoomY = 0;
+        } else {
+            const rect = img.getBoundingClientRect();
+            const cx = e.clientX - (rect.left + rect.width / 2);
+            const cy = e.clientY - (rect.top + rect.height / 2);
+            const ratio = newScale / galleryZoomScale;
+            galleryZoomX += cx * (1 - ratio);
+            galleryZoomY += cy * (1 - ratio);
+            galleryZoomScale = newScale;
+        }
+        applyGalleryZoom(false);
+    }, { passive: false });
+
+    img.addEventListener('pointerdown', (e) => {
+        if (e.button !== 0 || !img.src) return;
+        galleryPointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        galleryPanning = galleryZoomScale > 1;
+        applyGalleryZoom(false);
+        img.setPointerCapture(e.pointerId);
+    });
+
+    img.addEventListener('pointermove', (e) => {
+        const previous = galleryPointers.get(e.pointerId);
+        if (!previous) return;
+        const next = { x: e.clientX, y: e.clientY };
+        const other = [...galleryPointers.entries()].find(([id]) => id !== e.pointerId)?.[1];
+        if (other) {
+            const oldDistance = Math.hypot(previous.x - other.x, previous.y - other.y);
+            const distance = Math.hypot(next.x - other.x, next.y - other.y);
+            const scale = Math.max(1, Math.min(6, galleryZoomScale * (oldDistance ? distance / oldDistance : 1)));
+            const rect = img.getBoundingClientRect();
+            const cx = (previous.x + other.x) / 2 - (rect.left + rect.width / 2);
+            const cy = (previous.y + other.y) / 2 - (rect.top + rect.height / 2);
+            const ratio = scale / galleryZoomScale;
+            galleryZoomX += cx * (1 - ratio) + (next.x - previous.x) / 2;
+            galleryZoomY += cy * (1 - ratio) + (next.y - previous.y) / 2;
+            galleryZoomScale = scale;
+        } else if (galleryZoomScale > 1) {
+            galleryZoomX += next.x - previous.x;
+            galleryZoomY += next.y - previous.y;
+        }
+        galleryPointers.set(e.pointerId, next);
+        if (galleryZoomScale === 1) { galleryZoomX = 0; galleryZoomY = 0; }
+        galleryPanning = galleryZoomScale > 1;
+        applyGalleryZoom(false);
+    });
+
+    const endPan = (e) => {
+        galleryPointers.delete(e.pointerId);
+        galleryPanning = galleryPointers.size > 0 && galleryZoomScale > 1;
+        applyGalleryZoom(false);
+    };
+    img.addEventListener('pointerup', endPan);
+    img.addEventListener('pointercancel', endPan);
+    img.addEventListener('lostpointercapture', endPan);
 }
 
 export async function openGallery(slotId, messageId, callbacks = {}) {
+    // Capture before IndexedDB yields; the host can reuse its chat array when
+    // navigating, so neither an index nor a chat filename identifies the source.
+    const ctx = getContext();
+    const owner = getImageChatIdentity(ctx);
+    const chatId = String(ctx.chatId || '');
+    const msgIdx = Number(messageId);
+    const message = Number.isInteger(msgIdx) ? ctx.chat?.[msgIdx] : null;
+    const swipeIndex = message?.swipe_id ?? 0;
+    const assertCurrent = () => {
+        const current = getContext();
+        if (current.chat !== ctx.chat || getImageChatIdentity(current) !== owner
+            || (Number.isInteger(msgIdx) && current.chat?.[msgIdx] !== message)
+            || (message?.swipe_id ?? 0) !== swipeIndex) throw new Error(DRAW_SLOT_COPY.sourceChanged);
+    };
     createGalleryOverlay();
 
-    const previews = await getPreviewsBySlot(slotId);
-    const validPreviews = previews.filter(hasPreviewImage);
+    let previews = await getPreviewsBySlot(slotId);
+    assertCurrent();
+    let validPreviews = previews.filter(hasPreviewImage);
+
+    if (!validPreviews.length && message && owner) {
+        const { materializeDrawSavedPreview } = await import('./draw-common.js');
+        assertCurrent();
+        await materializeDrawSavedPreview(message, slotId, { messageId: msgIdx, chatId });
+        assertCurrent();
+        previews = await getPreviewsBySlot(slotId);
+        assertCurrent();
+        validPreviews = previews.filter(hasPreviewImage);
+    }
 
     if (!validPreviews.length) {
         showToast('没有找到图片历史', 'error');
@@ -1305,19 +1521,27 @@ export async function openGallery(slotId, messageId, callbacks = {}) {
     }
 
     const selectedImgId = await getSlotSelection(slotId);
+    assertCurrent();
     let startIndex = 0;
     if (selectedImgId) {
         const idx = validPreviews.findIndex(p => p.imgId === selectedImgId);
         if (idx >= 0) startIndex = idx;
     }
 
-    currentGalleryData = { slotId, messageId, previews: validPreviews, currentIndex: startIndex, callbacks };
+    currentGalleryData?.stopViewport();
+    currentGalleryData = { slotId, messageId, previews: validPreviews, currentIndex: startIndex, callbacks,
+        stopViewport: observeViewport(() => {
+            Object.assign(document.getElementById('nd-gallery-overlay').style, getSafeViewportStyles());
+        }),
+    };
     renderGalleryThumbs();
     renderGallery();
     document.getElementById('nd-gallery-overlay').classList.add('visible');
 }
 
 export function closeGallery() {
+    resetGalleryZoom(false);
+    currentGalleryData?.stopViewport();
     const el = document.getElementById('nd-gallery-overlay');
     if (el) el.classList.remove('visible');
     currentGalleryData = null;
@@ -1329,8 +1553,7 @@ function renderGalleryThumbs() {
     const reversedPreviews = previews.slice().reverse();
     const thumbsContainer = document.getElementById('nd-gallery-thumbs');
 
-    // Generated from local preview data only.
-    // eslint-disable-next-line no-unsanitized/property
+    // eslint-disable-next-line no-unsanitized/property -- Generated from local preview data only.
     thumbsContainer.innerHTML = reversedPreviews.map((p, i) => {
         const src = getPreviewDisplayUrl(p);
         const originalIndex = previews.length - 1 - i;
@@ -1367,7 +1590,10 @@ function renderGallery() {
     const current = previews[currentIndex];
     if (!current) return;
 
-    document.getElementById('nd-gallery-img').src = getPreviewDisplayUrl(current);
+    const image = document.getElementById('nd-gallery-img');
+    if (image.dataset.imgId !== current.imgId) resetGalleryZoom(false);
+    image.dataset.imgId = current.imgId;
+    image.src = getPreviewDisplayUrl(current);
     document.getElementById('nd-gallery-saved-badge').style.display = current.savedUrl ? 'block' : 'none';
     updateGalleryThumbState();
 
@@ -1379,8 +1605,7 @@ function renderGallery() {
         saveBtn.textContent = '✓ 已保存';
         saveBtn.disabled = true;
     } else {
-        // Static draw-owned markup, without user input.
-        // eslint-disable-next-line no-unsanitized/property
+        // eslint-disable-next-line no-unsanitized/property -- Static draw-owned markup, without user input.
         saveBtn.innerHTML = IMAGE_SAVE_LABEL_HTML;
         saveBtn.disabled = false;
     }
@@ -1491,7 +1716,7 @@ export function destroyGalleryCache() {
     galleryOverlayCreated = false;
 
     if (db) {
-        try { db.close(); } catch {}
+        try { db.close(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "destroyGalleryCache" }, caughtError); }
         db = null;
     }
     dbOpening = null;

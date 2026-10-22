@@ -3,6 +3,8 @@ import type { TaskGenerationRequests, TaskGenerationRequestResult } from './requ
 import type { BoardCompileResult, CandidateCompileResult } from './types.js';
 import { taskFailureMessage } from '../feedback.js';
 import { taskGenerationFailureReason } from './failure.js';
+import { observeBackgroundTask } from '../../../../../shared/common/async-errors.js';
+
 
 interface GenerationRun {
     chatIdentity: string;
@@ -60,7 +62,8 @@ export function createTaskGenerationRuntime({
             run.state = {
                 ...run.state,
                 state: 'idle',
-                message: (run.state.kind === 'board' ? '任务刷新失败。' : '招募失败。') + taskFailureMessage(run.failureReason),
+                message: run.failureReason === 'save-unconfirmed' ? ''
+                    : (run.state.kind === 'board' ? '任务刷新失败。' : '招募失败。') + taskFailureMessage(run.failureReason),
             };
         } finally {
             if (isCurrent(run)) {onChange();}
@@ -85,7 +88,7 @@ export function createTaskGenerationRuntime({
         };
         current = run;
         onChange();
-        void execute(run, request);
+        observeBackgroundTask(execute(run, request), { source: import.meta.url, operation: "start" });
     }
 
     return Object.freeze({

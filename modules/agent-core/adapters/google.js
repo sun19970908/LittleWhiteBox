@@ -1,12 +1,15 @@
+import { resolveApiBaseUrl } from '../../../shared/common/openai-url-utils.js';
 import { FunctionCallingConfigMode, GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { buildSamplingParameters } from '../sampling.js';
 import { resolveAgentAuth } from '../provider-auth.js';
-import { requireResponseCompletion } from '../runtime/response-completion.js';
+import { readResponseCompletion } from '../runtime/response-completion.js';
 import {
     buildEffectiveReasoningConfig,
     buildSdkRequestInspection,
 } from './request-inspection.js';
 import { resolveTaskReasoning } from '../reasoning-capabilities.js';
 import { isReasoningOutputVisible } from '../reasoning-config.js';
+import { stripToolProtocolMarker } from './tool-protocol-marker.js';
 
 function parseArguments(text) {
     try {
@@ -345,7 +348,7 @@ function extractThoughts(response) {
 function resolveSystemInstruction(task) {
     const parts = [
         String(task.systemPrompt || '').trim(),
-        ...((task.messages || [])
+        ...(stripToolProtocolMarker(task.messages || [])
             .filter((message) => message.role === 'system')
             .map((message) => String(message.content || '').trim())),
     ].filter(Boolean);
@@ -416,7 +419,7 @@ function buildConversation(messages) {
     const toolNameById = new Map();
     const providerToolCallIdByInternalId = new Map();
     const contents = [];
-    const filteredMessages = (messages || []).filter((message) => (
+    const filteredMessages = stripToolProtocolMarker(messages || []).filter((message) => (
         message.role === 'user' || message.role === 'assistant' || message.role === 'tool'
     ));
 
@@ -546,7 +549,8 @@ export class GoogleAdapter {
             ...this.auth.sdkOptions,
             httpOptions: {
                 headers: this.auth.headers,
-                baseUrl: String(config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, ''),
+                baseUrl: config.resolvedBaseUrl || resolveApiBaseUrl(config.baseUrl || 'https://generativelanguage.googleapis.com', '/v1beta'),
+                apiVersion: '',
                 timeout: Number(config.timeoutMs) || 15 * 60 * 1000,
             },
         });
@@ -611,6 +615,9 @@ export class GoogleAdapter {
             };
         }
 
+        const samplingParams = buildSamplingParameters('google', this.config.sampling);
+        Object.assign(config, samplingParams);
+
         const createPayload = {
             model: this.config.model,
             history: conversation.history,
@@ -628,7 +635,7 @@ export class GoogleAdapter {
         const effectiveReasoning = options.effectiveReasoning
             || resolveTaskReasoning('google', this.config, task.reasoning);
         const payload = options.payload || this.buildChatPayload(task, effectiveReasoning);
-        const baseUrl = String(this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
+        const baseUrl = this.config.resolvedBaseUrl || resolveApiBaseUrl(this.config.baseUrl || 'https://generativelanguage.googleapis.com', '/v1beta');
         return buildSdkRequestInspection({
             provider: 'google',
             model: this.config.model,
@@ -658,7 +665,7 @@ export class GoogleAdapter {
     }
 
     inspectSendRequest(sendPayload, task, effectiveReasoning) {
-        const baseUrl = String(this.config.baseUrl || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/$/, '');
+        const baseUrl = this.config.resolvedBaseUrl || resolveApiBaseUrl(this.config.baseUrl || 'https://generativelanguage.googleapis.com', '/v1beta');
         return buildSdkRequestInspection({
             provider: 'google',
             model: this.config.model,
@@ -791,7 +798,7 @@ export class GoogleAdapter {
             text,
             toolCalls: normalizedToolCalls,
             thoughts,
-            finishReason: requireResponseCompletion('google', finishReason, false, text),
+            ...readResponseCompletion('google', finishReason),
             model: response.modelVersion || this.config.model,
             provider: 'google',
             providerPayload: buildProviderPayloadFromContents(historyModelContents)

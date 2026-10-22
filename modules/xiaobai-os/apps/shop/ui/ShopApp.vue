@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRaw } from 'vue';
+import { createStorageId } from '../../../kernel/identity.js';
 import { useAppBack } from '../../../shell/app-src/navigation/app-navigation.js';
 import type { XiaobaiOsAppProps } from '../../../shell/app-contract.js';
 import { HostRequestError } from '../../../shell/app-src/frame-bridge.js';
@@ -12,6 +13,8 @@ import ShopProductDetail from './ShopProductDetail.vue';
 import ShopIcon from './ShopIcon.vue';
 import { shopPurchaseReason } from './shop-display.js';
 import './shop.css';
+import { observeBackgroundTask } from '../../../../../shared/common/async-errors.js';
+
 
 interface PendingAction {
     mode: 'purchase' | 'use' | 'deactivate';
@@ -43,7 +46,7 @@ let unsubscribe = () => {};
 let requestGeneration = 0;
 useAppBack(() => {
     if (pending.value) { closeAction(); return true; }
-    if (selectedItemId.value) { void closeDetail(); return true; }
+    if (selectedItemId.value) { observeBackgroundTask(closeDetail(), { source: import.meta.url, operation: "callback" }); return true; }
     if (page.value !== 'shelf') { navigate('shelf'); return true; }
     return false;
 });
@@ -69,8 +72,7 @@ const pendingDisabledReason = computed(() => {
 });
 
 function createActionId(): string {
-    if (typeof globalThis.crypto?.randomUUID === 'function') {return `shop-ui:${globalThis.crypto.randomUUID()}`;}
-    return `shop-ui:${Date.now()}:${Math.random().toString(36).slice(2, 10)}`;
+    return `shop-ui:${createStorageId()}`;
 }
 
 function binding(): { chatIdentity: string } {

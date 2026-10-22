@@ -1,5 +1,5 @@
 import { getRequestHeaders } from '../../../../../../script.js';
-import { extension_settings } from '../../../../../extensions.js';
+import { extensionSettings as extension_settings } from './host/host-state.js';
 import { extensionFolderPath } from '../../core/constants.js';
 import { createFirstPartyIframeOverlay, loadFirstPartyIframeCacheKey } from '../../core/first-party-iframe-app.js';
 import { isTrustedMessage, postToIframe } from '../../core/iframe-messaging.js';
@@ -35,6 +35,8 @@ import {
     saveTavernWorldbookEntry,
     setTavernGlobalWorldbooks,
 } from './host/worldbooks.js';
+import { observeBackgroundTask } from '../../shared/common/async-errors.js';
+
 
 interface PendingFrameMessage {
     type: string;
@@ -98,7 +100,6 @@ const LITTLE_WHITE_BOX_EXT_ID = 'LittleWhiteBox';
 const OVERLAY_ID = 'xiaobaix-tavern-overlay';
 const IFRAME_ID = 'xiaobaix-tavern-iframe';
 const HTML_PATH = `${extensionFolderPath}/modules/tavern/tavern.html`;
-const BUILD_INFO_PATH = `${extensionFolderPath}/modules/tavern/dist/tavern-build.json`;
 const TAVERN_DRAW_DELETED_ERROR_TYPE = 'deleted';
 const TAVERN_DRAW_DELETED_ERROR_MESSAGE = '图片已删除，点击重试可重新生成';
 
@@ -193,7 +194,7 @@ function cloneFramePayload<T>(value: T): T {
 
 async function loadTavernCacheKey(): Promise<string> {
     if (tavernCacheKey) {return tavernCacheKey;}
-    tavernCacheKey = await loadFirstPartyIframeCacheKey(BUILD_INFO_PATH);
+    tavernCacheKey = await loadFirstPartyIframeCacheKey();
     return tavernCacheKey;
 }
 
@@ -209,11 +210,11 @@ function isTavernMobileDevice(): boolean {
             Bowser?: { parse?: (userAgent: string) => { platform?: { type?: string } } };
         };
         const platformType = bowser.Bowser?.parse?.(navigator.userAgent)?.platform?.type;
-        if (mobileTypes.includes(platformType)) {
+        if (platformType !== undefined && mobileTypes.includes(platformType)) {
             return true;
         }
-    } catch {
-        // Fall back to pointer/screen heuristics below.
+    } catch (caughtError) {
+        console.warn({ source: import.meta.url, operation: "isTavernMobileDevice" }, caughtError);
     }
     return window.matchMedia('(pointer: coarse)').matches && window.matchMedia('(max-width: 900px)').matches;
 }
@@ -1099,8 +1100,8 @@ async function handleDrawImageRefresh(payload: Record<string, unknown> = {}): Pr
                     replyHostResult(requestId, { ok: true, result: await buildDrawImageResult(slotId) });
                     return;
                 }
-            } catch {
-                // Fall through to the generic error reply if persistence itself fails.
+            } catch (caughtError) {
+                console.warn({ source: import.meta.url, operation: "handleDrawImageRefresh" }, caughtError);
             }
         }
         replyHostResult(requestId, hostErrorPayload(error, 'image_refresh_failed'));
@@ -1470,10 +1471,10 @@ function handleFrameMessage(event: MessageEvent): void {
             closeTavern();
             break;
         case 'xb-tavern:refresh-context':
-            void refreshContext(data.payload || {});
+            observeBackgroundTask(refreshContext(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:save-config':
-            void saveConfigFromFrame(data.payload || {});
+            observeBackgroundTask(saveConfigFromFrame(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:get-host-request-headers':
             handleHostRequestHeaders(data.payload || {});
@@ -1482,55 +1483,55 @@ function handleFrameMessage(event: MessageEvent): void {
             handleDrawStatus(data.payload || {});
             break;
         case 'xb-tavern:draw-open-settings':
-            void handleDrawOpenSettings(data.payload || {});
+            observeBackgroundTask(handleDrawOpenSettings(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-quick-settings':
-            void handleDrawQuickSettings(data.payload || {});
+            observeBackgroundTask(handleDrawQuickSettings(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-update-quick-settings':
-            void handleDrawUpdateQuickSettings(data.payload || {});
+            observeBackgroundTask(handleDrawUpdateQuickSettings(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-generate':
-            void handleDrawGenerate(data.payload || {});
+            observeBackgroundTask(handleDrawGenerate(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:inline-image-generate':
-            void handleInlineImageGenerate(data.payload || {});
+            observeBackgroundTask(handleInlineImageGenerate(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:voice-play':
-            void handleVoicePlay(data.payload || {});
+            observeBackgroundTask(handleVoicePlay(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-image':
-            void handleDrawImage(data.payload || {});
+            observeBackgroundTask(handleDrawImage(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-image-select':
-            void handleDrawImageSelect(data.payload || {});
+            observeBackgroundTask(handleDrawImageSelect(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-image-gallery':
-            void handleDrawImageGallery(data.payload || {});
+            observeBackgroundTask(handleDrawImageGallery(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-image-save':
-            void handleDrawImageSave(data.payload || {});
+            observeBackgroundTask(handleDrawImageSave(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-image-delete':
-            void handleDrawImageDelete(data.payload || {});
+            observeBackgroundTask(handleDrawImageDelete(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-image-refresh':
-            void handleDrawImageRefresh(data.payload || {});
+            observeBackgroundTask(handleDrawImageRefresh(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:draw-image-edit':
-            void handleDrawImageEdit(data.payload || {});
+            observeBackgroundTask(handleDrawImageEdit(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:cancel-request':
             handleCancelRequest(data.payload || {});
             break;
         case 'xb-tavern:get-context':
-            void handleContextRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleContextRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:list-chat-presets':
         case 'xb-tavern:get-chat-preset':
         case 'xb-tavern:save-chat-preset':
         case 'xb-tavern:select-chat-preset':
-            void handleChatPresetRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleChatPresetRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:list-worldbook-sources':
         case 'xb-tavern:get-worldbook-preview':
@@ -1542,30 +1543,30 @@ function handleFrameMessage(event: MessageEvent): void {
         case 'xb-tavern:get-global-worldbooks':
         case 'xb-tavern:set-global-worldbooks':
         case 'xb-tavern:get-worldbook-runtime':
-            void handleWorldbookRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleWorldbookRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:build-native-chat-prompt':
-            void handleNativePromptRequest(data.payload || {});
+            observeBackgroundTask(handleNativePromptRequest(data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:list-regex-scripts':
         case 'xb-tavern:save-regex-script':
         case 'xb-tavern:delete-regex-script':
         case 'xb-tavern:apply-regex':
-            void handleRegexRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleRegexRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:substitute-params':
-            void handleSubstituteParamsRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleSubstituteParamsRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:replace-html-render-vars':
-            void handleHtmlRenderRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleHtmlRenderRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:run-slash-command':
-            void handleSlashCommandRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleSlashCommandRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         case 'xb-tavern:list-users':
         case 'xb-tavern:switch-user':
         case 'xb-tavern:save-display-settings':
-            void handleUserRequest(data.type, data.payload || {});
+            observeBackgroundTask(handleUserRequest(data.type, data.payload || {}), { source: import.meta.url, operation: "handleFrameMessage" });
             break;
         default:
             break;
@@ -1574,8 +1575,7 @@ function handleFrameMessage(event: MessageEvent): void {
 
 function installMessageHandler(): void {
     if (messageHandlerInstalled) {return;}
-    // Guarded by isTrustedMessage in handleFrameMessage.
-    // eslint-disable-next-line no-restricted-syntax
+    // eslint-disable-next-line no-restricted-syntax -- Guarded by isTrustedMessage in handleFrameMessage.
     window.addEventListener('message', handleFrameMessage);
     messageHandlerInstalled = true;
 }

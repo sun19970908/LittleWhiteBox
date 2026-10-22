@@ -24,6 +24,8 @@ import { bindEbookEvents } from './ui-bindings.js';
 import { enhanceMarkdownContent } from '../../agent-core/ui/message-markdown.js';
 import { formatDraftMetrics } from './text-metrics.js';
 import { escapeHtml } from './text-utils.js';
+import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
+
 
 const CONFIG_SAVE_TIMEOUT_MS = 5000;
 const CONFIG_SAVE_RESULT_MS = 1800;
@@ -183,8 +185,7 @@ function updateAgentScrollButtons(root) {
 
 function buildHtmlElement(html = '') {
     const template = document.createElement('template');
-    // Dynamic values are escaped by renderer helpers before interpolation.
-    // eslint-disable-next-line no-unsanitized/property
+    // eslint-disable-next-line no-unsanitized/property -- Dynamic values are escaped by renderer helpers before interpolation.
     template.innerHTML = String(html || '').trim();
     return template.content.firstElementChild || document.createTextNode('');
 }
@@ -290,8 +291,8 @@ export function createEbookApp(options = {}) {
 
     try {
         globalThis.__xiaobaixEbookPerfCounters = renderPerfCounters;
-    } catch {
-        // Debug counters are optional and must never affect runtime behavior.
+    } catch (caughtError) {
+        console.warn({ source: import.meta.url, operation: "createEbookApp" }, caughtError);
     }
 
     function bumpRenderPerfCounter(name = '') {
@@ -368,6 +369,7 @@ export function createEbookApp(options = {}) {
                 requestId,
                 error: '保存超时，请重试',
             };
+            settingsPanel.completePresetSave(requestId, { ok: false });
             if (!renderSettingsSurface()) render();
             scheduleConfigSaveReset();
         }, CONFIG_SAVE_TIMEOUT_MS);
@@ -407,16 +409,21 @@ export function createEbookApp(options = {}) {
             beginConfigSave(requestId);
             try {
                 const result = await hostBridge.requestHost('xb-ebook:save-config', payload);
-                state.config = normalizeEbookConfig(result?.config || config || {});
+                if (state.configSave.requestId !== requestId || state.configSave.status !== 'saving') return;
+                const confirmed = normalizeEbookConfig(result?.config || config || {});
                 state.configLoadError = '';
-                state.configDraft = null;
-                state.configDirty = false;
-                state.configFormSyncPending = true;
+                if (!settingsPanel.completePresetSave(requestId, { ok: true, config: confirmed })) {
+                    state.config = confirmed;
+                    state.configDraft = null;
+                    state.configDirty = false;
+                    state.configFormSyncPending = true;
+                }
                 completeConfigSave(requestId, { ok: true });
                 showToast('配置已保存');
                 if (!renderSettingsSurface()) render();
                 if (!renderAgentControlsSurface()) renderAgentSurface();
             } catch (error) {
+                settingsPanel.completePresetSave(requestId, { ok: false });
                 completeConfigSave(requestId, { ok: false, error: describeError(error) });
                 showToast(describeError(error));
             }
@@ -452,8 +459,8 @@ export function createEbookApp(options = {}) {
         ) {
             try {
                 node.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd);
-            } catch {
-                // Not all focused elements expose a text selection.
+            } catch (caughtError) {
+                console.warn({ source: import.meta.url, operation: "restoreFocusState" }, caughtError);
             }
         }
     }
@@ -777,8 +784,7 @@ export function createEbookApp(options = {}) {
             state.readerPath,
         );
         const providerConfig = getActiveProviderConfig();
-        // Dynamic values are escaped by renderer helpers before interpolation.
-        // eslint-disable-next-line no-unsanitized/property
+        // eslint-disable-next-line no-unsanitized/property -- Dynamic values are escaped by renderer helpers before interpolation.
         root.innerHTML = renderEbookShell({
             state,
             providerConfig,
@@ -937,7 +943,7 @@ export function createEbookApp(options = {}) {
         state.status = '正在打开书架...';
         render();
         hostBridge.postToHost('xb-ebook:frame-ready');
-        void hydrateEbookStartup({ renderInitial: false });
+        observeBackgroundTask(hydrateEbookStartup({ renderInitial: false }), { source: import.meta.url, operation: "start" });
     }
 
     return {

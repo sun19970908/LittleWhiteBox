@@ -16,6 +16,8 @@ import {
     type TavernManagerProgressProjection,
     type TavernManagerRunVersion,
 } from './manager-run-sync';
+import { observeBackgroundTask } from '../../../../../shared/common/async-errors.js';
+
 
 interface DexieLiveQuerySubscription {
     unsubscribe(): void;
@@ -168,7 +170,7 @@ export function useTavernManagerRunSync(options: TavernManagerRunSyncOptions) {
         if (!id) {return;}
         terminalRefreshDone.delete(id);
         const pending = terminalRefreshPending.get(id);
-        if (pending?.timer !== null) {window.clearTimeout(pending.timer);}
+        if (pending && pending.timer !== null) {window.clearTimeout(pending.timer);}
         terminalRefreshPending.delete(id);
     }
 
@@ -226,7 +228,7 @@ export function useTavernManagerRunSync(options: TavernManagerRunSyncOptions) {
             existing.run = run;
             return;
         }
-        if (existing?.timer !== null) {window.clearTimeout(existing.timer);}
+        if (existing && existing.timer !== null) {window.clearTimeout(existing.timer);}
         const pending: TerminalRefreshPending = {
             run,
             version,
@@ -386,7 +388,7 @@ export function useTavernManagerRunSync(options: TavernManagerRunSyncOptions) {
 
     function handleVisibilityFallback(): void {
         if (document.visibilityState === 'hidden') {return;}
-        void reconcileHistory();
+        observeBackgroundTask(reconcileHistory(), { source: import.meta.url, operation: "handleVisibilityFallback" });
     }
 
     watch(options.selectedSessionId, startSubscription, { immediate: true });
