@@ -1,4 +1,4 @@
-/* global Buffer */
+import { createTestModuleUrl } from './helpers/bundle-module.js';
 // Real summary/anchor/history transaction, HTTP confirmation and IndexedDB boundary.
 // Protects import undo, source retirement and ambiguous saves; no model calls or source-text assertions.
 import assert from 'node:assert/strict';
@@ -33,7 +33,7 @@ const shims = {
     'runtime.js': 'export const applyRecallRuntimeMutationBestEffort=(chatId,change)=>globalThis.__memoryStorageTest.mutations.push({chatId,...change}); export const clearRecallRuntime=async()=>{};',
     'modules/story-summary/data/config.js': 'export const getTextFilterRules=()=>[]; export const getVectorConfig=()=>globalThis.__memoryStorageTest.vectorConfig; export const getSummaryPanelConfig=()=>({memoryMaintenanceEnabled:false,trigger:{},ui:{hideSummarized:true,keepVisibleCount:0}}); export const getSettings=()=>({storySummary:{enabled:true}}); export const DEFAULT_MEMORY_PROMPT_TEMPLATE="{$剧情记忆}";',
     'modules/story-summary/generate/llm.js': 'export const generateSummary=(...args)=>globalThis.__memoryStorageTest.generate(...args); export const parseSummaryJson=JSON.parse; export const isSummaryGenerationCancelledError=()=>false;',
-    'modules/story-summary/maintenance/runner.js': 'export const createSharedMemoryAgent=()=>{throw Error("unexpected Agent request");}; export const runMemoryAgent=createSharedMemoryAgent; export const memoryRunId=()=>crypto.randomUUID();',
+    'modules/story-summary/maintenance/runner.js': 'export const createSharedMemoryAgent=()=>{throw Error("unexpected Agent request");}; export const runMemoryAgent=createSharedMemoryAgent; let sequence=0; export const memoryRunId=()=>"memory-storage-test-"+(++sequence);',
     'modules/story-summary/vector/utils/embedder.js': 'export const getEngineFingerprint=()=>"test-engine";',
     'modules/story-summary/vector/llm/siliconflow.js': 'export const embed=(texts)=>globalThis.__memoryStorageTest.embed(texts);',
     'modules/story-summary/vector/llm/atom-extraction.js': 'export const extractAtomsForRound=()=>{throw Error("unexpected anchor request");};',
@@ -76,7 +76,7 @@ const bundled = await build({
     } }],
 });
 // eslint-disable-next-line no-unsanitized/method -- Generated local test bundle, never external code.
-const mod = await import('data:text/javascript;base64,' + Buffer.from(bundled.outputFiles[0].text).toString('base64'));
+const mod = await import(await createTestModuleUrl(bundled.outputFiles[0].text));
 const originalFetch = globalThis.fetch;
 after(() => { mod.db.close(); globalThis.fetch = originalFetch; delete globalThis.__memoryStorageTest; delete globalThis.LWB_StateRollbackHook; });
 const ext = () => host.metadata.extensions.LittleWhiteBox;

@@ -1,3 +1,6 @@
+import { mountTextApiSettings } from '../text-api/settings-ui.js';
+import { WORKSPACE_COPY } from './workspace-copy.js';
+import { createSummaryAgentSettings } from './maintenance/api-settings.js';
 // story-summary-ui.js
 // iframe 内 UI 逻辑
 
@@ -9,9 +12,10 @@ import { RELATION_TRENDS } from './data/fact-predicates.js';
 import { createMemoryMaintenancePage } from './maintenance/ui.js';
 import { MEMORY_COPY } from './maintenance/copy.js';
 import { MEMORY_CHAT_MESSAGES } from './maintenance/chat-contract.js';
+import { MEMORY_CHAT_COPY } from './maintenance/chat-copy.js';
 import { DEFAULT_MEMORY_MAINTENANCE_ENABLED } from './maintenance/settings.js';
 import { SUMMARY_FEEDBACK_COPY } from './feedback-copy.js';
-import { SUMMARY_CONFIG_LOCAL_STORAGE_KEY, writeSummaryConfigLocalCache } from './data/config-local-cache.js';
+import { SUMMARY_CONFIG_LOCAL_STORAGE_KEY } from './data/config-local-cache.js';
 
 const UNANNOTATED_LABEL = '未标注';
 
@@ -19,6 +23,14 @@ const UNANNOTATED_LABEL = '未标注';
     'use strict';
     let memoryMaintenancePage;
     let archiveView;
+    let settingsDirty = false;
+    let settingsSnapshot;
+    let agentSettings;
+    let settingsPage = 'tab-summary';
+    let settingsSaving = false;
+    const settingsScroll = new Map();
+    let agentSettingsParent = 'tab-agent';
+    const textApiEditor = mountTextApiSettings(document.getElementById('summary-text-api'), { feature: 'summary', namespace: 'LittleWhiteBox-StoryFrame' });
 
     function formatVectorPackageCounts(result) {
         return `${result.stateVectorCount} 锚点向量、${result.chunkCount} 片段向量、${result.eventCount} 事件向量`;
@@ -148,12 +160,6 @@ const UNANNOTATED_LABEL = '未标注';
         catch { return window.location.origin; }
     })();
 
-    const PROVIDER_DEFAULTS = {
-        st: { url: '', needKey: false, canFetch: false },
-        openai: { url: 'https://api.openai.com', needKey: true, canFetch: true },
-        google: { url: 'https://generativelanguage.googleapis.com', needKey: true, canFetch: false },
-        claude: { url: 'https://api.anthropic.com', needKey: true, canFetch: false }
-    };
     const VECTOR_PROVIDER_DEFAULTS = {
         siliconflow: { url: 'https://api.siliconflow.cn/v1', needKey: true, canFetch: true },
         openrouter: { url: 'https://openrouter.ai/api/v1', needKey: true, canFetch: true },
@@ -299,9 +305,7 @@ const UNANNOTATED_LABEL = '未标注';
 
     const config = {
         memoryMaintenanceEnabled: DEFAULT_MEMORY_MAINTENANCE_ENABLED,
-        api: { provider: 'st', url: '', key: '', model: '', modelCache: [] },
-        gen: { temperature: null, top_p: null, top_k: null, presence_penalty: null, frequency_penalty: null },
-        trigger: { enabled: false, interval: 20, delayFloors: DEFAULT_SUMMARY_DELAY_FLOORS, timing: 'before_user', role: 'system', useStream: true, maxPerRun: 100, wrapperHead: '', wrapperTail: '', forceInsertAtEnd: false },
+        trigger: { enabled: false, interval: 20, delayFloors: DEFAULT_SUMMARY_DELAY_FLOORS, timing: 'before_user', role: 'system', maxPerRun: 100, wrapperHead: '', wrapperTail: '', forceInsertAtEnd: false },
         ui: { hideSummarized: true, keepVisibleCount: 6, useVectorBoundary: true },
         prompts: {
             memoryTemplate: '',
@@ -357,11 +361,7 @@ const UNANNOTATED_LABEL = '未标注';
     let allLinks = [];
     let activeRelationTooltip = null;
     let lastRecallLogText = '';
-    let modelListFetchedThisIframe = false;
     let configSaveSeq = 0;
-    let summaryModelFetchSeq = 0;
-    let pendingSummaryModelFetchRequestId = '';
-    let summaryModelFetchTimeoutId = null;
     let currentTimelineChatId = '';
     let tlUnfilteredPage = null;
     const TL_PAGE_SIZE = 20;
@@ -393,20 +393,6 @@ const UNANNOTATED_LABEL = '未标注';
         return `summary-config-save-${Date.now()}-${configSaveSeq}`;
     }
 
-    function nextSummaryModelFetchRequestId() {
-        summaryModelFetchSeq += 1;
-        return `summary-model-fetch-${Date.now()}-${summaryModelFetchSeq}`;
-    }
-
-    function resetSummaryModelFetchUi() {
-        if (summaryModelFetchTimeoutId) {
-            clearTimeout(summaryModelFetchTimeoutId);
-            summaryModelFetchTimeoutId = null;
-        }
-        $('btn-connect').disabled = false;
-        $('btn-connect').textContent = '连接 / 拉取模型列表';
-    }
-
     function resetSettingsSaveUi() {
         if (settingsSaveTimeoutId) {
             clearTimeout(settingsSaveTimeoutId);
@@ -430,9 +416,6 @@ const UNANNOTATED_LABEL = '未标注';
         const retry = $('settings-config-retry');
         retry.textContent = SUMMARY_FEEDBACK_COPY.configLoad.retry;
         retry.hidden = status !== 'error';
-        for (const prefix of ['l0', 'embedding', 'rerank']) {
-            $(`${prefix}-btn-save`).disabled = status !== 'ready';
-        }
         resetSettingsSaveUi();
     }
 
@@ -506,7 +489,8 @@ const UNANNOTATED_LABEL = '未标注';
 
     function syncCurrentChatSummaryControls() {
         const { hasChat, chatEnabled, effectiveEnabled, changing } = currentChatSummaryState;
-        $('archive-chat-state').textContent = chatEnabled ? ARCHIVE_COPY.currentChat : ARCHIVE_COPY.disabledChat;
+        $('archive-chat-state').textContent = chatEnabled ? '' : ARCHIVE_COPY.disabledChat;
+        $('archive-chat-state').hidden = chatEnabled;
         const controlsEnabled = canUseCurrentChatControls();
         const copy = SUMMARY_FEEDBACK_COPY.summaryControls;
         const toggle = $('current-chat-enabled');
@@ -523,11 +507,12 @@ const UNANNOTATED_LABEL = '未标注';
                 : changing ? copy.changing : !effectiveEnabled ? copy.disabled : '';
         }
 
-        for (const id of ['hide-summarized', 'keep-visible-count', 'use-vector-boundary']) {
-            const control = $(id);
-            if (control) control.disabled = !controlsEnabled;
-        }
-        syncVectorBoundaryControl(config.vector?.enabled, controlsEnabled && config.ui.hideSummarized);
+        syncVectorBoundaryControl($('vector-enabled').checked, $('hide-summarized').checked);
+        const busy = isBusyLike();
+        $('workspace-rollback').disabled = busy || !cleanActionState.canRollback;
+        $('workspace-rollback').title = busy ? WORKSPACE_COPY.busy : cleanActionState.canRollback ? '' : WORKSPACE_COPY.noRollback;
+        $('workspace-clear').disabled = busy;
+        $('workspace-clear').title = busy ? WORKSPACE_COPY.busy : '';
     }
 
     function renderSummaryStatus(data) {
@@ -554,7 +539,7 @@ const UNANNOTATED_LABEL = '未标注';
             }
             localGenerating = true;
             syncCurrentChatSummaryControls();
-            postMsg('REQUEST_GENERATE', { config: { api: config.api, gen: config.gen, trigger: config.trigger } });
+            postMsg('REQUEST_GENERATE', { config: { trigger: config.trigger } });
         };
     }
 
@@ -579,8 +564,7 @@ const UNANNOTATED_LABEL = '未标注';
         const container = $('container-vector-boundary');
         if (!input || !label || !container) return;
 
-        const enabled = canUseCurrentChatControls() && !!vectorEnabled && !!hideEnabled;
-        input.checked = config.ui.useVectorBoundary !== false;
+        const enabled = !!vectorEnabled && !!hideEnabled;
         input.disabled = !enabled;
         container.classList.toggle('is-disabled', !enabled);
         label.classList.toggle('is-disabled', !enabled);
@@ -607,10 +591,6 @@ const UNANNOTATED_LABEL = '未标注';
             if (s) {
                 const p = JSON.parse(s);
                 config.memoryMaintenanceEnabled = p.memoryMaintenanceEnabled === true;
-                Object.assign(config.api, p.api || {});
-                normalizeSummaryApiConfigUI(config.api);
-                config.api.modelCache = [];
-                Object.assign(config.gen, p.gen || {});
                 Object.assign(config.trigger, p.trigger || {});
                 Object.assign(config.ui, p.ui || {});
                 config.ui.useVectorBoundary = p.ui?.useVectorBoundary !== false;
@@ -627,19 +607,11 @@ const UNANNOTATED_LABEL = '未标注';
     function applyConfig(cfg) {
         if (!cfg) return;
         config.memoryMaintenanceEnabled = cfg.memoryMaintenanceEnabled === true;
-        memoryMaintenancePage?.setEnabled(config.memoryMaintenanceEnabled);
-        const currentApiKey = String(config.api?.key || '').trim();
-        const currentInputKey = String($('api-key')?.value || '').trim();
-        Object.assign(config.api, cfg.api || {});
-        normalizeSummaryApiConfigUI(config.api);
-        if (!String(config.api.key || '').trim() && (currentInputKey || currentApiKey)) {
-            config.api.key = currentInputKey || currentApiKey;
-        }
-        config.api.modelCache = [];
-        Object.assign(config.gen, cfg.gen || {});
+        if (!settingsDirty) memoryMaintenancePage?.setEnabled(config.memoryMaintenanceEnabled);
         Object.assign(config.trigger, cfg.trigger || {});
         Object.assign(config.ui, cfg.ui || {});
         config.ui.useVectorBoundary = cfg.ui?.useVectorBoundary !== false;
+        if (!settingsDirty) $('use-vector-boundary').checked = config.ui.useVectorBoundary;
         config.prompts.memoryTemplate = String(cfg.prompts?.memoryTemplate || config.prompts.memoryTemplate || '').trim();
         config.textFilterRules = Array.isArray(cfg.textFilterRules)
             ? cfg.textFilterRules
@@ -649,17 +621,6 @@ const UNANNOTATED_LABEL = '未标注';
         if (cfg.vector) config.vector = normalizeVectorConfigUI(cfg.vector);
         normalizeTriggerConfig();
         syncVectorBoundaryControl(config.vector?.enabled, config.ui.hideSummarized);
-        writeSummaryConfigLocalCache(config, (message, errorName) => console.warn(message, errorName));
-    }
-
-    function normalizeSummaryApiConfigUI(apiCfg = {}) {
-        if (String(apiCfg.provider || '').toLowerCase() === 'custom') {
-            apiCfg.provider = 'openai';
-        }
-        if (!PROVIDER_DEFAULTS[apiCfg.provider]) {
-            apiCfg.provider = 'st';
-        }
-        return apiCfg;
     }
 
     function applyBuiltInSummaryPrompts(prompts) {
@@ -811,15 +772,6 @@ const UNANNOTATED_LABEL = '未标注';
         $(`${prefix}-api-model-select`).value = cache.includes(profile.model) ? profile.model : '';
     }
 
-    async function saveVectorApiSection(prefix) {
-        saveCurrentVectorApiProfile(prefix);
-        await saveConfig({
-            statusId: `${prefix}-api-connect-status`,
-            loadingMessage: '保存中...',
-            successMessage: '此组配置已保存',
-        });
-    }
-
     async function fetchVectorModels(prefix) {
         const provider = $(`${prefix}-api-provider`).value;
         const pv = VECTOR_PROVIDER_DEFAULTS[provider] || VECTOR_PROVIDER_DEFAULTS.custom;
@@ -926,6 +878,7 @@ const UNANNOTATED_LABEL = '未标注';
             btn.onclick = () => {
                 btn.closest('.filter-rule-item')?.remove();
                 updateFilterRulesCount();
+                markSettingsDirty();
             };
         });
 
@@ -966,9 +919,11 @@ const UNANNOTATED_LABEL = '未标注';
         div.querySelector('.btn-del-rule').onclick = () => {
             div.remove();
             updateFilterRulesCount();
+            markSettingsDirty();
         };
         list.appendChild(div);
         updateFilterRulesCount();
+        markSettingsDirty();
     }
 
     function updateFilterRulesCount() {
@@ -1143,7 +1098,6 @@ const UNANNOTATED_LABEL = '未标注';
                     updateVectorOnlineStatus(prefix, 'idle', '');
                 });
             }
-            $(`${prefix}-btn-save`).onclick = () => saveVectorApiSection(prefix);
             $(`${prefix}-btn-test`).onclick = () => {
                 const btn = $(`${prefix}-btn-test`);
                 if (btn) btn.disabled = true;
@@ -1252,33 +1206,48 @@ const UNANNOTATED_LABEL = '未标注';
     // Settings Modal
     // ═══════════════════════════════════════════════════════════════════════════
 
-    function updateProviderUI(provider) {
-        const pv = PROVIDER_DEFAULTS[provider] || PROVIDER_DEFAULTS.openai;
-        const isSt = provider === 'st';
-        const hasModelCache = modelListFetchedThisIframe && Array.isArray(config.api.modelCache) && config.api.modelCache.length > 0;
-
-        $('api-url-row').classList.toggle('hidden', isSt);
-        $('api-key-row').classList.toggle('hidden', !pv.needKey);
-        $('api-model-manual-row').classList.toggle('hidden', isSt);
-        $('api-model-select-row').classList.toggle('hidden', isSt || !hasModelCache);
-        $('api-connect-row').classList.toggle('hidden', isSt || !pv.canFetch);
-        $('api-connect-status').classList.toggle('hidden', isSt || !pv.canFetch);
-
-        const urlInput = $('api-url');
-        if (!urlInput.value && pv.url) urlInput.value = pv.url;
+    function selectSettingsTab(targetId) {
+        settingsScroll.set(settingsPage, $('settings-modal').scrollTop);
+        settingsPage = targetId;
+        $$('.settings-tab').forEach(tab => {
+            tab.classList.toggle('active', tab.dataset.tab === targetId);
+            if (tab.dataset.tab === targetId) tab.setAttribute('aria-current', 'page'); else tab.removeAttribute('aria-current');
+        });
+        $$('.tab-pane').forEach(pane => pane.classList.toggle('active', pane.id === targetId));
+        const tab = document.querySelector(`.settings-tab[data-tab="${targetId}"]`);
+        const childPage = $(targetId).dataset.parent;
+        const assistant = targetId === 'tab-agent' || targetId === 'tab-agent-api';
+        $('settings-modal').classList.toggle('assistant-page', assistant);
+        $('settings-modal').classList.toggle('workspace-local', !!childPage);
+        $('assistant-page-title').hidden = false;
+        $('assistant-page-title').textContent = childPage ? $(targetId).dataset.title : targetId === 'tab-agent-api' ? WORKSPACE_COPY.agentApi : assistant ? MEMORY_COPY.tab : tab.textContent;
+        $('settings-close').setAttribute('aria-label', childPage || targetId === 'tab-agent-api' ? WORKSPACE_COPY.backParent : WORKSPACE_COPY.back);
+        $$('.settings-tab').forEach(item => { item.hidden = !!childPage || assistant || item.dataset.family !== tab.dataset.family; });
+        $('settings-save').parentElement.hidden = ['tab-agent-api', 'tab-models', 'tab-appearance', 'tab-transfer', 'tab-backups', 'tab-clear', 'tab-guide'].includes(targetId);
+        $('settings-cancel').hidden = targetId === 'tab-agent';
+        $('settings-chat').hidden = targetId !== 'tab-agent';
+        if (targetId === 'tab-vector') postMsg('REQUEST_RECALL_LOG');
+        if (targetId === 'tab-agent') memoryMaintenancePage.open();
+        if (targetId === 'tab-agent-api') void agentSettings.open();
+        if (targetId === 'tab-clear') syncCurrentChatSummaryControls();
+        $('settings-modal').scrollTop = settingsScroll.get(targetId) || 0;
     }
 
-    function openSettings({ preserveTab = false } = {}) {
+    function markSettingsDirty() {
+        settingsDirty = true;
+        $('api-connect-status').textContent = WORKSPACE_COPY.dirty;
+    }
+
+    function openSettings({ preserveTab = false, tab = 'tab-summary' } = {}) {
+        settingsDirty = false;
+        settingsSnapshot = structuredClone(config);
+        if (!preserveTab) {
+            const assistant = tab === 'tab-agent';
+            $('settings-modal').classList.toggle('assistant-page', assistant);
+            $('assistant-page-title').hidden = !assistant;
+            $('assistant-page-title').textContent = MEMORY_COPY.tab;
+        }
         memoryMaintenancePage.setEnabled(config.memoryMaintenanceEnabled);
-        $('api-provider').value = config.api.provider;
-        $('api-url').value = config.api.url;
-        $('api-key').value = config.api.key;
-        $('api-model-text').value = config.api.model;
-        $('gen-temp').value = config.gen.temperature ?? '';
-        $('gen-top-p').value = config.gen.top_p ?? '';
-        $('gen-top-k').value = config.gen.top_k ?? '';
-        $('gen-presence').value = config.gen.presence_penalty ?? '';
-        $('gen-frequency').value = config.gen.frequency_penalty ?? '';
         if ($('trigger-notify-on-complete')) {
             $('trigger-notify-on-complete').checked = !!config.trigger.notifyOnComplete;
         }
@@ -1287,7 +1256,6 @@ const UNANNOTATED_LABEL = '未标注';
         $('trigger-delay-floors').value = normalizeSummaryDelayFloors(config.trigger.delayFloors);
         $('trigger-timing').value = config.trigger.timing;
         $('trigger-role').value = config.trigger.role || 'system';
-        $('trigger-stream').checked = config.trigger.useStream !== false;
         $('trigger-max-per-run').value = config.trigger.maxPerRun || 100;
         $('trigger-wrapper-head').value = config.trigger.wrapperHead || '';
         $('trigger-wrapper-tail').value = config.trigger.wrapperTail || '';
@@ -1295,17 +1263,13 @@ const UNANNOTATED_LABEL = '未标注';
         fillBuiltInSummaryPromptFields();
         $('memory-prompt-template').value = config.prompts.memoryTemplate || '';
         $('api-connect-status').textContent = '';
+        $('hide-summarized').checked = config.ui.hideSummarized;
+        $('keep-visible-count').value = config.ui.keepVisibleCount;
+        $('use-vector-boundary').checked = config.ui.useVectorBoundary;
 
         syncAutoSummaryControls();
 
-        if (config.api.modelCache.length) {
-            setSelectOptions($('api-model-select'), config.api.modelCache, '请选择');
-            $('api-model-select').value = config.api.modelCache.includes(config.api.model) ? config.api.model : '';
-        } else {
-            setSelectOptions($('api-model-select'), [], '请选择');
-        }
-
-        updateProviderUI(config.api.provider);
+        if (!preserveTab) void textApiEditor.refresh();
         if (config.vector) loadVectorConfig(config.vector);
         renderFilterRules(Array.isArray(config.textFilterRules) ? config.textFilterRules : DEFAULT_FILTER_RULES);
         settingsOpenedWithServerConfig = panelConfigLoad.status === 'ready';
@@ -1322,35 +1286,21 @@ const UNANNOTATED_LABEL = '未标注';
         }
 
         $('settings-modal').classList.add('active');
+        document.querySelector('.archive').inert = true;
 
         // Opening starts on Summary; recovery preserves the user's current tab.
         if (!preserveTab) {
-            $$('.settings-tab').forEach(t => t.classList.remove('active'));
-            $$('.settings-tab[data-tab="tab-summary"]').forEach(t => t.classList.add('active'));
-            $$('.tab-pane').forEach(p => p.classList.remove('active'));
-            $('tab-summary').classList.add('active');
+            selectSettingsTab(tab);
         }
 
         postMsg('SETTINGS_OPENED');
     }
 
     function collectSettingsFormToConfig() {
+        config.ui.hideSummarized = $('hide-summarized').checked;
+        config.ui.keepVisibleCount = Number($('keep-visible-count').value);
+        config.ui.useVectorBoundary = $('use-vector-boundary').checked;
         config.memoryMaintenanceEnabled = memoryMaintenancePage.getEnabled();
-        const pn = id => { const v = $(id).value; return v === '' ? null : parseFloat(v); };
-        const provider = $('api-provider').value;
-
-        config.api.provider = provider;
-        config.api.url = $('api-url').value;
-        config.api.key = $('api-key').value;
-        config.api.model = provider === 'st' ? '' : $('api-model-text').value.trim();
-        config.api.modelCache = [];
-
-        config.gen.temperature = pn('gen-temp');
-        config.gen.top_p = pn('gen-top-p');
-        config.gen.top_k = pn('gen-top-k');
-        config.gen.presence_penalty = pn('gen-presence');
-        config.gen.frequency_penalty = pn('gen-frequency');
-
         const timing = $('trigger-timing').value;
         config.trigger.timing = normalizeTriggerTiming(timing);
         config.trigger.role = $('trigger-role').value || 'system';
@@ -1360,7 +1310,6 @@ const UNANNOTATED_LABEL = '未标注';
         config.trigger.enabled = $('trigger-enabled').checked;
         config.trigger.interval = Math.max(1, Math.min(30, parseInt($('trigger-interval').value) || 20));
         config.trigger.delayFloors = normalizeSummaryDelayFloors($('trigger-delay-floors').value);
-        config.trigger.useStream = $('trigger-stream').checked;
         config.trigger.maxPerRun = parseInt($('trigger-max-per-run').value) || 100;
         config.trigger.wrapperHead = $('trigger-wrapper-head').value;
         config.trigger.wrapperTail = $('trigger-wrapper-tail').value;
@@ -1383,11 +1332,16 @@ const UNANNOTATED_LABEL = '未标注';
     }
 
     async function saveSettings() {
+        if (settingsSaving) return false;
         if (!settingsOpenedWithServerConfig) {
             retryPanelConfigLoad();
             return false;
         }
+        const previousConfig = structuredClone(config);
         collectSettingsFormToConfig();
+        settingsSaving = true;
+        $('settings-modal').querySelector('.workspace-layout').inert = true;
+        $('settings-cancel').disabled = true;
         const btn = $('settings-save');
         const statusEl = $('api-connect-status');
         resetSettingsSaveUi();
@@ -1403,63 +1357,33 @@ const UNANNOTATED_LABEL = '未标注';
             timeoutMs: 5000,
         });
         const saved = await savePromise;
+        if (saved) {
+            settingsDirty = false;
+            settingsSnapshot = structuredClone(config);
+        }
+        else Object.assign(config, previousConfig);
+        settingsSaving = false;
+        $('settings-modal').querySelector('.workspace-layout').inert = false;
+        $('settings-cancel').disabled = false;
         resetSettingsSaveUi();
         return saved;
     }
 
-    function closeSettings() {
+    async function closeSettings() {
+        if (settingsSaving) return;
+        const parentPage = $(settingsPage).dataset.parent;
+        if (parentPage) { selectSettingsTab(parentPage); return; }
+        if (settingsPage === 'tab-agent-api') { selectSettingsTab(agentSettingsParent); return; }
+        if (settingsDirty && !await showConfirm(WORKSPACE_COPY.discardTitle, WORKSPACE_COPY.discardDetail, WORKSPACE_COPY.discard, WORKSPACE_COPY.stay)) return;
+        if (settingsDirty) Object.assign(config, settingsSnapshot);
+        settingsDirty = false;
         memoryMaintenancePage.close();
         resetSettingsSaveUi();
         settingsOpenedWithServerConfig = false;
         $('settings-modal').classList.remove('active');
+        document.querySelector('.archive').inert = false;
         postMsg('SETTINGS_CLOSED');
     }
-
-    async function fetchModels() {
-        const btn = $('btn-connect');
-        const statusEl = $('api-connect-status');
-        const provider = $('api-provider').value;
-
-        if (!PROVIDER_DEFAULTS[provider]?.canFetch) {
-            statusEl.textContent = '当前渠道不支持自动拉取模型';
-            return;
-        }
-
-        const baseUrl = $('api-url').value.trim();
-        const apiKey = $('api-key').value.trim();
-
-        if (!apiKey) {
-            statusEl.textContent = '请先填写 API KEY';
-            return;
-        }
-
-        const requestId = nextSummaryModelFetchRequestId();
-        pendingSummaryModelFetchRequestId = requestId;
-        btn.disabled = true;
-        btn.textContent = '连接中...';
-        statusEl.textContent = '连接中...';
-        if (summaryModelFetchTimeoutId) {
-            clearTimeout(summaryModelFetchTimeoutId);
-        }
-        summaryModelFetchTimeoutId = setTimeout(() => {
-            if (pendingSummaryModelFetchRequestId !== requestId) return;
-            pendingSummaryModelFetchRequestId = '';
-            resetSummaryModelFetchUi();
-            setStatusText(statusEl, '拉取失败：请求超时（>5s）', 'error');
-        }, 5000);
-
-        postMsg('FETCH_SUMMARY_MODELS', {
-            requestId,
-            provider,
-            url: baseUrl,
-            apiKey,
-            timeoutMs: 5000,
-        });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Rendering Functions
-    // ═══════════════════════════════════════════════════════════════════════════
 
     function renderKeywords(kw) {
         summaryData.keywords = kw || [];
@@ -2020,75 +1944,6 @@ const UNANNOTATED_LABEL = '未标注';
         });
     }
 
-    function showCleanActionMenu() {
-        return new Promise(resolve => {
-            const modal = $('confirm-modal');
-            const titleEl = $('confirm-title');
-            const msgEl = $('confirm-message');
-            const inputWrap = $('confirm-input-wrap');
-            const inputEl = $('confirm-input');
-            const actionList = $('confirm-action-list');
-            const rollbackBtn = $('confirm-action-rollback');
-            const clearBtn = $('confirm-action-clear');
-            const rollbackDesc = $('confirm-action-rollback-desc');
-            const clearDesc = $('confirm-action-clear-desc');
-            const okBtn = $('confirm-ok');
-            const cancelBtn = $('confirm-cancel');
-            const closeBtn = $('confirm-close');
-            const backdrop = $('confirm-backdrop');
-            const busy = isBusyLike();
-
-            titleEl.textContent = '清理总结数据';
-            msgEl.textContent = '请选择要执行的清理操作。';
-            inputWrap.classList.add('hidden');
-            inputEl.value = '';
-            actionList.classList.remove('hidden');
-            okBtn.classList.add('hidden');
-            cancelBtn.textContent = '退出';
-
-            if (busy) {
-                rollbackBtn.disabled = true;
-                clearBtn.disabled = true;
-                rollbackDesc.textContent = '当前有任务运行中，暂时不能执行。';
-                clearDesc.textContent = '当前有任务运行中，暂时不能执行。';
-            } else {
-                rollbackBtn.disabled = !cleanActionState.canRollback;
-                clearBtn.disabled = false;
-                rollbackDesc.textContent = cleanActionState.canRollback
-                    ? (cleanActionState.rollbackWillResetBoundary
-                        ? '撤销首次总结生成的内容；人工修改不会被覆盖，存在冲突时将拒绝回退。聊天记录不会删除。'
-                        : `撤销最近一次总结，已总结楼层将回退到 ${cleanActionState.rollbackTargetSummarizedUpTo} 楼。聊天记录不会删除。`)
-                    : '当前没有可回退的总结快照。';
-                clearDesc.textContent = '删除本聊天的全部总结数据，聊天记录不会删除。';
-            }
-
-            const close = (result) => {
-                modal.classList.remove('active');
-                postMsg('CONFIRM_CLOSED');
-                actionList.classList.add('hidden');
-                okBtn.classList.remove('hidden');
-                rollbackBtn.onclick = null;
-                clearBtn.onclick = null;
-                cancelBtn.onclick = null;
-                if (closeBtn) closeBtn.onclick = null;
-                backdrop.onclick = null;
-                resolve(result);
-            };
-
-            rollbackBtn.onclick = () => {
-                if (!rollbackBtn.disabled) close('rollback');
-            };
-            clearBtn.onclick = () => {
-                if (!clearBtn.disabled) close('clear');
-            };
-            cancelBtn.onclick = () => close(null);
-            if (closeBtn) closeBtn.onclick = () => close(null);
-            backdrop.onclick = () => close(null);
-
-            modal.classList.add('active');
-            postMsg('CONFIRM_OPENED');
-        });
-    }
 
     function renderArcsEditor(arcs) {
         const list = arcs?.length ? arcs : [{ name: '', trajectory: '', progress: 0, moments: [] }];
@@ -2521,6 +2376,9 @@ const UNANNOTATED_LABEL = '未标注';
         if (!d || d.source !== 'LittleWhiteBox') return;
 
         switch (d.type) {
+            case 'SUMMARY_AGENT_SETTINGS_RESULT':
+                agentSettings.receive(d);
+                break;
             case 'CHAT_SUMMARY_STATE':
                 currentChatSummaryState = d.state;
                 syncCurrentChatSummaryControls();
@@ -2538,16 +2396,19 @@ const UNANNOTATED_LABEL = '未标注';
                     cleanActionState.summarizedUpTo = d.stats.summarizedUpTo ?? 0;
                 }
                 if (d.hideSummarized !== undefined) {
-                    $('hide-summarized').checked = d.hideSummarized;
+                    if (!settingsDirty) $('hide-summarized').checked = d.hideSummarized;
                     config.ui.hideSummarized = d.hideSummarized;
                 }
-                if (d.keepVisibleCount !== undefined) $('keep-visible-count').value = d.keepVisibleCount;
+                if (d.keepVisibleCount !== undefined) {
+                    config.ui.keepVisibleCount = d.keepVisibleCount;
+                    if (!settingsDirty) $('keep-visible-count').value = d.keepVisibleCount;
+                }
                 if (d.useVectorBoundary !== undefined) config.ui.useVectorBoundary = d.useVectorBoundary !== false;
                 if (d.vectorEnabled !== undefined) config.vector.enabled = d.vectorEnabled;
-                syncCurrentChatSummaryControls();
                 cleanActionState.canRollback = !!d.canRollback;
                 cleanActionState.rollbackTargetSummarizedUpTo = Number(d.rollbackTargetSummarizedUpTo || 0);
                 cleanActionState.rollbackWillResetBoundary = !!d.rollbackWillResetBoundary;
+                syncCurrentChatSummaryControls();
                 break;
 
             case 'SUMMARY_FULL_DATA':
@@ -2648,38 +2509,8 @@ const UNANNOTATED_LABEL = '未标注';
                 break;
             }
 
-            case 'SUMMARY_MODELS': {
-                if (!d.requestId || d.requestId !== pendingSummaryModelFetchRequestId) break;
-                pendingSummaryModelFetchRequestId = '';
-                resetSummaryModelFetchUi();
-
-                const models = Array.isArray(d.models) ? [...new Set(d.models.filter(Boolean))] : [];
-                config.api.modelCache = models;
-                modelListFetchedThisIframe = models.length > 0;
-                setSelectOptions($('api-model-select'), config.api.modelCache, '请选择');
-                $('api-model-select-row').classList.toggle('hidden', !models.length);
-
-                if (!config.api.model && models.length) {
-                    config.api.model = models[0];
-                    $('api-model-text').value = models[0];
-                    $('api-model-select').value = models[0];
-                } else if (config.api.model) {
-                    $('api-model-select').value = config.api.model;
-                }
-
-                setStatusText($('api-connect-status'), `拉取成功：${models.length} 个模型`, 'success');
-                break;
-            }
-
-            case 'SUMMARY_MODELS_ERROR':
-                if (!d.requestId || d.requestId !== pendingSummaryModelFetchRequestId) break;
-                pendingSummaryModelFetchRequestId = '';
-                resetSummaryModelFetchUi();
-                setStatusText($('api-connect-status'), '拉取失败：' + (d.message || '请检查 URL 和 KEY'), 'error');
-                break;
-
             case 'VECTOR_CONFIG':
-                if (d.config) loadVectorConfig(d.config);
+                if (d.config && !settingsDirty) loadVectorConfig(d.config);
                 break;
 
             case 'VECTOR_ONLINE_STATUS':
@@ -2794,12 +2625,24 @@ const UNANNOTATED_LABEL = '未标注';
         $('editor-save').onclick = saveEditor;
 
         // Settings modal
-        $('btn-settings').onclick = () => { archiveView.closeDialogs(); openSettings(); };
-        $('settings-backdrop').onclick = closeSettings;
+        $('archive-manage-open').onclick = () => { archiveView.closeDialogs(); openSettings(); };
+        $('archive-data').onclick = () => { archiveView.closeDialogs(); openSettings({ tab: 'tab-transfer' }); };
+        $('archive-assistant').textContent = MEMORY_COPY.tab;
+        $('archive-assistant').onclick = () => { archiveView.closeDialogs(); openSettings({ tab: 'tab-agent' }); };
+        $('settings-chat').textContent = MEMORY_CHAT_COPY.entry;
+        $('settings-chat').onclick = () => memoryMaintenancePage.openChat();
         $('settings-close').onclick = closeSettings;
-        $('settings-cancel').onclick = closeSettings;
+        $('settings-cancel').onclick = () => {
+            Object.assign(config, settingsSnapshot);
+            openSettings({ preserveTab: true });
+        };
         $('settings-config-retry').onclick = retryPanelConfigLoad;
         $('settings-save').onclick = saveSettings;
+        $$('[data-workspace-page]').forEach(button => { button.onclick = () => selectSettingsTab(button.dataset.workspacePage); });
+        $('settings-modal').addEventListener('input', event => {
+            if (event.target.closest('.text-api, #tab-agent-api') || ['theme-select', 'current-chat-enabled'].includes(event.target.id)) return;
+            markSettingsDirty();
+        });
 
         // Settings tabs
         $$('.settings-tab').forEach(tab => {
@@ -2807,42 +2650,13 @@ const UNANNOTATED_LABEL = '未标注';
                 const targetId = tab.dataset.tab;
                 if (!targetId) return;
 
-                // Update tab active state
-                $$('.settings-tab').forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-
-                // Update pane active state
-                $$('.tab-pane').forEach(p => p.classList.remove('active'));
-                $(targetId).classList.add('active');
-
-                // If switching to debug tab, refresh log
-                if (targetId === 'tab-debug') {
-                    postMsg('REQUEST_RECALL_LOG');
-                }
-                if (targetId === 'tab-agent') memoryMaintenancePage.open();
+                selectSettingsTab(targetId);
             };
         });
 
-        // API provider change
-        $('api-provider').onchange = e => {
-            const pv = PROVIDER_DEFAULTS[e.target.value] || PROVIDER_DEFAULTS.openai;
-            $('api-url').value = '';
-            modelListFetchedThisIframe = false;
-            if (!pv.canFetch) config.api.modelCache = [];
-            updateProviderUI(e.target.value);
-        };
-
-        $('btn-connect').onclick = fetchModels;
-        $('api-model-text').oninput = e => { config.api.model = e.target.value.trim(); };
-        $('api-model-select').onchange = e => {
-            const value = e.target.value || '';
-            if (value) {
-                $('api-model-text').value = value;
-                config.api.model = value;
-            }
-        };
         $('btn-reset-memory-prompt-template').onclick = () => {
             $('memory-prompt-template').value = DEFAULT_MEMORY_PROMPT_TEMPLATE;
+            markSettingsDirty();
         };
 
         // Trigger timing
@@ -2871,9 +2685,8 @@ const UNANNOTATED_LABEL = '未标注';
         };
 
         // Main actions
-        $('btn-clear').onclick = async () => {
-            archiveView.closeDialogs();
-            const action = await showCleanActionMenu();
+        const clean = async action => {
+            if (isBusyLike() || (action === 'rollback' && !cleanActionState.canRollback)) return;
             if (action === 'rollback') {
                 const currentUpTo = cleanActionState.summarizedUpTo || 0;
                 const rollbackMessage = cleanActionState.rollbackWillResetBoundary
@@ -2888,23 +2701,18 @@ const UNANNOTATED_LABEL = '未标注';
                 }
             }
         };
+        $('workspace-rollback').onclick = () => clean('rollback');
+        $('workspace-clear').onclick = () => clean('clear');
         bindSummaryActions();
 
         // Hide summarized
         $('hide-summarized').onchange = e => {
-            config.ui.hideSummarized = e.target.checked;
-            syncVectorBoundaryControl(config.vector?.enabled, config.ui.hideSummarized);
-            postMsg('TOGGLE_HIDE_SUMMARIZED', { enabled: e.target.checked });
-        };
-        $('use-vector-boundary').onchange = e => {
-            config.ui.useVectorBoundary = e.target.checked;
-            postMsg('TOGGLE_USE_VECTOR_BOUNDARY', { enabled: e.target.checked });
+            syncVectorBoundaryControl($('vector-enabled').checked, e.target.checked);
         };
         $('keep-visible-count').onchange = e => {
             const parsedCount = Number.parseInt(e.target.value, 10);
             const c = Number.isFinite(parsedCount) ? Math.max(0, Math.min(50, parsedCount)) : 6;
             e.target.value = c;
-            postMsg('UPDATE_KEEP_VISIBLE', { count: c });
         };
 
         // Fullscreen relations
@@ -2917,17 +2725,6 @@ const UNANNOTATED_LABEL = '未标注';
         // Vector UI
         initSummaryIOUI();
         initVectorUI();
-
-        // Gen params collapsible
-        const genParamsToggle = $('gen-params-toggle');
-        const genParamsContent = $('gen-params-content');
-        if (genParamsToggle && genParamsContent) {
-            genParamsToggle.onclick = () => {
-                const collapse = genParamsToggle.closest('.settings-collapse');
-                collapse.classList.toggle('open');
-                genParamsContent.classList.toggle('hidden');
-            };
-        }
 
         // Filter rules collapsible
         const filterRulesToggle = $('filter-rules-toggle');
@@ -3024,10 +2821,17 @@ const UNANNOTATED_LABEL = '未标注';
             onPeopleVisible: () => { renderRelations(summaryData.characters); relationChart?.resize(); },
             onEdit: openEditor, postMsg, setHtml, h,
         });
-        $('memory-agent-tab').textContent = MEMORY_COPY.tab;
         $('settings-save').textContent = MEMORY_COPY.settingsSave;
-        $('settings-cancel').textContent = MEMORY_COPY.settingsClose;
-        memoryMaintenancePage = createMemoryMaintenancePage($('tab-agent'), postMsg);
+        const agentRoot = document.createElement('section');
+        agentRoot.id = 'tab-agent-api'; agentRoot.className = 'tab-pane xb-agent-settings-surface';
+        $('tab-agent').parentElement.append(agentRoot);
+        agentSettings = createSummaryAgentSettings(agentRoot, postMsg, setHtml);
+        const openAgentApi = parent => { agentSettingsParent = parent; selectSettingsTab('tab-agent-api'); };
+        memoryMaintenancePage = createMemoryMaintenancePage($('tab-agent'), postMsg, { openApi: () => openAgentApi('tab-agent') });
+        const agentLink = document.createElement('button');
+        agentLink.type = 'button'; agentLink.className = 'workspace-model-link'; agentLink.textContent = WORKSPACE_COPY.agentApi;
+        agentLink.onclick = () => openAgentApi('tab-models');
+        $('tab-models').append(agentLink);
         loadConfig();
         tlPagingEnabled = localStorage.getItem(TL_PAGING_KEY) === '1';
 

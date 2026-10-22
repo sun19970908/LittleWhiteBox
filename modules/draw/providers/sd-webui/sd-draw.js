@@ -119,7 +119,7 @@ import { createImageRequestAttempt, imageHttpFailure } from '../../shared/image-
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
 import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
-import { persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
+import { getCharacterTagEditGroups, persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
 import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
@@ -438,9 +438,9 @@ export async function loadSettings() {
         const saved = await SdDrawStorage.getStrict(SERVER_FILE_KEY, null);
         const upgrade = installScenePlannerPresets(saved, DEFAULT_PROMPT_CONFIG, PROMPT_TEMPLATE_VERSION, { installVersion: 9 });
         settingsCache = normalizeSettings(upgrade.settings);
-        if (!saved || upgrade.changed) {
+        if (!saved || upgrade.changed || saved.activeApiPresetId !== settingsCache.activeApiPresetId) {
             const savedDefaults = await SdDrawStorage.setAndSave(SERVER_FILE_KEY, settingsCache, { silent: true });
-            if (!savedDefaults) throw new Error('新版提示词预设保存失败');
+            if (!savedDefaults) throw new Error(API_PRESET_COPY.saveFailed);
         }
         if (saved && upgrade.installed) {
             toastr.info(SCENE_PLANNER_PRESET_INSTALL_NOTICE, 'SD WebUI', { timeOut: 8000 });
@@ -3212,6 +3212,7 @@ function appendEditGroup(container, { label, value, type, index = null }) {
 
     const textarea = document.createElement('textarea');
     textarea.className = 'xb-nd-edit-input';
+    textarea.setAttribute('aria-label', label);
     textarea.dataset.type = type;
     if (index !== null) textarea.dataset.index = String(index);
     textarea.value = value || '';
@@ -3463,16 +3464,8 @@ async function toggleEditPanel(container, show) {
         scrollWrap.replaceChildren();
         appendEditGroup(scrollWrap, { label: '场景', value: currentTags, type: 'scene' });
 
-        if (preview?.characterPrompts?.length > 0) {
-            preview.characterPrompts.forEach((char, i) => {
-                const name = char.name || `角色 ${i + 1}`;
-                appendEditGroup(scrollWrap, { label: name, value: char.prompt || '', type: 'char', index: i });
-            });
-            // 角色专属负向（uc）：放在所有编辑框最下面，每个角色固定一个框，方便随时新增
-            preview.characterPrompts.forEach((char, i) => {
-                const name = char.name || `角色 ${i + 1}`;
-                appendEditGroup(scrollWrap, { label: `${name} 负向`, value: char.uc || '', type: 'uc', index: i });
-            });
+        for (const group of getCharacterTagEditGroups(preview?.characterPrompts)) {
+            appendEditGroup(scrollWrap, group);
         }
 
         if (btnsPanel) {

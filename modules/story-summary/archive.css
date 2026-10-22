@@ -15,6 +15,8 @@
 }
 .archive-topbar { height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .archive-brand { font-size: 15px; font-weight: 600; letter-spacing: .06em; }
+.archive-topbar .archive-brand { white-space: nowrap; }
+.archive-topbar .archive-actions { flex-wrap: nowrap; flex-shrink: 0; }
 .archive-actions { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .archive-icon {
     width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%; display: inline-grid;
@@ -23,12 +25,11 @@
 .archive-icon:hover { background: var(--bg3); color: var(--txt); }
 .archive-icon svg, .archive-search svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; }
 .archive-icon svg circle { fill: var(--bg); }
-.archive-hero { padding: 28px 0 34px; display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; }
-.archive h1 { font: 400 clamp(30px, 3vw, 42px)/1.4 'Noto Serif CJK SC', 'Songti SC', SimSun, serif; letter-spacing: .08em; margin: 0; color: var(--txt); }
-.archive-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 14px; font-size: 12px; color: var(--txt3); }
+.archive-hero { padding: 12px 0 24px; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.archive-meta { display: flex; gap: 16px; flex-wrap: wrap; font-size: 12px; color: var(--txt3); }
 .archive-meta b, .archive-muted b { font-weight: 500; }
 .archive-muted { color: var(--txt3); font-size: 12px; }
-.archive-generate { gap: 18px; padding-bottom: 3px; }
+.archive-generate { gap: 8px; padding-bottom: 3px; flex-wrap: nowrap; flex-shrink: 0; }
 .archive-generate .btn { min-height: 42px; border-radius: 7px; padding: 9px 18px; font-size: 13px; }
 .archive-nav { position: sticky; top: 0; z-index: 5; display: flex; align-items: center; justify-content: space-between; gap: 20px; border-bottom: 1px solid var(--bdr); background: var(--bg); }
 .archive-tabs { display: flex; gap: 34px; }
@@ -77,6 +78,8 @@
 .archive-person:hover { background: var(--bg3); }
 .archive-avatar { flex: 0 0 28px; width: 28px; height: 28px; border-radius: 50%; display: inline-grid; place-items: center; background: var(--bg3); color: var(--txt); }
 .archive-profile { min-width: 0; padding-left: 32px; border-left: 1px solid var(--bdr); }
+.archive-person-select { width: 100%; min-height: 44px; margin-bottom: 20px; padding: 8px 12px; border: 1px solid var(--bdr); border-radius: 6px; background: var(--bg); color: var(--txt); font: inherit; }
+.archive-person-select:focus-visible { outline: 2px solid var(--archive-accent); outline-offset: 3px; }
 .archive-profile .prof-arc { padding: 0; margin-bottom: 24px; }
 .archive-profile .prof-name { font: 400 30px/1.5 'Noto Serif CJK SC', 'Songti SC', SimSun, serif; margin-bottom: 12px; }
 .archive-profile .prof-traj { font-size: 14px; line-height: 1.9; color: var(--txt2); margin-bottom: 22px; white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -135,10 +138,12 @@
     .archive { padding: 0 20px 32px; }
     .archive-topbar { height: 58px; }
     .archive-brand { font-size: 14px; }
-    .archive-hero { display: block; padding: 16px 0 18px; }
-    .archive h1 { font-size: 32px; }
-    .archive-meta { margin-top: 12px; gap: 8px 12px; font-size: 11px; }
-    .archive-generate { justify-content: space-between; margin-top: 20px; padding: 0; }
+    .archive-topbar .archive-actions { gap: 4px; }
+    .archive-hero { padding: 6px 0 10px; gap: 8px; }
+    .archive-meta { gap: 4px 8px; font-size: 11px; }
+    .archive-meta > span { white-space: nowrap; }
+    .archive-generate { padding: 0; gap: 6px; }
+    .archive-generate .btn { padding: 8px 10px; min-height: 40px; font-size: 12px; }
     .archive-tabs { gap: 22px; }
     .archive-tab { font-size: 14px; }
     .archive-nav { gap: 12px; }
@@ -146,14 +151,14 @@
     .archive-search:focus-within input { width: 92px; }
     .archive-nav:has(.archive-search:focus-within) .archive-tab span { display: none; }
     .archive-nav:has(.archive-search:focus-within) .archive-tabs { gap: 12px; }
-    .archive-content { padding-top: 18px; }
+    .archive-content { padding-top: 10px; }
     .archive-story, .archive-people-layout, .archive-world-layout { display: block; }
     .archive-index > .archive-label { display: none; }
-    #archive-story-index, .archive-world-index { display: flex; gap: 18px; overflow-x: auto; margin-bottom: 12px; padding-bottom: 6px; }
+    #archive-story-index, .archive-world-index { display: flex; gap: 18px; overflow-x: auto; margin-bottom: 4px; padding-bottom: 0; }
     .archive-index-button { flex: 0 0 auto; width: auto; max-width: 200px; border: 0; padding: 10px 0; font-size: 12px; }
     .archive-index-button[aria-pressed="true"] { border: 0; padding: 10px 0; }
     .archive-index-button span { font-size: 10px; }
-    .archive-keywords { margin: 0 0 14px; }
+    .archive-keywords { margin: 0 0 4px; }
     .archive-keywords summary { min-height: 36px; padding: 6px 0; }
     .archive-section-head { margin-bottom: 18px; }
     .archive-section-head h2 { font-size: 16px; }
