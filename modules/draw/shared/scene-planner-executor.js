@@ -15,6 +15,7 @@ import {
 } from './planner-retry.js';
 import { logScenePlannerDiagnostic } from './scene-planner-debug.js';
 import { markToolProtocolMessages } from '../../agent-core/adapters/tool-protocol-marker.js';
+import { normalizeToolDefinitions, toFunctionTool } from './custom-tools.js';
 const ERROR_SOURCE = "modules/draw/shared/scene-planner-executor.js";
 
 
@@ -61,7 +62,19 @@ function assertPreparedScenePlanner(prepared) {
         throw new ScenePlannerError('Scene Planner 预处理结果无效。', 'PREPARED_INPUT_INVALID');
     }
     assertSubmitScenePlanTool(prepared.planner.tool);
+    readPreparedCustomTools(prepared);
     return prepared;
+}
+
+// 快照里的自定义工具只有定义（名字、说明、参数），没有代码；定义不合格就当快照无效。
+function readPreparedCustomTools(prepared) {
+    const raw = prepared?.planner?.customTools;
+    if (raw === undefined) return [];
+    try {
+        return normalizeToolDefinitions(raw);
+    } catch (error) {
+        throw new ScenePlannerError(`Scene Planner 预处理结果里的自定义工具无效：${error?.message || '未知错误'}`, 'PREPARED_INPUT_INVALID', null, { cause: error });
+    }
 }
 
 /**
@@ -73,7 +86,7 @@ export function createPreparedScenePlannerTask(prepared) {
     return {
         systemPrompt: input.planner.prompt.systemPrompt,
         messages: markToolProtocolMessages(input.planner.prompt.messages),
-        tools: [input.planner.tool],
+        tools: [input.planner.tool, ...readPreparedCustomTools(input).map(toFunctionTool)],
         toolChoice: 'required',
     };
 }
@@ -82,11 +95,14 @@ export function createPreparedScenePlannerTask(prepared) {
 // 重试后前几轮的失败记录就丢了。这里包一层：已失败（并将重试）的轮次记录保留在前，
 // 后续轮次的尝试号顺延（保证整份诊断里 attempt 唯一，后台 Draw Run 的日志去重签名含 attempt，号码相撞会被当成已记录），
 // 并用 retry 标注它属于第几次重试。第一轮记录原样不动。
-// 顺延量统一取“之前各轮已记录的 attempts 条数”，三个字段（以及 argumentRepair.attempt）用同一个偏移，彼此对得上。
+// 顺延量统一取“之前各轮已记录的 attempts 条数”，所有历史字段（以及 argumentRepair.attempt）用同一个偏移。
 function createAttemptPreservingDiagnostic(diagnostic) {
-    const HISTORY_FIELDS = ['attempts', 'validationFailures', 'corrections'];
-    let history = { attempts: [], validationFailures: [], corrections: [] };
-    let visible = { attempts: [], validationFailures: [], corrections: [] };
+    const HISTORY_FIELDS = ['attempts', 'validationFailures', 'corrections', 'customToolCalls'];
+    let history = Object.fromEntries(HISTORY_FIELDS.map(field => [field, []]));
+    const visible = Object.fromEntries(HISTORY_FIELDS.map(field => [field, []]));
+    // stealth 调用不留明细，计数必须独立于明细长度累加。
+    let priorCustomToolCount = 0;
+    let currentCustomToolCount = 0;
     let callIndex = 0;
     // 重试请求进行期间一直显示“重试 n/m”：运行时每次 update 都会把 progress 写回 analysis / correction，
     // 这里在重试轮次里把它盖回重试进度，直到该轮成功或最终失败（succeed / fail 不带 progress，不受影响）。
@@ -118,6 +134,10 @@ function createAttemptPreservingDiagnostic(diagnostic) {
         if (Array.isArray(patch.corrections) && Number.isInteger(patch.correctionCount)) {
             merged.correctionCount = history.corrections.length + patch.correctionCount;
         }
+        if (Number.isInteger(patch.customToolCallCount)) {
+            currentCustomToolCount = patch.customToolCallCount;
+            merged.customToolCallCount = priorCustomToolCount + currentCustomToolCount;
+        }
         if (callIndex > 0 && Number.isInteger(patch.argumentRepair?.attempt)) {
             merged.argumentRepair = { ...patch.argumentRepair, attempt: patch.argumentRepair.attempt + offset };
         }
@@ -139,7 +159,9 @@ function createAttemptPreservingDiagnostic(diagnostic) {
             retryProgress = progress;
             refreshVisible();
             sources = {};
-            history = { attempts: visible.attempts, validationFailures: visible.validationFailures, corrections: visible.corrections };
+            history = Object.fromEntries(HISTORY_FIELDS.map(field => [field, visible[field]]));
+            priorCustomToolCount += currentCustomToolCount;
+            currentCustomToolCount = 0;
             callIndex += 1;
         },
     };
@@ -150,6 +172,16 @@ export async function executePreparedScenePlanner(prepared, options = {}) {
     const diagnostic = options.diagnostic
         || beginDrawScenePlannerDiagnostic({}, options.onDiagnosticUpdate);
     const task = createPreparedScenePlannerTask(input);
+    const customTools = readPreparedCustomTools(input);
+    // 自定义工具要有能运行它们的宿主（浏览器沙盒）。后台 Draw Run 没有，所以带自定义工具的快照在这里就被拒绝。
+    if (customTools.length && typeof options.customToolHost?.invoke !== 'function') {
+        const error = new ScenePlannerError(
+            '请求结构里有启用的“附带工具”，需要在浏览器里运行；后台任务不会执行自定义代码。',
+            'CUSTOM_TOOL_HOST_MISSING',
+        );
+        diagnostic.fail(error, { stage: 'config' });
+        throw error;
+    }
     const validationContext = input.planner.validationContext;
     const preparedProviderConfig = input.agent?.providerConfig || null;
     const logger = options.logger;
@@ -191,6 +223,7 @@ export async function executePreparedScenePlanner(prepared, options = {}) {
                 timeout: options.timeout,
                 signal: options.signal,
                 diagnostic: attemptTracker.diagnostic,
+                ...(customTools.length ? { customTools, customToolHost: options.customToolHost } : {}),
                 ...(options.agentOptions || {}),
                 ...(options.agentCore ? { agentCore: options.agentCore } : {}),
                 ...(Object.hasOwn(options, 'hostClient') ? { hostClient: options.hostClient } : {}),
