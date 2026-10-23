@@ -5,6 +5,8 @@ import { NOVEL_API_DEFAULTS, NOVEL_API_FIELDS, normalizeNovelApiConfig } from '.
 import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
 import { CHARACTER_LOCK_COPY } from '../../shared/character-lock-copy.js';
 import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+import { createSandboxToolHost } from '../../shared/custom-tool-sandbox.js';
+import { collectToolBlocks, normalizeToolDefinition } from '../../shared/custom-tools.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 常量
@@ -3476,7 +3478,25 @@ function pruneLayoutDrafts() {
 function layoutFieldForSave() {
     if (!layoutSupported()) return {};
     const layout = getEffectivePromptLayout(getActivePromptPresetForForm());
-    return { layout: PLE.isDefaultLayout(layout) ? null : PLE.normalizeLayout(layout).layout };
+    return { layout: PLE.layoutForStorage(layout) ?? null };
+}
+
+function savePromptPreset(buttonId, statusTarget, statusId) {
+    getActivePromptPresetForForm();
+    let layoutFields;
+    try {
+        layoutFields = layoutFieldForSave();
+    } catch (error) {
+        updateStatus($(statusId), 'error', error.message);
+        return;
+    }
+    setSavingState($(buttonId));
+    postToParent({ type: 'SAVE_PROMPT_PRESET', selectedPromptPresetId: state.selectedPromptPresetId, promptDraft: {
+        topSystem: $('nd_prompt_system').value,
+        sceneRules: $('nd_prompt_format').value,
+        modelGuideOverrides: collectModelGuideOverridesFromForm(),
+        ...layoutFields,
+    }, statusTarget });
 }
 
 /** 导出用的布局：默认 / 没有 -> null（导出 V3，旧版本照常能导入）；否则规范化后的对象（导出 V4）。 */
@@ -3552,6 +3572,22 @@ function editBuiltinBlock(id) {
     }
 }
 
+async function testBlockTool(block) {
+    const host = createSandboxToolHost({ document });
+    try {
+        const definition = normalizeToolDefinition(await host.define(block.id, block.tool?.code ?? ''));
+        const names = Object.keys(definition.parameters.properties || {});
+        return {
+            ok: true,
+            message: `可用：工具名 ${definition.name}；参数 ${names.length ? names.join('、') : '无'}${definition.stealth ? '；调用不记入工具记录' : ''}`,
+        };
+    } catch (error) {
+        return { ok: false, message: String(error?.message || '读取工具定义失败') };
+    } finally {
+        host.dispose();
+    }
+}
+
 let layoutEditor = null;
 function getLayoutEditor() {
     if (!layoutEditor && PLE) {
@@ -3571,6 +3607,7 @@ function getLayoutEditor() {
             confirm: message => confirm(message),
             autoScroll: autoScrollPresetList,
             getDisabledReason: () => (state.promptLayoutSupported === true ? '' : LAYOUT_UNSUPPORTED_REASON),
+            onTestTool: testBlockTool,
         });
     }
     return layoutEditor;
@@ -4287,14 +4324,7 @@ function initializePage() {
     // 提示词预设管理 — 切换立即持久化，模板正文仍由保存按钮提交；
     // 列表里的点选 / “…”菜单由 preset-list-view.js 在第一次绘制时挂上委托（selectPromptPreset / handlePromptPresetAction）。
     $('nd_prompt_preset_save').addEventListener('click', () => {
-        setSavingState($('nd_prompt_preset_save'));
-        getActivePromptPresetForForm();
-        postToParent({ type: 'SAVE_PROMPT_PRESET', selectedPromptPresetId: state.selectedPromptPresetId, promptDraft: {
-            topSystem: $('nd_prompt_system').value,
-            sceneRules: $('nd_prompt_format').value,
-            modelGuideOverrides: collectModelGuideOverridesFromForm(),
-            ...layoutFieldForSave(),
-        }, statusTarget: 'prompt-preset' });
+        savePromptPreset('nd_prompt_preset_save', 'prompt-preset', 'nd_prompt_preset_status');
     });
 
     $('nd_prompt_add').addEventListener('click', () => postToParent({
@@ -4304,14 +4334,7 @@ function initializePage() {
 
     // 提示词模板保存（底部按钮，等同于预设栏保存）
     $('nd_prompts_save').addEventListener('click', () => {
-        setSavingState($('nd_prompts_save'));
-        getActivePromptPresetForForm();
-        postToParent({ type: 'SAVE_PROMPT_PRESET', selectedPromptPresetId: state.selectedPromptPresetId, promptDraft: {
-            topSystem: $('nd_prompt_system').value,
-            sceneRules: $('nd_prompt_format').value,
-            modelGuideOverrides: collectModelGuideOverridesFromForm(),
-            ...layoutFieldForSave(),
-        }, statusTarget: 'prompts' });
+        savePromptPreset('nd_prompts_save', 'prompts', 'nd_prompts_status');
     });
 
     // 恢复默认只改表单；点保存才落盘
@@ -4375,11 +4398,16 @@ function initializePage() {
         try {
             const text = await file.text();
             const data = JSON.parse(text);
+            const hasEnabledToolCode = collectToolBlocks(data?.layout).length > 0;
+            const keepToolBlocks = hasEnabledToolCode
+                ? confirm('这份模板含自定义工具代码，可在浏览器中执行并联网。是否启用？取消则导入但先关闭带工具的消息。只启用你信任的模板。')
+                : false;
             postToParent({
                 type: 'IMPORT_PROMPT_PRESET',
                 payload: data,
                 fallbackName: file.name.replace(/\.json$/i, '').trim()
                     || `导入的预设-${(state.promptPresets || []).length + 1}`,
+                ...(hasEnabledToolCode ? { keepToolBlocks } : {}),
             });
         } catch (err) {
             alert('导入失败: ' + err.message);
