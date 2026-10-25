@@ -28,7 +28,7 @@ import {
     getCacheStats,
     clearExpiredCache,
     clearAllCache,
-    getGallerySummary,
+    getGalleryOverview,
     getCharacterSlotsPage,
     getSlotVersions,
     openGallery,
@@ -70,6 +70,9 @@ import {
 } from "../../shared/api-presets.js";
 import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
 import { NOVEL_API_FIELDS, NOVEL_API_PRESET_OPTIONS, normalizeNovelApiConfig, normalizeNovelApiPresets } from './novel-api-config.js';
+import { createQuickTestSession, QUICK_TEST_SLOT_ID as TEST_SLOT_ID, QUICK_TEST_PAGE_SIZE, QUICK_TEST_COPY } from './quick-test-session.js';
+import { getSlotPreviewPage } from '../../shared/gallery-cache.js';
+import { resolveImageTaskOrientations } from '../../shared/image-orientation.js';
 import { detectPresentCharacters } from "../../shared/present-characters.js";
 import { joinTags } from "../../shared/character-prompts.js";
 import { resolveAutoLearnCharacter } from "./novel-character-learning.js";
@@ -737,6 +740,7 @@ function normalizeParamsPreset(preset, index) {
             ? 2
             : Math.max(0, Number(source.maxImages) || 0),
         maxCharactersPerImage: Math.max(0, Number(source.maxCharactersPerImage) || 0),
+        overrideSize: source.overrideSize === 'auto' ? 'auto' : 'default',
         params: {
             model: String(params.model || DEFAULT_PARAMS_PRESET.params.model).trim(),
             sampler: String(params.sampler || DEFAULT_PARAMS_PRESET.params.sampler),
@@ -1155,6 +1159,7 @@ function compactPromptGuideOverrides(value) {
 
 const NOVEL_QUICK_SIZE_OPTIONS = [
     { value: 'default', label: '跟随预设' },
+    { value: 'auto', label: 'AI 自动（按构图）' },
     { value: '832x1216', label: '832 x 1216 竖图' },
     { value: '1216x832', label: '1216 x 832 横图' },
     { value: '1024x1024', label: '1024 x 1024 方图' },
@@ -1623,7 +1628,12 @@ export function createNovelGenerationRecipe({
             min: Number(settings.requestDelay?.min) || DEFAULT_SETTINGS.requestDelay.min,
             max: Number(settings.requestDelay?.max) || DEFAULT_SETTINGS.requestDelay.max,
         },
-        overrideSize: String(settings.overrideSize || 'default'),
+        overrideSize: (() => {
+            // 悬浮囊显式选择（含显式 AI 自动）优先；选「跟随预设」时回落预设自身的尺寸模式。
+            const globalOverride = String(settings.overrideSize || 'default');
+            if (globalOverride !== 'default') return globalOverride;
+            return preset?.overrideSize === 'auto' ? 'auto' : 'default';
+        })(),
         baseHref: globalThis.location?.href,
         resolveForBackend: resolveForBackend === true,
         params: cloneSettingsObject(params),
@@ -2789,6 +2799,7 @@ async function generateImagesFromText(options = {}) {
                     base64,
                     tags: item.tagsForStore,
                     positive: item.scene,
+                    orientation: item.task.orientation ?? null,
                     characterPrompts: item.characterPrompts,
                     negativePrompt: item.negativePrompt,
                 });
@@ -2819,6 +2830,7 @@ async function generateImagesFromText(options = {}) {
                     errorType: errorType.code,
                     errorMessage: errorType.desc,
                     characterPrompts: item.characterPrompts,
+                    orientation: item.task.orientation ?? null,
                     negativePrompt: item.negativePrompt,
                 });
                 images[index] = {
@@ -2853,7 +2865,7 @@ async function generateImagesFromText(options = {}) {
 let preparedImageDispose = null;
 
 async function runPreparedNovelSlots(input) {
-    const { ctx, message, messageId, sourceText, tasks, onStateChange } = input;
+    const { ctx, message, messageId, sourceText, onStateChange } = input;
     const job = input.job || createGenerationJob(messageId);
     try {
         const settings = input.settings || cloneSettingsObject(getRuntimeSettings());
@@ -2861,9 +2873,10 @@ async function runPreparedNovelSlots(input) {
         const recipe = createNovelGenerationRecipe({
             settings,
             preset,
-            itemCount: tasks.length,
+            itemCount: input.tasks.length,
             resolveForBackend: resolveNovelImageTransport(settings) !== 'frontend',
         });
+        const tasks = await resolveImageTaskOrientations(input.tasks, recipe.overrideSize, job.controller.signal);
         const { compiledBatch, requests, metadata } = prepareImageInput('novelai', tasks, recipe);
         job.phase = 'gen';
         const monitorGeneration = backendJobMonitors.captureGeneration();
@@ -3218,11 +3231,15 @@ async function sendCacheData() {
     if (!iframe?.contentWindow) return;
     // 统计失败时对应字段干脆不带：页面收到缺省字段会保持原状，不会被占位的空值冲掉。
     const cacheData = { type: 'CACHE_DATA' };
-    try { cacheData.cacheStats = await getCacheStats(); } catch (e) { console.warn('[NovelDraw] getCacheStats failed:', e); }
-    try { cacheData.gallerySummary = await getGallerySummary(); } catch (e) { console.warn('[NovelDraw] getGallerySummary failed:', e); }
+    try {
+        const overview = await getGalleryOverview();
+        cacheData.cacheStats = overview.stats;
+        cacheData.gallerySummary = overview.summary;
+    } catch (e) { console.error('[NovelDraw] Gallery overview failed:', e); }
     const currentIframe = document.getElementById('xiaobaix-novel-draw-iframe');
     if (currentIframe?.contentWindow === iframe.contentWindow) {
         postToIframe(currentIframe, cacheData, 'LittleWhiteBox-NovelDraw');
+        await pushTestHistory();
     }
 }
 
@@ -3281,6 +3298,56 @@ function ensureAgentSettingsSurface() {
         logPrefix: 'NovelDraw',
     });
     return agentSettingsSurface;
+}
+
+let testHistoryOffset = 0;
+let testHistoryRevision = 0;
+function postTestMessage(message) {
+    const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+    if (iframe) postToIframe(iframe, message, 'LittleWhiteBox-NovelDraw');
+}
+const quickTestSession = createQuickTestSession({
+    store: storePreview,
+    notify: record => {
+        testHistoryRevision++;
+        testHistoryOffset = 0;
+        postTestMessage({ type: 'TEST_RETAINED', record });
+    },
+    stateChanged: busy => postTestMessage({ type: 'TEST_STATE', busy }),
+});
+window.addEventListener('beforeunload', event => {
+    if (!quickTestSession.hasUnsaved) return;
+    event.preventDefault();
+    event.returnValue = '';
+});
+
+async function pushTestHistory(selectedImgId, offset = testHistoryOffset) {
+    const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+    if (!iframe) return;
+    const revision = ++testHistoryRevision;
+    testHistoryOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+    postTestMessage({ type: 'TEST_STATE', busy: quickTestSession.busy });
+    const pending = quickTestSession.records;
+    // Restore unsaved output immediately even if IndexedDB is blocked/unreadable.
+    if (pending.length) postTestMessage({ type: 'TEST_RESULT', items: pending.slice(testHistoryOffset, testHistoryOffset + QUICK_TEST_PAGE_SIZE),
+        offset: testHistoryOffset, hasMore: pending.length > testHistoryOffset + QUICK_TEST_PAGE_SIZE, selectedImgId });
+    try {
+        const temporary = pending.slice(testHistoryOffset, testHistoryOffset + QUICK_TEST_PAGE_SIZE);
+        const page = await getSlotPreviewPage(TEST_SLOT_ID, {
+            offset: Math.max(0, testHistoryOffset - pending.length),
+            limit: QUICK_TEST_PAGE_SIZE - temporary.length,
+            exclude: pending.map(record => record.imgId),
+        });
+        if (!iframe.isConnected || revision !== testHistoryRevision) return;
+        const items = [...temporary, ...page.items];
+        if (!items.length && testHistoryOffset) return pushTestHistory(selectedImgId, 0);
+        postTestMessage({ type: 'TEST_RESULT', items, offset: testHistoryOffset,
+            hasMore: pending.length > testHistoryOffset + QUICK_TEST_PAGE_SIZE || page.hasMore, selectedImgId });
+    } catch (error) {
+        if (revision !== testHistoryRevision || !iframe.isConnected) return;
+        console.error(QUICK_TEST_COPY.historyFailed, error);
+        postTestMessage({ type: 'TEST_HISTORY_FAILED' });
+    }
 }
 
 async function handleFrameMessage(event) {
@@ -3998,6 +4065,17 @@ async function handleFrameMessage(event) {
             break;
         }
 
+        case 'LOAD_GALLERY_IMAGE': {
+            const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+            let image = null;
+            try {
+                const record = await getPreview(data.imgId);
+                if (record) image = { imgId: record.imgId, savedUrl: record.savedUrl, base64: record.savedUrl ? null : record.base64 };
+            } catch (error) { console.error('[NovelDraw] Gallery image read failed:', error); }
+            if (iframe?.isConnected) postToIframe(iframe, { type: 'GALLERY_IMAGE_LOADED', requestId: data.requestId, image }, 'LittleWhiteBox-NovelDraw');
+            break;
+        }
+
         case 'LOAD_SLOT_VERSIONS': {
             const { charName, slotId, requestId } = data;
             if (!charName || !slotId) break;
@@ -4063,21 +4141,47 @@ async function handleFrameMessage(event) {
         }
 
         case 'TEST_SINGLE': {
+            if (quickTestSession.busy) break;
             try {
-                postStatus('loading', '生成中...');
-                const t0 = Date.now();
+                postStatus('loading', QUICK_TEST_COPY.generating);
                 const preset = getActiveParamsPreset();
                 const tags = (typeof data.tags === 'string' && data.tags.trim()) ? data.tags.trim() : '1girl, smile';
                 const scene = joinTags(preset?.positivePrefix, tags);
-                const base64 = await generateNovelImage({ scene, characterPrompts: [], negativePrompt: preset?.negativePrefix || '', params: preset?.params || {} });
-                {
-                    const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
-                    if (iframe) postToIframe(iframe, { type: 'TEST_RESULT', url: getPreviewDisplayUrl({ base64 }) }, 'LittleWhiteBox-NovelDraw');
-                }
-                postStatus('success', `完成 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+                const imgId = await quickTestSession.generate(async () => ({
+                    base64: await generateNovelImage({ scene, characterPrompts: [], negativePrompt: preset?.negativePrefix || '', params: preset?.params || {} }),
+                    imgId: generateImgId(),
+                    slotId: TEST_SLOT_ID,
+                    tags,
+                    positive: scene,
+                    negativePrompt: preset?.negativePrefix || '',
+                    source: 'quick-test',
+                }));
+                await pushTestHistory(imgId, 0);
+                postStatus('success', QUICK_TEST_COPY.generated);
             } catch (e) {
                 postStatus('error', e?.message);
             }
+            break;
+        }
+
+        case 'TEST_HISTORY':
+            await pushTestHistory(undefined, data.offset ?? 0);
+            break;
+
+        case 'TEST_RETRY_SAVE':
+            try {
+                await quickTestSession.save(data.imgId);
+                await pushTestHistory(data.imgId, 0);
+                postStatus('success', QUICK_TEST_COPY.saved);
+            } catch (error) {
+                console.error(QUICK_TEST_COPY.unsaved, error);
+                postStatus('error', error?.message);
+            }
+            break;
+
+        case 'OPEN_TEST_GALLERY': {
+            const refresh = () => observeBackgroundTask(sendCacheData(), { source: import.meta.url, operation: 'refreshTestGallery' });
+            await openGallery(TEST_SLOT_ID, null, { onSave: refresh, onDelete: refresh, onBecameEmpty: refresh }, data.imgId);
             break;
         }
     }
