@@ -1,4 +1,4 @@
-import { SUBMIT_SCENE_PLAN_TOOL_NAME } from './scene-plan-contract.js';
+import { SCENE_TITLE_MAX_LENGTH, SUBMIT_SCENE_PLAN_TOOL_NAME } from './scene-plan-contract.js';
 import { normalizeScenePlannerProfile } from './scene-planner-profile.js';
 
 // Model-facing instructions are prepared in the browser, not bundled into the executor.
@@ -7,10 +7,11 @@ function normalizeLimit(value) {
     return Number.isInteger(number) && number > 0 ? number : 0;
 }
 
-function stringSchema(description, { minLength = 0 } = {}) {
+function stringSchema(description, { minLength = 0, maxLength = 0 } = {}) {
     return {
         type: 'string',
         ...(minLength > 0 ? { minLength } : {}),
+        ...(maxLength > 0 ? { maxLength } : {}),
         description,
     };
 }
@@ -53,8 +54,11 @@ export function getScenePlanCharacterProperties(profile) {
     const effective = normalizeScenePlannerProfile(profile);
     return {
         name: stringSchema(
-            '角色名。已录入角色用【已录入角色】列出的规范名，原文用别名也归一到规范名。未知角色用原文名字，无名时用简短称呼。',
+            '角色名。已录入角色用【已录入角色】中的名称，原文用别名也归一到该名称。未知角色用原文名字，无名时用简短称呼。',
             { minLength: 1 },
+        ),
+        form: stringSchema(
+            '多形态角色必填：本图出现的形态名，取自该角色的“形态”列表；单形态角色省略。',
         ),
         // type 在 danbooru 之前：与 assembleCharacterPrompts 的拼接顺序一致
         // （type → danbooru → appear → costume → action），也让模型按"先说清是谁、在哪，再给身份 tag"的顺序写。
@@ -144,9 +148,12 @@ export function createSubmitScenePlanTool(options = {}) {
                     ...(insertPointCount ? { maximum: insertPointCount } : {}),
                     description: 'The number N of an existing `【插图点 N】` marker in <content>. Choose the nearest marker after the moment depicted. Images at the same marker appear in array order.',
                 },
-                scene: stringSchema(
-                    '画面整体：人数与关系、构图与视角、背景、光影、氛围，逗号分隔的英文 tag。角色个体的外貌与动作不写在这里。拼在正向提示词最前。',
-                    { minLength: 1 },
+                // 先命名和确定画幅，再展开绘图 tag；title 仅用于展示，不参与提示词拼接。
+                title: stringSchema(
+                    `本图的场景名称，简体中文，${SCENE_TITLE_MAX_LENGTH} 字以内，不设最少字数；抓住具体的动作、物件或瞬间，不写剧情摘要。`
+                    + '例如：雨停、门口的回眸、凌晨两点的便利店。'
+                    + '只输出名称正文，不加引号、书名号或句末标点。仅用于图片展示，不写入绘图 tag。',
+                    { minLength: 1, maxLength: SCENE_TITLE_MAX_LENGTH },
                 ),
                 orientation: {
                     type: 'string',
@@ -156,6 +163,10 @@ export function createSubmitScenePlanTool(options = {}) {
                         + 'landscape（横幅）：三人及以上群像、wide shot / 全景远景、开阔环境、左右展开的互动与站位。'
                         + '两人同框不必然横幅；方向须与景别一致。拿不准时填 portrait。',
                 },
+                scene: stringSchema(
+                    '画面整体：人数与关系、构图与视角、背景、光影、氛围，逗号分隔的英文 tag。角色个体的外貌与动作不写在这里。拼在正向提示词最前。',
+                    { minLength: 1 },
+                ),
                 characters: charactersSchema,
                 // 追加位（可选）：拼在所有角色之后、整条正向提示词的最末尾。
                 // 只有 profile.postPrompt === 'append' 的 provider 才暴露，避免教会模型一个编译器会丢的字段。

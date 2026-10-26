@@ -26,6 +26,7 @@ import { createModuleEvents } from "../../core/event-manager.js";
 import { postToIframe, isTrustedMessage } from "../../core/iframe-messaging.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
 import { STORY_SUMMARY_TOGGLE_EVENT } from './runtime-events.js';
+import { isXiaobaiMasterEnabled } from './runtime-gate.js';
 import { initChatDeletionLifecycle } from './chat-deletion-lifecycle.js';
 import { createMemoryMaintenanceHost } from './maintenance/host.js';
 import { createSummaryDiagnostics } from './summary-diagnostics.js';
@@ -284,7 +285,7 @@ function getStorySummaryEnablement() {
     const chatEnabled = hasChat
         ? getChatStorySummaryEnabled(chat_metadata, EXT_ID)
         : true;
-    const effectiveEnabled = hasChat && resolveStorySummaryEnabled(globalEnabled, chatEnabled);
+    const effectiveEnabled = isXiaobaiMasterEnabled() && hasChat && resolveStorySummaryEnabled(globalEnabled, chatEnabled);
     return { context, hasChat, globalEnabled, chatEnabled, effectiveEnabled };
 }
 
@@ -339,6 +340,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
 
     // The host saves the entire metadata, including any pending memory draft.
     assertMemoryWritable(targetChatId);
+    const wasManagingVisibility = !!events && isStorySummaryEnabledForCurrentChat();
     chatSummaryStateChanging = true;
     setChatStorySummaryEnabled(targetMetadata, EXT_ID, nextEnabled);
     if (!nextEnabled) {
@@ -350,7 +352,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
 
     try {
         notifyStorySummaryChatState();
-        if (!nextEnabled) observeBackgroundTask(clearHideState({ persist: false }), { source: import.meta.url, operation: 'setStorySummaryEnabledForCurrentChat' });
+        if (!nextEnabled && wasManagingVisibility) observeBackgroundTask(hideState.clear({ persist: false }), { source: import.meta.url, operation: 'setStorySummaryEnabledForCurrentChat' });
         await saveChatSummaryState(context);
 
         if (getContext()?.chatId === targetChatId && events) {
@@ -2740,8 +2742,8 @@ async function importSummaryMemoryPackage(rawText, targetChatId = '') {
     };
 }
 
-// Compatibility export for ena-planner.
-// Returns a compact plain-text snapshot of story-summary memory.
+// Canonical fallback for the recall interceptor's published result.
+// This reads saved summary text only; it never performs vector retrieval.
 export function getStorySummaryForEna() {
     if (!isStorySummaryEnabledForCurrentChat()) return "";
     return getStorySummaryMemoryText();
@@ -2864,9 +2866,8 @@ const hideState = createHideStateController({
             chatId: context.chatId,
             chat: context.chat,
             saveChat: context.saveChat,
-            enabled: !!events && window.isXiaobaixEnabled !== false
-                && isStorySummaryEnabledForCurrentChat()
-                && isSummarySourceValid(store, context.chat?.length || 0) && ui.hideSummarized,
+            managed: !!events && isStorySummaryEnabledForCurrentChat(),
+            enabled: isSummarySourceValid(store, context.chat?.length || 0) && ui.hideSummarized,
             summaryBoundary: store?.lastSummarizedMesId ?? -1,
             useVectorBoundary: !!getVectorConfig()?.enabled && ui.useVectorBoundary,
             keepVisibleCount: ui.keepVisibleCount,
@@ -2985,6 +2986,8 @@ function clearDeferredBackgroundTasks() {
 }
 
 function clearHideState(options) {
+    // Late callbacks may still settle after teardown or a chat-level disable.
+    if (!events || !isStorySummaryEnabledForCurrentChat()) return Promise.resolve();
     return hideState.clear(options);
 }
 
@@ -3586,6 +3589,7 @@ async function handleFrameMessage(event) {
             const { chatId } = context;
             const chatIdentity = getChatIdentity(context);
             try {
+                cancelActiveSummaryExecution();
                 cancelRecallAndClearPrompt('summary-edited');
                 if (data.section === "events") cancelEmbeddingWriteTasks('Summary events edited');
                 const committed = await runVectorWriteTask({ chatId, kind: 'summary-manual-edit', scope: VECTOR_WRITE_SCOPES.CONSISTENCY }, async () => {
@@ -3638,6 +3642,7 @@ async function handleFrameMessage(event) {
         case "UPDATE_CHARACTER_ALIASES": {
             if (!Array.isArray(data.aliases)) break;
             try {
+                cancelActiveSummaryExecution();
                 const { chatId } = getContext();
                 await waitForMemoryCommit();
                 assertMemoryWritable(chatId);
@@ -4559,6 +4564,7 @@ function handleChatChange() {
 
 async function registerEvents() {
     if (storySummaryTeardown) await storySummaryTeardown;
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
     if (events) return;
     resumeVectorWriteCoordinator();
     window.registerModuleCleanup?.(MODULE_ID, unregisterEvents);
@@ -4672,6 +4678,8 @@ async function registerEvents() {
 
 async function unregisterEvents() {
     if (storySummaryTeardown) return storySummaryTeardown;
+    // The master cleanup and the feature toggle can both request shutdown.
+    if (!events) return;
     storySummaryTeardown = runStorySummaryTeardown();
     try {
         await storySummaryTeardown;
@@ -4688,7 +4696,10 @@ async function runStorySummaryTeardown() {
     memoryMaintenance.stop();
     // The master switch invokes this cleanup directly (without awaiting it).
     // Restore flags synchronously, before waiting for any background writer.
-    const hideCleanup = clearHideState();
+    // Restore once at this transition even though the master/feature flag is
+    // already off. A chat disabled earlier has already released its visibility.
+    const hideCleanup = getChatStorySummaryEnabled(chat_metadata, EXT_ID)
+        ? hideState.clear() : Promise.resolve();
     cancelActiveSummaryExecution();
     activeSummaryExecution = null;
     cancelRecallAndClearPrompt('unregistered');
@@ -4733,7 +4744,8 @@ async function runStorySummaryTeardown() {
 async function deactivateCurrentChatStorySummary() {
     embeddingConnection.cancel();
     serviceTests.cancel();
-    const hideCleanup = clearHideState();
+    // Visibility was released by the explicit disable transition; loading an
+    // already-disabled chat must not clear later manual hides.
     clearDeferredBackgroundTasks();
     cancelPendingHide();
     cancelRecallAndClearPrompt('deactivated');
@@ -4743,7 +4755,7 @@ async function deactivateCurrentChatStorySummary() {
 
     const targetChatId = activeChatId || getContext()?.chatId || '';
     invalidateLexicalIndex();
-    await Promise.all([waitForVectorWrites(), hideCleanup]);
+    await waitForVectorWrites();
     clearDeferredBackgroundTasks();
     if (targetChatId) await clearRecallRuntime(targetChatId);
 }
@@ -4971,8 +4983,7 @@ function showBackupManagerModal() {
 $(document).on(STORY_SUMMARY_TOGGLE_EVENT, observeAsyncCallback(async (_e, enabled) => {
     if (enabled) {
         try {
-            await registerEvents();
-            await handleChatChanged();
+            await initializeStorySummary();
         } catch (error) {
             reportStartupFailure(error);
         }
@@ -4993,18 +5004,24 @@ function reportStartupFailure(error) {
     notifySummaryStartupFailure(error, shouldNotify);
 }
 
+// 首次加载和重新开启必须先同步配置，再注册事件和应用聊天隐藏状态。
+async function initializeStorySummary() {
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
+    try {
+        await loadConfigFromServer();
+    } catch (e) {
+        xbLog.warn(MODULE_ID, "Failed to load server config before initialization; using local cache", e);
+    }
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
+    await registerEvents();
+    // 注册可能等待上一次卸载；等待期间关闭开关时，不再继续初始化。
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
+    initStateIntegration();
+    maybePreloadTokenizer();
+    await handleChatChanged();
+}
+
 jQuery(() => {
     initChatDeletionLifecycle(handleChatDeleted);
-    if (!getSettings().storySummary?.enabled) return;
-    (async () => {
-        try {
-            await loadConfigFromServer();
-        } catch (e) {
-            xbLog.warn(MODULE_ID, "Failed to load server config before initialization; using local cache", e);
-        }
-        await registerEvents();
-        initStateIntegration();
-        maybePreloadTokenizer();
-        await handleChatChanged();
-    })().catch(reportStartupFailure);
+    initializeStorySummary().catch(reportStartupFailure);
 });
