@@ -193,29 +193,8 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
 .danbooru-char-series { font-size: 10px; color: var(--text-muted); font-style: italic; }
 .danbooru-tag-preview { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
 .danbooru-status { font-size: 11px; color: var(--text-muted); padding: 8px 0; }
-.char-list-body { padding-bottom: 40px; }
-.char-floating-save {
-    position: fixed; right: 28px; bottom: 28px; z-index: 80;
-    border-radius: 999px; padding: 10px 18px;
-    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(212, 165, 116, 0.25);
-    transition: transform 0.15s ease, box-shadow 0.15s ease;
-}
-.char-floating-save:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 24px rgba(212, 165, 116, 0.35);
-}
-.char-floating-save:active {
-    transform: translateY(0);
-}
-.char-floating-save.save-success {
-    background: var(--success); border-color: var(--success); color: #fff;
-}
-.char-floating-save.save-failed {
-    background: var(--danger); border-color: var(--danger); color: #fff;
-}
 @media (max-width: 768px) {
     .char-grid { min-width: 0; }
-    .char-floating-save { bottom: 76px; right: 16px; }
     .gallery-slots { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
     .workflow-mode-btns { flex-direction: column; }
     .chain-item[data-key="tools"] { flex-direction: column; }
@@ -856,10 +835,6 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
                         </div>
                     </section>
                 </div>
-                <button id="comfy-char-floating-save" class="btn btn-primary char-floating-save" type="button" data-comfy-save-shared title="保存角色与设置">
-                    <i class="fa-solid fa-floppy-disk"></i>
-                    <span>保存角色</span>
-                </button>
             </section>
 
             <section class="view wide" data-comfy-view-panel="gallery">
