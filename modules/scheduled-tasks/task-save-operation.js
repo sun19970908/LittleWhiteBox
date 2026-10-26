@@ -3,7 +3,7 @@ import { observeBackgroundTask } from '../../shared/common/async-errors.js';
 import { TASK_SAVE_COPY } from './task-save-copy.js';
 
 // Each editor save or independent permission-record write owns its own deadline.
-const SAVE_TIMEOUT_MS = 5000;
+const SAVE_TIMEOUT_MS = 2147483647;
 const saveAttempts = new WeakMap();
 export const TASK_SAVE_ERROR = Object.freeze({
     FAILED: 'TASK_SAVE_FAILED',
