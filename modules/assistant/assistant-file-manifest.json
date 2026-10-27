@@ -132,7 +132,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/core/storage-file.js",
       "relativePath": "core/storage-file.js",
       "extension": ".js",
-      "sizeBytes": 12979
+      "sizeBytes": 13070
     },
     {
       "source": "littlewhitebox",
@@ -181,7 +181,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/docs/ena-planner-context.md",
       "relativePath": "docs/ena-planner-context.md",
       "extension": ".md",
-      "sizeBytes": 7985
+      "sizeBytes": 7612
     },
     {
       "source": "littlewhitebox",
@@ -202,7 +202,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/docs/plugin-build.md",
       "relativePath": "docs/plugin-build.md",
       "extension": ".md",
-      "sizeBytes": 13191
+      "sizeBytes": 13975
     },
     {
       "source": "littlewhitebox",
@@ -475,7 +475,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/manifest.json",
       "relativePath": "manifest.json",
       "extension": ".json",
-      "sizeBytes": 383
+      "sizeBytes": 382
     },
     {
       "source": "littlewhitebox",
@@ -490,6 +490,13 @@
       "relativePath": "modules/agent-core/adapters/anthropic.js",
       "extension": ".js",
       "sizeBytes": 21682
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/agent-core/adapters/gemini-tool-schema.js",
+      "relativePath": "modules/agent-core/adapters/gemini-tool-schema.js",
+      "extension": ".js",
+      "sizeBytes": 2506
     },
     {
       "source": "littlewhitebox",
@@ -510,7 +517,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/agent-core/adapters/openai-compatible.js",
       "relativePath": "modules/agent-core/adapters/openai-compatible.js",
       "extension": ".js",
-      "sizeBytes": 53607
+      "sizeBytes": 54001
     },
     {
       "source": "littlewhitebox",
@@ -791,6 +798,13 @@
       "relativePath": "modules/agent-core/tests/fixtures/text-tool-boundaries.js",
       "extension": ".js",
       "sizeBytes": 7860
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/agent-core/tests/gemini-tool-schema.test.js",
+      "relativePath": "modules/agent-core/tests/gemini-tool-schema.test.js",
+      "extension": ".js",
+      "sizeBytes": 4326
     },
     {
       "source": "littlewhitebox",
@@ -1707,7 +1721,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/comfyui/floating-panel.js",
       "relativePath": "modules/draw/providers/comfyui/floating-panel.js",
       "extension": ".js",
-      "sizeBytes": 63249
+      "sizeBytes": 63036
     },
     {
       "source": "littlewhitebox",
@@ -1742,7 +1756,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/floating-panel.js",
       "relativePath": "modules/draw/providers/novelai/floating-panel.js",
       "extension": ".js",
-      "sizeBytes": 81004
+      "sizeBytes": 80451
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/gallery-feedback.js",
+      "relativePath": "modules/draw/providers/novelai/gallery-feedback.js",
+      "extension": ".js",
+      "sizeBytes": 3095
     },
     {
       "source": "littlewhitebox",
@@ -1777,21 +1798,21 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/novel-draw-page.js",
       "relativePath": "modules/draw/providers/novelai/novel-draw-page.js",
       "extension": ".js",
-      "sizeBytes": 260751
+      "sizeBytes": 260812
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/novel-draw.html",
       "relativePath": "modules/draw/providers/novelai/novel-draw.html",
       "extension": ".html",
-      "sizeBytes": 107401
+      "sizeBytes": 110318
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/novel-draw.js",
       "relativePath": "modules/draw/providers/novelai/novel-draw.js",
       "extension": ".js",
-      "sizeBytes": 217179
+      "sizeBytes": 217363
     },
     {
       "source": "littlewhitebox",
@@ -1868,7 +1889,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/tests/character-form-flow.test.js",
       "relativePath": "modules/draw/providers/novelai/tests/character-form-flow.test.js",
       "extension": ".js",
-      "sizeBytes": 40643
+      "sizeBytes": 36755
     },
     {
       "source": "littlewhitebox",
@@ -1931,7 +1952,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/novelai/tests/quick-test-handler.test.js",
       "relativePath": "modules/draw/providers/novelai/tests/quick-test-handler.test.js",
       "extension": ".js",
-      "sizeBytes": 9638
+      "sizeBytes": 10783
     },
     {
       "source": "littlewhitebox",
@@ -1973,7 +1994,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/sd-webui/floating-panel.js",
       "relativePath": "modules/draw/providers/sd-webui/floating-panel.js",
       "extension": ".js",
-      "sizeBytes": 63208
+      "sizeBytes": 62995
     },
     {
       "source": "littlewhitebox",
@@ -2078,7 +2099,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/character-card-menu.js",
       "relativePath": "modules/draw/shared/character-card-menu.js",
       "extension": ".js",
-      "sizeBytes": 6519
+      "sizeBytes": 7167
     },
     {
       "source": "littlewhitebox",
@@ -2204,7 +2225,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/character-library-ui.css",
       "relativePath": "modules/draw/shared/character-library-ui.css",
       "extension": ".css",
-      "sizeBytes": 15811
+      "sizeBytes": 15777
     },
     {
       "source": "littlewhitebox",
@@ -2379,7 +2400,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/draw-common.js",
       "relativePath": "modules/draw/shared/draw-common.js",
       "extension": ".js",
-      "sizeBytes": 60344
+      "sizeBytes": 60417
     },
     {
       "source": "littlewhitebox",
@@ -2509,6 +2530,13 @@
     },
     {
       "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/floating-popovers.js",
+      "relativePath": "modules/draw/shared/floating-popovers.js",
+      "extension": ".js",
+      "sizeBytes": 4208
+    },
+    {
+      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/floor-image-job.js",
       "relativePath": "modules/draw/shared/floor-image-job.js",
       "extension": ".js",
@@ -2596,7 +2624,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/image-card-menu.js",
       "relativePath": "modules/draw/shared/image-card-menu.js",
       "extension": ".js",
-      "sizeBytes": 4173
+      "sizeBytes": 4187
     },
     {
       "source": "littlewhitebox",
@@ -2617,7 +2645,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/image-card-view.js",
       "relativePath": "modules/draw/shared/image-card-view.js",
       "extension": ".js",
-      "sizeBytes": 10601
+      "sizeBytes": 11297
     },
     {
       "source": "littlewhitebox",
@@ -2799,7 +2827,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/prepared-slot-executor.js",
       "relativePath": "modules/draw/shared/prepared-slot-executor.js",
       "extension": ".js",
-      "sizeBytes": 10255
+      "sizeBytes": 10331
     },
     {
       "source": "littlewhitebox",
@@ -2848,7 +2876,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/prompt-layout-editor.css",
       "relativePath": "modules/draw/shared/prompt-layout-editor.css",
       "extension": ".css",
-      "sizeBytes": 15297
+      "sizeBytes": 15263
     },
     {
       "source": "littlewhitebox",
@@ -2932,7 +2960,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/scene-plan-tool.js",
       "relativePath": "modules/draw/shared/scene-plan-tool.js",
       "extension": ".js",
-      "sizeBytes": 11218
+      "sizeBytes": 11242
     },
     {
       "source": "littlewhitebox",
@@ -3146,13 +3174,6 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-action-icons.test.js",
-      "relativePath": "modules/draw/shared/tests/character-action-icons.test.js",
-      "extension": ".js",
-      "sizeBytes": 2297
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-card-menu.test.js",
       "relativePath": "modules/draw/shared/tests/character-card-menu.test.js",
       "extension": ".js",
@@ -3163,35 +3184,28 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-edit-form.test.js",
       "relativePath": "modules/draw/shared/tests/character-edit-form.test.js",
       "extension": ".js",
-      "sizeBytes": 27333
+      "sizeBytes": 13273
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-editor-autosave.test.js",
       "relativePath": "modules/draw/shared/tests/character-editor-autosave.test.js",
       "extension": ".js",
-      "sizeBytes": 4715
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-editor-copy.test.js",
-      "relativePath": "modules/draw/shared/tests/character-editor-copy.test.js",
-      "extension": ".js",
-      "sizeBytes": 8170
+      "sizeBytes": 4269
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-form-enabled.test.js",
       "relativePath": "modules/draw/shared/tests/character-form-enabled.test.js",
       "extension": ".js",
-      "sizeBytes": 13107
+      "sizeBytes": 12749
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-form-selection.test.js",
       "relativePath": "modules/draw/shared/tests/character-form-selection.test.js",
       "extension": ".js",
-      "sizeBytes": 8428
+      "sizeBytes": 7659
     },
     {
       "source": "littlewhitebox",
@@ -3205,21 +3219,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-forms-editor.test.js",
       "relativePath": "modules/draw/shared/tests/character-forms-editor.test.js",
       "extension": ".js",
-      "sizeBytes": 15577
+      "sizeBytes": 12034
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-forms.test.js",
       "relativePath": "modules/draw/shared/tests/character-forms.test.js",
       "extension": ".js",
-      "sizeBytes": 16256
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-group-height.test.js",
-      "relativePath": "modules/draw/shared/tests/character-group-height.test.js",
-      "extension": ".js",
-      "sizeBytes": 9603
+      "sizeBytes": 14427
     },
     {
       "source": "littlewhitebox",
@@ -3234,13 +3241,6 @@
       "relativePath": "modules/draw/shared/tests/character-library-ui.test.js",
       "extension": ".js",
       "sizeBytes": 5849
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/character-tones-css.test.js",
-      "relativePath": "modules/draw/shared/tests/character-tones-css.test.js",
-      "extension": ".js",
-      "sizeBytes": 6819
     },
     {
       "source": "littlewhitebox",
@@ -3342,31 +3342,10 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/drop-indicator-css.test.js",
-      "relativePath": "modules/draw/shared/tests/drop-indicator-css.test.js",
-      "extension": ".js",
-      "sizeBytes": 2313
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/fixtures/scene-planner-golden.json",
-      "relativePath": "modules/draw/shared/tests/fixtures/scene-planner-golden.json",
-      "extension": ".json",
-      "sizeBytes": 1321715
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/floating-gesture.test.js",
       "relativePath": "modules/draw/shared/tests/floating-gesture.test.js",
       "extension": ".js",
-      "sizeBytes": 6054
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/floating-theme-css.test.js",
-      "relativePath": "modules/draw/shared/tests/floating-theme-css.test.js",
-      "extension": ".js",
-      "sizeBytes": 2233
+      "sizeBytes": 6140
     },
     {
       "source": "littlewhitebox",
@@ -3377,24 +3356,10 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/gallery-compression-copy.test.js",
-      "relativePath": "modules/draw/shared/tests/gallery-compression-copy.test.js",
-      "extension": ".js",
-      "sizeBytes": 1911
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/gallery-metadata.test.js",
       "relativePath": "modules/draw/shared/tests/gallery-metadata.test.js",
       "extension": ".js",
       "sizeBytes": 3250
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/gallery-modal-css.test.js",
-      "relativePath": "modules/draw/shared/tests/gallery-modal-css.test.js",
-      "extension": ".js",
-      "sizeBytes": 9668
     },
     {
       "source": "littlewhitebox",
@@ -3429,7 +3394,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/image-card-menu.test.js",
       "relativePath": "modules/draw/shared/tests/image-card-menu.test.js",
       "extension": ".js",
-      "sizeBytes": 7655
+      "sizeBytes": 8404
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/image-card-projection.test.js",
+      "relativePath": "modules/draw/shared/tests/image-card-projection.test.js",
+      "extension": ".js",
+      "sizeBytes": 5034
     },
     {
       "source": "littlewhitebox",
@@ -3464,14 +3436,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/inline-rename.test.js",
       "relativePath": "modules/draw/shared/tests/inline-rename.test.js",
       "extension": ".js",
-      "sizeBytes": 5485
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/last-tab.test.js",
-      "relativePath": "modules/draw/shared/tests/last-tab.test.js",
-      "extension": ".js",
-      "sizeBytes": 4940
+      "sizeBytes": 4314
     },
     {
       "source": "littlewhitebox",
@@ -3506,14 +3471,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/named-tag-items.test.js",
       "relativePath": "modules/draw/shared/tests/named-tag-items.test.js",
       "extension": ".js",
-      "sizeBytes": 5348
+      "sizeBytes": 4161
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/panel-escape.test.js",
       "relativePath": "modules/draw/shared/tests/panel-escape.test.js",
       "extension": ".js",
-      "sizeBytes": 16596
+      "sizeBytes": 14975
     },
     {
       "source": "littlewhitebox",
@@ -3559,13 +3524,6 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/prompt-layout-editor-chrome.test.js",
-      "relativePath": "modules/draw/shared/tests/prompt-layout-editor-chrome.test.js",
-      "extension": ".js",
-      "sizeBytes": 16608
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/prompt-layout-editor-tools.test.js",
       "relativePath": "modules/draw/shared/tests/prompt-layout-editor-tools.test.js",
       "extension": ".js",
@@ -3576,7 +3534,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/prompt-layout-editor.test.js",
       "relativePath": "modules/draw/shared/tests/prompt-layout-editor.test.js",
       "extension": ".js",
-      "sizeBytes": 40882
+      "sizeBytes": 37385
     },
     {
       "source": "littlewhitebox",
@@ -3604,21 +3562,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/scene-plan-presentation.test.js",
       "relativePath": "modules/draw/shared/tests/scene-plan-presentation.test.js",
       "extension": ".js",
-      "sizeBytes": 4353
+      "sizeBytes": 4410
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/scene-planner-assembly.test.js",
       "relativePath": "modules/draw/shared/tests/scene-planner-assembly.test.js",
       "extension": ".js",
-      "sizeBytes": 15574
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/scene-planner-golden.test.js",
-      "relativePath": "modules/draw/shared/tests/scene-planner-golden.test.js",
-      "extension": ".js",
-      "sizeBytes": 33066
+      "sizeBytes": 10773
     },
     {
       "source": "littlewhitebox",
@@ -3632,7 +3583,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/scene-planner-layout.test.js",
       "relativePath": "modules/draw/shared/tests/scene-planner-layout.test.js",
       "extension": ".js",
-      "sizeBytes": 34575
+      "sizeBytes": 31732
     },
     {
       "source": "littlewhitebox",
@@ -3650,45 +3601,10 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/settings-header-layout.test.js",
-      "relativePath": "modules/draw/shared/tests/settings-header-layout.test.js",
-      "extension": ".js",
-      "sizeBytes": 866
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/sortable-list.test.js",
       "relativePath": "modules/draw/shared/tests/sortable-list.test.js",
       "extension": ".js",
       "sizeBytes": 19198
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/tag-editor-autofit.test.js",
-      "relativePath": "modules/draw/shared/tests/tag-editor-autofit.test.js",
-      "extension": ".js",
-      "sizeBytes": 6376
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/textarea-autofit.test.js",
-      "relativePath": "modules/draw/shared/tests/textarea-autofit.test.js",
-      "extension": ".js",
-      "sizeBytes": 9284
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/theme-switch.test.js",
-      "relativePath": "modules/draw/shared/tests/theme-switch.test.js",
-      "extension": ".js",
-      "sizeBytes": 8686
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/theme-tokens-css.test.js",
-      "relativePath": "modules/draw/shared/tests/theme-tokens-css.test.js",
-      "extension": ".js",
-      "sizeBytes": 5232
     },
     {
       "source": "littlewhitebox",
@@ -3930,13 +3846,6 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/ena-planner-budget.js",
-      "relativePath": "modules/ena-planner/ena-planner-budget.js",
-      "extension": ".js",
-      "sizeBytes": 3671
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/ena-planner-context.js",
       "relativePath": "modules/ena-planner/ena-planner-context.js",
       "extension": ".js",
@@ -3947,7 +3856,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/ena-planner-copy.js",
       "relativePath": "modules/ena-planner/ena-planner-copy.js",
       "extension": ".js",
-      "sizeBytes": 896
+      "sizeBytes": 1094
     },
     {
       "source": "littlewhitebox",
@@ -3968,14 +3877,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/ena-planner-generation.js",
       "relativePath": "modules/ena-planner/ena-planner-generation.js",
       "extension": ".js",
-      "sizeBytes": 16790
+      "sizeBytes": 14369
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/ena-planner-host.js",
       "relativePath": "modules/ena-planner/ena-planner-host.js",
       "extension": ".js",
-      "sizeBytes": 10141
+      "sizeBytes": 8546
     },
     {
       "source": "littlewhitebox",
@@ -4003,7 +3912,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/ena-planner-preview.js",
       "relativePath": "modules/ena-planner/ena-planner-preview.js",
       "extension": ".js",
-      "sizeBytes": 9215
+      "sizeBytes": 8821
     },
     {
       "source": "littlewhitebox",
@@ -4018,13 +3927,6 @@
       "relativePath": "modules/ena-planner/ena-planner-requests.js",
       "extension": ".js",
       "sizeBytes": 3200
-    },
-    {
-      "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/ena-planner-save.js",
-      "relativePath": "modules/ena-planner/ena-planner-save.js",
-      "extension": ".js",
-      "sizeBytes": 4613
     },
     {
       "source": "littlewhitebox",
@@ -4056,13 +3958,6 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/tests/budget.test.js",
-      "relativePath": "modules/ena-planner/tests/budget.test.js",
-      "extension": ".js",
-      "sizeBytes": 8750
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/tests/context.test.js",
       "relativePath": "modules/ena-planner/tests/context.test.js",
       "extension": ".js",
@@ -4080,21 +3975,21 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/tests/generation.test.js",
       "relativePath": "modules/ena-planner/tests/generation.test.js",
       "extension": ".js",
-      "sizeBytes": 19519
+      "sizeBytes": 16715
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/tests/host.test.js",
       "relativePath": "modules/ena-planner/tests/host.test.js",
       "extension": ".js",
-      "sizeBytes": 13941
+      "sizeBytes": 14367
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/tests/preview.test.js",
       "relativePath": "modules/ena-planner/tests/preview.test.js",
       "extension": ".js",
-      "sizeBytes": 11357
+      "sizeBytes": 10830
     },
     {
       "source": "littlewhitebox",
@@ -4105,17 +4000,10 @@
     },
     {
       "source": "littlewhitebox",
-      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/tests/save.test.js",
-      "relativePath": "modules/ena-planner/tests/save.test.js",
-      "extension": ".js",
-      "sizeBytes": 13433
-    },
-    {
-      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/ena-planner/tests/slot.test.js",
       "relativePath": "modules/ena-planner/tests/slot.test.js",
       "extension": ".js",
-      "sizeBytes": 4732
+      "sizeBytes": 4681
     },
     {
       "source": "littlewhitebox",
@@ -4220,7 +4108,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/README.md",
       "relativePath": "modules/scheduled-tasks/README.md",
       "extension": ".md",
-      "sizeBytes": 27948
+      "sizeBytes": 28353
     },
     {
       "source": "littlewhitebox",
@@ -4231,10 +4119,24 @@
     },
     {
       "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/global-task-scripts.js",
+      "relativePath": "modules/scheduled-tasks/global-task-scripts.js",
+      "extension": ".js",
+      "sizeBytes": 3458
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/host-settings-save.js",
+      "relativePath": "modules/scheduled-tasks/host-settings-save.js",
+      "extension": ".js",
+      "sizeBytes": 3412
+    },
+    {
+      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/preset-lifecycle.test.js",
       "relativePath": "modules/scheduled-tasks/preset-lifecycle.test.js",
       "extension": ".js",
-      "sizeBytes": 135090
+      "sizeBytes": 107820
     },
     {
       "source": "littlewhitebox",
@@ -4255,35 +4157,42 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/scheduled-tasks.js",
       "relativePath": "modules/scheduled-tasks/scheduled-tasks.js",
       "extension": ".js",
-      "sizeBytes": 142292
+      "sizeBytes": 138138
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/task-editor-save.js",
       "relativePath": "modules/scheduled-tasks/task-editor-save.js",
       "extension": ".js",
-      "sizeBytes": 3202
+      "sizeBytes": 2266
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/task-save-confirmation.js",
       "relativePath": "modules/scheduled-tasks/task-save-confirmation.js",
       "extension": ".js",
-      "sizeBytes": 3825
+      "sizeBytes": 2811
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/task-save-copy.js",
       "relativePath": "modules/scheduled-tasks/task-save-copy.js",
       "extension": ".js",
-      "sizeBytes": 1499
+      "sizeBytes": 470
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/task-save-operation.js",
       "relativePath": "modules/scheduled-tasks/task-save-operation.js",
       "extension": ".js",
-      "sizeBytes": 3565
+      "sizeBytes": 2135
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/task-storage-fields.js",
+      "relativePath": "modules/scheduled-tasks/task-storage-fields.js",
+      "extension": ".js",
+      "sizeBytes": 319
     },
     {
       "source": "littlewhitebox",
@@ -4291,6 +4200,13 @@
       "relativePath": "modules/scheduled-tasks/task-trigger.js",
       "extension": ".js",
       "sizeBytes": 1585
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/tests/editor-save.test.js",
+      "relativePath": "modules/scheduled-tasks/tests/editor-save.test.js",
+      "extension": ".js",
+      "sizeBytes": 2750
     },
     {
       "source": "littlewhitebox",
@@ -4305,6 +4221,13 @@
       "relativePath": "modules/scheduled-tasks/tests/legacy-preset-start.test.js",
       "extension": ".js",
       "sizeBytes": 9089
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/tests/save-receipt.test.js",
+      "relativePath": "modules/scheduled-tasks/tests/save-receipt.test.js",
+      "extension": ".js",
+      "sizeBytes": 6074
     },
     {
       "source": "littlewhitebox",
@@ -9043,7 +8966,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/xiaobai-os/apps/administrator/application/runtime.ts",
       "relativePath": "modules/xiaobai-os/apps/administrator/application/runtime.ts",
       "extension": ".ts",
-      "sizeBytes": 19735
+      "sizeBytes": 19769
     },
     {
       "source": "littlewhitebox",
@@ -9190,7 +9113,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/xiaobai-os/apps/administrator/ui/AdministratorMessage.vue",
       "relativePath": "modules/xiaobai-os/apps/administrator/ui/AdministratorMessage.vue",
       "extension": ".vue",
-      "sizeBytes": 9922
+      "sizeBytes": 10000
     },
     {
       "source": "littlewhitebox",
@@ -9211,7 +9134,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/xiaobai-os/apps/administrator/ui/administrator.css",
       "relativePath": "modules/xiaobai-os/apps/administrator/ui/administrator.css",
       "extension": ".css",
-      "sizeBytes": 9728
+      "sizeBytes": 9804
     },
     {
       "source": "littlewhitebox",
@@ -16894,6 +16817,20 @@
     },
     {
       "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/xiaobai-os/tests/administrator-errors.test.js",
+      "relativePath": "modules/xiaobai-os/tests/administrator-errors.test.js",
+      "extension": ".js",
+      "sizeBytes": 2292
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/xiaobai-os/tests/administrator-gemini-tools.test.js",
+      "relativePath": "modules/xiaobai-os/tests/administrator-gemini-tools.test.js",
+      "extension": ".js",
+      "sizeBytes": 5709
+    },
+    {
+      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/xiaobai-os/tests/administrator-harness.js",
       "relativePath": "modules/xiaobai-os/tests/administrator-harness.js",
       "extension": ".js",
@@ -17457,7 +17394,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/scripts/project.test.mjs",
       "relativePath": "scripts/project.test.mjs",
       "extension": ".mjs",
-      "sizeBytes": 5914
+      "sizeBytes": 4942
     },
     {
       "source": "littlewhitebox",
@@ -17555,7 +17492,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/server-plugin/littlewhitebox-server/draw-runs/vendor/agent-core-node.cjs",
       "relativePath": "server-plugin/littlewhitebox-server/draw-runs/vendor/agent-core-node.cjs",
       "extension": ".cjs",
-      "sizeBytes": 968631
+      "sizeBytes": 970081
     },
     {
       "source": "littlewhitebox",
@@ -17786,7 +17723,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/settings.html",
       "relativePath": "settings.html",
       "extension": ".html",
-      "sizeBytes": 38162
+      "sizeBytes": 37211
     },
     {
       "source": "littlewhitebox",
