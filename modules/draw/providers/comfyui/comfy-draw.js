@@ -4480,7 +4480,7 @@ async function toggleEditPanel(container, show) {
         if (preview?.characterPrompts?.length > 0) {
             preview.characterPrompts.forEach((char, i) => {
                 const name = char.name || `角色 ${i + 1}`;
-                appendTagEditGroup(scrollWrap, { label: `${name} 负向`, value: char.uc || '', type: 'uc', index: i });
+                appendEditGroup(scrollWrap, { label: `${name} 负向`, value: char.uc || '', type: 'uc', index: i });
             });
         }
 
