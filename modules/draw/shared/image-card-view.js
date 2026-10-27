@@ -65,36 +65,23 @@ function commitCard(card, next, { replaceImage = false } = {}) {
     if (editing && editor.dataset.imgId === undefined) editor.dataset.imgId = card.dataset.imgId || '';
     syncAttributes(card, next);
     card.querySelector('[data-xb-image-view-error]')?.remove();
-    // 画面层是卡片里被整体搬动的单位：折叠标题时是 details（内含 wrap），否则就是 wrap。
-    // 菜单和胶囊都属于它内部，跟着它一起进出，不能再按「卡片直接子节点」单独搬——
-    // 否则整层搬进来时菜单已被带走，next 里查不到，会被当成「新视图没有菜单」删掉。
-    const frameOf = root => root.querySelector('.xb-nd-details') || root.querySelector('.xb-nd-img-wrap');
-    const wrapOf = frame => (frame?.classList.contains('xb-nd-img-wrap') ? frame
-        : frame?.querySelector('.xb-nd-img-wrap')) || null;
-    const frame = frameOf(card);
-    const nextFrame = frameOf(next);
-    if (frame && nextFrame && frame.tagName === nextFrame.tagName) {
-        // 同一层结构：只替换内部会变的部分，details 的展开状态与打开的菜单都属于视图。
-        const surface = wrapOf(frame), nextSurface = wrapOf(nextFrame);
-        if (surface && nextSurface) {
-            const img = surface.querySelector('img'), nextImg = nextSurface.querySelector('img');
-            syncAttributes(surface, nextSurface);
-            if (replaceImage) img.replaceWith(nextImg);
-            else syncAttributes(img, nextImg);
-            syncPart(surface, '.xb-nd-nav-pill', nextSurface.querySelector('.xb-nd-nav-pill'));
-            syncPart(surface, '.xb-nd-status', nextSurface.querySelector('.xb-nd-status'));
-            const menu = surface.querySelector('.xb-nd-menu-wrap');
-            const nextMenu = nextSurface.querySelector('.xb-nd-menu-wrap');
-            if (menu?.classList.contains('open') && nextMenu) nextMenu.classList.add('open');
-            syncPart(surface, '.xb-nd-menu-wrap', nextMenu);
-        }
-    } else if (nextFrame) {
-        // 占位卡首次成图，或标题模式在 wrap / details 之间切换：整层替换，内部零件随之一就位。
-        if (frame) frame.replaceWith(nextFrame);
-        else card.append(nextFrame);
-    }
+    const surface = card.querySelector('.xb-nd-img-wrap');
+    const nextSurface = next.querySelector('.xb-nd-img-wrap');
+    if (surface && nextSurface) {
+        const img = surface.querySelector('img'), nextImg = nextSurface.querySelector('img');
+        syncAttributes(surface, nextSurface);
+        if (replaceImage) img.replaceWith(nextImg);
+        else syncAttributes(img, nextImg);
+        syncPart(surface, '.xb-nd-nav-pill', nextSurface.querySelector('.xb-nd-nav-pill'));
+        syncPart(surface, '.xb-nd-status', nextSurface.querySelector('.xb-nd-status'));
+    } else syncPart(card, '.xb-nd-img-wrap', nextSurface);
+
+    const menu = card.querySelector('.xb-nd-menu-wrap');
+    const nextMenu = next.querySelector('.xb-nd-menu-wrap');
+    if (menu?.classList.contains('open') && nextMenu) nextMenu.classList.add('open');
+    syncPart(card, '.xb-nd-menu-wrap', nextMenu);
     for (const selector of ['.xb-nd-indicator', '.xb-nd-status', '.xb-nd-failed-icon',
-        '.xb-nd-failed-title', '.xb-nd-failed-desc', '.xb-nd-failed-btns', '.xb-nd-menu-wrap']) {
+        '.xb-nd-failed-title', '.xb-nd-failed-desc', '.xb-nd-failed-btns']) {
         // Only top-level parts: failed controls can also belong to the status overlay.
         const oldPart = [...card.children].find(child => child.matches(selector));
         const newPart = [...next.children].find(child => child.matches(selector));
