@@ -1,8 +1,10 @@
-﻿// floating-panel.js
+import { mountThemeSwitch } from '../../shared/theme-switch.js';
+// floating-panel.js
 /**
  * NovelDraw 画图按钮面板 - 支持楼层按钮和悬浮按钮双模式
  */
 
+import { ensureDrawVisuals, createDrawIcon } from '../../shared/draw-visuals.js';
 import { getContext } from '../../../../../../../extensions.js';
 import {
     openNovelDrawSettings,
@@ -16,6 +18,7 @@ import {
 import { registerToToolbar, removeFromToolbar } from '../../../../widgets/message-toolbar.js';
 import { formatScenePlannerProgress } from '../../shared/draw-common.js';
 import { DRAW_CAPSULE_COPY } from '../../shared/draw-capsule-copy.js';
+import { FLOATING_POPOVER_STYLES, getFloatingViewport, mountFloatingPopovers } from '../../shared/floating-popovers.js';
 import { pickPresetMaxImages } from '../../shared/max-images-override.js';
 import {
     MAX_IMAGES_INPUT_CLASS,
@@ -34,7 +37,7 @@ import {
 import { isDrawRunPendingError } from '../../shared/draw-run-production.js';
 import {
     formatDrawRunProgress,
-    getDrawRunProgressIcon,
+    getDrawRunProgressPhase,
     hasDrawRunProgressDetail,
     resolveDrawRunActivityDetail,
     resolveDrawRunPendingDetail,
@@ -74,6 +77,7 @@ const FloatState = {
 
 const SIZE_OPTIONS = [
     { value: 'default', label: '跟随预设', width: null, height: null },
+    { value: 'auto', label: 'AI 自动（按构图）', width: null, height: null },
     { value: '832x1216', label: '832 × 1216  竖图', width: 832, height: 1216 },
     { value: '1216x832', label: '1216 × 832  横图', width: 1216, height: 832 },
     { value: '1024x1024', label: '1024 × 1024  方图', width: 1024, height: 1024 },
@@ -109,71 +113,51 @@ let drawRunActivityDispose = null;
 // 样式 - 统一样式（楼层+悬浮共用）
 // ═══════════════════════════════════════════════════════════════════════════
 
+const FLOATING_WIDTH_IDLE = 74;
+const FLOATING_WIDTH_ACTIVE = 98;
+
 const STYLES = `
-:root {
-    --nd-h: 34px;
-    --nd-bg: rgba(0, 0, 0, 0.55);
-    --nd-bg-solid: rgba(24, 24, 28, 0.98);
-    --nd-bg-hover: rgba(0, 0, 0, 0.7);
-    --nd-bg-active: rgba(255, 255, 255, 0.1);
-    --nd-border: rgba(255, 255, 255, 0.08);
-    --nd-border-hover: rgba(255, 255, 255, 0.2);
-    --nd-border-subtle: rgba(255, 255, 255, 0.08);
-    --nd-text-primary: rgba(255, 255, 255, 0.85);
-    --nd-text-secondary: rgba(255, 255, 255, 0.65);
-    --nd-text-muted: rgba(255, 255, 255, 0.45);
-    --nd-text-dim: rgba(255, 255, 255, 0.25);
-    --nd-success: #3ecf8e;
-    --nd-warning: #f0b429;
-    --nd-error: #f87171;
-    --nd-info: #60a5fa;
-    --nd-shadow-lg: 0 8px 32px rgba(0, 0, 0, 0.5);
-    --nd-radius-sm: 6px;
-    --nd-radius-md: 10px;
-    --nd-radius-lg: 14px;
-}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    楼层按钮样式
    ═══════════════════════════════════════════════════════════════════════════ */
-.nd-float {
+.nd-float.nd-novel {
     position: relative;
     user-select: none;
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 }
 
-.nd-capsule {
-    width: 74px;
+.nd-novel .nd-capsule{
+    box-sizing: border-box;
+    width: ${FLOATING_WIDTH_IDLE}px;
     height: var(--nd-h);
     background: var(--nd-bg);
     border: 1px solid var(--nd-border);
     border-radius: 17px;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
     position: relative;
     overflow: hidden;
     transition: all 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.nd-float:hover .nd-capsule {
+.nd-float.nd-novel:hover .nd-capsule {
     background: var(--nd-bg-hover);
     border-color: var(--nd-border-hover);
 }
 
-.nd-float.working .nd-capsule { border-color: rgba(240, 180, 41, 0.5); }
-.nd-float.cooldown .nd-capsule { border-color: rgba(96, 165, 250, 0.6); background: rgba(96, 165, 250, 0.1); }
-.nd-float.success .nd-capsule { border-color: rgba(62, 207, 142, 0.6); background: rgba(62, 207, 142, 0.1); }
-.nd-float.partial .nd-capsule { border-color: rgba(240, 180, 41, 0.6); background: rgba(240, 180, 41, 0.1); }
-.nd-float.error .nd-capsule { border-color: rgba(248, 113, 113, 0.6); background: rgba(248, 113, 113, 0.1); }
+.nd-float.nd-novel.working .nd-capsule { border-color: var(--nd-warning); }
+.nd-float.nd-novel.cooldown .nd-capsule { border-color: var(--nd-info); background: color-mix(in srgb, var(--nd-info) 10%, var(--nd-bg)); }
+.nd-float.nd-novel.success .nd-capsule { border-color: var(--nd-success); background: color-mix(in srgb, var(--nd-success) 10%, var(--nd-bg)); }
+.nd-float.nd-novel.partial .nd-capsule { border-color: var(--nd-warning); background: color-mix(in srgb, var(--nd-warning) 10%, var(--nd-bg)); }
+.nd-float.nd-novel.error .nd-capsule { border-color: var(--nd-error); background: color-mix(in srgb, var(--nd-error) 10%, var(--nd-bg)); }
 
 /* 非空闲状态：胶囊右侧多出 24px，放常驻菜单按钮（生成中也能打开菜单/设置） */
-.nd-float.working .nd-capsule,
-.nd-float.cooldown .nd-capsule,
-.nd-float.success .nd-capsule,
-.nd-float.partial .nd-capsule,
-.nd-float.error .nd-capsule { width: 98px; }
+.nd-float.nd-novel.working .nd-capsule,
+.nd-float.nd-novel.cooldown .nd-capsule,
+.nd-float.nd-novel.success .nd-capsule,
+.nd-float.nd-novel.partial .nd-capsule,
+.nd-float.nd-novel.error .nd-capsule { width: ${FLOATING_WIDTH_ACTIVE}px; }
 
-.nd-inner {
+.nd-novel .nd-inner{
     display: grid;
     width: 100%;
     height: 100%;
@@ -183,7 +167,7 @@ const STYLES = `
     pointer-events: none;
 }
 
-.nd-layer {
+.nd-novel .nd-layer{
     grid-area: s;
     min-width: 0;
     min-height: 0;
@@ -195,19 +179,20 @@ const STYLES = `
     pointer-events: auto;
 }
 
-.nd-layer-idle { opacity: 1; transform: translateY(0); }
+.nd-novel .nd-layer-idle{ opacity: 1; visibility: visible; transform: translateY(0); }
 
-.nd-float.working .nd-layer-idle,
-.nd-float.cooldown .nd-layer-idle,
-.nd-float.success .nd-layer-idle,
-.nd-float.partial .nd-layer-idle,
-.nd-float.error .nd-layer-idle {
+.nd-float.nd-novel.working .nd-layer-idle,
+.nd-float.nd-novel.cooldown .nd-layer-idle,
+.nd-float.nd-novel.success .nd-layer-idle,
+.nd-float.nd-novel.partial .nd-layer-idle,
+.nd-float.nd-novel.error .nd-layer-idle {
     opacity: 0;
+    visibility: hidden;
     transform: translateY(-100%);
     pointer-events: none;
 }
 
-.nd-btn-draw {
+.nd-novel .nd-btn-draw{
     flex: 1;
     height: 100%;
     border: none;
@@ -221,10 +206,16 @@ const STYLES = `
     transition: background 0.15s;
     font-size: 16px;
 }
-.nd-btn-draw:hover { background: rgba(255, 255, 255, 0.12); }
-.nd-btn-draw:active { transform: scale(0.92); }
+.nd-novel .nd-btn-draw:hover { background: var(--nd-bg-active); }
+.nd-novel .nd-btn-draw:active{ transform: scale(0.92); }
 
-.nd-auto-dot {
+.nd-novel button { margin: 0; padding: 0; box-shadow: none; }
+.nd-novel button:focus-visible { outline: 2px solid var(--nd-text-secondary); outline-offset: -3px; }
+.nd-novel .nd-icon { display: block; width: 16px; height: 16px; flex-shrink: 0; pointer-events: none; }
+.nd-novel .nd-arrow { display: flex; align-items: center; justify-content: center; }
+.nd-novel .nd-arrow .nd-icon { width: 12px; height: 12px; }
+
+.nd-novel .nd-auto-dot{
     position: absolute;
     top: 7px;
     right: 6px;
@@ -232,16 +223,16 @@ const STYLES = `
     height: 6px;
     background: var(--nd-success);
     border-radius: 50%;
-    box-shadow: 0 0 6px rgba(62, 207, 142, 0.6);
+    box-shadow: 0 0 6px var(--nd-success);
     opacity: 0;
     transform: scale(0);
     transition: all 0.2s;
 }
-.nd-float.auto-on .nd-auto-dot { opacity: 1; transform: scale(1); }
+.nd-float.nd-novel.auto-on .nd-auto-dot { opacity: 1; transform: scale(1); }
 
-.nd-sep { width: 1px; height: 12px; background: var(--nd-border); }
+.nd-novel .nd-sep{ width: 1px; height: 12px; background: var(--nd-border); }
 
-.nd-btn-menu {
+.nd-novel .nd-btn-menu {
     width: 24px;
     height: 100%;
     border: none;
@@ -250,16 +241,16 @@ const STYLES = `
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--nd-text-dim);
+    color: var(--nd-text-secondary);
     font-size: 8px;
-    opacity: 0.6;
+    opacity: 1;
     transition: opacity 0.25s, transform 0.25s;
 }
-.nd-float:hover .nd-btn-menu { opacity: 1; }
-.nd-btn-menu:hover { background: rgba(255, 255, 255, 0.12); color: var(--nd-text-muted); }
+.nd-float.nd-novel:hover .nd-btn-menu { opacity: 1; }
+.nd-novel .nd-btn-menu:hover { background: var(--nd-bg-active); color: var(--nd-text-primary); }
 
 /* 常驻菜单按钮：只在非空闲状态显示（空闲时由 idle 层自己的菜单按钮负责） */
-.nd-btn-menu-persist {
+.nd-novel .nd-btn-menu-persist {
     display: none;
     position: absolute;
     top: 0;
@@ -268,59 +259,63 @@ const STYLES = `
     box-sizing: border-box;
     border-left: 1px solid var(--nd-border);
 }
-.nd-float.working .nd-btn-menu-persist,
-.nd-float.cooldown .nd-btn-menu-persist,
-.nd-float.success .nd-btn-menu-persist,
-.nd-float.partial .nd-btn-menu-persist,
-.nd-float.error .nd-btn-menu-persist { display: flex; }
+.nd-float.nd-novel.working .nd-btn-menu-persist,
+.nd-float.nd-novel.cooldown .nd-btn-menu-persist,
+.nd-float.nd-novel.success .nd-btn-menu-persist,
+.nd-float.nd-novel.partial .nd-btn-menu-persist,
+.nd-float.nd-novel.error .nd-btn-menu-persist { display: flex; }
 
-.nd-arrow { transition: transform 0.2s; }
-.nd-float.expanded .nd-arrow { transform: rotate(180deg); }
+.nd-novel .nd-arrow{ transition: transform 0.2s; }
+.nd-float.nd-novel.expanded .nd-arrow { transform: rotate(180deg); }
 
-.nd-layer-active {
+.nd-novel .nd-layer-active {
     box-sizing: border-box;
+    border: 0;
+    background: transparent;
     padding: 0 6px;
     opacity: 0;
+    visibility: hidden;
     transform: translateY(100%);
     justify-content: center;
     gap: 6px;
     font-size: 14px;
     font-weight: 600;
-    color: #fff;
+    color: var(--nd-text-primary);
     cursor: pointer;
     pointer-events: none;
     transition: opacity 0.2s, transform 0.2s, padding-right 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.nd-float.working .nd-layer-active,
-.nd-float.cooldown .nd-layer-active,
-.nd-float.success .nd-layer-active,
-.nd-float.partial .nd-layer-active,
-.nd-float.error .nd-layer-active {
+.nd-float.nd-novel.working .nd-layer-active,
+.nd-float.nd-novel.cooldown .nd-layer-active,
+.nd-float.nd-novel.success .nd-layer-active,
+.nd-float.nd-novel.partial .nd-layer-active,
+.nd-float.nd-novel.error .nd-layer-active {
     opacity: 1;
+    visibility: visible;
     transform: translateY(0);
     pointer-events: auto;
     padding-right: 30px; /* 原 6px + 常驻菜单按钮 24px，文字区宽度保持不变 */
 }
 
-.nd-float.cooldown .nd-layer-active { color: var(--nd-info); }
-.nd-float.success .nd-layer-active { color: var(--nd-success); }
-.nd-float.partial .nd-layer-active { color: var(--nd-warning); }
-.nd-float.error .nd-layer-active { color: var(--nd-error); }
+.nd-float.nd-novel.cooldown .nd-layer-active { color: var(--nd-info); }
+.nd-float.nd-novel.success .nd-layer-active { color: var(--nd-success); }
+.nd-float.nd-novel.partial .nd-layer-active { color: var(--nd-warning); }
+.nd-float.nd-novel.error .nd-layer-active { color: var(--nd-error); }
 
-.nd-spin { display: inline-block; animation: nd-spin 1.5s linear infinite; }
-.nd-status-icon { flex-shrink: 0; }
-.nd-status-text { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.nd-novel .nd-spin{ display: inline-block; animation: nd-spin 1.5s linear infinite; }
+.nd-novel .nd-status-icon{ flex-shrink: 0; }
+.nd-novel .nd-status-text{ min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 @keyframes nd-spin { to { transform: rotate(360deg); } }
 
-.nd-countdown { font-variant-numeric: tabular-nums; min-width: 36px; text-align: center; }
+.nd-novel .nd-countdown{ font-variant-numeric: tabular-nums; min-width: 36px; text-align: center; }
 
 /* 详情弹窗 - 向下展开（楼层按钮用） */
-.nd-detail {
+.nd-novel .nd-detail {
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
-    background: rgba(18, 18, 22, 0.98);
+    background: var(--nd-bg-solid);
     border: 1px solid var(--nd-border);
     border-radius: 12px;
     padding: 12px 16px;
@@ -328,66 +323,58 @@ const STYLES = `
     color: var(--nd-text-secondary);
     white-space: nowrap;
     box-shadow: var(--nd-shadow-lg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     opacity: 0;
     visibility: hidden;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity 0.15s ease, visibility 0.15s;
     z-index: 100;
-    transform: translateY(-6px) scale(0.96);
-    transform-origin: top right;
 }
 
-.nd-float.show-detail .nd-detail {
+.nd-float.nd-novel.show-detail .nd-detail {
     opacity: 1;
     visibility: visible;
-    transform: translateY(0) scale(1);
+    transform: none;
 }
 
-.nd-detail-row { display: flex; align-items: center; gap: 10px; padding: 3px 0; }
-.nd-detail-row + .nd-detail-row { margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--nd-border-subtle); }
-.nd-detail-icon { opacity: 0.6; font-size: 13px; }
-.nd-detail-label { color: var(--nd-text-muted); }
-.nd-detail-value { margin-left: auto; font-weight: 600; color: var(--nd-text-primary); }
-.nd-detail-value.success { color: var(--nd-success); }
-.nd-detail-value.warning { color: var(--nd-warning); }
-.nd-detail-value.error { color: var(--nd-error); }
+.nd-novel .nd-detail-row{ display: flex; align-items: center; gap: 10px; padding: 3px 0; }
+.nd-novel .nd-detail-row + .nd-detail-row{ margin-top: 6px; padding-top: 8px; border-top: 1px solid var(--nd-border-subtle); }
+.nd-novel .nd-detail-icon{ opacity: 0.6; font-size: 13px; }
+.nd-novel .nd-detail-label{ color: var(--nd-text-muted); }
+.nd-novel .nd-detail-value{ margin-left: auto; font-weight: 600; color: var(--nd-text-primary); }
+.nd-novel .nd-detail-value.success{ color: var(--nd-success); }
+.nd-novel .nd-detail-value.warning{ color: var(--nd-warning); }
+.nd-novel .nd-detail-value.error{ color: var(--nd-error); }
 
 /* 菜单 - 向下展开（楼层按钮用） */
-.nd-menu {
+.nd-novel .nd-menu {
     position: absolute;
     top: calc(100% + 8px);
     right: 0;
-    width: 190px;
-    background: rgba(18, 18, 22, 0.96);
+    width: 220px;
+    background: var(--nd-bg-solid);
     border: 1px solid var(--nd-border);
     border-radius: 12px;
     padding: 10px;
     box-shadow: var(--nd-shadow-lg);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
     opacity: 0;
     visibility: hidden;
-    transform: translateY(-6px) scale(0.96);
-    transform-origin: top right;
-    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    transition: opacity 0.15s ease, visibility 0.15s;
     z-index: 100;
 }
 
-.nd-float.expanded .nd-menu {
+.nd-float.nd-novel.expanded .nd-menu {
     opacity: 1;
     visibility: visible;
-    transform: translateY(0) scale(1);
+    transform: none;
 }
 
-.nd-card {
+.nd-novel .nd-card{
     background: transparent;
     border: none;
     border-radius: 0;
     overflow: visible;
 }
 
-.nd-row {
+.nd-novel .nd-row{
     display: flex;
     align-items: center;
     gap: 10px;
@@ -395,7 +382,7 @@ const STYLES = `
     min-height: 36px;
 }
 
-.nd-label {
+.nd-novel .nd-label{
     font-size: 11px;
     color: var(--nd-text-muted);
     width: 32px;
@@ -403,10 +390,10 @@ const STYLES = `
     padding: 0;
 }
 
-.nd-select {
+.nd-novel .nd-select {
     flex: 1;
     min-width: 0;
-    background: rgba(255, 255, 255, 0.06);
+    background: var(--nd-bg-active);
     border: 1px solid var(--nd-border-subtle);
     color: var(--nd-text-primary);
     font-size: 11px;
@@ -425,50 +412,53 @@ const STYLES = `
     -moz-appearance: none;
     appearance: none;
 }
-.nd-select:hover { border-color: rgba(255, 255, 255, 0.2); }
-.nd-select:focus { border-color: rgba(255, 255, 255, 0.3); }
-.nd-select option { background: #1a1a1e; color: #eee; text-align: left; }
-.nd-select.size { font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 11px; }
+.nd-novel .nd-select:hover { border-color: var(--nd-border-hover); }
+.nd-novel .nd-select:focus { border-color: var(--nd-text-muted); }
+.nd-novel .nd-select option { background: var(--nd-bg-solid); color: var(--nd-text-primary); text-align: left; }
+.nd-novel .nd-select.size{ font-family: "SF Mono", "Menlo", "Consolas", monospace; font-size: 11px; }
 ${MAX_IMAGES_INPUT_CSS}
+.nd-novel .nd-max-images-input { background: var(--nd-bg-active); }
+.nd-novel .nd-max-images-input:hover { border-color: var(--nd-border-hover); }
+.nd-novel .nd-max-images-input:focus { border-color: var(--nd-text-muted); }
 
-.nd-inner-sep { display: none; }
+.nd-novel .nd-inner-sep{ display: none; }
 
-.nd-controls { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+.nd-novel .nd-controls{ display: flex; align-items: center; gap: 8px; margin-top: 10px; }
 
-.nd-auto {
+.nd-novel .nd-auto{
     flex: 1;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 9px 12px;
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--nd-bg-active);
     border: 1px solid var(--nd-border-subtle);
     border-radius: var(--nd-radius-sm);
     cursor: pointer;
     transition: all 0.15s;
 }
-.nd-auto:hover { background: rgba(255, 255, 255, 0.08); }
-.nd-auto.on { background: rgba(62, 207, 142, 0.08); border-color: rgba(62, 207, 142, 0.3); }
+.nd-novel .nd-auto:hover { background: var(--nd-bg-active); }
+.nd-novel .nd-auto.on{ background: color-mix(in srgb, var(--nd-success) 8%, var(--nd-bg)); border-color: var(--nd-success); }
 
-.nd-dot {
+.nd-novel .nd-dot{
     width: 7px;
     height: 7px;
     border-radius: 50%;
-    background: rgba(255, 255, 255, 0.2);
+    background: var(--nd-text-muted);
     transition: all 0.2s;
 }
-.nd-auto.on .nd-dot { background: var(--nd-success); box-shadow: 0 0 8px rgba(62, 207, 142, 0.5); }
+.nd-novel .nd-auto.on .nd-dot{ background: var(--nd-success); box-shadow: 0 0 8px var(--nd-success); }
 
-.nd-auto-text { font-size: 12px; color: var(--nd-text-muted); }
-.nd-auto:hover .nd-auto-text { color: var(--nd-text-secondary); }
-.nd-auto.on .nd-auto-text { color: rgba(62, 207, 142, 0.95); }
+.nd-novel .nd-auto-text{ font-size: 12px; color: var(--nd-text-muted); }
+.nd-novel .nd-auto:hover .nd-auto-text{ color: var(--nd-text-secondary); }
+.nd-novel .nd-auto.on .nd-auto-text{ color: var(--nd-success); }
 
-.nd-gear {
+.nd-novel .nd-gear{
     width: 36px;
     height: 36px;
     border: 1px solid var(--nd-border-subtle);
     border-radius: var(--nd-radius-sm);
-    background: rgba(255, 255, 255, 0.03);
+    background: var(--nd-bg-active);
     color: var(--nd-text-muted);
     cursor: pointer;
     display: flex;
@@ -477,68 +467,68 @@ ${MAX_IMAGES_INPUT_CSS}
     font-size: 14px;
     transition: all 0.15s;
 }
-.nd-gear:hover { background: rgba(255, 255, 255, 0.08); color: var(--nd-text-secondary); }
+.nd-novel .nd-gear:hover { background: var(--nd-bg-active); color: var(--nd-text-secondary); }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    悬浮按钮样式（固定定位，可拖拽）
    ═══════════════════════════════════════════════════════════════════════════ */
-.nd-floating-global {
+.nd-floating-global.nd-novel {
     position: fixed;
     z-index: 10000;
     user-select: none;
-    will-change: transform;
+    transition: transform 0.25s ease;
 }
 
-.nd-floating-global .nd-capsule {
+/* 貼邊半藏：膠囊一半移出螢幕；吸附時隱藏跳圖鈕 */
+.nd-floating-global.nd-novel.nd-docked-left { transform: translateX(-50%); }
+.nd-floating-global.nd-novel.nd-docked-right { transform: translateX(50%); }
+.nd-floating-global.nd-novel[class*="nd-docked"] .nd-img-jump { display: none; }
+
+.nd-floating-global.nd-novel .nd-capsule {
     background: var(--nd-bg-solid);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.16);
     touch-action: none;
     cursor: grab;
 }
 
-.nd-floating-global .nd-capsule:active { cursor: grabbing; }
-
-/* 悬浮按钮的详情和菜单向上展开 */
-.nd-floating-global .nd-detail {
-    top: auto;
-    bottom: calc(100% + 10px);
-    transform: translateY(4px) scale(0.96);
-    transform-origin: bottom right;
-}
-
-.nd-floating-global.show-detail .nd-detail {
-    transform: translateY(0) scale(1);
-}
-
-.nd-floating-global .nd-detail::after {
-    content: '';
+/* 跳圖上下鈕：絕對定位在膠囊外，不影響膠囊尺寸與拖曳 */
+.nd-floating-global.nd-novel .nd-img-jump {
+    touch-action: none;
     position: absolute;
-    top: auto;
-    bottom: -6px;
     left: 50%;
     transform: translateX(-50%);
-    border: 6px solid transparent;
-    border-top-color: rgba(18, 18, 22, 0.98);
-    border-bottom-color: transparent;
+    width: 34px;
+    height: 26px;
+    border: none;
+    border-radius: 11px;
+    background: transparent;
+    color: var(--nd-text-muted);
+    font-size: 12px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: none;
+    z-index: 1;
+    padding: 0;
+    transition: color 0.15s, background 0.15s;
 }
+.nd-floating-global.nd-novel .nd-img-jump-prev { bottom: calc(100% + 4px); }
+.nd-floating-global.nd-novel .nd-img-jump-next { top: calc(100% + 4px); }
+.nd-floating-global.nd-novel .nd-img-jump:hover { color: var(--nd-text-primary); background: var(--nd-bg-active); }
+.nd-novel .nd-img-jump-prev .nd-icon { transform: rotate(180deg); }
 
-.nd-floating-global .nd-menu {
-    top: auto;
-    bottom: calc(100% + 10px);
-    transform: translateY(6px) scale(0.98);
-    transform-origin: bottom right;
+.nd-floating-global.nd-novel .nd-capsule:active { cursor: grabbing; }
+
+${FLOATING_POPOVER_STYLES}
+@media (prefers-reduced-motion: reduce) {
+    .nd-novel, .nd-novel * { transition: none !important; animation: none !important; }
 }
-
-.nd-floating-global.expanded .nd-menu {
-    transform: translateY(0) scale(1);
-}
-
-/* 悬浮按钮箭头向上 */
-.nd-floating-global .nd-arrow { transform: rotate(180deg); }
-.nd-floating-global.expanded .nd-arrow { transform: rotate(0deg); }
 `;
 
 function injectStyles() {
+    ensureDrawVisuals();
     if (stylesInjected) return;
     stylesInjected = true;
 
@@ -559,11 +549,21 @@ function createEl(tag, className, text) {
     return el;
 }
 
+function createCapsuleIcon(name) {
+    return createDrawIcon(name === 'chevron' ? 'chevron-down' : name, 'nd-icon');
+}
+
+function createMenuArrow() {
+    const arrow = createEl('span', 'nd-arrow');
+    arrow.appendChild(createCapsuleIcon('chevron'));
+    return arrow;
+}
+
 // 常驻菜单按钮：非空闲状态（生成中/成功/失败等）idle 层被隐藏时，仍可点开菜单与设置
-function createPersistMenuBtn(arrow) {
+function createPersistMenuBtn() {
     const btn = createEl('button', 'nd-btn-menu nd-btn-menu-persist');
     btn.title = '展开菜单';
-    btn.appendChild(createEl('span', 'nd-arrow', arrow));
+    btn.appendChild(createMenuArrow());
     return btn;
 }
 
@@ -632,7 +632,7 @@ function createFloorPanelElement(messageId) {
     const isAuto = settings.mode === 'auto';
 
     const root = document.createElement('div');
-    root.className = `nd-float${isAuto ? ' auto-on' : ''}`;
+    root.className = `nd-float nd-novel lwb-draw-ui${isAuto ? ' auto-on' : ''}`;
     root.dataset.messageId = messageId;
 
     const capsule = createEl('div', 'nd-capsule');
@@ -640,40 +640,40 @@ function createFloorPanelElement(messageId) {
     const layerIdle = createEl('div', 'nd-layer nd-layer-idle');
     const drawBtn = createEl('button', 'nd-btn-draw');
     drawBtn.title = '点击生成配图';
-    drawBtn.appendChild(createEl('span', '', '🎨'));
+    drawBtn.appendChild(createCapsuleIcon('palette'));
     drawBtn.appendChild(createEl('span', 'nd-auto-dot'));
     const sep = createEl('div', 'nd-sep');
     const menuBtn = createEl('button', 'nd-btn-menu');
     menuBtn.title = '展开菜单';
-    menuBtn.appendChild(createEl('span', 'nd-arrow', '▼'));
+    menuBtn.appendChild(createMenuArrow());
     layerIdle.append(drawBtn, sep, menuBtn);
 
-    const layerActive = createEl('div', 'nd-layer nd-layer-active');
+    const layerActive = createEl('button', 'nd-layer nd-layer-active');
     layerActive.append(
-        createEl('span', 'nd-status-icon', '⏳'),
+        createEl('span', 'nd-status-icon'),
         createEl('span', 'nd-status-text', DRAW_CAPSULE_COPY.analysis)
     );
 
     inner.append(layerIdle, layerActive);
-    capsule.append(inner, createPersistMenuBtn('▼'));
+    capsule.append(inner, createPersistMenuBtn());
 
     const detail = createEl('div', 'nd-detail');
     const detailRowResult = createEl('div', 'nd-detail-row');
     detailRowResult.append(
-        createEl('span', 'nd-detail-icon', '📊'),
+        createDrawIcon('images', 'nd-detail-icon'),
         createEl('span', 'nd-detail-label', '结果'),
         createEl('span', 'nd-detail-value nd-result', '-')
     );
     const detailRowError = createEl('div', 'nd-detail-row nd-error-row');
     detailRowError.style.display = 'none';
     detailRowError.append(
-        createEl('span', 'nd-detail-icon', '💡'),
+        createDrawIcon('circle-info', 'nd-detail-icon'),
         createEl('span', 'nd-detail-label', '原因'),
         createEl('span', 'nd-detail-value error nd-error', '-')
     );
     const detailRowTime = createEl('div', 'nd-detail-row');
     detailRowTime.append(
-        createEl('span', 'nd-detail-icon', '⏱'),
+        createDrawIcon('clock', 'nd-detail-icon'),
         createEl('span', 'nd-detail-label', '耗时'),
         createEl('span', 'nd-detail-value nd-time', '-')
     );
@@ -700,8 +700,9 @@ function createFloorPanelElement(messageId) {
         createEl('span', 'nd-dot'),
         createEl('span', 'nd-auto-text', '自动配图')
     );
-    const settingsBtn = createEl('button', 'nd-gear nd-settings-btn', '⚙');
+    const settingsBtn = createEl('button', 'nd-gear nd-settings-btn');
     settingsBtn.title = '打开设置';
+    settingsBtn.appendChild(createDrawIcon('sliders'));
     controls.append(autoToggle, settingsBtn);
 
     menu.append(card, controls);
@@ -757,63 +758,63 @@ function setFloorState(messageId, state, data = {}) {
         case FloatState.SUBMITTING:
             el.classList.add('working');
             if (!panelData.result.startTime) panelData.result.startTime = Date.now();
-            if (statusIcon) { statusIcon.textContent = '↥'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('upload')); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = DRAW_CAPSULE_COPY.submitting;
             break;
         case FloatState.ACCEPTED:
             el.classList.add('working');
             if (!panelData.result.startTime) panelData.result.startTime = Date.now();
-            if (statusIcon) { statusIcon.textContent = getDrawRunProgressIcon(data); statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon(['analysis', 'retry'].includes(getDrawRunProgressPhase(data)) ? 'spinner' : 'palette')); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = formatDrawRunProgress(data);
             break;
         case FloatState.UNCERTAIN:
             el.classList.add('working');
             if (!panelData.result.startTime) panelData.result.startTime = Date.now();
-            if (statusIcon) { statusIcon.textContent = '↻'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('rotate')); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = DRAW_CAPSULE_COPY.uncertain;
             break;
         case FloatState.QUEUED:
             el.classList.add('working');
             if (!panelData.result.startTime) panelData.result.startTime = Date.now();
-            if (statusIcon) { statusIcon.textContent = '⌛'; statusIcon.className = 'nd-status-icon'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('clock')); statusIcon.className = 'nd-status-icon'; }
             if (statusText) statusText.textContent = DRAW_CAPSULE_COPY.queued;
             panelData.result.total = data.total || panelData.result.total || 0;
             break;
         case FloatState.LLM:
             el.classList.add('working');
             if (!panelData.result.startTime) panelData.result.startTime = Date.now();
-            if (statusIcon) { statusIcon.textContent = '⏳'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('spinner')); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = formatScenePlannerProgress(data);
             break;
         case FloatState.GEN:
             el.classList.add('working');
-            if (statusIcon) { statusIcon.textContent = '🎨'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('palette')); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = `${data.current || 0}/${data.total || 0}`;
             panelData.result.total = data.total || 0;
             break;
         case FloatState.COOLDOWN:
             el.classList.add('cooldown');
-            if (statusIcon) { statusIcon.textContent = '⏳'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('spinner')); statusIcon.className = 'nd-status-icon nd-spin'; }
             startFloorCooldownTimer(panelData, data);
             break;
         case FloatState.RECONNECTING:
             el.classList.add('working');
-            if (statusIcon) { statusIcon.textContent = '↻'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('rotate')); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = DRAW_CAPSULE_COPY.reconnecting;
             break;
         case FloatState.CANCELLING:
             el.classList.add('working');
-            if (statusIcon) { statusIcon.textContent = '⏳'; statusIcon.className = 'nd-status-icon nd-spin'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('spinner')); statusIcon.className = 'nd-status-icon nd-spin'; }
             if (statusText) statusText.textContent = DRAW_CAPSULE_COPY.cancelling;
             break;
         case FloatState.BACKEND_LEGACY:
             el.classList.add('working');
-            if (statusIcon) { statusIcon.textContent = '↪'; statusIcon.className = 'nd-status-icon'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('share-from-square')); statusIcon.className = 'nd-status-icon'; }
             if (statusText) statusText.textContent = DRAW_CAPSULE_COPY.legacy;
             break;
         case FloatState.SUCCESS:
             el.classList.add('success');
-            if (statusIcon) { statusIcon.textContent = '✓'; statusIcon.className = 'nd-status-icon'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('check')); statusIcon.className = 'nd-status-icon'; }
             if (statusText) statusText.textContent = `${data.success}/${data.total}`;
             panelData.result.success = data.success;
             panelData.result.total = data.total;
@@ -821,7 +822,7 @@ function setFloorState(messageId, state, data = {}) {
             break;
         case FloatState.PARTIAL:
             el.classList.add('partial');
-            if (statusIcon) { statusIcon.textContent = '⚠'; statusIcon.className = 'nd-status-icon'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('triangle-exclamation')); statusIcon.className = 'nd-status-icon'; }
             if (statusText) statusText.textContent = `${data.success}/${data.total}`;
             panelData.result.success = data.success;
             panelData.result.total = data.total;
@@ -829,7 +830,7 @@ function setFloorState(messageId, state, data = {}) {
             break;
         case FloatState.ERROR:
             el.classList.add('error');
-            if (statusIcon) { statusIcon.textContent = '✗'; statusIcon.className = 'nd-status-icon'; }
+            if (statusIcon) { statusIcon.replaceChildren(createCapsuleIcon('xmark')); statusIcon.className = 'nd-status-icon'; }
             if (statusText) statusText.textContent = data.unknown ? DRAW_CAPSULE_COPY.unknown : DRAW_CAPSULE_COPY.error;
             panelData.result.error = data.error;
             panelData.autoResetTimer = setTimeout(() => setFloorState(messageId, FloatState.IDLE), AUTO_RESET_DELAY);
@@ -1081,7 +1082,9 @@ function bindFloorPanelEvents(panelData) {
     };
     document.addEventListener('click', closeMenu, { passive: true });
 
+    const themeSwitch = mountThemeSwitch({ document, container: el.querySelector('.nd-controls') });
     panelData._cleanup = () => {
+        themeSwitch?.destroy();
         maxImagesBinding.destroy();
         document.removeEventListener('click', closeMenu);
         if (panelData.autoResetTimer) clearTimeout(panelData.autoResetTimer);
@@ -1284,28 +1287,43 @@ function getFloatingPosition() {
     return { left: window.innerWidth - 110, top: window.innerHeight - 80 };
 }
 
+let floatingDockedSide = null;
+
+// side: 'left' | 'right' | null（null＝完全展開）
+function setFloatingDock(side) {
+    if (!floatingEl) return;
+    floatingDockedSide = side;
+    floatingEl.classList.toggle('nd-docked-left', side === 'left');
+    floatingEl.classList.toggle('nd-docked-right', side === 'right');
+}
+
 function saveFloatingPosition() {
     if (!floatingEl) return;
-    const r = floatingEl.getBoundingClientRect();
+    // 吸附狀態下 getBoundingClientRect 含 translateX 偏移，只能讀 inline 定位
+    const left = parseFloat(floatingEl.style.left) || 0;
+    const top = parseFloat(floatingEl.style.top) || 0;
     try {
         localStorage.setItem(FLOAT_POS_KEY, JSON.stringify({
-            left: Math.round(r.left),
-            top: Math.round(r.top)
+            left: Math.round(left),
+            top: Math.round(top),
+            docked: floatingDockedSide || '',
         }));
     } catch (caughtError) { console.warn({ source: import.meta.url, operation: "saveFloatingPosition" }, caughtError); }
 }
 
-// 胶囊宽度有 0.35s 过渡，夹取位置要用过渡结束后的目标宽度（空闲 74px / 非空闲 98px，含边框）
-const FLOATING_WIDTH_IDLE = 77;
-const FLOATING_WIDTH_ACTIVE = 101;
-
 function applyFloatingPosition() {
     if (!floatingEl) return;
     const pos = getFloatingPosition();
+    const view = getFloatingViewport();
+    // Width transitions are still running here; clamp using the CSS target width.
     const w = floatingState === FloatState.IDLE ? FLOATING_WIDTH_IDLE : FLOATING_WIDTH_ACTIVE;
     const h = floatingEl.offsetHeight || 34;
-    floatingEl.style.left = `${Math.max(0, Math.min(pos.left, window.innerWidth - w))}px`;
-    floatingEl.style.top = `${Math.max(0, Math.min(pos.top, window.innerHeight - h))}px`;
+    // 預留膠囊外上下跳圖鈕的高度
+    const JUMP_RESERVE = 30;
+    const left = pos.docked === 'left' ? view.left : pos.docked === 'right' ? view.right - w : pos.left;
+    floatingEl.style.left = `${Math.max(view.left, Math.min(left, view.right - w))}px`;
+    floatingEl.style.top = `${Math.max(view.top + JUMP_RESERVE, Math.min(pos.top, view.bottom - h - JUMP_RESERVE))}px`;
+    setFloatingDock(pos.docked === 'left' || pos.docked === 'right' ? pos.docked : null);
 }
 
 function clearFloatingCooldownTimer() {
@@ -1369,72 +1387,72 @@ function setFloatingState(state, data = {}) {
         case FloatState.SUBMITTING:
             floatingEl.classList.add('working');
             if (!floatingResult.startTime) floatingResult.startTime = Date.now();
-            statusIcon.textContent = '↥';
+            statusIcon.replaceChildren(createCapsuleIcon('upload'));
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = DRAW_CAPSULE_COPY.submitting;
             break;
         case FloatState.ACCEPTED:
             floatingEl.classList.add('working');
             if (!floatingResult.startTime) floatingResult.startTime = Date.now();
-            statusIcon.textContent = getDrawRunProgressIcon(data);
+            statusIcon.replaceChildren(createCapsuleIcon(['analysis', 'retry'].includes(getDrawRunProgressPhase(data)) ? 'spinner' : 'palette'));
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = formatDrawRunProgress(data);
             break;
         case FloatState.UNCERTAIN:
             floatingEl.classList.add('working');
             if (!floatingResult.startTime) floatingResult.startTime = Date.now();
-            statusIcon.textContent = '↻';
+            statusIcon.replaceChildren(createCapsuleIcon('rotate'));
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = DRAW_CAPSULE_COPY.uncertain;
             break;
         case FloatState.QUEUED:
             floatingEl.classList.add('working');
             if (!floatingResult.startTime) floatingResult.startTime = Date.now();
-            statusIcon.textContent = '⌛';
+            statusIcon.replaceChildren(createCapsuleIcon('clock'));
             statusIcon.className = 'nd-status-icon';
             statusText.textContent = DRAW_CAPSULE_COPY.queued;
             break;
         case FloatState.LLM:
             floatingEl.classList.add('working');
             if (!floatingResult.startTime) floatingResult.startTime = Date.now();
-            statusIcon.textContent = '⏳';
+            statusIcon.replaceChildren(createCapsuleIcon('spinner'));
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = formatScenePlannerProgress(data);
             break;
         case FloatState.GEN:
             floatingEl.classList.add('working');
-            statusIcon.textContent = '🎨';
+            statusIcon.replaceChildren(createCapsuleIcon('palette'));
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = `${data.current || 0}/${data.total || 0}`;
             floatingResult.total = data.total || 0;
             break;
         case FloatState.COOLDOWN:
             floatingEl.classList.add('cooldown');
-            statusIcon.textContent = '⏳';
+            statusIcon.replaceChildren(createCapsuleIcon('spinner'));
             statusIcon.className = 'nd-status-icon nd-spin';
             startFloatingCooldownTimer(data);
             break;
         case FloatState.RECONNECTING:
             floatingEl.classList.add('working');
-            statusIcon.textContent = '↻';
+            statusIcon.replaceChildren(createCapsuleIcon('rotate'));
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = DRAW_CAPSULE_COPY.reconnecting;
             break;
         case FloatState.CANCELLING:
             floatingEl.classList.add('working');
-            statusIcon.textContent = '⏳';
+            statusIcon.replaceChildren(createCapsuleIcon('spinner'));
             statusIcon.className = 'nd-status-icon nd-spin';
             statusText.textContent = DRAW_CAPSULE_COPY.cancelling;
             break;
         case FloatState.BACKEND_LEGACY:
             floatingEl.classList.add('working');
-            statusIcon.textContent = '↪';
+            statusIcon.replaceChildren(createCapsuleIcon('share-from-square'));
             statusIcon.className = 'nd-status-icon';
             statusText.textContent = DRAW_CAPSULE_COPY.legacy;
             break;
         case FloatState.SUCCESS:
             floatingEl.classList.add('success');
-            statusIcon.textContent = '✓';
+            statusIcon.replaceChildren(createCapsuleIcon('check'));
             statusIcon.className = 'nd-status-icon';
             statusText.textContent = `${data.success}/${data.total}`;
             floatingResult.success = data.success;
@@ -1443,7 +1461,7 @@ function setFloatingState(state, data = {}) {
             break;
         case FloatState.PARTIAL:
             floatingEl.classList.add('partial');
-            statusIcon.textContent = '⚠';
+            statusIcon.replaceChildren(createCapsuleIcon('triangle-exclamation'));
             statusIcon.className = 'nd-status-icon';
             statusText.textContent = `${data.success}/${data.total}`;
             floatingResult.success = data.success;
@@ -1452,7 +1470,7 @@ function setFloatingState(state, data = {}) {
             break;
         case FloatState.ERROR:
             floatingEl.classList.add('error');
-            statusIcon.textContent = '✗';
+            statusIcon.replaceChildren(createCapsuleIcon('xmark'));
             statusIcon.className = 'nd-status-icon';
             statusText.textContent = data.unknown ? DRAW_CAPSULE_COPY.unknown : DRAW_CAPSULE_COPY.error;
             floatingResult.error = data.error;
@@ -1487,7 +1505,15 @@ function updateFloatingDetailPopup() {
 }
 
 function onFloatingPointerDown(e) {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || floatingDragState || !e.target.closest('.nd-capsule, .nd-img-jump')) return;
+
+    // 吸附半藏狀態：首次按下只拉回，不起拖曳、不觸發膠囊內按鈕
+    if (floatingDockedSide) {
+        setFloatingDock(null);
+        saveFloatingPosition();
+        e.preventDefault();
+        return;
+    }
 
     floatingDragState = {
         startX: e.clientX,
@@ -1514,10 +1540,13 @@ function onFloatingPointerMove(e) {
     }
 
     if (floatingDragState.moved) {
+        const view = getFloatingViewport();
         const w = floatingEl.offsetWidth || 88;
         const h = floatingEl.offsetHeight || 36;
-        floatingEl.style.left = `${Math.max(0, Math.min(floatingDragState.startLeft + dx, window.innerWidth - w))}px`;
-        floatingEl.style.top = `${Math.max(0, Math.min(floatingDragState.startTop + dy, window.innerHeight - h))}px`;
+        // 預留膠囊外上下跳圖鈕的高度
+        const JUMP_RESERVE = 30;
+        floatingEl.style.left = `${Math.max(view.left, Math.min(floatingDragState.startLeft + dx, view.right - w))}px`;
+        floatingEl.style.top = `${Math.max(view.top + JUMP_RESERVE, Math.min(floatingDragState.startTop + dy, view.bottom - h - JUMP_RESERVE))}px`;
     }
 
     e.preventDefault();
@@ -1528,18 +1557,77 @@ function onFloatingPointerUp(e) {
 
     const { moved, originalTarget } = floatingDragState;
 
-    try { e.currentTarget.releasePointerCapture(e.pointerId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "onFloatingPointerUp" }, caughtError); }
     floatingDragState = null;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
 
     if (moved) {
+        // 離左右邊緣 28px 內放開＝貼邊半藏；其餘位置解除吸附
+        const finalLeft = parseFloat(floatingEl.style.left) || 0;
+        const w = floatingEl.offsetWidth || 88;
+        const EDGE_SNAP = 28;
+        const view = getFloatingViewport();
+        let side = null;
+        if (finalLeft <= view.left + EDGE_SNAP) side = 'left';
+        else if (finalLeft >= view.right - w - EDGE_SNAP) side = 'right';
+        if (side) floatingEl.style.left = `${side === 'left' ? view.left : view.right - w}px`;
+        setFloatingDock(side);
         saveFloatingPosition();
     } else {
         routeFloatingClick(originalTarget);
     }
 }
 
+function onFloatingPointerCancel(e) {
+    if (!floatingDragState || floatingDragState.pointerId !== e.pointerId) return;
+    const { startLeft, startTop } = floatingDragState;
+    floatingDragState = null;
+    floatingEl.style.left = `${startLeft}px`;
+    floatingEl.style.top = `${startTop}px`;
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) e.currentTarget.releasePointerCapture(e.pointerId);
+}
+
+function onFloatingControlClick(e) {
+    if (!e.target.closest('.nd-capsule, .nd-img-jump')) return;
+    // Pointer actions are dispatched on release; only keyboard/AT clicks act here.
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.detail !== 0) return;
+    if (floatingDockedSide) {
+        setFloatingDock(null);
+        saveFloatingPosition();
+        return;
+    }
+    routeFloatingClick(e.target);
+}
+
+function getVisibleChatImageWrappers() {
+    return [...document.querySelectorAll('#chat .mes .mes_text .xb-nd-img')]
+        .filter(w => w.offsetHeight > 0 && w.offsetWidth > 0 && w.querySelector('img'));
+}
+
+// 以視口中線為「當前位置」：dir=-1 跳到中線上方最近一張，dir=1 跳下方最近一張。
+// 不記樓層，手動滾動後再點仍然正確。
+function jumpToChatImage(dir) {
+    const center = window.innerHeight / 2;
+    let target = null;
+    let best = Infinity;
+    for (const w of getVisibleChatImageWrappers()) {
+        const r = w.getBoundingClientRect();
+        if (dir < 0 && r.bottom < center - 1) {
+            const d = center - r.bottom;
+            if (d < best) { best = d; target = w; }
+        } else if (dir > 0 && r.top > center + 1) {
+            const d = r.top - center;
+            if (d < best) { best = d; target = w; }
+        }
+    }
+    if (target) target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
 function routeFloatingClick(target) {
-    if (target.closest('.nd-btn-draw')) {
+    if (target.closest('.nd-img-jump')) {
+        jumpToChatImage(target.closest('.nd-img-jump-prev') ? -1 : 1);
+    } else if (target.closest('.nd-btn-draw')) {
         observeBackgroundTask(handleFloatingDrawClick(), { source: import.meta.url, operation: "routeFloatingClick" });
     } else if (target.closest('.nd-btn-menu')) {
         floatingEl.classList.remove('show-detail');
@@ -1657,26 +1745,26 @@ function createFloatingButton() {
     const isAuto = settings.mode === 'auto';
 
     floatingEl = document.createElement('div');
-    floatingEl.className = `nd-float nd-floating-global${isAuto ? ' auto-on' : ''}`;
+    floatingEl.className = `nd-float nd-novel lwb-draw-ui nd-floating-global${isAuto ? ' auto-on' : ''}`;
     floatingEl.id = 'nd-floating-global';
 
     const detail = createEl('div', 'nd-detail');
     const detailRowResult = createEl('div', 'nd-detail-row');
     detailRowResult.append(
-        createEl('span', 'nd-detail-icon', '📊'),
+        createDrawIcon('images', 'nd-detail-icon'),
         createEl('span', 'nd-detail-label', '结果'),
         createEl('span', 'nd-detail-value nd-result', '-')
     );
     const detailRowError = createEl('div', 'nd-detail-row nd-error-row');
     detailRowError.style.display = 'none';
     detailRowError.append(
-        createEl('span', 'nd-detail-icon', '💡'),
+        createDrawIcon('circle-info', 'nd-detail-icon'),
         createEl('span', 'nd-detail-label', '原因'),
         createEl('span', 'nd-detail-value error nd-error', '-')
     );
     const detailRowTime = createEl('div', 'nd-detail-row');
     detailRowTime.append(
-        createEl('span', 'nd-detail-icon', '⏱'),
+        createDrawIcon('clock', 'nd-detail-icon'),
         createEl('span', 'nd-detail-label', '耗时'),
         createEl('span', 'nd-detail-value nd-time', '-')
     );
@@ -1703,8 +1791,9 @@ function createFloatingButton() {
         createEl('span', 'nd-dot'),
         createEl('span', 'nd-auto-text', '自动配图')
     );
-    const settingsBtn = createEl('button', 'nd-gear nd-settings-btn', '⚙');
+    const settingsBtn = createEl('button', 'nd-gear nd-settings-btn');
     settingsBtn.title = '打开设置';
+    settingsBtn.appendChild(createDrawIcon('sliders'));
     controls.append(autoToggle, settingsBtn);
     menu.append(card, controls);
 
@@ -1713,34 +1802,41 @@ function createFloatingButton() {
     const layerIdle = createEl('div', 'nd-layer nd-layer-idle');
     const drawBtn = createEl('button', 'nd-btn-draw');
     drawBtn.title = '点击为最后一条AI消息生成配图';
-    drawBtn.appendChild(createEl('span', '', '🎨'));
+    drawBtn.appendChild(createCapsuleIcon('palette'));
     drawBtn.appendChild(createEl('span', 'nd-auto-dot'));
     const sep = createEl('div', 'nd-sep');
     const menuBtn = createEl('button', 'nd-btn-menu');
     menuBtn.title = '展开菜单';
-    menuBtn.appendChild(createEl('span', 'nd-arrow', '▲'));
+    menuBtn.appendChild(createMenuArrow());
     layerIdle.append(drawBtn, sep, menuBtn);
-    const layerActive = createEl('div', 'nd-layer nd-layer-active');
+    const layerActive = createEl('button', 'nd-layer nd-layer-active');
     layerActive.append(
-        createEl('span', 'nd-status-icon', '⏳'),
+        createEl('span', 'nd-status-icon'),
         createEl('span', 'nd-status-text', DRAW_CAPSULE_COPY.analysis)
     );
     inner.append(layerIdle, layerActive);
-    capsule.append(inner, createPersistMenuBtn('▲'));
+    capsule.append(inner, createPersistMenuBtn());
 
-    floatingEl.append(detail, menu, capsule);
+    // Three visible controls share the same gesture owner; menus remain native.
+    const imgPrevBtn = createEl('button', 'nd-img-jump nd-img-jump-prev');
+    imgPrevBtn.appendChild(createCapsuleIcon('chevron'));
+    imgPrevBtn.title = '跳到上一张图片';
+    const imgNextBtn = createEl('button', 'nd-img-jump nd-img-jump-next');
+    imgNextBtn.appendChild(createCapsuleIcon('chevron'));
+    imgNextBtn.title = '跳到下一张图片';
+
+    floatingEl.append(detail, menu, imgPrevBtn, capsule, imgNextBtn);
 
     document.body.appendChild(floatingEl);
     cacheFloatingDOM();
     applyFloatingPosition();
 
-    const capsuleEl = $floatingCache.capsule;
-    if (capsuleEl) {
-        capsuleEl.addEventListener('pointerdown', onFloatingPointerDown, { passive: false });
-        capsuleEl.addEventListener('pointermove', onFloatingPointerMove, { passive: false });
-        capsuleEl.addEventListener('pointerup', onFloatingPointerUp, { passive: false });
-        capsuleEl.addEventListener('pointercancel', onFloatingPointerUp, { passive: false });
-    }
+    floatingEl.addEventListener('pointerdown', onFloatingPointerDown, { passive: false });
+    floatingEl.addEventListener('pointermove', onFloatingPointerMove, { passive: false });
+    floatingEl.addEventListener('pointerup', onFloatingPointerUp, { passive: false });
+    floatingEl.addEventListener('pointercancel', onFloatingPointerCancel);
+    floatingEl.addEventListener('lostpointercapture', onFloatingPointerCancel);
+    floatingEl.addEventListener('click', onFloatingControlClick);
 
     $floatingCache.presetSelect?.addEventListener('change', async (e) => {
         await setQuickPreset(e.target.value);
@@ -1751,6 +1847,8 @@ function createFloatingButton() {
     });
 
     $floatingCache.maxImagesBinding = maxImages.bind($floatingCache.maxImagesInput);
+    $floatingCache.themeSwitch = mountThemeSwitch({ document, container: floatingEl.querySelector('.nd-controls') });
+    $floatingCache.popovers = mountFloatingPopovers(floatingEl, applyFloatingPosition);
 
     $floatingCache.autoToggle?.addEventListener('click', async () => {
         await toggleQuickAutoMode();
@@ -1762,12 +1860,13 @@ function createFloatingButton() {
     });
 
     document.addEventListener('click', handleFloatingOutsideClick, { passive: true });
-    window.addEventListener('resize', applyFloatingPosition);
     const messageId = findLastAIMessageId();
     if (messageId >= 0) observeBackgroundTask(syncDrawRunPanelState(messageId), { source: import.meta.url, operation: "createFloatingButton" });
 }
 
 function destroyFloatingButton() {
+    $floatingCache.popovers?.destroy();
+    $floatingCache.themeSwitch?.destroy();
     $floatingCache.maxImagesBinding?.destroy();
     clearFloatingCooldownTimer();
 
@@ -1776,7 +1875,6 @@ function destroyFloatingButton() {
         floatingAutoResetTimer = null;
     }
 
-    window.removeEventListener('resize', applyFloatingPosition);
     document.removeEventListener('click', handleFloatingOutsideClick);
 
     floatingEl?.remove();

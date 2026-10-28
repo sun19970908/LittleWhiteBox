@@ -1,0 +1,116 @@
+/* Single palette for drawing settings, controls and chat images. */
+:root {
+    --draw-color-scheme: dark;
+    --draw-light-bg-primary: #fcfaf6;
+    --draw-light-bg-secondary: #fffdf9;
+    --draw-light-bg-tertiary: #f0eee8;
+    --draw-light-bg-input: #fffdf9;
+    --draw-light-text-primary: #292723;
+    --draw-light-text-secondary: #625f59;
+    --draw-light-text-muted: #79756d;
+    --draw-light-border: rgba(87,70,48,.16);
+    --draw-light-border-focus: #3d7c83;
+    --draw-light-accent: #3a3329;
+    --draw-light-accent-soft: rgba(87,70,48,.06);
+    --draw-light-success: #32766d;
+    --draw-light-danger: #b64d5d;
+    --draw-light-warning: #86672d;
+    --draw-bg-primary: #171922;
+    --draw-bg-secondary: #1c1f2a;
+    --draw-bg-tertiary: #242834;
+    --draw-bg-input: #1c1f2a;
+    --draw-text-primary: #d4d0c8;
+    --draw-text-secondary: #aaa79f;
+    --draw-text-muted: #858894;
+    --draw-border: rgba(184,178,166,.15);
+    --draw-border-focus: #8fb4bd;
+    --draw-accent: #b8b2a6;
+    --draw-accent-soft: rgba(184,178,166,.09);
+    --draw-success: #96b8b2;
+    --draw-danger: #d88490;
+    --draw-warning: #c4ad84;
+}
+@media (prefers-color-scheme: light) {
+    :root:not([data-draw-theme="dark"]) {
+        --draw-color-scheme: light;
+        --draw-bg-primary: var(--draw-light-bg-primary);
+        --draw-bg-secondary: var(--draw-light-bg-secondary);
+        --draw-bg-tertiary: var(--draw-light-bg-tertiary);
+        --draw-bg-input: var(--draw-light-bg-input);
+        --draw-text-primary: var(--draw-light-text-primary);
+        --draw-text-secondary: var(--draw-light-text-secondary);
+        --draw-text-muted: var(--draw-light-text-muted);
+        --draw-border: var(--draw-light-border);
+        --draw-border-focus: var(--draw-light-border-focus);
+        --draw-accent: var(--draw-light-accent);
+        --draw-accent-soft: var(--draw-light-accent-soft);
+        --draw-success: var(--draw-light-success);
+        --draw-danger: var(--draw-light-danger);
+        --draw-warning: var(--draw-light-warning);
+    }
+}
+:root[data-draw-theme="light"] {
+    --draw-color-scheme: light;
+    --draw-bg-primary: var(--draw-light-bg-primary);
+    --draw-bg-secondary: var(--draw-light-bg-secondary);
+    --draw-bg-tertiary: var(--draw-light-bg-tertiary);
+    --draw-bg-input: var(--draw-light-bg-input);
+    --draw-text-primary: var(--draw-light-text-primary);
+    --draw-text-secondary: var(--draw-light-text-secondary);
+    --draw-text-muted: var(--draw-light-text-muted);
+    --draw-border: var(--draw-light-border);
+    --draw-border-focus: var(--draw-light-border-focus);
+    --draw-accent: var(--draw-light-accent);
+    --draw-accent-soft: var(--draw-light-accent-soft);
+    --draw-success: var(--draw-light-success);
+    --draw-danger: var(--draw-light-danger);
+    --draw-warning: var(--draw-light-warning);
+}
+
+/* Native controls only follow our palette inside draw-owned surfaces. */
+:where(.lwb-draw-ui, .nd-float, .xb-nd-img, .xb-nd-more-menu) { color-scheme: var(--draw-color-scheme); }
+.nd-float {
+    --nd-h: 34px;
+    --nd-bg: var(--draw-bg-secondary);
+    --nd-bg-solid: var(--draw-bg-secondary);
+    --nd-bg-hover: var(--draw-bg-tertiary);
+    --nd-bg-active: var(--draw-accent-soft);
+    --nd-border: var(--draw-border);
+    --nd-border-hover: var(--draw-border-focus);
+    --nd-border-subtle: var(--draw-border);
+    --nd-text-primary: var(--draw-text-primary);
+    --nd-text-secondary: var(--draw-text-secondary);
+    --nd-text-muted: var(--draw-text-muted);
+    --nd-text-dim: var(--draw-text-muted);
+    --nd-success: var(--draw-success);
+    --nd-warning: var(--draw-warning);
+    --nd-error: var(--draw-danger);
+    --nd-info: var(--draw-border-focus);
+    --nd-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.18);
+    --nd-radius-sm: 6px;
+    --nd-radius-md: 10px;
+    --nd-radius-lg: 14px;
+}
+/* SillyTavern gives every element a blurred text shadow. Light draw surfaces
+   must not inherit that halo, including select/option/input placeholders. */
+.nd-float, .nd-float *, .nd-float input::placeholder { text-shadow: none; }
+.draw-theme-toggle {
+    box-sizing: border-box;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    margin: 0;
+    padding: 0;
+    border: 1px solid var(--draw-border);
+    border-radius: 8px;
+    background: var(--draw-accent-soft);
+    color: var(--draw-text-secondary);
+    font-size: 16px;
+    cursor: pointer;
+    text-shadow: none;
+}
+.draw-theme-toggle:hover { color: var(--draw-text-primary); border-color: var(--draw-border-focus); }
+.draw-theme-toggle:focus-visible { outline: 2px solid var(--draw-border-focus); outline-offset: 2px; }

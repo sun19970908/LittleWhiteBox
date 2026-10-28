@@ -182,10 +182,12 @@ function normalizeItem(source) {
         ...(source.deliveryCommitted === true ? { deliveryCommitted: true } : {}),
         previewMetadata: {
             tags: normalizeText(metadata.tags),
+            title: normalizeText(metadata.title),
             positive: normalizeText(metadata.positive),
             characterPrompts: metadata.characterPrompts ?? null,
             negativePrompt: metadata.negativePrompt ?? null,
             postPrompt: metadata.postPrompt ?? null,
+            orientation: metadata.orientation ?? null,
             providerMetadata,
         },
     };

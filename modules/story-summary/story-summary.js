@@ -26,10 +26,13 @@ import { createModuleEvents } from "../../core/event-manager.js";
 import { postToIframe, isTrustedMessage } from "../../core/iframe-messaging.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
 import { STORY_SUMMARY_TOGGLE_EVENT } from './runtime-events.js';
+import { isXiaobaiMasterEnabled } from './runtime-gate.js';
 import { initChatDeletionLifecycle } from './chat-deletion-lifecycle.js';
 import { createMemoryMaintenanceHost } from './maintenance/host.js';
+import { createSummaryDiagnostics } from './summary-diagnostics.js';
 import { MEMORY_CHAT_MESSAGES } from './maintenance/chat-contract.js';
 import { SUMMARY_FEEDBACK_COPY } from './feedback-copy.js';
+import { summaryFailureReason } from './summary-failure.js';
 import {
     clearEmbeddingFailureNotice,
     clearRecallFailureNotice,
@@ -54,7 +57,7 @@ import {
 
 // config/store
 import {
-    BUILTIN_SUMMARY_PROMPTS,
+    getSummaryPrompts,
     getSettings,
     getSummaryPanelConfig,
     getVectorConfig,
@@ -116,7 +119,7 @@ import { isGenerating } from '../../shared/common/sillytavern-generation-state.j
 
 // summary generation
 import { runSummaryGeneration } from "./generate/generator.js";
-import { createSummaryGenerationCancelledError } from "./generate/llm.js";
+import { createSummaryGenerationCancelledError, isSummaryGenerationCancelledError } from "./generate/llm.js";
 
 // vector service
 import { embed, getEngineFingerprint } from "./vector/utils/embedder.js";
@@ -232,7 +235,9 @@ const serviceTests = createServiceTests({
     probes: { l0: testL0Service, rerank: testRerankService },
     onStatus: (target, state) => postToFrame({ type: 'VECTOR_ONLINE_STATUS', target, ...state }),
 });
+const summaryDiagnostics = createSummaryDiagnostics();
 const memoryMaintenance = createMemoryMaintenanceHost({
+    readSummaryDiagnostics: args => summaryDiagnostics.read(getChatIdentity(getContext()), args),
     isEnabled: () => isStorySummaryEnabledForCurrentChat(),
     invalidateRecall: () => {
         recallReuse.invalidate();
@@ -280,7 +285,7 @@ function getStorySummaryEnablement() {
     const chatEnabled = hasChat
         ? getChatStorySummaryEnabled(chat_metadata, EXT_ID)
         : true;
-    const effectiveEnabled = hasChat && resolveStorySummaryEnabled(globalEnabled, chatEnabled);
+    const effectiveEnabled = isXiaobaiMasterEnabled() && hasChat && resolveStorySummaryEnabled(globalEnabled, chatEnabled);
     return { context, hasChat, globalEnabled, chatEnabled, effectiveEnabled };
 }
 
@@ -335,6 +340,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
 
     // The host saves the entire metadata, including any pending memory draft.
     assertMemoryWritable(targetChatId);
+    const wasManagingVisibility = !!events && isStorySummaryEnabledForCurrentChat();
     chatSummaryStateChanging = true;
     setChatStorySummaryEnabled(targetMetadata, EXT_ID, nextEnabled);
     if (!nextEnabled) {
@@ -346,7 +352,7 @@ export async function setStorySummaryEnabledForCurrentChat(enabled) {
 
     try {
         notifyStorySummaryChatState();
-        if (!nextEnabled) observeBackgroundTask(clearHideState({ persist: false }), { source: import.meta.url, operation: 'setStorySummaryEnabledForCurrentChat' });
+        if (!nextEnabled && wasManagingVisibility) observeBackgroundTask(hideState.clear({ persist: false }), { source: import.meta.url, operation: 'setStorySummaryEnabledForCurrentChat' });
         await saveChatSummaryState(context);
 
         if (getContext()?.chatId === targetChatId && events) {
@@ -662,11 +668,14 @@ function isSummaryGenerating() {
     return guard.isRunning('summary');
 }
 
-function beginSummaryExecution() {
+function beginSummaryExecution(automatic = false) {
     const { chatId } = getContext();
     if (!chatId) return null;
+    const identity = getChatIdentity(getContext());
     const execution = {
         chatId,
+        identity,
+        diagnosticRun: summaryDiagnostics.startRun(identity, automatic),
         controller: new AbortController(),
     };
     activeSummaryExecution = execution;
@@ -695,31 +704,27 @@ function isSummaryExecutionActive(execution) {
     return !!execution
         && !execution.controller.signal.aborted
         && activeSummaryExecution === execution
-        && getContext()?.chatId === execution.chatId;
+        && getChatIdentity(getContext()) === execution.identity;
 }
 
 function postSummaryExecution(execution, payload) {
     // A stopped run may still report its final status, but never into another chat/run.
-    if (activeSummaryExecution === execution && getContext()?.chatId === execution.chatId) {
+    if (activeSummaryExecution === execution && getChatIdentity(getContext()) === execution.identity) {
         postToFrame(payload);
     }
 }
 
 function reportSummaryExecutionFailure(execution, error, { automatic = false, attempts = 1, stale = false } = {}) {
-    if (activeSummaryExecution !== execution || getContext()?.chatId !== execution.chatId) return;
-    // Source revalidation can cancel independently of the run's own controller.
-    if (error?.name === 'AbortError' || execution.controller.signal.aborted) {
+    if (activeSummaryExecution !== execution || getChatIdentity(getContext()) !== execution.identity) return;
+    // A provider deadline may also be named AbortError; it is still a failure.
+    if (isSummaryGenerationCancelledError(error) || execution.controller.signal.aborted) {
         postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: SUMMARY_FEEDBACK_COPY.summaryStopped });
         return;
     }
     xbLog.error(MODULE_ID, SUMMARY_FEEDBACK_COPY.summaryFailed, error);
     const uncertain = getMemoryCommitState() === 'unconfirmed' || error?.uncertain === true;
-    // Only known domain reasons reach the panel; provider errors may contain credentials.
-    const reason = ['metadata_saving', 'source_boundary_invalid', 'summary_history_invalid', 'history_discontinuous'].includes(error?.code)
-        ? memorySaveError(error) : '';
     const message = SUMMARY_FEEDBACK_COPY.summaryRunEnded({
-        automatic, attempts, uncertain, stale, reason,
-        summarizedThrough: (getPublishedSummaryStore()?.lastSummarizedMesId ?? -1) + 1,
+        automatic, attempts, uncertain, stale, reason: summaryFailureReason(error),
     });
     postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message, uncertain });
     return message;
@@ -745,9 +750,26 @@ async function prepareSummaryExecution(execution) {
     await updateFrameStatsAfterSummary(store, execution);
 }
 
+async function runSummaryAttempt(execution, mesId, config, callbacks) {
+    const id = summaryDiagnostics.begin(execution.diagnosticRun);
+    try {
+        await prepareSummaryExecution(execution);
+        const result = await runSummaryGeneration(mesId, config, {
+            ...callbacks,
+            onProgress: progress => summaryDiagnostics.progress(id, progress),
+        }, { signal: execution.controller.signal, targetChatId: execution.chatId });
+        summaryDiagnostics.finish(id, result);
+        return result;
+    } catch (error) {
+        summaryDiagnostics.finish(id, { success: false, error,
+            cancelled: execution.controller.signal.aborted || isSummaryGenerationCancelledError(error) });
+        throw error;
+    }
+}
+
 function notifySummaryState() {
     postToFrame({ type: "GENERATION_STATE", isGenerating: guard.isRunning('summary')
-        && activeSummaryExecution?.chatId === getContext()?.chatId });
+        && activeSummaryExecution?.identity === getChatIdentity(getContext()) });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -2282,7 +2304,7 @@ async function sendSavedConfigToFrame() {
         postToFrame({
             type: "LOAD_PANEL_CONFIG",
             config: savedConfig,
-            builtInSummaryPrompts: BUILTIN_SUMMARY_PROMPTS,
+            builtInSummaryPrompts: getSummaryPrompts(savedConfig),
         });
     } catch (e) {
         xbLog.warn(MODULE_ID, SUMMARY_FEEDBACK_COPY.configLoad.failed, e);
@@ -2720,8 +2742,8 @@ async function importSummaryMemoryPackage(rawText, targetChatId = '') {
     };
 }
 
-// Compatibility export for ena-planner.
-// Returns a compact plain-text snapshot of story-summary memory.
+// Canonical fallback for the recall interceptor's published result.
+// This reads saved summary text only; it never performs vector retrieval.
 export function getStorySummaryForEna() {
     if (!isStorySummaryEnabledForCurrentChat()) return "";
     return getStorySummaryMemoryText();
@@ -2844,9 +2866,8 @@ const hideState = createHideStateController({
             chatId: context.chatId,
             chat: context.chat,
             saveChat: context.saveChat,
-            enabled: !!events && window.isXiaobaixEnabled !== false
-                && isStorySummaryEnabledForCurrentChat()
-                && isSummarySourceValid(store, context.chat?.length || 0) && ui.hideSummarized,
+            managed: !!events && isStorySummaryEnabledForCurrentChat(),
+            enabled: isSummarySourceValid(store, context.chat?.length || 0) && ui.hideSummarized,
             summaryBoundary: store?.lastSummarizedMesId ?? -1,
             useVectorBoundary: !!getVectorConfig()?.enabled && ui.useVectorBoundary,
             keepVisibleCount: ui.keepVisibleCount,
@@ -2965,6 +2986,8 @@ function clearDeferredBackgroundTasks() {
 }
 
 function clearHideState(options) {
+    // Late callbacks may still settle after teardown or a chat-level disable.
+    if (!events || !isStorySummaryEnabledForCurrentChat()) return Promise.resolve();
     return hideState.clear(options);
 }
 
@@ -3002,7 +3025,7 @@ async function maybeAutoRunSummary(reason) {
 async function autoRunSummaryWithRetry(targetMesId, configForRun) {
     const release = guard.acquire('summary');
     if (!release) return;
-    const execution = beginSummaryExecution();
+    const execution = beginSummaryExecution(true);
     if (!execution) {
         release();
         return;
@@ -3018,8 +3041,7 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
                 postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: SUMMARY_FEEDBACK_COPY.summaryStopped });
                 return;
             }
-            await prepareSummaryExecution(execution);
-            const result = await runSummaryGeneration(targetMesId, configForRun, {
+            const result = await runSummaryAttempt(execution, targetMesId, configForRun, {
                 onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: SUMMARY_FEEDBACK_COPY.summaryAttempt(attempt, AUTO_SUMMARY_MAX_ATTEMPTS, text) }),
                 onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: msg }),
                 onComplete: async ({ newEventIds, aliasChanged, store }) => {
@@ -3043,9 +3065,6 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
                     await autoVectorizeMissingEvents(store, execution);
                     await rebuildActiveVectorCacheAfterSummary(execution);
                 },
-            }, {
-                signal: execution.controller.signal,
-                targetChatId: execution.chatId,
             });
             lastResult = result;
 
@@ -3069,7 +3088,7 @@ async function autoRunSummaryWithRetry(targetMesId, configForRun) {
             automatic: true, attempts, stale: lastResult?.stale,
         });
         if (!shouldNotifyMemoryFailure(lastResult?.error, getMemoryCommitState())) return;
-        window.toastr?.[lastResult?.stale ? 'warning' : 'error'](message, SUMMARY_FEEDBACK_COPY.title);
+        window.toastr?.[lastResult?.stale ? 'warning' : 'error'](message, SUMMARY_FEEDBACK_COPY.title, { escapeHtml: true });
     } catch (error) {
         reportSummaryExecutionFailure(execution, error, { automatic: true, attempts });
     } finally {
@@ -3194,7 +3213,7 @@ async function handleFrameMessage(event) {
         }
 
         case "REQUEST_CANCEL":
-            if (activeSummaryExecution?.chatId === getContext()?.chatId && cancelActiveSummaryExecution()) {
+            if (activeSummaryExecution?.identity === getChatIdentity(getContext()) && cancelActiveSummaryExecution()) {
                 postToFrame({ type: "SUMMARY_STATUS", statusText: "正在停止..." });
             }
             break;
@@ -3570,6 +3589,7 @@ async function handleFrameMessage(event) {
             const { chatId } = context;
             const chatIdentity = getChatIdentity(context);
             try {
+                cancelActiveSummaryExecution();
                 cancelRecallAndClearPrompt('summary-edited');
                 if (data.section === "events") cancelEmbeddingWriteTasks('Summary events edited');
                 const committed = await runVectorWriteTask({ chatId, kind: 'summary-manual-edit', scope: VECTOR_WRITE_SCOPES.CONSISTENCY }, async () => {
@@ -3622,6 +3642,7 @@ async function handleFrameMessage(event) {
         case "UPDATE_CHARACTER_ALIASES": {
             if (!Array.isArray(data.aliases)) break;
             try {
+                cancelActiveSummaryExecution();
                 const { chatId } = getContext();
                 await waitForMemoryCommit();
                 assertMemoryWritable(chatId);
@@ -3751,8 +3772,7 @@ async function handleManualGenerate(mesId, config) {
     notifySummaryState();
 
     try {
-        await prepareSummaryExecution(execution);
-        const result = await runSummaryGeneration(mesId, config, {
+        const result = await runSummaryAttempt(execution, mesId, config, {
             onStatus: (text) => postSummaryExecution(execution, { type: 'SUMMARY_STATUS', statusText: text }),
             onError: (msg) => postSummaryExecution(execution, { type: 'SUMMARY_ERROR', message: msg }),
             onComplete: async ({ newEventIds, aliasChanged, store }) => {
@@ -3774,9 +3794,6 @@ async function handleManualGenerate(mesId, config) {
                 await autoVectorizeMissingEvents(store, execution);
                 await rebuildActiveVectorCacheAfterSummary(execution);
             },
-        }, {
-            signal: execution.controller.signal,
-            targetChatId: execution.chatId,
         });
         if ((result.committed || result.noContent) && isStorySummaryConsumableForCurrentChat()) {
             scheduleVectorIntegrityCheck();
@@ -4547,6 +4564,7 @@ function handleChatChange() {
 
 async function registerEvents() {
     if (storySummaryTeardown) await storySummaryTeardown;
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
     if (events) return;
     resumeVectorWriteCoordinator();
     window.registerModuleCleanup?.(MODULE_ID, unregisterEvents);
@@ -4660,6 +4678,8 @@ async function registerEvents() {
 
 async function unregisterEvents() {
     if (storySummaryTeardown) return storySummaryTeardown;
+    // The master cleanup and the feature toggle can both request shutdown.
+    if (!events) return;
     storySummaryTeardown = runStorySummaryTeardown();
     try {
         await storySummaryTeardown;
@@ -4669,13 +4689,17 @@ async function unregisterEvents() {
 }
 
 async function runStorySummaryTeardown() {
+    summaryDiagnostics.clear();
     messageSources.reset();
     embeddingConnection.cancel();
     serviceTests.cancel();
     memoryMaintenance.stop();
     // The master switch invokes this cleanup directly (without awaiting it).
     // Restore flags synchronously, before waiting for any background writer.
-    const hideCleanup = clearHideState();
+    // Restore once at this transition even though the master/feature flag is
+    // already off. A chat disabled earlier has already released its visibility.
+    const hideCleanup = getChatStorySummaryEnabled(chat_metadata, EXT_ID)
+        ? hideState.clear() : Promise.resolve();
     cancelActiveSummaryExecution();
     activeSummaryExecution = null;
     cancelRecallAndClearPrompt('unregistered');
@@ -4720,7 +4744,8 @@ async function runStorySummaryTeardown() {
 async function deactivateCurrentChatStorySummary() {
     embeddingConnection.cancel();
     serviceTests.cancel();
-    const hideCleanup = clearHideState();
+    // Visibility was released by the explicit disable transition; loading an
+    // already-disabled chat must not clear later manual hides.
     clearDeferredBackgroundTasks();
     cancelPendingHide();
     cancelRecallAndClearPrompt('deactivated');
@@ -4730,7 +4755,7 @@ async function deactivateCurrentChatStorySummary() {
 
     const targetChatId = activeChatId || getContext()?.chatId || '';
     invalidateLexicalIndex();
-    await Promise.all([waitForVectorWrites(), hideCleanup]);
+    await waitForVectorWrites();
     clearDeferredBackgroundTasks();
     if (targetChatId) await clearRecallRuntime(targetChatId);
 }
@@ -4740,6 +4765,8 @@ async function deactivateCurrentChatStorySummary() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function handleChatDeleted(chatId) {
+    // Host deletion events carry only a filename, not its character/group owner.
+    // Keep page-lifetime diagnostic history; a filename cannot identify its records.
     logRecallRuntimeCheckpoint("chatDeleted:clear-runtime", `chat=${chatId || "-"}`);
     clearWarningCooldownsForChat(chatId);
     // Drain existing writes before deleting their cache, including when summary
@@ -4956,8 +4983,7 @@ function showBackupManagerModal() {
 $(document).on(STORY_SUMMARY_TOGGLE_EVENT, observeAsyncCallback(async (_e, enabled) => {
     if (enabled) {
         try {
-            await registerEvents();
-            await handleChatChanged();
+            await initializeStorySummary();
         } catch (error) {
             reportStartupFailure(error);
         }
@@ -4978,18 +5004,24 @@ function reportStartupFailure(error) {
     notifySummaryStartupFailure(error, shouldNotify);
 }
 
+// 首次加载和重新开启必须先同步配置，再注册事件和应用聊天隐藏状态。
+async function initializeStorySummary() {
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
+    try {
+        await loadConfigFromServer();
+    } catch (e) {
+        xbLog.warn(MODULE_ID, "Failed to load server config before initialization; using local cache", e);
+    }
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
+    await registerEvents();
+    // 注册可能等待上一次卸载；等待期间关闭开关时，不再继续初始化。
+    if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
+    initStateIntegration();
+    maybePreloadTokenizer();
+    await handleChatChanged();
+}
+
 jQuery(() => {
     initChatDeletionLifecycle(handleChatDeleted);
-    if (!getSettings().storySummary?.enabled) return;
-    (async () => {
-        try {
-            await loadConfigFromServer();
-        } catch (e) {
-            xbLog.warn(MODULE_ID, "Failed to load server config before initialization; using local cache", e);
-        }
-        await registerEvents();
-        initStateIntegration();
-        maybePreloadTokenizer();
-        await handleChatChanged();
-    })().catch(reportStartupFailure);
+    initializeStorySummary().catch(reportStartupFailure);
 });

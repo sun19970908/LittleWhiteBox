@@ -2,14 +2,14 @@
 // 导入
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { extension_settings, getContext, writeExtensionField } from "../../../../../extensions.js";
+import { extension_settings, getContext } from "../../../../../extensions.js";
 import { saveSettingsDebounced, characters, this_chid, chat, callPopup } from "../../../../../../script.js";
 import { getPresetManager } from "../../../../../preset-manager.js";
 import { oai_settings } from "../../../../../openai.js";
 import { SlashCommandParser } from "../../../../../slash-commands/SlashCommandParser.js";
 import { SlashCommand } from "../../../../../slash-commands/SlashCommand.js";
 import { ARGUMENT_TYPE, SlashCommandArgument, SlashCommandNamedArgument } from "../../../../../slash-commands/SlashCommandArgument.js";
-import { callGenericPopup, POPUP_TYPE } from "../../../../../popup.js";
+import { callGenericPopup, POPUP_TYPE, POPUP_RESULT } from "../../../../../popup.js";
 import { accountStorage } from "../../../../../util/AccountStorage.js";
 import { download, getFileText, uuidv4, debounce, getSortableDelay } from "../../../../../utils.js";
 import { executeSlashCommand } from "../../core/slash-command.js";
@@ -17,8 +17,16 @@ import { EXT_ID } from "../../core/constants.js";
 import { createModuleEvents, event_types } from "../../core/event-manager.js";
 import { xbLog, CacheRegistry } from "../../core/debug-core.js";
 import { TasksStorage } from "../../core/server-storage.js";
-import { initPresetTaskEvents } from './preset-task-events.js';
+import { initPresetTaskEvents, consumePresetTaskImport } from './preset-task-events.js';
 import { observeAsyncCallback, observeBackgroundTask } from '../../shared/common/async-errors.js';
+import { createTaskEditorSaveHandler } from './task-editor-save.js';
+import { confirmTaskSettingsSave, saveCharacterTasksConfirmed, savePresetTaskContent } from './task-save-confirmation.js';
+import { runTaskSave, waitTaskSave } from './task-save-operation.js';
+import { prepareGlobalTaskScripts, retainUncertainGlobalScripts, finishGlobalTaskScripts, taskScriptId } from './global-task-scripts.js';
+import { throwIfSignalAborted } from '../../shared/common/abort-utils.js';
+import { TASK_SAVE_COPY } from './task-save-copy.js';
+import { PRESET_START_TIMING, PRESET_START_LABEL, getTaskTriggerTiming, setTaskTriggerTiming } from './task-trigger.js';
+import { PRESET_TASK_FIELD, PRESET_PROMPT_ORDER_CHARACTER_ID } from './task-storage-fields.js';
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -54,6 +62,19 @@ let state = {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const normalizeTaskKey = (name) => String(name || '').trim();
+// A queued destructive edit stops automatic restarts without publishing draft
+// metadata. Counts keep one pending edit from releasing another edit's hold.
+const pendingTaskMutations = new Map();
+const isTaskMutationPending = key => pendingTaskMutations.has(normalizeTaskKey(key));
+function holdTaskMutation(key) {
+    const taskKey = normalizeTaskKey(key);
+    pendingTaskMutations.set(taskKey, (pendingTaskMutations.get(taskKey) || 0) + 1);
+    return () => {
+        const count = pendingTaskMutations.get(taskKey) || 0;
+        if (count <= 1) pendingTaskMutations.delete(taskKey);
+        else pendingTaskMutations.set(taskKey, count - 1);
+    };
+}
 // Host work and cleanup keep their own receipts until they actually settle.
 const isRetainedExecution = entry => entry?.source === 'host' || entry?.source === 'cleanup';
 const refreshExecutionState = () => {
@@ -75,7 +96,10 @@ const startExecutionRecord = (taskName, source = 'command', signal = null) => {
 const finishExecutionRecord = (token) => {
     if (!token) return;
     state.executingRecords.get(token)?.release();
-    if (state.executingRecords.delete(token)) refreshExecutionState();
+    if (state.executingRecords.delete(token)) {
+        refreshExecutionState();
+        if (!state.executingRecords.size) requestPresetTaskStartup();
+    }
 };
 const clearExecutionRecordsByTask = (taskName) => {
     const key = normalizeTaskKey(taskName);
@@ -124,14 +148,13 @@ const logExecutionLockSkip = (location, context = {}) => {
     try { xbLog.warn('scheduledTasks', { event: 'execution_lock_skip', ...detail }); } catch (error) { console.warn({ source: import.meta.url, operation: 'log' }, error); }
 };
 
-const normalizeTiming = (t) => (String(t || '').toLowerCase() === 'initialization' ? 'character_init' : t);
-const mapTiming = (task) => ({ ...task, triggerTiming: normalizeTiming(task.triggerTiming) });
+const mapTiming = (task, scope) => ({ ...task, triggerTiming: getTaskTriggerTiming(task, scope) });
 
 async function readGlobalTaskCommands(task) {
     if (task?.id) {
         let commands;
         try {
-            commands = await TasksStorage.getStrict(task.id, null);
+            commands = await TasksStorage.getStrict(taskScriptId(task), null);
         } catch (error) {
             throw new Error(`读取全局任务“${task.name || task.id}”失败：${error?.message || error}`);
         }
@@ -150,7 +173,7 @@ async function readGlobalTaskCommands(task) {
 const allTasksMeta = () => [
     ...getSettings().globalTasks.map(mapTiming),
     ...getCharacterTasks().map(mapTiming),
-    ...getPresetTasks().map(mapTiming)
+    ...getPresetTasks().map(task => mapTiming(task, 'preset'))
 ];
 
 const allTasks = allTasksMeta;
@@ -168,7 +191,7 @@ async function allTasksFull() {
     }))).filter(Boolean);
     // Keep the visit identity across I/O, not a stale snapshot of its tasks.
     const presetTasks = isTaskRuntimeActive({ preset })
-        ? getPresetTasks().map(task => ({ ...mapTiming(task), __runtime: captureTaskRuntime(task, 'preset') }))
+        ? getPresetTasks().map(task => ({ ...mapTiming(task, 'preset'), __runtime: captureTaskRuntime(task, 'preset') }))
         : [];
     return [
         ...globalTasks.map(mapTiming),
@@ -181,7 +204,9 @@ async function allTasksFull() {
 // 设置管理
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getSettings() {
+let pendingGlobalSettings = null;
+
+function getStoredTaskSettings() {
     const ext = extension_settings[EXT_ID] || (extension_settings[EXT_ID] = {});
     if (!ext.tasks) ext.tasks = structuredClone(defaultSettings);
     const t = ext.tasks;
@@ -190,6 +215,16 @@ function getSettings() {
     if (!Array.isArray(t.processedMessages)) t.processedMessages = [];
     if (!Array.isArray(t.character_allowed_tasks)) t.character_allowed_tasks = [];
     return t;
+}
+
+// The native serializer sees the candidate, while every task reader continues
+// to see the committed definition until its matching acknowledgement arrives.
+function getSettings() {
+    const settings = getStoredTaskSettings();
+    if (!pendingGlobalSettings) return settings;
+    return new Proxy(settings, {
+        get(target, key) { return key === 'globalTasks' ? pendingGlobalSettings || target.globalTasks : target[key]; },
+    });
 }
 
 function hydrateProcessedSetFromSettings() {
@@ -244,9 +279,8 @@ function markMessageAsProcessed(key) {
 // 角色任务
 // ═══════════════════════════════════════════════════════════════════════════
 
-function getCharacterTasks() {
-    if (this_chid == null || !characters[this_chid]) return [];
-    const c = characters[this_chid];
+function getCharacterTasks(c = characters[this_chid]) {
+    if (!c) return [];
     if (!c.data) c.data = {};
     if (!c.data.extensions) c.data.extensions = {};
     if (!c.data.extensions[TASKS_MODULE_NAME]) c.data.extensions[TASKS_MODULE_NAME] = { tasks: [] };
@@ -255,33 +289,42 @@ function getCharacterTasks() {
     return c.data.extensions[TASKS_MODULE_NAME].tasks;
 }
 
-async function saveCharacterTasks(tasks) {
-    if (this_chid == null || !characters[this_chid]) return;
-    await writeExtensionField(Number(this_chid), TASKS_MODULE_NAME, { tasks });
-    try {
-        if (!characters[this_chid].data) characters[this_chid].data = {};
-        if (!characters[this_chid].data.extensions) characters[this_chid].data.extensions = {};
-        if (!characters[this_chid].data.extensions[TASKS_MODULE_NAME]) characters[this_chid].data.extensions[TASKS_MODULE_NAME] = { tasks: [] };
-        characters[this_chid].data.extensions[TASKS_MODULE_NAME].tasks = tasks;
-    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "saveCharacterTasks" }, caughtError); }
-    const settings = getSettings();
-    const avatar = characters[this_chid].avatar;
-    if (avatar && !settings.character_allowed_tasks?.includes(avatar)) {
-        settings.character_allowed_tasks ??= [];
-        settings.character_allowed_tasks.push(avatar);
-        saveSettingsDebounced();
+async function saveCharacterTasks(tasks, { signal, target } = {}) {
+    const characterId = this_chid;
+    const character = target?.character || characters[characterId];
+    if (!character) throw new Error(TASK_SAVE_COPY.characterRequired);
+    {
+        await saveCharacterTasksConfirmed(character.avatar, TASKS_MODULE_NAME, tasks, signal);
+        // Match the host's two in-memory representations only after confirmation.
+        if (character.json_data) {
+            const json = JSON.parse(character.json_data);
+            json.data ??= {};
+            json.data.extensions ??= {};
+            json.data.extensions[TASKS_MODULE_NAME] = { tasks };
+            character.json_data = JSON.stringify(json);
+            if (characters[this_chid] === character) $('#character_json_data').val(character.json_data);
+        }
     }
+    character.data ??= {};
+    character.data.extensions ??= {};
+    character.data.extensions[TASKS_MODULE_NAME] = { tasks };
+    const settings = getSettings();
+    const avatar = character.avatar;
+    if (!avatar || settings.character_allowed_tasks?.includes(avatar)) return;
+    settings.character_allowed_tasks = [...(settings.character_allowed_tasks || []), avatar];
+    saveSettingsDebounced();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 预设任务
 // ═══════════════════════════════════════════════════════════════════════════
 
-const PRESET_TASK_FIELD = 'scheduledTasks';
-const PRESET_PROMPT_ORDER_CHARACTER_ID = 100000;
 const presetTasksState = { name: '', tasks: [] };
 
 const PresetTasksStore = (() => {
+    // Only in-flight saves live here. Serialize our writes to each preset; a host
+    // import/delete invalidates their memory publication, not ordinary preset edits.
+    const writes = new Map();
     const isPlainObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);
     const deepClone = (value) => {
         if (value === undefined) return undefined;
@@ -303,19 +346,11 @@ const PresetTasksStore = (() => {
                 source = manager.getCompletionPresetByName(name) || null;
             }
         } catch (caughtError) { console.warn({ source: import.meta.url, operation: "getPresetSnapshot" }, caughtError); }
-        if (!source) {
+        if (!source && typeof manager.getCompletionPresetByName !== 'function') {
             try { source = manager.getPresetSettings?.(name) || null; } catch { source = null; }
         }
         if (!source) return { source: null, clone: null };
         return { source, clone: deepClone(source) };
-    };
-
-    const syncTarget = (target, source) => {
-        if (!target || !source) return;
-        Object.keys(target).forEach((key) => {
-            if (!Object.prototype.hasOwnProperty.call(source, key)) delete target[key];
-        });
-        Object.assign(target, source);
     };
 
     const ensurePromptOrderEntry = (preset, create = false) => {
@@ -337,44 +372,95 @@ const PresetTasksStore = (() => {
         try { return getPresetManagerSafe()?.getSelectedPresetName?.() || ''; } catch { return ''; }
     };
 
+    const isCurrentBatch = (manager, name, batch) => {
+        const { source } = getPresetSnapshot(manager, name);
+        return !!batch?.valid && writes.get(name) === batch && source === batch.source;
+    };
+
     const read = (name) => {
         if (!name) return [];
         const manager = getPresetManagerSafe();
         if (!manager) return [];
+        const pending = writes.get(name);
         const { clone } = getPresetSnapshot(manager, name);
         if (!clone) return [];
         const entry = ensurePromptOrderEntry(clone, false);
         if (!entry || !isPlainObject(entry.xiaobai_ext)) return [];
         const tasks = entry.xiaobai_ext[PRESET_TASK_FIELD];
-        return Array.isArray(tasks) ? deepClone(tasks) : [];
+        const committed = Array.isArray(tasks) ? deepClone(tasks) : [];
+        if (!isCurrentBatch(manager, name, pending)) return committed;
+        // Explicit deletion/disable takes effect immediately. Draft names and
+        // scripts must not run before their write succeeds.
+        const findPending = task => pending.tasks.find(next => task.id ? next.id === task.id : next.name === task.name);
+        return committed.filter(task => findPending(task))
+            .map(task => findPending(task)?.disabled ? { ...task, disabled: true } : task);
     };
 
-    const write = async (name, tasks) => {
-        if (!name) return;
-        const manager = getPresetManagerSafe();
-        if (!manager) return;
-        const { source, clone } = getPresetSnapshot(manager, name);
-        if (!clone) return;
-        const shouldCreate = Array.isArray(tasks) && tasks.length > 0;
-        const entry = ensurePromptOrderEntry(clone, shouldCreate);
-        if (entry) {
+    const writeTasks = (preset, tasks) => {
+        const entry = ensurePromptOrderEntry(preset, tasks.length > 0);
+        if (!entry) return;
+        if (tasks.length) {
             entry.xiaobai_ext = isPlainObject(entry.xiaobai_ext) ? entry.xiaobai_ext : {};
-            if (shouldCreate) {
-                entry.xiaobai_ext[PRESET_TASK_FIELD] = deepClone(tasks);
-            } else {
-                if (entry.xiaobai_ext) delete entry.xiaobai_ext[PRESET_TASK_FIELD];
-                if (entry.xiaobai_ext && Object.keys(entry.xiaobai_ext).length === 0) delete entry.xiaobai_ext;
-            }
-        }
-        await manager.savePreset(name, clone, { skipUpdate: true });
-        syncTarget(source, clone);
-        const activeName = manager.getSelectedPresetName?.();
-        if (activeName && activeName === name && Object.prototype.hasOwnProperty.call(clone, 'prompt_order')) {
-            try { oai_settings.prompt_order = structuredClone(clone.prompt_order); } catch { oai_settings.prompt_order = clone.prompt_order; }
+            entry.xiaobai_ext[PRESET_TASK_FIELD] = deepClone(tasks);
+        } else if (entry.xiaobai_ext) {
+            delete entry.xiaobai_ext[PRESET_TASK_FIELD];
+            if (!Object.keys(entry.xiaobai_ext).length) delete entry.xiaobai_ext;
         }
     };
 
-    return { currentName, read, write };
+    const write = async (name, tasks, signal) => {
+        throwIfSignalAborted(signal);
+        if (!name) return false;
+        const manager = getPresetManagerSafe();
+        if (!manager) return false;
+        const { source } = getPresetSnapshot(manager, name);
+        if (!source) return false;
+        const previous = writes.get(name);
+        let batch = previous;
+        if (!batch || !batch.valid || batch.source !== source) {
+            batch = { source, valid: true, latest: 0, tail: previous?.tail || Promise.resolve() };
+            writes.set(name, batch);
+        }
+        const ticket = ++batch.latest;
+        const savedTasks = deepClone(tasks);
+        batch.tasks = savedTasks;
+        const isCurrent = () => isCurrentBatch(manager, name, batch);
+        const previousWrite = batch.tail;
+        const save = async saveSignal => {
+            await waitTaskSave(() => previousWrite, saveSignal);
+            throwIfSignalAborted(saveSignal);
+            if (!isCurrent()) return false;
+            const { clone } = getPresetSnapshot(manager, name);
+            writeTasks(clone, savedTasks);
+            // Equivalent to host savePreset(skipUpdate), with cancellable transport.
+            await savePresetTaskContent(name, clone, savedTasks, saveSignal);
+            if (!isCurrent()) return false;
+            // Publish only the field this feature owns. Never roll back live prompt switches.
+            writeTasks(getPresetSnapshot(manager, name).source, savedTasks);
+            if (ticket === batch.latest && PresetTasksStore.currentName() === name) writeTasks(oai_settings, savedTasks);
+            return true;
+        };
+        const work = signal ? save(signal) : runTaskSave(save);
+        // The caller receives save errors; a later explicit save may still proceed.
+        batch.tail = work.then(() => {}, () => {});
+        try { return await work; }
+        finally { if (writes.get(name) === batch && ticket === batch.latest) writes.delete(name); }
+    };
+
+    const flush = async name => {
+        let batch;
+        while ((batch = writes.get(name))) {
+            const tail = batch.tail;
+            await tail;
+            // An edit can join the queue while we wait. Drain it too before the
+            // host sends its import, without retaining a lock after this event.
+            if (writes.get(name) === batch && batch.tail === tail) break;
+        }
+    };
+
+    const currentSource = () => getPresetSnapshot(getPresetManagerSafe(), currentName()).source;
+    const imported = name => { const batch = writes.get(name); if (batch) batch.valid = false; };
+    return { currentName, read, write, currentSource, imported, flush };
 })();
 
 // A preset visit owns its running work. This is runtime-only: leaving and returning
@@ -445,7 +531,7 @@ function getPresetTasks() {
         resetPresetTasksCache();
         return presetTasksState.tasks;
     }
-    if (presetTasksState.name !== name || !presetTasksState.tasks.length) {
+    if (presetTasksState.name !== name) {
         const loaded = PresetTasksStore.read(name) || [];
         ensurePresetTaskIds(loaded);
         presetTasksState.name = name;
@@ -454,14 +540,25 @@ function getPresetTasks() {
     return presetTasksState.tasks;
 }
 
-async function savePresetTasks(tasks) {
-    const name = PresetTasksStore.currentName();
-    if (!name) return;
-    const list = Array.isArray(tasks) ? tasks : [];
+async function savePresetTasks(tasks, { signal, target } = {}) {
+    const name = target?.name || PresetTasksStore.currentName();
+    if (!name) throw new Error(TASK_SAVE_COPY.presetRequired);
+    const list = Array.isArray(tasks) ? tasks.map(task => getTaskTriggerTiming(task, 'preset') === PRESET_START_TIMING
+        ? setTaskTriggerTiming(task, PRESET_START_TIMING, 'preset') : task) : [];
     ensurePresetTaskIds(list);
-    presetTasksState.name = name;
-    presetTasksState.tasks = list;
-    await PresetTasksStore.write(name, list);
+    try {
+        const saving = PresetTasksStore.write(name, list, signal);
+        if (presetTasksState.name === name) resetPresetTasksCache();
+        const applied = await saving;
+        if (applied === false) throw new Error(TASK_SAVE_COPY.presetChanged);
+    } catch (error) {
+        // Host refresh/reentry can cache a clone of the pending list. Invalidate
+        // by preset, then read the store's latest pending or committed definition;
+        // an older failure must not restore its snapshot over a newer save.
+        if (presetTasksState.name === name) resetPresetTasksCache();
+        throw error;
+    }
+    if (presetTasksState.name === name) resetPresetTasksCache();
     state.lastTasksHash = '';
     updatePresetTaskHint();
 }
@@ -470,46 +567,62 @@ async function savePresetTasks(tasks) {
 // 任务列表操作
 // ═══════════════════════════════════════════════════════════════════════════
 
-const getTaskListByScope = (scope) => {
-    if (scope === 'character') return getCharacterTasks();
-    if (scope === 'preset') return getPresetTasks();
+const getTaskListByScope = (scope, target) => {
+    if (scope === 'character') return getCharacterTasks(target?.character);
+    if (scope === 'preset') return target?.name && target.name !== PresetTasksStore.currentName()
+        ? PresetTasksStore.read(target.name) : getPresetTasks();
     return getSettings().globalTasks;
 };
 
-async function persistTaskListByScope(scope, tasks) {
-    if (scope === 'character') return await saveCharacterTasks(tasks);
-    if (scope === 'preset') return await savePresetTasks(tasks);
+// Serialize task commits, not independent permission preferences.
+let globalTaskWriteTail = Promise.resolve();
 
-    const metaOnly = [];
-    for (const task of tasks) {
-        if (!task) continue;
-        if (!task.id) task.id = uuidv4();
-
-        if (Object.prototype.hasOwnProperty.call(task, 'commands')) {
-            await TasksStorage.set(task.id, String(task.commands ?? ''));
+async function persistTaskListByScope(scope, tasks, { signal, target } = {}) {
+    throwIfSignalAborted(signal);
+    if (scope === 'character') return await saveCharacterTasks(tasks, { signal, target });
+    if (scope === 'preset') return await savePresetTasks(tasks, { signal, target });
+    const base = structuredClone(getSettings().globalTasks);
+    const snapshot = tasks.filter(Boolean).map(task => ({ ...task, id: task.id || uuidv4() }));
+    const work = globalTaskWriteTail.then(async () => {
+        // Another editor/API may have queued a change to a different task.
+        // Apply this list's changes rather than replaying an old full snapshot.
+        const current = getSettings().globalTasks;
+        const before = new Map(base.map(task => [task.id, task]));
+        const desiredIds = new Set(snapshot.map(task => task.id));
+        const merged = snapshot.map(task => JSON.stringify(task) === JSON.stringify(before.get(task.id))
+            ? current.find(item => item.id === task.id) : task).filter(Boolean);
+        for (const task of current) {
+            if (!before.has(task.id) && !desiredIds.has(task.id)) merged.push(task);
         }
-
-        const meta = { ...task };
-        delete meta.commands;
-        metaOnly.push(meta);
-    }
-
-    getSettings().globalTasks = metaOnly;
-    saveSettingsDebounced();
+        await persistGlobalTaskList(merged, signal);
+    });
+    globalTaskWriteTail = work.then(() => {}, () => {});
+    return await waitTaskSave(() => work, signal);
 }
 
-async function removeTaskByScope(scope, taskId, fallbackIndex = -1) {
-    const list = getTaskListByScope(scope);
-    const idx = taskId ? list.findIndex(t => t?.id === taskId) : fallbackIndex;
-    if (idx < 0 || idx >= list.length) return;
-    
-    const task = list[idx];
-    if (scope === 'global' && task?.id) {
-        await TasksStorage.delete(task.id);
+async function persistGlobalTaskList(tasks, signal) {
+    const metadata = await prepareGlobalTaskScripts(tasks, signal);
+    const settings = getStoredTaskSettings();
+    const previous = settings.globalTasks;
+    pendingGlobalSettings = previous;
+    settings.globalTasks = metadata;
+    try {
+        await confirmTaskSettingsSave({ globalTasks: metadata }, signal);
+    } catch (error) {
+        retainUncertainGlobalScripts(previous, metadata, error);
+        settings.globalTasks = previous;
+        throw error;
+    } finally {
+        pendingGlobalSettings = null;
     }
-    
-    list.splice(idx, 1);
-    await persistTaskListByScope(scope, [...list]);
+    finishGlobalTaskScripts(previous, metadata, () => getSettings().globalTasks);
+}
+
+async function removeTaskByScope(scope, taskId, fallbackIndex = -1, { signal, target } = {}) {
+    const list = [...getTaskListByScope(scope, target)];
+    const idx = taskId ? list.findIndex(t => t?.id === taskId) : fallbackIndex;
+    if (idx >= 0 && idx < list.length) list.splice(idx, 1);
+    await persistTaskListByScope(scope, list, { signal, target });
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -624,6 +737,7 @@ function resetTaskRun(taskName) {
 }
 
 function resetAllTaskRuns() {
+    if (presetTaskStartup) presetTaskStartup.pending = false;
     for (const executions of Array.from(__taskExecutionMap.values())) {
         for (const execution of Array.from(executions)) execution.abort.abort();
     }
@@ -1140,6 +1254,7 @@ async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatCha
 
     const tasksToExecute = combined.filter(task => {
         if (task.disabled) return false;
+        if (isTaskMutationPending(task.__runtime?.key || task.name)) return false;
         if (!isTaskRuntimeActive(task.__runtime)) return false;
         if (isTaskInCooldown(task.__runtime?.key || task.name, n)) return false;
         const tt = task.triggerTiming || 'after_ai';
@@ -1161,6 +1276,7 @@ async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatCha
     try {
         for (const task of tasksToExecute) {
             if (!isTaskRuntimeActive(task.__runtime)) continue;
+            if (isTaskMutationPending(task.__runtime?.key || task.name)) continue;
             state.taskLastExecutionTime.set(task.__runtime?.key || task.name, n);
             if (task.__dynamic) {
                 const callbackEntry = state.dynamicCallbacks.get(task.name);
@@ -1268,11 +1384,73 @@ async function onChatCreated() {
     await checkAndExecuteTasks('chat_created', false, false);
 }
 
-function refreshPresetTasks() {
+// This entry point is opt-in and separate from legacy message/init scheduling.
+// Pending activation waits for host readiness and existing work, never drops the event.
+let presetTaskHostReady = false;
+let presetTaskInitialization = null;
+let presetTaskStartup = null;
+let presetTaskStartupQueued = false;
+let presetTaskStartupRunning = false;
+
+function beginPresetTaskInitialization() {
+    return presetTaskInitialization = { ready: false };
+}
+
+function finishPresetTaskInitialization(initialization) {
+    if (presetTaskInitialization !== initialization) return;
+    initialization.ready = true;
+    requestPresetTaskStartup();
+}
+
+function requestPresetTaskStartup() {
+    if (!presetTaskStartup?.pending || presetTaskStartupQueued || presetTaskStartupRunning) return;
+    presetTaskStartupQueued = true;
+    observeBackgroundTask(Promise.resolve().then(async () => {
+        presetTaskStartupQueued = false;
+        const activation = presetTaskStartup;
+        if (!activation?.pending || !activation.ready || !presetTaskHostReady || !presetTaskInitialization?.ready || !window.__XB_TASKS_INITIALIZED__
+            || !isGloballyEnabled() || isAnyTaskExecuting()) return;
+        if (!isTaskRuntimeActive({ preset: activation.preset })) return;
+        activation.pending = false;
+        presetTaskStartupRunning = true;
+        try {
+            const names = getPresetTasks().filter(task => getTaskTriggerTiming(task, 'preset') === PRESET_START_TIMING).map(task => task.name);
+            for (const name of names) {
+                if (!isTaskRuntimeActive({ preset: activation.preset })) break;
+                // An earlier startup may await. Read the next task only when it can run.
+                const task = getPresetTasks().find(item => item.name === name && getTaskTriggerTiming(item, 'preset') === PRESET_START_TIMING && !item.disabled);
+                if (!task) continue;
+                const runtime = captureTaskRuntime(task, 'preset');
+                if (isTaskMutationPending(runtime.key) || (__taskRunMap.get(runtime.key) && !__taskRunMap.get(runtime.key).cleaned)) continue;
+                await executeCommands(task.commands, task.name, runtime);
+            }
+        } finally {
+            presetTaskStartupRunning = false;
+            requestPresetTaskStartup();
+        }
+    }), { source: import.meta.url, operation: 'presetStartup' });
+}
+
+function refreshPresetTasks({ hostReady = false, initialize = false, selection = false, appliedName, apiChanged = false } = {}) {
+    if (hostReady) presetTaskHostReady = true;
+    const imported = consumePresetTaskImport(PresetTasksStore.currentSource());
+    if (imported) {
+        PresetTasksStore.imported(PresetTasksStore.currentName());
+        presetTaskBinding?.abort.abort();
+        presetTaskBinding = null;
+    }
     syncPresetTaskBinding();
     resetPresetTasksCache();
     state.lastTasksHash = '';
     refreshUI();
+    if (initialize || imported || presetTaskStartup?.preset.name !== presetTaskBinding.name) {
+        presetTaskStartup = { preset: presetTaskBinding, pending: !!presetTaskBinding.name, ready: false };
+    }
+    // Selection stops the previous visit immediately. Startup waits for the host
+    // to finish applying this preset's settings, rather than an earlier AFTER event.
+    if (selection && presetTaskStartup.pending) presetTaskStartup.ready = false;
+    if (hostReady || initialize || apiChanged || appliedName === presetTaskBinding.name) presetTaskStartup.ready = true;
+    requestPresetTaskStartup();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1303,7 +1481,9 @@ function createTaskItemSimple(task, scope = 'global') {
     }[task.triggerTiming] || 'AI后';
 
     let displayName;
-    if (task.interval === 0) {
+    if (taskType === 'preset' && getTaskTriggerTiming(task, 'preset') === PRESET_START_TIMING) {
+        displayName = `${task.name} (${PRESET_START_LABEL})`;
+    } else if (task.interval === 0) {
         displayName = `${task.name} (手动触发)`;
     } else if (task.triggerTiming === 'initialization' || task.triggerTiming === 'character_init') {
         displayName = `${task.name} (角色卡初始化)`;
@@ -1525,7 +1705,9 @@ function handleTaskBarClick(e) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
+    const editorToken = Symbol('task-editor');
     const initialScope = scope || 'global';
+    const initialTarget = captureTaskSaveTarget(initialScope);
     const sourceList = getTaskListByScope(initialScope);
     const sourceIndex = sourceList.indexOf(task);
     
@@ -1543,13 +1725,19 @@ async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
     state.currentEditingScope = initialScope;
     state.currentEditingIndex = isEdit ? sourceIndex : -1;
     state.currentEditingId = task?.id || null;
+    state.currentEditorToken = editorToken;
 
     const editorTemplate = $('#task_editor_template').clone().removeAttr('id').show();
     editorTemplate.find('.task_name_edit').val(task?.name || '');
     editorTemplate.find('.task_commands_edit').val(task?.commands || '');
     editorTemplate.find('.task_interval_edit').val(task?.interval ?? 3);
     editorTemplate.find('.task_floor_type_edit').val(task?.floorType || 'all');
-    editorTemplate.find('.task_trigger_timing_edit').val(task?.triggerTiming === 'character_init' ? 'initialization' : (task?.triggerTiming || 'after_ai'));
+    const presetStartOption = document.createElement('option');
+    presetStartOption.value = PRESET_START_TIMING;
+    presetStartOption.textContent = PRESET_START_LABEL;
+    editorTemplate.find('.task_trigger_timing_edit').append(presetStartOption);
+    const initialTiming = getTaskTriggerTiming(task, initialScope) || 'after_ai';
+    editorTemplate.find('.task_trigger_timing_edit').val(initialTiming === 'character_init' ? 'initialization' : initialTiming);
     editorTemplate.find('.task_type_edit').val(initialScope);
     editorTemplate.find('.task_enabled_edit').prop('checked', !task?.disabled);
     editorTemplate.find('.task_button_activated_edit').prop('checked', task?.buttonActivated || false);
@@ -1572,15 +1760,29 @@ async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
     }
 
     function updateControlStates() {
+        const isPreset = editorTemplate.find('.task_type_edit').val() === 'preset';
+        presetStartOption.hidden = !isPreset;
+        presetStartOption.disabled = !isPreset;
+        if (!isPreset && editorTemplate.find('.task_trigger_timing_edit').val() === PRESET_START_TIMING) {
+            editorTemplate.find('.task_trigger_timing_edit').val('chat_changed');
+        }
         const interval = parseInt(editorTemplate.find('.task_interval_edit').val()) || 0;
         const triggerTiming = editorTemplate.find('.task_trigger_timing_edit').val();
         const intervalControl = editorTemplate.find('.task_interval_edit');
         const floorTypeControl = editorTemplate.find('.task_floor_type_edit');
         const triggerTimingControl = editorTemplate.find('.task_trigger_timing_edit');
+        editorTemplate.find('.task_interval_edit + small, .task_floor_type_edit + small')
+            .css('display', isPreset && triggerTiming === PRESET_START_TIMING ? 'none' : '');
 
-        if (interval === 0) {
+        if (isPreset && triggerTiming === PRESET_START_TIMING) {
+            intervalControl.prop('disabled', true).css('opacity', '0.5');
             floorTypeControl.prop('disabled', true).css('opacity', '0.5');
-            triggerTimingControl.prop('disabled', true).css('opacity', '0.5');
+            triggerTimingControl.prop('disabled', false).css('opacity', '1');
+            editorTemplate.find('.manual-trigger-hint').hide();
+        } else if (interval === 0) {
+            intervalControl.prop('disabled', false).css('opacity', '1');
+            floorTypeControl.prop('disabled', true).css('opacity', '0.5');
+            triggerTimingControl.prop('disabled', !isPreset).css('opacity', isPreset ? '1' : '0.5');
             let manualTriggerHint = editorTemplate.find('.manual-trigger-hint');
             if (manualTriggerHint.length === 0) {
                 manualTriggerHint = $('<small class="manual-trigger-hint" style="color:#888;">手动触发</small>');
@@ -1605,41 +1807,53 @@ async function showTaskEditor(task = null, isEdit = false, scope = 'global') {
     editorTemplate.find('.task_interval_edit').on('input', updateControlStates);
     editorTemplate.find('.task_trigger_timing_edit').on('change', updateControlStates);
     editorTemplate.find('.task_floor_type_edit').on('change', updateControlStates);
+    editorTemplate.find('.task_type_edit').on('change', updateControlStates);
     updateControlStates();
 
-    observeBackgroundTask(callGenericPopup(editorTemplate, POPUP_TYPE.CONFIRM, '', { okButton: '保存' }).then(async (result) => {
-        if (result) {
-            const desiredName = String(editorTemplate.find('.task_name_edit').val() || '').trim();
-            const existingNames = new Set(allTasks().map(t => (t?.name || '').trim().toLowerCase()));
-            let uniqueName = desiredName;
-            if (desiredName && (!isEdit || (isEdit && task?.name?.toLowerCase() !== desiredName.toLowerCase()))) {
-                if (existingNames.has(desiredName.toLowerCase())) {
-                    let idx = 1;
-                    while (existingNames.has(`${desiredName}${idx}`.toLowerCase())) idx++;
-                    uniqueName = `${desiredName}${idx}`;
-                }
+    // A failed attempt must retry the same task, not create another identity.
+    const draftId = task?.id || uuidv4();
+    // Only this open editor owns its migration receipts. Include attempted writes:
+    // a failed confirmation can still mean the server accepted the destination.
+    const edit = { task, isEdit, scope: initialScope,
+        runtime: task ? captureTaskRuntime(task, initialScope) : null,
+        locations: new Map(isEdit ? [[initialScope, initialTarget]] : []),
+    };
+    const onClosing = createTaskEditorSaveHandler(editorTemplate[0], async signal => {
+        const desiredName = String(editorTemplate.find('.task_name_edit').val() || '').trim();
+        const existingNames = new Set(allTasks().filter(t => t.id !== draftId).map(t => (t?.name || '').trim().toLowerCase()));
+        let uniqueName = desiredName;
+        if (desiredName && (!isEdit || (isEdit && task?.name?.toLowerCase() !== desiredName.toLowerCase()))) {
+            if (existingNames.has(desiredName.toLowerCase())) {
+                let idx = 1;
+                while (existingNames.has(`${desiredName}${idx}`.toLowerCase())) idx++;
+                uniqueName = `${desiredName}${idx}`;
             }
-
-            const base = task ? structuredClone(task) : {};
-            const selectedTriggerTiming = editorTemplate.find('.task_trigger_timing_edit').val() || 'after_ai';
-            const newTask = {
-                ...base,
-                id: base.id || `task_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
-                name: uniqueName,
-                commands: String(editorTemplate.find('.task_commands_edit').val() || ''),
-                interval: parseInt(String(editorTemplate.find('.task_interval_edit').val() || '0'), 10) || 0,
-                floorType: editorTemplate.find('.task_floor_type_edit').val() || 'all',
-                triggerTiming: task?.triggerTiming === 'character_init' && selectedTriggerTiming === 'initialization'
-                    ? 'character_init'
-                    : selectedTriggerTiming,
-                disabled: !editorTemplate.find('.task_enabled_edit').prop('checked'),
-                buttonActivated: editorTemplate.find('.task_button_activated_edit').prop('checked'),
-                createdAt: base.createdAt || new Date().toISOString(),
-            };
-            const targetScope = String(editorTemplate.find('.task_type_edit').val() || initialScope);
-            await saveTaskFromEditor(newTask, targetScope);
         }
-    }), { source: import.meta.url, operation: "showTaskEditor" });
+
+        const base = edit.task ? structuredClone(edit.task) : {};
+        const selectedTriggerTiming = editorTemplate.find('.task_trigger_timing_edit').val() || 'after_ai';
+        const newTask = {
+            ...base,
+            id: draftId,
+            name: uniqueName,
+            commands: String(editorTemplate.find('.task_commands_edit').val() || ''),
+            interval: parseInt(String(editorTemplate.find('.task_interval_edit').val() || '0'), 10) || 0,
+            floorType: editorTemplate.find('.task_floor_type_edit').val() || 'all',
+            triggerTiming: task?.triggerTiming === 'character_init' && selectedTriggerTiming === 'initialization'
+                ? 'character_init'
+                : selectedTriggerTiming,
+            disabled: !editorTemplate.find('.task_enabled_edit').prop('checked'),
+            buttonActivated: editorTemplate.find('.task_button_activated_edit').prop('checked'),
+            createdAt: base.createdAt || new Date().toISOString(),
+        };
+        const targetScope = String(editorTemplate.find('.task_type_edit').val() || initialScope);
+        await saveTaskFromEditor(setTaskTriggerTiming(newTask, newTask.triggerTiming, targetScope), targetScope, edit, signal);
+    }, POPUP_RESULT.AFFIRMATIVE);
+    observeBackgroundTask(callGenericPopup(editorTemplate, POPUP_TYPE.CONFIRM, '', {
+        okButton: TASK_SAVE_COPY.save, cancelButton: TASK_SAVE_COPY.cancel, onClosing,
+    }).then(() => {
+        if (state.currentEditorToken === editorToken) resetTaskEditorState();
+    }), { source: import.meta.url, operation: 'showTaskEditor' });
 }
 
 function resetTaskEditorState() {
@@ -1647,40 +1861,45 @@ function resetTaskEditorState() {
     state.currentEditingIndex = -1;
     state.currentEditingId = null;
     state.currentEditingScope = 'global';
+    state.currentEditorToken = null;
 }
 
-async function saveTaskFromEditor(task, scope) {
-    const targetScope = scope === 'character' || scope === 'preset' ? scope : 'global';
-    const isManual = (task?.interval === 0);
-    const isEditingExistingTask = state.currentEditingIndex >= 0 || !!state.currentEditingId;
-    if (!task.name || (!isEditingExistingTask && !isManual && !task.commands)) return;
+function captureTaskSaveTarget(scope) {
+    if (scope === 'character') return { character: characters[this_chid] };
+    if (scope === 'preset') return { name: PresetTasksStore.currentName() };
+    return {};
+}
 
-    const previousTask = isEditingExistingTask ? state.currentEditingTask : null;
+async function saveTaskFromEditor(task, scope, edit, signal) {
+    const targetScope = scope === 'character' || scope === 'preset' ? scope : 'global';
+    if (targetScope !== 'global') {
+        task = { ...task };
+        delete task.scriptId;
+    }
+    const isManual = (task?.interval === 0);
+    const isEditingExistingTask = edit.isEdit;
+    if (!task.name) throw new Error(TASK_SAVE_COPY.nameRequired);
+    if (!isEditingExistingTask && !isManual && !task.commands) throw new Error(TASK_SAVE_COPY.commandsRequired);
+
+    const previousTask = isEditingExistingTask ? edit.task : null;
     const previousName = previousTask?.name;
-    const previousRuntime = previousTask ? captureTaskRuntime(previousTask, state.currentEditingScope) : null;
+    const previousRuntime = edit.runtime;
     const shouldResetPreviousRun = !!previousName && (
         normalizeTaskKey(previousName) !== normalizeTaskKey(task.name)
         || String(previousTask?.commands ?? '') !== String(task.commands ?? '')
         || (!previousTask?.disabled && task.disabled === true)
     );
-    const previousScope = state.currentEditingScope || 'global';
+    const previousScope = edit.scope;
     const taskTypeChanged = isEditingExistingTask && previousScope !== targetScope;
 
-    if (targetScope === 'preset' && !PresetTasksStore.currentName()) {
-        toastr?.warning?.('请先选择一个OpenAI预设。');
-        return;
+    const target = edit.locations.get(targetScope) || captureTaskSaveTarget(targetScope);
+    if (targetScope === 'preset' && !target.name) {
+        throw new Error(TASK_SAVE_COPY.presetRequired);
     }
-    if (shouldResetPreviousRun || taskTypeChanged) resetTaskRun(previousRuntime?.key);
-
-    if (taskTypeChanged) {
-        await removeTaskByScope(previousScope, state.currentEditingId, state.currentEditingIndex);
-        state.lastTasksHash = '';
-        state.currentEditingIndex = -1;
-        state.currentEditingId = null;
-    }
-
-    const list = getTaskListByScope(targetScope);
-    let idx = state.currentEditingId ? list.findIndex(t => t?.id === state.currentEditingId) : state.currentEditingIndex;
+    if (targetScope === 'character' && !target.character) throw new Error(TASK_SAVE_COPY.characterRequired);
+    if (!previousTask?.disabled && task.disabled) resetTaskRun(previousRuntime?.key);
+    const list = [...getTaskListByScope(targetScope, target)];
+    const idx = list.findIndex(t => t?.id === task.id);
     
     if (idx >= 0 && idx < list.length) {
         list[idx] = task;
@@ -1688,9 +1907,23 @@ async function saveTaskFromEditor(task, scope) {
         list.push(task);
     }
 
-    await persistTaskListByScope(targetScope, [...list]);
+    edit.locations.set(targetScope, target);
+    await persistTaskListByScope(targetScope, list, { signal, target });
+    // Keep the source until the destination has acknowledged the new definition.
+    // Retry every recorded old location, even if its local list is already empty.
+    for (const [oldScope, oldTarget] of edit.locations) {
+        if (oldScope === targetScope) continue;
+        await removeTaskByScope(oldScope, task.id, -1, { signal, target: oldTarget });
+        edit.locations.delete(oldScope);
+    }
 
-    resetTaskEditorState();
+    // A failed save/source removal leaves the original instance usable.
+    if (shouldResetPreviousRun || taskTypeChanged) resetTaskRun(previousRuntime?.key);
+    edit.task = task;
+    edit.scope = targetScope;
+    edit.isEdit = true;
+    edit.runtime = captureTaskRuntime(task, targetScope);
+
     state.lastTasksHash = '';
     refreshUI();
 }
@@ -1707,6 +1940,7 @@ async function deleteTask(index, scope) {
     const task = list[index];
     if (!task) return;
     const runtime = captureTaskRuntime(task, scope);
+    const target = scope === 'preset' ? captureTaskSaveTarget(scope) : undefined;
 
     try {
         const styleId = 'temp-dialog-style';
@@ -1719,8 +1953,10 @@ async function deleteTask(index, scope) {
         const result = await callPopup(`确定要删除任务 "${task.name}" 吗？`, 'confirm');
         document.getElementById(styleId)?.remove();
         if (result) {
+            const release = holdTaskMutation(runtime.key);
             resetTaskRun(runtime.key);
-            await removeTaskByScope(scope, task.id, index);
+            try { await removeTaskByScope(scope, task.id, index, { target }); }
+            finally { release(); }
             if (state.currentEditingId === task.id || (state.currentEditingScope === scope && state.currentEditingIndex === index)) {
                 resetTaskEditorState();
             }
@@ -1897,6 +2133,8 @@ async function exportSingleTask(index, scope) {
         }
     }
     
+    task = { ...task };
+    delete task.scriptId;
     const fileName = `${scope}_task_${task?.name || 'unnamed'}_${new Date().toISOString().split('T')[0]}.json`;
     const fileData = JSON.stringify({ type: scope, exportDate: new Date().toISOString(), tasks: [task] }, null, 4);
     download(fileData, fileName, 'application/json');
@@ -2035,6 +2273,7 @@ function onCharacterDeleted({ character }) {
 }
 
 function cleanup() {
+    presetTaskInitialization = null;
     delete window.__XB_TASKS_INITIALIZED__;
     if (state.cleanupTimer) {
         clearInterval(state.cleanupTimer);
@@ -2085,10 +2324,12 @@ function cleanup() {
             id: t.id, name: t.name, interval: t.interval,
             floorType: t.floorType, timing: t.triggerTiming, disabled: !!t.disabled
         });
+        const mapPreset = task => ({ ...map(task), timing: getTaskTriggerTiming(task, 'preset') === PRESET_START_TIMING
+            ? PRESET_START_TIMING : task.triggerTiming });
         if (scope === 'global') return g.map(map);
         if (scope === 'character') return c.map(map);
-        if (scope === 'preset') return p.map(map);
-        return { global: g.map(map), character: c.map(map), preset: p.map(map) };
+        if (scope === 'preset') return p.map(mapPreset);
+        return { global: g.map(map), character: c.map(map), preset: p.map(mapPreset) };
     }
 
     function find(name, scope = 'all') {
@@ -2113,55 +2354,47 @@ function cleanup() {
 
     async function setCommands(name, commands, opts = {}) {
         const { mode = 'replace', scope = 'all' } = opts;
+        if (find(name, scope)?.scope === 'global') await globalTaskWriteTail;
         const hit = find(name, scope);
         if (!hit) throw new Error(`找不到任务: ${name}`);
-
         const body = String(commands ?? '');
-        let newCommands;
-        if (mode === 'append' || mode === 'prepend') {
-            const old = hit.scope === 'global'
-                ? await readGlobalTaskCommands(hit.task)
-                : String(hit.task.commands || '');
-            newCommands = mode === 'append'
-                ? (old ? `${old}\n${body}` : body)
-                : (old ? `${body}\n${old}` : body);
-        } else {
-            newCommands = body;
-        }
-
-        const previousKey = captureTaskRuntime(hit.task, hit.scope).key;
-        hit.task.commands = newCommands;
-        resetTaskRun(previousKey);
-        await persistTaskListByScope(hit.scope, hit.list);
-        refreshTaskLists();
-        return { ok: true, scope: hit.scope, name: hit.task.name };
+        const old = mode === 'append' || mode === 'prepend'
+            ? (hit.scope === 'global' ? await readGlobalTaskCommands(hit.task) : String(hit.task.commands || '')) : '';
+        const value = mode === 'append' ? (old ? `${old}\n${body}` : body)
+            : mode === 'prepend' ? (old ? `${body}\n${old}` : body) : body;
+        return await setProps(name, { commands: value }, hit.scope);
     }
 
     async function setJS(name, jsCode, opts = {}) {
-        const commands = `<<taskjs>>${jsCode}<</taskjs>>`;
-        return await setCommands(name, commands, opts);
+        return await setCommands(name, `<<taskjs>>${jsCode}<</taskjs>>`, opts);
     }
 
     async function setProps(name, props, scope = 'all') {
-        const hit = find(name, scope);
-        if (!hit) throw new Error(`找不到任务: ${name}`);
         const patch = props || {};
-        const previousName = hit.task.name;
-        const previousKey = captureTaskRuntime(hit.task, hit.scope).key;
-        const wasDisabled = !!hit.task.disabled;
-        const shouldResetPreviousRun = (
-            (Object.prototype.hasOwnProperty.call(patch, 'name')
-                && normalizeTaskKey(previousName) !== normalizeTaskKey(patch.name))
-            || Object.prototype.hasOwnProperty.call(patch, 'commands')
-            || (!wasDisabled
-                && Object.prototype.hasOwnProperty.call(patch, 'disabled')
-                && !!patch.disabled)
-        );
-        Object.assign(hit.task, patch);
-        if (shouldResetPreviousRun) resetTaskRun(previousKey);
-        await persistTaskListByScope(hit.scope, hit.list);
-        refreshTaskLists();
-        return { ok: true, scope: hit.scope, name: hit.task.name };
+        const initialHit = find(name, scope);
+        const disabling = !!patch.disabled && initialHit && !initialHit.task.disabled;
+        const initialKey = initialHit ? captureTaskRuntime(initialHit.task, initialHit.scope).key : null;
+        const release = disabling ? holdTaskMutation(initialKey) : null;
+        // Explicit stop remains immediate, even if another save is in flight.
+        if (disabling) resetTaskRun(initialKey);
+        try {
+            if (initialHit?.scope === 'global') await globalTaskWriteTail;
+            const hit = find(name, scope);
+            if (!hit) throw new Error(`找不到任务: ${name}`);
+            const previousKey = captureTaskRuntime(hit.task, hit.scope).key;
+            const updated = { ...hit.task, ...patch };
+            const task = Object.hasOwn(patch, 'triggerTiming')
+                ? setTaskTriggerTiming(updated, patch.triggerTiming, hit.scope) : updated;
+            const list = hit.list.map((entry, index) => index === hit.index ? task : entry);
+            await persistTaskListByScope(hit.scope, list);
+            if (Object.hasOwn(patch, 'commands') || normalizeTaskKey(task.name) !== normalizeTaskKey(hit.task.name)) {
+                resetTaskRun(previousKey);
+            }
+            refreshTaskLists();
+            return { ok: true, scope: hit.scope, name: task.name };
+        } finally {
+            release?.();
+        }
     }
 
     async function exec(name) {
@@ -2181,6 +2414,7 @@ function cleanup() {
             ...structuredClone(t),
             commands: await readGlobalTaskCommands(t)
         })));
+        for (const task of g) delete task.scriptId;
         if (scope === 'global') return g;
         const c = structuredClone(getCharacterTasks() || []);
         const p = structuredClone(getPresetTasks() || []);
@@ -2247,8 +2481,7 @@ window.setScheduledTaskInterval = async (name, interval) => {
     const settings = getSettings();
     const gi = settings.globalTasks.findIndex(t => t.name.toLowerCase() === name.toLowerCase());
     if (gi !== -1) {
-        settings.globalTasks[gi].interval = intervalNum;
-        saveSettingsDebounced();
+        await window.XBTasks.setProps(settings.globalTasks[gi].name, { interval: intervalNum }, 'global');
         refreshTaskLists();
         return `已设置全局任务 "${name}" 的间隔为 ${intervalNum === 0 ? '手动激活' : `每${intervalNum}楼层`}`;
     }
@@ -2256,8 +2489,7 @@ window.setScheduledTaskInterval = async (name, interval) => {
     const cts = getCharacterTasks();
     const ci = cts.findIndex(t => t.name.toLowerCase() === name.toLowerCase());
     if (ci !== -1) {
-        cts[ci].interval = intervalNum;
-        await saveCharacterTasks(cts);
+        await window.XBTasks.setProps(cts[ci].name, { interval: intervalNum }, 'character');
         refreshTaskLists();
         return `已设置角色任务 "${name}" 的间隔为 ${intervalNum === 0 ? '手动激活' : `每${intervalNum}楼层`}`;
     }
@@ -2326,8 +2558,7 @@ function registerSlashCommands() {
                 if (!task) throw new Error(`找不到任务 "${name}"`);
 
                 const changed = [];
-                const previousTaskName = task.name;
-                const wasDisabled = !!task.disabled;
+                task = { ...task };
 
                 if (namedArgs.status !== undefined) {
                     const val = String(namedArgs.status).toLowerCase();
@@ -2360,9 +2591,7 @@ function registerSlashCommands() {
 
                 if (changed.length === 0) throw new Error('未提供要修改的参数');
 
-                if (!wasDisabled && task.disabled === true) resetTaskRun(previousTaskName);
-                if (isCharacter) await saveCharacterTasks(getCharacterTasks());
-                else saveSettingsDebounced();
+                await window.XBTasks.setProps(name, task, isCharacter ? 'character' : 'global');
                 refreshTaskLists();
 
                 return `已更新任务 "${name}": ${changed.join(', ')}`;
@@ -2387,7 +2616,7 @@ function registerSlashCommands() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function initTaskSettings() {
-    initPresetTaskEvents(refreshPresetTasks);
+    initPresetTaskEvents(refreshPresetTasks, PresetTasksStore.flush, PresetTasksStore.imported);
 }
 
 async function initTasks() {
@@ -2396,6 +2625,7 @@ async function initTasks() {
         return;
     }
     window.__XB_TASKS_INITIALIZED__ = true;
+    const initialization = beginPresetTaskInitialization();
 
     hydrateProcessedSetFromSettings();
     scheduleCleanup();
@@ -2437,21 +2667,15 @@ async function initTasks() {
     });
 
     $('#global_tasks_list').off('.xbTasks')
-        .on('input.xbTasks', '.disable_task', function () {
+        .on('input.xbTasks', '.disable_task', observeAsyncCallback(async function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
-            const list = getSettings().globalTasks;
-            const idx = list.findIndex(t => t?.id === id);
-            if (idx !== -1) {
-                const taskName = list[idx].name;
-                const wasDisabled = !!list[idx].disabled;
-                const disabled = $(this).prop('checked');
-                list[idx].disabled = disabled;
-                saveSettingsDebounced();
-                if (!wasDisabled && disabled) resetTaskRun(taskName);
+            const task = getSettings().globalTasks.find(item => item?.id === id);
+            if (task) {
+                await window.XBTasks.setProps(task.name, { disabled: $(this).prop('checked') }, 'global');
                 state.lastTasksHash = '';
                 refreshTaskLists();
             }
-        })
+        }, { source: import.meta.url, operation: 'toggleGlobalTask' }))
         .on('click.xbTasks', '.edit_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getSettings().globalTasks;
@@ -2567,9 +2791,11 @@ async function initTasks() {
     const pluginInitTimer = setTimeout(() => {
         state.initTimers.delete(pluginInitTimer);
         if (!window.__XB_TASKS_INITIALIZED__) return;
-        try { observeBackgroundTask(checkAndExecuteTasks('plugin_initialized', false, false), { source: import.meta.url, operation: "callback" }); } catch (e) { console.debug(e); }
+        observeBackgroundTask(checkAndExecuteTasks('plugin_initialized', false, false).finally(() => finishPresetTaskInitialization(initialization)),
+            { source: import.meta.url, operation: 'pluginInitialization' });
     }, 0);
     state.initTimers.add(pluginInitTimer);
+    refreshPresetTasks({ initialize: true });
 }
 
 export { initTasks };

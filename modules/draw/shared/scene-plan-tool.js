@@ -1,4 +1,4 @@
-import { SUBMIT_SCENE_PLAN_TOOL_NAME } from './scene-plan-contract.js';
+import { SCENE_TITLE_MAX_LENGTH, SUBMIT_SCENE_PLAN_TOOL_NAME } from './scene-plan-contract.js';
 import { normalizeScenePlannerProfile } from './scene-planner-profile.js';
 
 // Model-facing instructions are prepared in the browser, not bundled into the executor.
@@ -7,10 +7,11 @@ function normalizeLimit(value) {
     return Number.isInteger(number) && number > 0 ? number : 0;
 }
 
-function stringSchema(description, { minLength = 0 } = {}) {
+function stringSchema(description, { minLength = 0, maxLength = 0 } = {}) {
     return {
         type: 'string',
         ...(minLength > 0 ? { minLength } : {}),
+        ...(maxLength > 0 ? { maxLength } : {}),
         description,
     };
 }
@@ -53,8 +54,11 @@ export function getScenePlanCharacterProperties(profile) {
     const effective = normalizeScenePlannerProfile(profile);
     return {
         name: stringSchema(
-            '角色名。已录入角色用【已录入角色】列出的规范名，原文用别名也归一到规范名。未知角色用原文名字，无名时用简短称呼。',
+            '角色名。已录入角色用【已录入角色】中的名称，原文用别名也归一到该名称。未知角色用原文名字，无名时用简短称呼。',
             { minLength: 1 },
+        ),
+        form: stringSchema(
+            '多形态角色必填：本图出现的形态名，取自该角色的“形态”列表；单形态角色省略。',
         ),
         // type 在 danbooru 之前：与 assembleCharacterPrompts 的拼接顺序一致
         // （type → danbooru → appear → costume → action），也让模型按"先说清是谁、在哪，再给身份 tag"的顺序写。
@@ -135,7 +139,7 @@ export function createSubmitScenePlanTool(options = {}) {
         items: {
             type: 'object',
             additionalProperties: false,
-            required: ['index', 'insert_after', 'scene', 'characters'],
+            required: ['index', 'insert_after', 'title', 'orientation', 'scene', 'characters'],
             properties: {
                 index: { type: 'integer', minimum: 1, description: '本图序号，从 1 起。' },
                 insert_after: {
@@ -143,6 +147,22 @@ export function createSubmitScenePlanTool(options = {}) {
                     minimum: 1,
                     ...(insertPointCount ? { maximum: insertPointCount } : {}),
                     description: 'The number N of an existing `【插图点 N】` marker in <content>. Choose the nearest marker after the moment depicted. Images at the same marker appear in array order.',
+                },
+                // 先命名和确定画幅，再展开绘图 tag；title 仅用于展示，不参与提示词拼接。
+                title: stringSchema(
+                    `本次绘画的标题：简体中文，${SCENE_TITLE_MAX_LENGTH} 字内，只输出标题本身，不加标点。\n`
+                    + '把它当成这一格画面的小标题，只写画里最具体的那个动作、物件或瞬间，不要概括主题。\n'
+                    + '同一批的几张图，句式和开头都要各不相同，少用「XX的XX」。可参考：\n'
+                    + '那只手终于探了出来 / 听到她说晚上好 / 距离正在缩到三米 / 凌晨两点的便利店 / 路灯吞掉了影子',
+                    { minLength: 1, maxLength: SCENE_TITLE_MAX_LENGTH },
+                ),
+                orientation: {
+                    type: 'string',
+                    enum: ['portrait', 'landscape'],
+                    description: '本图画幅方向，先定景别与主体排布再决定，人数只作参考。'
+                        + 'portrait（竖幅）：单人、直立站姿、close-up / upper body 等近景、双人贴近构图；'
+                        + 'landscape（横幅）：三人及以上群像、wide shot / 全景远景、开阔环境、左右展开的互动与站位。'
+                        + '两人同框不必然横幅；方向须与景别一致。拿不准时填 portrait。',
                 },
                 scene: stringSchema(
                     '画面整体：人数与关系、构图与视角、背景、光影、氛围，逗号分隔的英文 tag。角色个体的外貌与动作不写在这里。拼在正向提示词最前。',

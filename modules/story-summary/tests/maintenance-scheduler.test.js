@@ -11,6 +11,7 @@ import path from 'node:path';
 import { build } from 'esbuild';
 import { maintenanceFixture } from './fixtures/memory-maintenance.js';
 import { createMemoryScheduler } from '../maintenance/scheduler.js';
+import { createSummaryDiagnostics } from '../summary-diagnostics.js';
 import { maintenanceRanges } from '../maintenance/ranges.js';
 import { readMaintenanceDiagnostics } from '../maintenance/diagnostics.js';
 import { getChatIdentity } from '../data/chat-identity.js';
@@ -68,7 +69,7 @@ const deferred = () => {
 
 beforeEach(() => {
     const fixture = maintenanceFixture();
-    Object.assign(host, { fixture, enabled: true, config: { memoryMaintenanceEnabled: true, textFilterRules: [] },
+    Object.assign(host, { fixture, enabled: true, config: { memoryMaintenanceEnabled: true, textFilterRules: [], prompts: { summaryStyle: '' } },
         requests: [], writes: 0, files: [], confirmations: [], listeners: new Set(), afterSave: null, beforeReadback: null, onRunFinished: null,
         respond: async () => ({ text: 'Review finished.' }),
         metadata: { extensions: { LittleWhiteBox: {
@@ -92,7 +93,9 @@ beforeEach(() => {
         config: { provider: 'openai', model: 'fixture', maxTokens: 1000 },
         countTokens: async () => ({ tokens: 100, source: 'test' }),
     });
+    const diagnostics = createSummaryDiagnostics();
     host.maintenance = mod.createMemoryMaintenanceHost({
+        readSummaryDiagnostics: args => diagnostics.read(getChatIdentity(host.context), args),
         isEnabled: () => host.enabled,
         invalidateRecall() {}, refreshSummary() {},
         changed: () => { for (const listener of host.listeners) listener(); },

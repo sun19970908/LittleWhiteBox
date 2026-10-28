@@ -61,6 +61,7 @@ export function buildDrawAgentSettingsSurfaceMarkup(state = {}) {
             activePage: 'main',
             isBusy: state.configSave?.status === 'saving',
             canDeletePreset: Object.keys(state.config?.presets || {}).length > 1,
+            // 与仓库其他 Agent API 面板一致：预设下拉框 + 操作按钮。
         });
 }
 

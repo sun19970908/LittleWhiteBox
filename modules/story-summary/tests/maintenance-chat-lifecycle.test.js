@@ -9,7 +9,10 @@ import { entry } from './helpers/story-summary-entry.js';
 import { maintenanceFixture } from './fixtures/memory-maintenance.js';
 import { createMemoryChatDialog } from '../maintenance/chat-ui.js';
 import { MEMORY_CHAT_MESSAGES as routes } from '../maintenance/chat-contract.js';
+import { createSummaryDiagnostics } from '../summary-diagnostics.js';
+import { getChatIdentity } from '../data/chat-identity.js';
 import { isTrustedMessage, postToIframe } from '../../../core/iframe-messaging.js';
+import { getMemoryChatPrompt } from '../maintenance/prompt.js';
 
 // This boundary test joins the real host/save path, frame entrypoints and chat UI.
 // Only the host API, confirmed metadata readback and derived-index storage are
@@ -59,7 +62,7 @@ const deferred = () => {
 
 function harness(t) {
     const fixture = maintenanceFixture();
-    Object.assign(host, { config: { memoryMaintenanceEnabled: false, textFilterRules: [] }, requests: [], writes: 0,
+    Object.assign(host, { config: { memoryMaintenanceEnabled: false, textFilterRules: [], prompts: { summaryStyle: '' } }, requests: [], writes: 0,
         afterSave: null, notifications: [], respond: async () => ({ text: 'fixture-answer' }),
         metadata: { extensions: { LittleWhiteBox: {
             storySummary: { json: fixture.json, lastSummarizedMesId: fixture.cutoff,
@@ -85,7 +88,9 @@ function harness(t) {
     const parent = parseHTML('<html><body></body></html>');
     const mounted = [], pending = [];
     let current = null, bridge;
+    const diagnostics = createSummaryDiagnostics();
     const maintenance = mod.createMemoryMaintenanceHost({
+        readSummaryDiagnostics: args => diagnostics.read(getChatIdentity(host.context), args),
         isEnabled: () => true, invalidateRecall() {}, refreshSummary() {}, changed: payload => host.notifications.push(payload),
         chatChanged: payload => bridge?.postToFrame({ type: routes.state, payload }),
     });
@@ -153,9 +158,53 @@ function harness(t) {
         for (const binding of mounted) { binding.alive = false; binding.ui.dispose(); }
         delete globalThis.document; delete globalThis.window; delete globalThis.ResizeObserver;
     });
-    return { maintenance, mount, closePanel, settle: () => Promise.all(pending),
+    return { maintenance, diagnostics, mount, closePanel, settle: () => Promise.all(pending),
         memory: () => host.metadata.extensions.LittleWhiteBox };
 }
+
+// Contract: a settings change reaches the next real host/runner turn without
+// rewriting stored memories or resetting completed work. Cost: silent data loss.
+test('changing writing preferences reaches later turns without modifying stored memory', async t => {
+    const h = harness(t);
+    const before = structuredClone(h.memory());
+    host.respond = async () => ({ text: 'No changes requested.' });
+    for (const summaryStyle of ['Use concrete actions.', 'Conservez les dates complètes.', '']) {
+        host.config.prompts.summaryStyle = summaryStyle;
+        await h.maintenance.chat.send({ identity: h.maintenance.chat.identity, text: '当前有什么任务？' });
+        const expected = getMemoryChatPrompt(summaryStyle);
+        assert.equal(host.requests.at(-1).systemPrompt.slice(0, expected.length), expected);
+        assert.equal(host.writes, 0);
+        assert.deepEqual(h.memory(), before);
+    }
+});
+
+// Acceptance: even before the first valid summary, a diagnostic question sends
+// actual generation evidence to the model without saves. Cost: invisible failure / paid replay.
+for (const invalid of [false, true]) test(`assistant receives summary failures without maintenance receipts (invalid history: ${invalid})`, async t => {
+    const h = harness(t);
+    Object.assign(h.memory().storySummary, { lastSummarizedMesId: -1, summaryHistory: [], summaryInvalid: invalid });
+    const identity = h.maintenance.chat.identity;
+    const owner = getChatIdentity(host.context);
+    const id = h.diagnostics.begin(h.diagnostics.startRun(owner, false));
+    h.diagnostics.progress(id, { stage: 'request', range: { from: 1, to: 24 } });
+    h.diagnostics.finish(id, { success: false, error: new Error('HTTP 429 provider quota exhausted') });
+    const before = structuredClone(h.memory());
+    let observed;
+    host.respond = async request => {
+        if (host.requests.length === 1) {
+            assert.deepEqual(request.tools.map(tool => tool.function.name), ['ReadMaintenance']);
+            return { toolCalls: [{ id: 'diagnosis', name: 'ReadMaintenance', arguments: '{}' }] };
+        }
+        observed = JSON.parse(request.messages.find(message => message.tool_call_id === 'diagnosis').content);
+        return { text: 'fixture-diagnosed' };
+    };
+    await h.maintenance.chat.send({ identity, text: '为什么刚才总结失败？' });
+    assert.equal(host.requests.length, 2);
+    assert.equal(observed.runs.length, 0);
+    assert.deepEqual(observed.summaryGeneration, h.diagnostics.read(owner));
+    assert.equal(host.writes, 0);
+    assert.deepEqual(h.memory(), before);
+});
 
 test('tool progress sends status only and requests a full receipt refresh once after task settlement', async t => {
     const h = harness(t);

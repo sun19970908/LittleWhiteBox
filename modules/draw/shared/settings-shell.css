@@ -1,39 +1,20 @@
-/* 绘图设置的共同外壳。后端页面只保留领域专属样式。 */
+@import url("./draw-theme.css");
+
 :root {
-    color-scheme: dark;
-    --bg-primary: #171922;
-    --bg-secondary: #1c1f2a;
-    --bg-tertiary: #242834;
-    --bg-input: #1c1f2a;
-    --text-primary: #d4d0c8;
-    --text-secondary: #aaa79f;
-    --text-muted: #858894;
-    --border: rgba(184,178,166,.15);
-    --border-focus: #8fb4bd;
-    --accent: #b8b2a6;
-    --accent-soft: rgba(184,178,166,.09);
-    --success: #96b8b2;
-    --danger: #d88490;
-    --warning: #c4ad84;
-}
-@media (prefers-color-scheme: light) {
-    :root {
-        color-scheme: light;
-        --bg-primary: #fcfaf6;
-        --bg-secondary: #fffdf9;
-        --bg-tertiary: #f0eee8;
-        --bg-input: #fffdf9;
-        --text-primary: #292723;
-        --text-secondary: #625f59;
-        --text-muted: #79756d;
-        --border: rgba(87,70,48,.16);
-        --border-focus: #3d7c83;
-        --accent: #3a3329;
-        --accent-soft: rgba(87,70,48,.06);
-        --success: #32766d;
-        --danger: #b64d5d;
-        --warning: #86672d;
-    }
+    --bg-primary: var(--draw-bg-primary);
+    --bg-secondary: var(--draw-bg-secondary);
+    --bg-tertiary: var(--draw-bg-tertiary);
+    --bg-input: var(--draw-bg-input);
+    --text-primary: var(--draw-text-primary);
+    --text-secondary: var(--draw-text-secondary);
+    --text-muted: var(--draw-text-muted);
+    --border: var(--draw-border);
+    --border-focus: var(--draw-border-focus);
+    --accent: var(--draw-accent);
+    --accent-soft: var(--draw-accent-soft);
+    --success: var(--draw-success);
+    --danger: var(--draw-danger);
+    --warning: var(--draw-warning);
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
@@ -86,6 +67,8 @@ button:focus-visible, summary:focus-visible, [tabindex]:focus-visible { outline:
 .input:focus { outline: none; border-color: var(--border-focus); }
 .input::placeholder { color: var(--text-muted); }
 textarea.input { min-height: 90px; resize: vertical; }
+/* 随内容自动长高的文本框（见 textarea-autofit.js）：不要固定的最小高度，一行内容就是一行高。 */
+textarea.input[data-autofit] { min-height: 0; overflow-y: hidden; }
 .input-row { display: flex; gap: 8px; }
 .input-row .input { flex: 1; min-width: 0; }
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 7px; color: var(--text-primary); background: transparent; font-size: 13px; white-space: nowrap; cursor: pointer; }
@@ -112,6 +95,7 @@ textarea.input { min-height: 90px; resize: vertical; }
 .tip-box i { flex-shrink: 0; margin-top: 3px; }
 .char-management-layout { display: flex; flex-direction: column; gap: 12px; }
 .char-management-main { min-width: 0; }
+.char-library-options > summary { font-weight: 600; color: var(--text-primary); } /* 与各区块标题（.card-title）一致 */
 .char-library-options > .char-management-sidebar { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; padding-top: 12px; }
 .char-management-sidebar > .card { margin: 0; }
 .char-summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
@@ -183,3 +167,14 @@ textarea.input { min-height: 90px; resize: vertical; }
 @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
 }
+/* 拖拽落点指示（所有可排序列表共用：预设行、角色卡 / 分组、服装 / 动态标签条目、形态、请求结构消息）：
+   落在某行之前 / 之后 = 那一行上 / 下沿一条线，放进分组 = 分组头虚线框。颜色取随主题变化的 --border-focus（青色，灰底上也醒目）；
+   box-shadow 用 !important，免得被各表面自带的卡片阴影（角色标签页的灰度层次）盖掉。 */
+.drop-before { box-shadow: 0 -3px 0 0 var(--border-focus) !important; }
+.drop-after { box-shadow: 0 3px 0 0 var(--border-focus) !important; }
+.drop-into { outline: 2px dashed var(--border-focus); outline-offset: -2px; }
+/* 就地改名的标题（shared/inline-rename.js）：平时就是一段加粗文字，悬停 / 聚焦才露出输入框，点一下就能改。 */
+.inline-name { min-width: 0; padding: 3px 6px; border: 1px solid transparent; border-radius: 6px; background: transparent; color: var(--text-primary); font: inherit; font-weight: 600; text-overflow: ellipsis; cursor: text; }
+.inline-name::placeholder { font-weight: 400; color: var(--text-muted); }
+.inline-name:hover { border-color: var(--border); }
+.inline-name:focus { outline: none; border-color: var(--border-focus); background: var(--bg-input); }

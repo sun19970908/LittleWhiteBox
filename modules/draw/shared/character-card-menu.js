@@ -9,6 +9,8 @@
 //   [role="menu"][hidden]                 菜单；其中的 [role="menuitem"] 是可聚焦的 button
 // 不得 import 酒馆内部模块；DOM 全部经传入的 document。
 
+import { createListenerBag, roveMenuFocus } from './menu-keyboard.js';
+
 const VIEWPORT_MARGIN = 8;
 const ANCHOR_GAP = 4;
 
@@ -38,8 +40,9 @@ export function computeMenuPosition(anchor, menu, viewport, { margin = VIEWPORT_
  * @param {object} options
  * @param {Document} options.document
  * @param {function} [options.getViewport] () => { width, height }，默认取 document 的视口（测试用）
+ * @param {boolean} [options.portal] Render outside transformed/scrolling chat containers.
  */
-export function createCardMenuController({ document, getViewport } = {}) {
+export function createCardMenuController({ document, getViewport, portal = false } = {}) {
     if (!document) throw new TypeError('缺少 document');
     const win = document.defaultView || null;
     const viewport = getViewport || (() => ({
@@ -47,17 +50,23 @@ export function createCardMenuController({ document, getViewport } = {}) {
         height: win?.innerHeight || document.documentElement?.clientHeight || 0,
     }));
     let current = null; // { button, menu, wrap }
-    const listeners = [];
+    const ownerObserver = portal ? new win.MutationObserver(() => {
+        if (current && !current.button.isConnected) close();
+    }) : null;
+    const { on, clear: removeListeners } = createListenerBag();
 
     const wrapOf = node => node?.closest?.('[data-card-menu]') || null;
     const itemsOf = menu => Array.from(menu.querySelectorAll('[role="menuitem"]')).filter(item => !item.disabled);
 
     function close({ restoreFocus = false } = {}) {
         if (!current) return false;
-        const { button, menu } = current;
+        const { button, menu, wrap } = current;
         current = null;
+        ownerObserver?.disconnect();
         menu.setAttribute('hidden', '');
         menu.style.cssText = '';
+        // Restore ancestry before the provider's delegated action reads it.
+        if (portal) wrap.append(menu);
         button.setAttribute('aria-expanded', 'false');
         if (restoreFocus) button.focus?.();
         return true;
@@ -85,6 +94,10 @@ export function createCardMenuController({ document, getViewport } = {}) {
         if (current?.menu !== menu) close();
         current = { button, menu, wrap };
         button.setAttribute('aria-expanded', 'true');
+        if (portal) {
+            document.body.append(menu);
+            ownerObserver.observe(document.body, { childList: true, subtree: true });
+        }
         place(current);
         itemsOf(menu)[0]?.focus?.({ preventScroll: true });
         return true;
@@ -95,14 +108,9 @@ export function createCardMenuController({ document, getViewport } = {}) {
         return open(button);
     }
 
-    function on(target, type, handler, capture) {
-        target.addEventListener(type, handler, capture);
-        listeners.push(() => target.removeEventListener(type, handler, capture));
-    }
-
     // 点击菜单以外的任何地方（包括别的卡片的“…”：它自己的处理已先换成新菜单，这里看到的是新菜单的容器）
     on(document, 'click', (event) => {
-        if (current && !current.wrap.contains(event.target)) close();
+        if (current && !current.wrap.contains(event.target) && !current.menu.contains(event.target)) close();
     });
     // Esc：在捕获阶段拦下，只关菜单并把焦点还给“…”按钮，不再传给页面里其它的 Esc 处理。
     on(document, 'keydown', (event) => {
@@ -115,16 +123,11 @@ export function createCardMenuController({ document, getViewport } = {}) {
         }
         if (!current.menu.contains(event.target)) return;
         const items = itemsOf(current.menu);
-        const index = items.indexOf(event.target.closest?.('[role="menuitem"]'));
-        const move = (to) => { event.preventDefault?.(); items[(to + items.length) % items.length]?.focus?.(); };
-        if (event.key === 'ArrowDown') move(index + 1);
-        else if (event.key === 'ArrowUp') move(index < 0 ? items.length - 1 : index - 1);
-        else if (event.key === 'Home') move(0);
-        else if (event.key === 'End') move(items.length - 1);
+        roveMenuFocus(event, items, items.indexOf(event.target.closest?.('[role="menuitem"]')));
     }, true);
     // Tab 走出菜单容器时关闭（焦点已经在别处，不再抢回来）。
     on(document, 'focusin', (event) => {
-        if (current && !current.wrap.contains(event.target)) close();
+        if (current && !current.wrap.contains(event.target) && !current.menu.contains(event.target)) close();
     });
     // 浮层不跟随滚动 / 缩放：直接关闭（菜单自己的滚动除外）。
     on(document, 'scroll', (event) => {
@@ -140,7 +143,7 @@ export function createCardMenuController({ document, getViewport } = {}) {
         getOpenButton: () => current?.button || null,
         destroy() {
             close();
-            listeners.splice(0).forEach(off => off());
+            removeListeners();
         },
     };
 }

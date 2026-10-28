@@ -10,9 +10,10 @@ import {
     mergeNewData,
     isSummaryConsumable,
 } from "../data/store.js";
-import { commitSummaryMemory, readSummaryMemory, waitForMemoryCommit } from '../data/memory-commit.js';
+import { commitSummaryMemory, readSummaryMemory, waitForMemoryCommit, getMemoryCommitState } from '../data/memory-commit.js';
 import { memorySaveError } from '../data/memory-copy.js';
 import { SUMMARY_FEEDBACK_COPY } from '../feedback-copy.js';
+import { summaryFailureReason } from '../summary-failure.js';
 import { formatCharacterAliasTableForAI } from "../data/character-aliases.js";
 import {
     generateSummary,
@@ -25,6 +26,7 @@ import { memoryPolicy } from '../data/memory-policy.js';
 import { getSummarySourceEnd } from './source-boundary.js';
 import { normalizeSummaryDelayFloors } from '../data/summary-delay.js';
 import { prepareSummaryResult } from './summary-result.js';
+import { rebaseGeneratedEvents } from './rebase-events.js';
 import { formatModelArcProgress } from './arc-progress.js';
 import { notifySummaryCommitted } from '../maintenance/notification.js';
 import { getChatIdentity } from '../data/chat-identity.js';
@@ -95,8 +97,9 @@ export function buildIncrementalSlice(targetMesId, lastSummarizedMesId, maxPerRu
 // 主生成函数
 // ═══════════════════════════════════════════════════════════════════════════
 
-function isSummaryRunInactive(signal, targetChatId) {
-    return signal?.aborted || (targetChatId && getContext()?.chatId !== targetChatId);
+function isSummaryRunInactive(signal, targetChatId, targetIdentity) {
+    return signal?.aborted || (targetChatId && getContext()?.chatId !== targetChatId)
+        || getChatIdentity(getContext()) !== targetIdentity;
 }
 
 function cancelledResult(onStatus, committed = false) {
@@ -110,22 +113,21 @@ function staleSourceResult(onStatus) {
 }
 
 export async function runSummaryGeneration(mesId, config, callbacks = {}, runtime = {}) {
-    const { onStatus, onError, onComplete } = callbacks;
+    const { onStatus, onError, onComplete, onProgress } = callbacks;
     const { signal = null, targetChatId = getContext()?.chatId || null } = runtime;
     const targetIdentity = getChatIdentity(getContext());
 
-    if (isSummaryRunInactive(signal, targetChatId)) {
+    if (isSummaryRunInactive(signal, targetChatId, targetIdentity)) {
         return cancelledResult(onStatus);
     }
 
+    onProgress?.({ stage: 'history' });
     const store = getSummaryStore();
     if (!isSummaryConsumable(store, getContext().chat?.length || 0)) {
-        onError?.("总结历史无法安全回滚：请导出当前总结，修正后重新导入，或清空总结数据");
+        onError?.(summaryFailureReason('summary_invalid'));
         return { success: false, error: "summary_invalid" };
     }
     const lastSummarized = store?.lastSummarizedMesId ?? -1;
-    const storeUpdatedAt = store?.updatedAt;
-    const storeJsonAtStart = JSON.stringify(store?.json || {});
     const maxPerRun = config.trigger?.maxPerRun || 100;
     const delayFloors = normalizeSummaryDelayFloors(config.trigger?.delayFloors);
     const filterRules = structuredClone(getTextFilterRules());
@@ -138,11 +140,15 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
         return { success: true, noContent: true };
     }
 
+    onProgress?.({ stage: 'request', range: { from: slice.endMesId - slice.count + 2, to: slice.endMesId + 1 } });
+
     onStatus?.(`正在总结 ${slice.range}（${slice.count}楼新内容）...`);
 
     const existingSummary = formatExistingSummaryForAI(store);
     const existingFacts = getFacts();
-    const existingEventCount = store?.json?.events?.length || 0;
+    const existingEvents = (store?.json?.events || []).map(({ id }) => ({ id }));
+    const existingEventCount = existingEvents.length;
+    const initialReceipts = new Set((store?.summaryHistory || []).flatMap(batch => batch.maintenance || []).map(receipt => receipt.id));
 
     let raw;
     try {
@@ -154,69 +160,80 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
             existingEventCount,
             signal,
         });
-        if (isSummaryRunInactive(signal, targetChatId)) {
+        if (isSummaryRunInactive(signal, targetChatId, targetIdentity)) {
             return cancelledResult(onStatus);
         }
         // Wait before revalidating or merging: a maintenance save may still be
         // publishing its receipt, or may restore the previous snapshot on failure.
-        await waitForMemoryCommit(signal);
+        onProgress?.({ stage: 'save_confirmation' });
+        do { await waitForMemoryCommit(signal); } while (getMemoryCommitState() === 'saving');
     } catch (err) {
-        if (isSummaryGenerationCancelledError(err) || isSummaryRunInactive(signal, targetChatId)) {
+        if (isSummaryGenerationCancelledError(err) || isSummaryRunInactive(signal, targetChatId, targetIdentity)) {
             onStatus?.(SUMMARY_FEEDBACK_COPY.summaryStopped);
             return { success: false, cancelled: true };
         }
         xbLog.error(MODULE_ID, '生成失败', err);
-        onError?.(SUMMARY_FEEDBACK_COPY.summaryFailed);
+        onError?.(summaryFailureReason(err));
         return { success: false, error: err };
     }
 
-    if (isSummaryRunInactive(signal, targetChatId)) {
+    if (isSummaryRunInactive(signal, targetChatId, targetIdentity)) {
         return cancelledResult(onStatus);
     }
     // Revalidate the captured slice without expanding it when new messages make
     // more floors eligible. A shortened chat must still respect the delayed tail.
+    // Maintenance of earlier memory is mergeable, not a change to these floors.
+    onProgress?.({ stage: 'source_validation' });
     const currentSlice = buildIncrementalSlice(slice.endMesId, lastSummarized, maxPerRun, delayFloors, filterRules);
     if (
         (store?.lastSummarizedMesId ?? -1) !== lastSummarized
-        || store?.updatedAt !== storeUpdatedAt
-        || JSON.stringify(store?.json || {}) !== storeJsonAtStart
         || currentSlice.endMesId !== slice.endMesId
         || currentSlice.text !== slice.text
     ) {
         return staleSourceResult(onStatus);
     }
 
+    onProgress?.({ stage: 'response' });
     if (!raw?.trim()) {
         xbLog.error(MODULE_ID, 'AI返回为空');
-        onError?.("AI返回为空");
+        onError?.(summaryFailureReason('empty'));
         return { success: false, error: "empty" };
     }
 
+    onProgress?.({ stage: 'parse' });
     const decoded = parseSummaryJson(raw);
     if (!decoded) {
         xbLog.error(MODULE_ID, 'JSON解析失败');
-        onError?.("AI未返回有效JSON");
+        onError?.(summaryFailureReason('parse'));
         return { success: false, error: "parse" };
     }
 
+    onProgress?.({ stage: 'structure' });
     let parsed;
     try {
         parsed = prepareSummaryResult(decoded, {
-            existingEvents: store?.json?.events || [],
+            existingEvents,
             // Source markers are one-based; endMesId is zero-based.
             startFloor: slice.endMesId - slice.count + 2,
             endFloor: slice.endMesId + 1,
         });
     } catch (error) {
-        const message = SUMMARY_FEEDBACK_COPY.summaryResultInvalid;
+        const failure = Object.assign(new Error(SUMMARY_FEEDBACK_COPY.summaryResultInvalid, { cause: error }), { code: 'structure' });
+        const message = summaryFailureReason(failure);
         xbLog.error(MODULE_ID, message, error);
         onError?.(message);
-        return { success: false, error: "structure", message };
+        return { success: false, error: failure };
     }
 
-    const mergeResult = mergeNewData(store?.json || {}, parsed, slice.endMesId, { returnMeta: true });
-    const merged = mergeResult.json;
+    onProgress?.({ stage: 'merge' });
     const previous = readSummaryMemory();
+    const maintenance = (previous.storySummary.summaryHistory || []).flatMap(batch => batch.maintenance || [])
+        .filter(receipt => !initialReceipts.has(receipt.id)).flatMap(receipt => receipt.operations);
+    parsed.events = rebaseGeneratedEvents(parsed.events, previous.storySummary.json?.events || [], maintenance);
+    // Append to the latest published memory. Incoming facts/arcs take precedence;
+    // untouched maintenance edits and their receipts remain in the same snapshot.
+    const mergeResult = mergeNewData(previous.storySummary.json || {}, parsed, slice.endMesId, { returnMeta: true });
+    const merged = mergeResult.json;
     const next = structuredClone(previous);
     next.storySummary.lastSummarizedMesId = slice.endMesId;
     next.storySummary.json = merged;
@@ -224,10 +241,11 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
     next.storySummary.updatedAt = Date.now();
     addSummarySnapshot(next.storySummary, lastSummarized, slice.endMesId, mergeResult.undo, memoryPolicy(filterRules));
 
+    onProgress?.({ stage: 'saving' });
     try {
         await commitSummaryMemory(targetChatId, next, { previous, validate: () => {
             const latest = buildIncrementalSlice(slice.endMesId, lastSummarized, maxPerRun, delayFloors, filterRules);
-            if (isSummaryRunInactive(signal, targetChatId) || latest.endMesId !== slice.endMesId || latest.text !== slice.text) {
+            if (isSummaryRunInactive(signal, targetChatId, targetIdentity) || latest.endMesId !== slice.endMesId || latest.text !== slice.text) {
                 throw Object.assign(new Error('metadata_draft_conflict'), { code: 'metadata_draft_conflict' });
             }
         } });
@@ -237,6 +255,7 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
         return { success: false, error };
     }
 
+    onProgress?.({ stage: 'followup' });
     xbLog.info(MODULE_ID, `总结完成，已更新至 ${slice.endMesId + 1} 楼`);
     if (!signal?.aborted && getChatIdentity(getContext()) === targetIdentity) {
         notifySummaryCommitted({ chatId: targetChatId, identity: targetIdentity, start: lastSummarized + 1, cutoff: slice.endMesId });
@@ -269,15 +288,15 @@ export async function runSummaryGeneration(mesId, config, callbacks = {}, runtim
             factStats: { updated: parsed.factUpdates?.length || 0 },
         });
     } catch (error) {
-        if (isSummaryGenerationCancelledError(error) || isSummaryRunInactive(signal, targetChatId)) {
+        if (isSummaryGenerationCancelledError(error) || isSummaryRunInactive(signal, targetChatId, targetIdentity)) {
             return cancelledResult(onStatus, true);
         }
         xbLog.warn(MODULE_ID, '总结已提交，但收尾任务失败', error);
-        onError?.(SUMMARY_FEEDBACK_COPY.summaryFollowupFailed);
-        return result;
+        onError?.(SUMMARY_FEEDBACK_COPY.summaryFollowupFailed(summaryFailureReason(error)));
+        return { ...result, followupError: error };
     }
 
-    if (isSummaryRunInactive(signal, targetChatId)) {
+    if (isSummaryRunInactive(signal, targetChatId, targetIdentity)) {
         return cancelledResult(onStatus, true);
     }
 

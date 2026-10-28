@@ -8,6 +8,8 @@ import { getContext } from "../../../../../../../extensions.js";
 import { saveBase64AsFile } from "../../../../../../../utils.js";
 import { getRequestHeaders, syncMesToSwipe } from "../../../../../../../../script.js";
 import { extensionFolderPath } from "../../../../core/constants.js";
+import { deleteGalleryImages, exportGalleryZipPart } from '../../shared/gallery-batch.js';
+import { GALLERY_JPEG_COPY } from '../../shared/gallery-image-codec.js';
 import { SERVER_PLUGIN_BASE, SERVER_PLUGIN_VERSION } from '../../../../shared/server-plugin/identity.js';
 import { SERVER_PLUGIN_COPY } from '../../../../shared/server-plugin/copy.js';
 import { DRAW_BACKEND_COPY, createDrawBackendStatusCopy } from '../../shared/draw-backend-copy.js';
@@ -28,7 +30,7 @@ import {
     getCacheStats,
     clearExpiredCache,
     clearAllCache,
-    getGallerySummary,
+    getGalleryOverview,
     getCharacterSlotsPage,
     getSlotVersions,
     openGallery,
@@ -46,6 +48,7 @@ import {
     getSharedDrawSettings,
     updateSharedDrawSettingsPersistent,
     normalizeSharedCacheDays,
+    normalizeImageTitleMode,
     mergeNovelDrawProviderSettingsIntoStorageRoot,
     updateDrawSettingsRootPersistent,
 } from "../../shared/draw-settings.js";
@@ -70,7 +73,12 @@ import {
 } from "../../shared/api-presets.js";
 import { API_PRESET_COPY } from '../../shared/api-presets-copy.js';
 import { NOVEL_API_FIELDS, NOVEL_API_PRESET_OPTIONS, normalizeNovelApiConfig, normalizeNovelApiPresets } from './novel-api-config.js';
+import { createQuickTestSession, QUICK_TEST_SLOT_ID as TEST_SLOT_ID, QUICK_TEST_PAGE_SIZE, QUICK_TEST_COPY } from './quick-test-session.js';
+import { getSlotPreviewPage } from '../../shared/gallery-cache.js';
+import { resolveImageTaskOrientations } from '../../shared/image-orientation.js';
 import { detectPresentCharacters } from "../../shared/present-characters.js";
+import { normalizeNamedTagList } from "../../shared/named-tag-items.js";
+import { normalizeForms } from "../../shared/character-forms.js";
 import { joinTags } from "../../shared/character-prompts.js";
 import { resolveAutoLearnCharacter } from "./novel-character-learning.js";
 import {
@@ -160,7 +168,17 @@ import {
     buildFailedPlaceholderHtml,
     ensureDrawImageStyles,
     showDrawTagEditor,
+    appendTagEditGroup,
+    syncImageTitleElements,
+    syncCollapseTitleWidths,
+    invalidateDrawPreviews,
 } from "../../shared/draw-common.js";
+import * as drawCommonModule from "../../shared/draw-common.js";
+// 注入标题模式读取：渲染时按共享设置决定 overlay/collapse/none。
+// namespace + 存在性守卫，兼容测试环境对 draw-common 的精简 mock。
+if (typeof drawCommonModule.setImageTitleSettingsProvider === 'function') {
+    drawCommonModule.setImageTitleSettingsProvider(() => getSharedDrawSettings());
+}
 import { IMAGE_SAVE_BUTTON_HTML, IMAGE_SAVING_INDICATOR_HTML } from '../../shared/image-save-ui.js';
 import { replaceSceneSlotElements } from "../../shared/scene-slot-dom.js";
 import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
@@ -178,6 +196,7 @@ import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { getCharacterTagEditGroups, persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
 import { hasPreviewImage, DRAW_SLOT_COPY } from "../../shared/image-record.js";
+import { installHostPanelEscape } from "../../shared/panel-escape.js";
 import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 
 const handleDelegatedClickEvent = observeAsyncCallback(handleDelegatedClick, { source: import.meta.url, operation: "handleDelegatedClick" });
@@ -395,6 +414,7 @@ const DEFAULT_SETTINGS = {
 let autoBusy = false;
 let overlayCreated = false;
 let frameReady = false;
+let galleryExportAbort = null;
 let jsZipLoaded = false;
 let messagePackDecoderPromise = null;
 let moduleInitialized = false;
@@ -412,6 +432,7 @@ const novelImageRequestQueue = createSerialImageRequestQueue({
 const imageBackendJobsClient = createImageBackendJobsClient({ getHeaders: getRequestHeaders, getOwner: getCurrentUserHandle });
 let ensureNovelDrawPanelRef = null;
 let overlayResizeHandler = null;
+let hostEscapeDispose = null; // 宿主页面里的 Esc 监听（shared/panel-escape.js），随面板创建 / 关闭
 let afterAiGateDispose = null;
 let agentSettingsSurface = null;
 
@@ -550,6 +571,7 @@ function insertPreviewBatchIntoRenderedMessage({ messageId, patches }) {
         }
     });
 
+    if (inserted) syncCollapseTitleWidths(mesTextEl);
     return inserted;
 }
 
@@ -737,6 +759,7 @@ function normalizeParamsPreset(preset, index) {
             ? 2
             : Math.max(0, Number(source.maxImages) || 0),
         maxCharactersPerImage: Math.max(0, Number(source.maxCharactersPerImage) || 0),
+        overrideSize: source.overrideSize === 'auto' ? 'auto' : 'default',
         params: {
             model: String(params.model || DEFAULT_PARAMS_PRESET.params.model).trim(),
             sampler: String(params.sampler || DEFAULT_PARAMS_PRESET.params.sampler),
@@ -834,6 +857,11 @@ function normalizeSettings(saved = {}) {
         danbooruTag: char.danbooruTag || '',
         outfits: normalizeNamedTagList(char.outfits || char.costumes || char.clothes || []),
         dynamicStates: normalizeNamedTagList(char.dynamicStates || []),
+        // 形态（见 character-forms.js）：不丢弃，也不给没有形态的角色添加这两个键。
+        ...(String(char.formName || '').trim() ? { formName: String(char.formName).trim() } : {}),
+        ...(normalizeForms(char.forms).length ? { forms: normalizeForms(char.forms) } : {}),
+        // 第一形态的停用标记（本机状态）：只在有额外形态时保留。
+        ...(char.formDisabled === true && normalizeForms(char.forms).length ? { formDisabled: true } : {}),
     }));
 
     merged.autoLearnCharacters = !!merged.autoLearnCharacters;
@@ -1155,6 +1183,7 @@ function compactPromptGuideOverrides(value) {
 
 const NOVEL_QUICK_SIZE_OPTIONS = [
     { value: 'default', label: '跟随预设' },
+    { value: 'auto', label: 'AI 自动（按构图）' },
     { value: '832x1216', label: '832 x 1216 竖图' },
     { value: '1216x832', label: '1216 x 832 横图' },
     { value: '1024x1024', label: '1024 x 1024 方图' },
@@ -1270,15 +1299,6 @@ async function ensureJSZip() {
 // ═══════════════════════════════════════════════════════════════════════════
 // 角色检测与标签组装
 // ═══════════════════════════════════════════════════════════════════════════
-
-function normalizeNamedTagList(list = []) {
-    return (Array.isArray(list) ? list : [])
-        .map(item => ({
-            name: String(item?.name || '').trim(),
-            tags: String(item?.tags || '').trim(),
-        }))
-        .filter(item => item.name || item.tags);
-}
 
 // ── 角色自动学习 ─────────────────────────────────────────────
 
@@ -1623,7 +1643,12 @@ export function createNovelGenerationRecipe({
             min: Number(settings.requestDelay?.min) || DEFAULT_SETTINGS.requestDelay.min,
             max: Number(settings.requestDelay?.max) || DEFAULT_SETTINGS.requestDelay.max,
         },
-        overrideSize: String(settings.overrideSize || 'default'),
+        overrideSize: (() => {
+            // 悬浮囊显式选择（含显式 AI 自动）优先；选「跟随预设」时回落预设自身的尺寸模式。
+            const globalOverride = String(settings.overrideSize || 'default');
+            if (globalOverride !== 'default') return globalOverride;
+            return preset?.overrideSize === 'auto' ? 'auto' : 'default';
+        })(),
         baseHref: globalThis.location?.href,
         resolveForBackend: resolveForBackend === true,
         params: cloneSettingsObject(params),
@@ -2060,9 +2085,11 @@ async function navigateToImage(container, targetIndex) {
     container.dataset.imgId = targetPreview.imgId;
     container.dataset.tags = escapeHtml(targetPreview.tags || '');
     container.dataset.positive = escapeHtml(targetPreview.positive || '');
+    container.dataset.title = escapeHtml(targetPreview.title || '');
     container.dataset.currentIndex = targetIndex;
 
     setImageState(container, targetPreview.savedUrl ? ImageState.SAVED : ImageState.PREVIEW);
+    syncImageTitleElements(container, targetPreview.title);
     updateNavControls(container, targetIndex, historyCount);
     void warmSlotPreviewNeighbors(slotId, targetIndex).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "navigateToImage" }, caughtError); });
     await setSlotSelection(slotId, targetPreview.imgId);
@@ -2346,22 +2373,9 @@ async function toggleEditPanel(container, show) {
             editPanel.insertBefore(scrollWrap, editPanel.firstChild);
         }
 
-        let html = `
-            <div class="xb-nd-edit-group">
-                <div class="xb-nd-edit-group-label">场景</div>
-                <textarea class="xb-nd-edit-input" data-type="scene">${escapeHtml(currentTags)}</textarea>
-            </div>`;
-
-        for (const group of getCharacterTagEditGroups(preview?.characterPrompts)) {
-            html += `
-                <div class="xb-nd-edit-group">
-                    <div class="xb-nd-edit-group-label">${escapeHtml(group.label)}</div>
-                    <textarea class="xb-nd-edit-input" aria-label="${escapeHtml(group.label)}" data-type="${group.type}" data-index="${group.index}">${escapeHtml(group.value)}</textarea>
-                </div>`;
-        }
-
-        // eslint-disable-next-line no-unsanitized/property -- Escaped data used in template.
-        scrollWrap.innerHTML = html;
+        scrollWrap.replaceChildren();
+        appendTagEditGroup(scrollWrap, { label: '场景', value: currentTags, type: 'scene' });
+        for (const group of getCharacterTagEditGroups(preview?.characterPrompts)) appendTagEditGroup(scrollWrap, group);
         if (btnsPanel) {
             btnsPanel.style.opacity = '0.3';
             btnsPanel.style.pointerEvents = 'none';
@@ -2458,9 +2472,11 @@ async function deleteCurrentImage(container) {
             container.dataset.imgId = latest.imgId;
             container.dataset.tags = escapeHtml(latest.tags || '');
             container.dataset.positive = escapeHtml(latest.positive || '');
+            container.dataset.title = escapeHtml(latest.title || '');
             container.dataset.currentIndex = '0';
             container.dataset.historyCount = String(successPreviews.length);
             setImageState(container, latest.savedUrl ? ImageState.SAVED : ImageState.PREVIEW);
+            syncImageTitleElements(container, latest.title || '');
             updateNavControls(container, 0, successPreviews.length);
             await syncNovelDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews);
             showToast(`已删除（剩余 ${successPreviews.length} 张）`);
@@ -2789,6 +2805,8 @@ async function generateImagesFromText(options = {}) {
                     base64,
                     tags: item.tagsForStore,
                     positive: item.scene,
+                    orientation: item.task.orientation ?? null,
+                    title: item.task.title,
                     characterPrompts: item.characterPrompts,
                     negativePrompt: item.negativePrompt,
                 });
@@ -2819,6 +2837,8 @@ async function generateImagesFromText(options = {}) {
                     errorType: errorType.code,
                     errorMessage: errorType.desc,
                     characterPrompts: item.characterPrompts,
+                    orientation: item.task.orientation ?? null,
+                    title: item.task.title,
                     negativePrompt: item.negativePrompt,
                 });
                 images[index] = {
@@ -2853,7 +2873,7 @@ async function generateImagesFromText(options = {}) {
 let preparedImageDispose = null;
 
 async function runPreparedNovelSlots(input) {
-    const { ctx, message, messageId, sourceText, tasks, onStateChange } = input;
+    const { ctx, message, messageId, sourceText, onStateChange } = input;
     const job = input.job || createGenerationJob(messageId);
     try {
         const settings = input.settings || cloneSettingsObject(getRuntimeSettings());
@@ -2861,9 +2881,10 @@ async function runPreparedNovelSlots(input) {
         const recipe = createNovelGenerationRecipe({
             settings,
             preset,
-            itemCount: tasks.length,
+            itemCount: input.tasks.length,
             resolveForBackend: resolveNovelImageTransport(settings) !== 'frontend',
         });
+        const tasks = await resolveImageTaskOrientations(input.tasks, recipe.overrideSize, job.controller.signal);
         const { compiledBatch, requests, metadata } = prepareImageInput('novelai', tasks, recipe);
         job.phase = 'gen';
         const monitorGeneration = backendJobMonitors.captureGeneration();
@@ -3073,7 +3094,7 @@ async function autoGenerateForLastAI() {
 // Overlay 设置面板
 // ═══════════════════════════════════════════════════════════════════════════
 
-function createOverlay() {
+function createOverlay(view = '') {
     if (overlayCreated) return;
     overlayCreated = true;
     ensureStyles();
@@ -3096,7 +3117,7 @@ function createOverlay() {
 
     const backdrop = document.createElement('div');
     backdrop.className = 'nd-backdrop';
-    backdrop.addEventListener('click', hideOverlay);
+    backdrop.addEventListener('click', requestOverlayClose);
 
     const frameWrap = document.createElement('div');
     frameWrap.className = 'nd-frame-wrap';
@@ -3104,21 +3125,22 @@ function createOverlay() {
 
     const iframe = document.createElement('iframe');
     iframe.id = 'xiaobaix-novel-draw-iframe';
-    iframe.src = `${HTML_PATH}?v=${Date.now()}`;
+    iframe.src = `${HTML_PATH}?v=${Date.now()}${view ? `&view=${encodeURIComponent(view)}` : ''}`; // view：打开方指定的页签，优先于上次记住的
     iframe.style.cssText = 'width:100%;height:100%;border:none;background:#0d1117;display:block;';
 
     frameWrap.appendChild(iframe);
     overlay.appendChild(backdrop);
     overlay.appendChild(frameWrap);
     document.body.appendChild(overlay);
+    hostEscapeDispose = installHostPanelEscape({ hostWindow: window, getOverlay: () => overlay, getFrame: () => iframe });
     syncOverlayFrameLayout();
     // eslint-disable-next-line no-restricted-syntax -- Guarded by isTrustedMessage (origin + source).
     window.addEventListener('message', handleFrameMessageEvent);
     subscribeGroupPresetRefresh();
 }
 
-function showOverlay() {
-    if (!overlayCreated) createOverlay();
+function showOverlay(view = '') {
+    if (!overlayCreated) createOverlay(view);
     const overlay = document.getElementById('xiaobaix-novel-draw-overlay');
     if (overlay) {
         overlay.style.display = 'block';
@@ -3129,8 +3151,12 @@ function showOverlay() {
 }
 
 function hideOverlay() {
+    galleryExportAbort?.abort();
+    galleryExportAbort = null;
     agentSettingsSurface?.destroy();
     agentSettingsSurface = null;
+    hostEscapeDispose?.();
+    hostEscapeDispose = null;
     const overlay = document.getElementById('xiaobaix-novel-draw-overlay');
     if (overlay) overlay.remove();
     overlayCreated = false;
@@ -3144,6 +3170,15 @@ function hideOverlay() {
 
     window.removeEventListener('message', handleFrameMessageEvent);
     unsubscribeGroupPresetRefresh();
+}
+
+function requestOverlayClose() {
+    const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+    if (!iframe?.contentWindow || !frameReady) {
+        hideOverlay();
+        return;
+    }
+    postToIframe(iframe, { type: 'REQUEST_CLOSE' }, 'LittleWhiteBox-NovelDraw');
 }
 
 async function sendInitData() {
@@ -3174,6 +3209,8 @@ async function sendInitData() {
             apiPresets: settings.apiPresets || [],
             activeApiPresetId: settings.activeApiPresetId || null,
             cacheDays: getSharedDrawSettings().cacheDays,
+            imageTitleMode: getSharedDrawSettings().imageTitleMode,
+            saveAsJpeg: getSharedDrawSettings().saveAsJpeg === true,
             selectedParamsPresetId: settings.selectedParamsPresetId,
             paramsPresets: settings.paramsPresets,
             useWorldInfo: settings.useWorldInfo,
@@ -3213,16 +3250,21 @@ async function sendInitData() {
 
 // 只发图片缓存统计（CACHE_DATA），不重发整份设置：画廊的保存 / 删除 / 刷新统计只改缓存，
 // 整份 INIT_DATA 会让页面所有控件重新赋值、图片管理整页重绘。
-async function sendCacheData() {
+async function sendCacheData({ requestId } = {}) {
     const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
     if (!iframe?.contentWindow) return;
     // 统计失败时对应字段干脆不带：页面收到缺省字段会保持原状，不会被占位的空值冲掉。
-    const cacheData = { type: 'CACHE_DATA' };
-    try { cacheData.cacheStats = await getCacheStats(); } catch (e) { console.warn('[NovelDraw] getCacheStats failed:', e); }
-    try { cacheData.gallerySummary = await getGallerySummary(); } catch (e) { console.warn('[NovelDraw] getGallerySummary failed:', e); }
+    const cacheData = { type: 'CACHE_DATA', requestId, ok: false };
+    try {
+        const overview = await getGalleryOverview();
+        cacheData.cacheStats = overview.stats;
+        cacheData.gallerySummary = overview.summary;
+        cacheData.ok = true;
+    } catch (e) { console.error('[NovelDraw] Gallery overview failed:', e); }
     const currentIframe = document.getElementById('xiaobaix-novel-draw-iframe');
     if (currentIframe?.contentWindow === iframe.contentWindow) {
         postToIframe(currentIframe, cacheData, 'LittleWhiteBox-NovelDraw');
+        await pushTestHistory();
     }
 }
 
@@ -3281,6 +3323,56 @@ function ensureAgentSettingsSurface() {
         logPrefix: 'NovelDraw',
     });
     return agentSettingsSurface;
+}
+
+let testHistoryOffset = 0;
+let testHistoryRevision = 0;
+function postTestMessage(message) {
+    const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+    if (iframe) postToIframe(iframe, message, 'LittleWhiteBox-NovelDraw');
+}
+const quickTestSession = createQuickTestSession({
+    store: storePreview,
+    notify: record => {
+        testHistoryRevision++;
+        testHistoryOffset = 0;
+        postTestMessage({ type: 'TEST_RETAINED', record });
+    },
+    stateChanged: busy => postTestMessage({ type: 'TEST_STATE', busy }),
+});
+window.addEventListener('beforeunload', event => {
+    if (!quickTestSession.hasUnsaved) return;
+    event.preventDefault();
+    event.returnValue = '';
+});
+
+async function pushTestHistory(selectedImgId, offset = testHistoryOffset) {
+    const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+    if (!iframe) return;
+    const revision = ++testHistoryRevision;
+    testHistoryOffset = Math.max(0, Math.trunc(Number(offset) || 0));
+    postTestMessage({ type: 'TEST_STATE', busy: quickTestSession.busy });
+    const pending = quickTestSession.records;
+    // Restore unsaved output immediately even if IndexedDB is blocked/unreadable.
+    if (pending.length) postTestMessage({ type: 'TEST_RESULT', items: pending.slice(testHistoryOffset, testHistoryOffset + QUICK_TEST_PAGE_SIZE),
+        offset: testHistoryOffset, hasMore: pending.length > testHistoryOffset + QUICK_TEST_PAGE_SIZE, selectedImgId });
+    try {
+        const temporary = pending.slice(testHistoryOffset, testHistoryOffset + QUICK_TEST_PAGE_SIZE);
+        const page = await getSlotPreviewPage(TEST_SLOT_ID, {
+            offset: Math.max(0, testHistoryOffset - pending.length),
+            limit: QUICK_TEST_PAGE_SIZE - temporary.length,
+            exclude: pending.map(record => record.imgId),
+        });
+        if (!iframe.isConnected || revision !== testHistoryRevision) return;
+        const items = [...temporary, ...page.items];
+        if (!items.length && testHistoryOffset) return pushTestHistory(selectedImgId, 0);
+        postTestMessage({ type: 'TEST_RESULT', items, offset: testHistoryOffset,
+            hasMore: pending.length > testHistoryOffset + QUICK_TEST_PAGE_SIZE || page.hasMore, selectedImgId });
+    } catch (error) {
+        if (revision !== testHistoryRevision || !iframe.isConnected) return;
+        console.error(QUICK_TEST_COPY.historyFailed, error);
+        postTestMessage({ type: 'TEST_HISTORY_FAILED' });
+    }
 }
 
 async function handleFrameMessage(event) {
@@ -3405,6 +3497,61 @@ async function handleFrameMessage(event) {
             if (ok) observeBackgroundTask(sendInitData(), { source: import.meta.url, operation: 'handleFrameMessage' });
             break;
         }
+
+        case 'SAVE_IMAGE_TITLE_MODE': {
+            const ok = await updateSharedDrawSettingsPersistent((settings) => {
+                settings.imageTitleMode = normalizeImageTitleMode(data.imageTitleMode);
+            }, '已保存', { notify: false, silent: false });
+            postStatus(ok ? 'success' : 'error', ok ? '已保存' : '保存失败', 'params');
+            if (ok) invalidateDrawPreviews();
+            break;
+        }
+
+        case 'SAVE_JPEG': {
+            const nextJpeg = data.saveAsJpeg === true;
+            const ok = await updateSharedDrawSettingsPersistent((settings) => {
+                settings.saveAsJpeg = nextJpeg;
+            }, '已保存', { notify: false, silent: false });
+            if (iframe.isConnected) postToIframe(iframe, {
+                type: 'STATUS', state: ok ? 'success' : 'error', target: 'jpeg',
+                text: ok ? GALLERY_JPEG_COPY.saved : GALLERY_JPEG_COPY.saveFailed,
+                saveAsJpeg: getSharedDrawSettings().saveAsJpeg === true,
+            }, 'LittleWhiteBox-NovelDraw');
+            break;
+        }
+
+        case 'BATCH_DELETE': {
+            const result = await deleteGalleryImages(data.ids, deletePreview);
+            if (iframe.isConnected) {
+                postToIframe(iframe, { type: 'BATCH_DELETED', requestId: data.requestId, ...result }, 'LittleWhiteBox-NovelDraw');
+                const overview = await getGalleryOverview();
+                if (iframe.isConnected) postToIframe(iframe, { type: 'CACHE_DATA', cacheStats: overview.stats, gallerySummary: overview.summary }, 'LittleWhiteBox-NovelDraw');
+            }
+            break;
+        }
+
+        case 'BATCH_DOWNLOAD': {
+            galleryExportAbort?.abort();
+            const controller = new AbortController();
+            galleryExportAbort = controller;
+            try {
+                const result = await exportGalleryZipPart(data.ids, { readPreview: getPreview, signal: controller.signal });
+                if (iframe.isConnected && !controller.signal.aborted) {
+                    postToIframe(iframe, { type: 'BATCH_DOWNLOADED', requestId: data.requestId, ...result }, 'LittleWhiteBox-NovelDraw');
+                }
+            } catch (error) {
+                if (!controller.signal.aborted && iframe.isConnected) {
+                    postToIframe(iframe, { type: 'BATCH_DOWNLOADED', requestId: data.requestId, error: error.message }, 'LittleWhiteBox-NovelDraw');
+                }
+            } finally {
+                if (galleryExportAbort === controller) galleryExportAbort = null;
+            }
+            break;
+        }
+
+        case 'BATCH_CANCEL_EXPORT':
+            galleryExportAbort?.abort();
+            break;
 
         case 'TEST_API': {
             try {
@@ -3769,9 +3916,11 @@ async function handleFrameMessage(event) {
                 }
                 if (Array.isArray(data.characterTags)) settings.characterTags = data.characterTags;
                 if (Array.isArray(data.characterGroups)) settings.characterGroups = data.characterGroups;
-            }, '角色标签已保存');
+            }, '角色标签已保存', data.requestId ? { notify: false } : undefined);
+            // 带 requestId 的是编辑区的自动保存：只回一条带 requestId 的回执（页面据此串行保存、更新状态栏），不占用全局状态栏。
+            if (data.requestId) postStatus(ok ? 'success' : 'error', ok ? '已保存' : '保存失败', 'char-tags', { requestId: data.requestId });
             // 页面已按同一规则恢复预设引用。成功只发保存状态，不用旧快照覆盖后续编辑。
-            if (!ok) await sendInitData();
+            if (!ok && !data.requestId) await sendInitData();
             break;
         }
 
@@ -3941,7 +4090,7 @@ async function handleFrameMessage(event) {
         }
 
         case 'REFRESH_CACHE_STATS':
-            observeBackgroundTask(sendCacheData(), { source: import.meta.url, operation: "handleFrameMessage" });
+            await sendCacheData({ requestId: data.requestId });
             break;
 
         case 'USE_GALLERY_IMAGE':
@@ -3995,6 +4144,17 @@ async function handleFrameMessage(event) {
                 console.error('[NovelDraw] 加载预览失败:', e);
                 if (iframe) postToIframe(iframe, { type: 'CHARACTER_PREVIEWS_FAILED', charName, requestId }, 'LittleWhiteBox-NovelDraw');
             }
+            break;
+        }
+
+        case 'LOAD_GALLERY_IMAGE': {
+            const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+            let image = null;
+            try {
+                const record = await getPreview(data.imgId);
+                if (record) image = { imgId: record.imgId, savedUrl: record.savedUrl, base64: record.savedUrl ? null : record.base64 };
+            } catch (error) { console.error('[NovelDraw] Gallery image read failed:', error); }
+            if (iframe?.isConnected) postToIframe(iframe, { type: 'GALLERY_IMAGE_LOADED', requestId: data.requestId, image }, 'LittleWhiteBox-NovelDraw');
             break;
         }
 
@@ -4063,21 +4223,47 @@ async function handleFrameMessage(event) {
         }
 
         case 'TEST_SINGLE': {
+            if (quickTestSession.busy) break;
             try {
-                postStatus('loading', '生成中...');
-                const t0 = Date.now();
+                postStatus('loading', QUICK_TEST_COPY.generating);
                 const preset = getActiveParamsPreset();
                 const tags = (typeof data.tags === 'string' && data.tags.trim()) ? data.tags.trim() : '1girl, smile';
                 const scene = joinTags(preset?.positivePrefix, tags);
-                const base64 = await generateNovelImage({ scene, characterPrompts: [], negativePrompt: preset?.negativePrefix || '', params: preset?.params || {} });
-                {
-                    const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
-                    if (iframe) postToIframe(iframe, { type: 'TEST_RESULT', url: getPreviewDisplayUrl({ base64 }) }, 'LittleWhiteBox-NovelDraw');
-                }
-                postStatus('success', `完成 ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+                const imgId = await quickTestSession.generate(async () => ({
+                    base64: await generateNovelImage({ scene, characterPrompts: [], negativePrompt: preset?.negativePrefix || '', params: preset?.params || {} }),
+                    imgId: generateImgId(),
+                    slotId: TEST_SLOT_ID,
+                    tags,
+                    positive: scene,
+                    negativePrompt: preset?.negativePrefix || '',
+                    source: 'quick-test',
+                }));
+                await pushTestHistory(imgId, 0);
+                postStatus('success', QUICK_TEST_COPY.generated);
             } catch (e) {
                 postStatus('error', e?.message);
             }
+            break;
+        }
+
+        case 'TEST_HISTORY':
+            await pushTestHistory(undefined, data.offset ?? 0);
+            break;
+
+        case 'TEST_RETRY_SAVE':
+            try {
+                await quickTestSession.save(data.imgId);
+                await pushTestHistory(data.imgId, 0);
+                postStatus('success', QUICK_TEST_COPY.saved);
+            } catch (error) {
+                console.error(QUICK_TEST_COPY.unsaved, error);
+                postStatus('error', error?.message);
+            }
+            break;
+
+        case 'OPEN_TEST_GALLERY': {
+            const refresh = () => observeBackgroundTask(sendCacheData(), { source: import.meta.url, operation: 'refreshTestGallery' });
+            await openGallery(TEST_SLOT_ID, null, { onSave: refresh, onDelete: refresh, onBecameEmpty: refresh }, data.imgId);
             break;
         }
     }
@@ -4087,14 +4273,14 @@ async function handleFrameMessage(event) {
 // 初始化与清理
 // ═══════════════════════════════════════════════════════════════════════════
 
-export async function openNovelDrawSettings() {
+export async function openNovelDrawSettings({ view } = {}) {
     try {
         await loadSettings();
         await loadSharedDrawSettings();
     } catch {
         return false;
     }
-    showOverlay();
+    showOverlay(view);
     return true;
 }
 
