@@ -1,5 +1,5 @@
 {
-  "buildId": "758c68fa160a92d3c72d",
+  "buildId": "e999ed515981f1c0ec89",
   "entries": {
     "apps/assistant": {
       "file": "apps/assistant-DBnEM2pO.js",
@@ -290,7 +290,7 @@
         "shared/protocol-CNWQIPGc.js",
         "shared/workspace-repository-RCSsbA29.js",
         "shared/settings-repository-C1xBBSBJ.js",
-        "shared/comfy-draw-JaD8smrk.js",
+        "shared/comfy-draw-D61-aNiz.js",
         "shared/message-toolbar-C7nU605C.js",
         "shared/novel-draw-BQ15nes-.js",
         "shared/sd-draw-Bge6beIL.js",
@@ -868,7 +868,7 @@
       "dynamicImports": [],
       "css": []
     },
-    "shared/comfy-draw-JaD8smrk.js": {
+    "shared/comfy-draw-D61-aNiz.js": {
       "imports": [
         "shared/preload-helper-CBBx94LT.js",
         "shared/constants-RJ4jNr01.js",
@@ -887,7 +887,7 @@
         "shared/async-errors-C4kfchr9.js"
       ],
       "dynamicImports": [
-        "shared/floating-panel-DOnbvdZM.js"
+        "shared/floating-panel-Cicr6mMZ.js"
       ],
       "css": []
     },
@@ -1064,9 +1064,9 @@
       "dynamicImports": [],
       "css": []
     },
-    "shared/floating-panel-DOnbvdZM.js": {
+    "shared/floating-panel-Cicr6mMZ.js": {
       "imports": [
-        "shared/comfy-draw-JaD8smrk.js",
+        "shared/comfy-draw-D61-aNiz.js",
         "shared/message-toolbar-C7nU605C.js",
         "shared/draw-common-BOXjyKMt.js",
         "shared/gallery-cache-DChWxUSN.js",

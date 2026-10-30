@@ -4479,14 +4479,6 @@ async function toggleEditPanel(container, show) {
             appendTagEditGroup(scrollWrap, { label: '追加 (post_prompt)', value: preview.postPrompt, type: 'post_prompt' });
         }
 
-        // 角色专属负向（uc）：放在所有编辑框最下面，每个角色固定一个框，方便随时新增
-        if (preview?.characterPrompts?.length > 0) {
-            preview.characterPrompts.forEach((char, i) => {
-                const name = char.name || `角色 ${i + 1}`;
-                appendTagEditGroup(scrollWrap, { label: `${name} 负向`, value: char.uc || '', type: 'uc', index: i });
-            });
-        }
-
         if (btnsPanel) {
             btnsPanel.style.opacity = '0.3';
             btnsPanel.style.pointerEvents = 'none';
