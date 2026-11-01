@@ -81,7 +81,7 @@ extension_settings[EXT_ID] = extension_settings[EXT_ID] || {
     enabled: true,
     recorded: { enabled: true },
     templateEditor: { enabled: true, characterBindings: {} },
-    tasks: { enabled: true, globalTasks: [], processedMessages: [], character_allowed_tasks: [] },
+    tasks: { enabled: true, globalTasks: [], processedMessages: [] },
     preview: { enabled: false },
     immersive: { enabled: false },
     xiaobaiOs: createDefaultXiaobaiOsSettings(),
@@ -715,7 +715,7 @@ async function toggleAllFeatures(enabled) {
         cleanupXiaobaiOs();
         cleanupChatMessageImages();
         cleanupAllResources();
-        if (window.messagePreviewCleanup) try { window.messagePreviewCleanup(); } catch (e) { console.warn({ source: import.meta.url, operation: "toggleAllFeatures" }, e); }
+        if (window.messagePreviewCleanup) try { window.messagePreviewCleanup({ detachFetch: false }); } catch (e) { console.warn({ source: import.meta.url, operation: "toggleAllFeatures" }, e); }
         if (window.buttonCollapseCleanup) try { window.buttonCollapseCleanup(); } catch (e) { console.warn({ source: import.meta.url, operation: "toggleAllFeatures" }, e); }
         try { cleanupVariablesPanel(); } catch (e) { console.warn({ source: import.meta.url, operation: "toggleAllFeatures" }, e); }
         try { cleanupVariablesCore(); } catch (e) { console.warn({ source: import.meta.url, operation: "toggleAllFeatures" }, e); }
@@ -806,7 +806,7 @@ async function setupSettings() {
         }, { source: import.meta.url, operation: "callback" }));
 
         const moduleConfigs = [
-            { id: 'xiaobaix_recorded_enabled', key: 'recorded' },
+            { id: 'xiaobaix_recorded_enabled', key: 'recorded', init: initMessagePreview },
             { id: 'xiaobaix_immersive_enabled', key: 'immersive', init: initImmersiveMode },
             { id: 'xiaobaix_preview_enabled', key: 'preview', init: initMessagePreview },
             { id: 'scheduled_tasks_enabled', key: 'tasks', init: initTasks },
@@ -840,7 +840,6 @@ async function setupSettings() {
                 }
                 if (!enabled && cleanup) cleanup();
                 if (enabled && init) await init();
-                if (CHAT_SURFACE_MANAGED && key === 'recorded' && enabled) initMessagePreview();
                 if (key === 'storySummary') {
                     $(document).trigger(STORY_SUMMARY_TOGGLE_EVENT, [enabled]);
                 }

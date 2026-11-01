@@ -34,7 +34,7 @@ import { PRESET_TASK_FIELD, PRESET_PROMPT_ORDER_CHARACTER_ID } from './task-stor
 // ═══════════════════════════════════════════════════════════════════════════
 
 const TASKS_MODULE_NAME = "xiaobaix-tasks";
-const defaultSettings = { enabled: true, globalTasks: [], processedMessages: [], character_allowed_tasks: [] };
+const defaultSettings = { enabled: true, globalTasks: [], processedMessages: [] };
 const CONFIG = { MAX_PROCESSED: 20, MAX_COOLDOWN: 10, CLEANUP_INTERVAL: 30000, TASK_COOLDOWN: 50 };
 
 // ── 自动补全 <<taskjs>> 包裹 开关 ─────────────────────────────
@@ -97,6 +97,7 @@ function holdTaskMutation(key) {
         const count = pendingTaskMutations.get(taskKey) || 0;
         if (count <= 1) pendingTaskMutations.delete(taskKey);
         else pendingTaskMutations.set(taskKey, count - 1);
+        requestPresetTaskStartup();
     };
 }
 // Host work and cleanup keep their own receipts until they actually settle.
@@ -237,7 +238,6 @@ function getStoredTaskSettings() {
     if (typeof t.enabled !== 'boolean') t.enabled = defaultSettings.enabled;
     if (!Array.isArray(t.globalTasks)) t.globalTasks = [];
     if (!Array.isArray(t.processedMessages)) t.processedMessages = [];
-    if (!Array.isArray(t.character_allowed_tasks)) t.character_allowed_tasks = [];
     return t;
 }
 
@@ -313,30 +313,50 @@ function getCharacterTasks(c = characters[this_chid]) {
     return c.data.extensions[TASKS_MODULE_NAME].tasks;
 }
 
-async function saveCharacterTasks(tasks, { signal, target } = {}) {
-    const characterId = this_chid;
-    const character = target?.character || characters[characterId];
+// Only writes to the same captured character wait for one another. Anonymous
+// row identities live only in the in-flight batch; nothing is added to task data.
+const characterTaskWrites = new WeakMap();
+
+async function saveCharacterTasks(tasks, { signal, target, mutation } = {}) {
+    throwIfSignalAborted(signal);
+    const character = target?.character || characters[this_chid];
     if (!character) throw new Error(TASK_SAVE_COPY.characterRequired);
-    {
-        await saveCharacterTasksConfirmed(character.avatar, TASKS_MODULE_NAME, tasks, signal);
+    const avatar = character.avatar;
+    const previousWrite = characterTaskWrites.get(character);
+    const identities = previousWrite?.identities || new WeakMap();
+    const current = getCharacterTasks(character);
+    const clone = (task, key = taskSaveKey(task, identities)) => {
+        const copy = structuredClone(task);
+        identities.set(copy, key);
+        return copy;
+    };
+    const base = current.map(task => clone(task));
+    const snapshot = tasks.map((task, index) => clone(task,
+        mutation?.index === index ? taskSaveKey(current[index], identities) : taskSaveKey(task, identities)));
+    const work = (previousWrite?.tail || Promise.resolve()).then(async () => {
+        throwIfSignalAborted(signal);
+        const merged = mergeTaskListChanges(base, snapshot, getCharacterTasks(character), mutation, identities);
+        await saveCharacterTasksConfirmed(avatar, TASKS_MODULE_NAME, merged, signal);
         // Match the host's two in-memory representations only after confirmation.
         if (character.json_data) {
             const json = JSON.parse(character.json_data);
             json.data ??= {};
             json.data.extensions ??= {};
-            json.data.extensions[TASKS_MODULE_NAME] = { tasks };
+            json.data.extensions[TASKS_MODULE_NAME] = { tasks: merged };
             character.json_data = JSON.stringify(json);
             if (characters[this_chid] === character) $('#character_json_data').val(character.json_data);
         }
-    }
-    character.data ??= {};
-    character.data.extensions ??= {};
-    character.data.extensions[TASKS_MODULE_NAME] = { tasks };
-    const settings = getSettings();
-    const avatar = character.avatar;
-    if (!avatar || settings.character_allowed_tasks?.includes(avatar)) return;
-    settings.character_allowed_tasks = [...(settings.character_allowed_tasks || []), avatar];
-    saveSettingsDebounced();
+        character.data ??= {};
+        character.data.extensions ??= {};
+        character.data.extensions[TASKS_MODULE_NAME] = { tasks: merged };
+    });
+    const release = () => {
+        if (characterTaskWrites.get(character) === write) characterTaskWrites.delete(character);
+    };
+    // A failed save rejects its caller without poisoning later submissions.
+    const write = { identities, tail: work.then(release, release) };
+    characterTaskWrites.set(character, write);
+    return await waitTaskSave(() => work, signal);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -598,26 +618,65 @@ const getTaskListByScope = (scope, target) => {
     return getSettings().globalTasks;
 };
 
-// Serialize task commits, not independent permission preferences.
+function taskSaveKey(task, identities) {
+    if (!identities) return task.id;
+    if (!identities.has(task)) identities.set(task, task.id || Symbol());
+    return identities.get(task);
+}
+
+// Rebase only the submitted changes. Untouched tasks, fields and ordering come
+// from the latest confirmed list, not from an older editor/toggle snapshot.
+function mergeTaskListChanges(base, snapshot, current, mutation, identities) {
+    const keyOf = task => taskSaveKey(task, identities);
+    const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+    const before = new Map(base.map(task => [keyOf(task), task]));
+    const latest = new Map(current.map(task => [keyOf(task), task]));
+    const desired = snapshot.map((task, index) => ({
+        task, key: mutation?.index === index ? keyOf(base[index]) : keyOf(task), index,
+    }));
+    const desiredKeys = new Set(desired.map(entry => entry.key));
+    const merged = new Map();
+    for (const { task, key, index } of desired) {
+        const previous = before.get(key), saved = latest.get(key);
+        // Explicit API/list assignments remain intentional even when they equal
+        // the old value (for example, enabling again while a disable is saving).
+        const fields = mutation?.index === index ? mutation.fields : [];
+        let updated;
+        if (same(task, previous) && fields.length === 0) updated = saved;
+        else if (!previous || !saved) updated = task;
+        else {
+            updated = { ...saved };
+            for (const field of new Set([...Object.keys(previous), ...Object.keys(task)])) {
+                if (!fields.includes(field) && same(previous[field], task[field])) continue;
+                if (Object.hasOwn(task, field)) updated = { ...updated, [field]: task[field] };
+                else delete updated[field];
+            }
+        }
+        if (!updated) continue;
+        identities?.set(updated, key);
+        merged.set(key, updated);
+    }
+    const oldOrder = base.filter(task => desiredKeys.has(keyOf(task))).map(keyOf);
+    const newOrder = desired.filter(entry => before.has(entry.key)).map(entry => entry.key);
+    if (oldOrder.length === newOrder.length && oldOrder.every((key, index) => key === newOrder[index])) {
+        return [
+            ...current.map(task => merged.get(keyOf(task)) || (!before.has(keyOf(task)) ? task : null)).filter(Boolean),
+            ...Array.from(merged).filter(([key]) => !latest.has(key)).map(([, task]) => task),
+        ];
+    }
+    return [...merged.values(), ...current.filter(task => !before.has(keyOf(task)) && !desiredKeys.has(keyOf(task)))];
+}
+
 let globalTaskWriteTail = Promise.resolve();
 
-async function persistTaskListByScope(scope, tasks, { signal, target } = {}) {
+async function persistTaskListByScope(scope, tasks, { signal, target, mutation } = {}) {
     throwIfSignalAborted(signal);
-    if (scope === 'character') return await saveCharacterTasks(tasks, { signal, target });
+    if (scope === 'character') return await saveCharacterTasks(tasks, { signal, target, mutation });
     if (scope === 'preset') return await savePresetTasks(tasks, { signal, target });
     const base = structuredClone(getSettings().globalTasks);
     const snapshot = tasks.filter(Boolean).map(task => ({ ...task, id: task.id || uuidv4() }));
     const work = globalTaskWriteTail.then(async () => {
-        // Another editor/API may have queued a change to a different task.
-        // Apply this list's changes rather than replaying an old full snapshot.
-        const current = getSettings().globalTasks;
-        const before = new Map(base.map(task => [task.id, task]));
-        const desiredIds = new Set(snapshot.map(task => task.id));
-        const merged = snapshot.map(task => JSON.stringify(task) === JSON.stringify(before.get(task.id))
-            ? current.find(item => item.id === task.id) : task).filter(Boolean);
-        for (const task of current) {
-            if (!before.has(task.id) && !desiredIds.has(task.id)) merged.push(task);
-        }
+        const merged = mergeTaskListChanges(base, snapshot, getSettings().globalTasks, mutation);
         await persistGlobalTaskList(merged, signal);
     });
     globalTaskWriteTail = work.then(() => {}, () => {});
@@ -734,9 +793,10 @@ function abortTaskRunEntry(entry) {
     return cleanupTaskRunOwner(entry?.taskKey, entry);
 }
 
-function resetTaskRun(taskName) {
+function resetTaskRun(taskName, { cancelStartup = true } = {}) {
     const taskKey = normalizeTaskKey(taskName);
     if (!taskKey) return { taskKey, clearedRuns: 0, clearedCallbacks: 0, clearedExecutions: 0 };
+    if (cancelStartup) presetTaskStartup?.pendingKeys.delete(taskKey);
     for (const execution of Array.from(__taskExecutionMap.get(taskKey) || [])) execution.abort.abort();
 
     let clearedRuns = 0;
@@ -761,7 +821,10 @@ function resetTaskRun(taskName) {
 }
 
 function resetAllTaskRuns() {
-    if (presetTaskStartup) presetTaskStartup.pending = false;
+    if (presetTaskStartup) {
+        presetTaskStartup.pending = false;
+        presetTaskStartup.pendingKeys.clear();
+    }
     for (const executions of Array.from(__taskExecutionMap.values())) {
         for (const execution of Array.from(executions)) execution.abort.abort();
     }
@@ -1341,8 +1404,7 @@ async function checkAndExecuteTasks(triggerContext = 'after_ai', overrideChatCha
 async function onMessageReceived(messageId) {
     if (typeof messageId !== 'number' || messageId < 0 || !chat[messageId]) return;
     const message = chat[messageId];
-    if (message.is_user || message.is_system || message.mes === '...' ||
-        (message.swipe_id !== undefined && message.swipe_id > 0)) return;
+    if (message.is_user || message.is_system || message.mes === '...') return;
     if (!isGloballyEnabled()) return;
     if (state.isCommandGenerated || isAnyTaskExecuting()) {
         logExecutionLockSkip('onMessageReceived', { triggerContext: 'after_ai', messageId, commandGenerated: state.isCommandGenerated });
@@ -1394,7 +1456,6 @@ async function onChatChanged(chatId) {
         state.processedMessagesSet.clear();
         const settings = getSettings();
         settings.processedMessages = [];
-        observeBackgroundTask(checkEmbeddedTasks(), { source: import.meta.url, operation: "callback" });
         refreshUI();
         observeBackgroundTask(checkAndExecuteTasks('chat_changed', false, false), { source: import.meta.url, operation: "callback" });
         requestAnimationFrame(() => requestAnimationFrame(() => { try { updateTaskBar(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "onChatChanged" }, caughtError); } }));
@@ -1426,26 +1487,49 @@ function finishPresetTaskInitialization(initialization) {
     requestPresetTaskStartup();
 }
 
+function reenablePresetTask(task, runtime) {
+    if (!runtime.preset || getTaskTriggerTiming(task, 'preset') !== PRESET_START_TIMING || !isTaskRuntimeActive(runtime)) return;
+    // Reset can end a visit without changing the selected preset. An explicit
+    // re-enable starts only this task, never replays the whole preset's startup.
+    if (presetTaskStartup?.preset !== runtime.preset) {
+        presetTaskStartup = { preset: runtime.preset, pending: false, ready: presetTaskStartup?.ready === true, pendingKeys: new Set() };
+    }
+    presetTaskStartup.pendingKeys.add(runtime.key);
+    requestPresetTaskStartup();
+}
+
 function requestPresetTaskStartup() {
-    if (!presetTaskStartup?.pending || presetTaskStartupQueued || presetTaskStartupRunning) return;
+    if (!presetTaskStartup || presetTaskStartupQueued || presetTaskStartupRunning) return;
+    if (!presetTaskStartup.pending && !Array.from(presetTaskStartup.pendingKeys).some(key => !isTaskMutationPending(key))) return;
     presetTaskStartupQueued = true;
     observeBackgroundTask(Promise.resolve().then(async () => {
         presetTaskStartupQueued = false;
         const activation = presetTaskStartup;
-        if (!activation?.pending || !activation.ready || !presetTaskHostReady || !presetTaskInitialization?.ready || !window.__XB_TASKS_INITIALIZED__
+        if (!activation || !activation.ready || !presetTaskHostReady || !presetTaskInitialization?.ready || !window.__XB_TASKS_INITIALIZED__
             || !isGloballyEnabled() || isAnyTaskExecuting()) return;
         if (!isTaskRuntimeActive({ preset: activation.preset })) return;
+        // One queue owns both entry and re-enable requests, including while a
+        // previous task awaits. This also deduplicates scripts with no JS owner.
+        const tasks = getPresetTasks();
+        const keys = new Set();
+        for (const task of tasks) {
+            if (getTaskTriggerTiming(task, 'preset') !== PRESET_START_TIMING) continue;
+            const key = captureTaskRuntime(task, 'preset').key;
+            keys.add(key);
+            if (activation.pending && !task.disabled) activation.pendingKeys.add(key);
+        }
+        for (const key of activation.pendingKeys) if (!keys.has(key)) activation.pendingKeys.delete(key);
         activation.pending = false;
         presetTaskStartupRunning = true;
         try {
-            const names = getPresetTasks().filter(task => getTaskTriggerTiming(task, 'preset') === PRESET_START_TIMING).map(task => task.name);
-            for (const name of names) {
-                if (!isTaskRuntimeActive({ preset: activation.preset })) break;
+            for (const name of tasks.map(task => task.name)) {
+                if (!isTaskRuntimeActive({ preset: activation.preset }) || !isGloballyEnabled()) break;
                 // An earlier startup may await. Read the next task only when it can run.
+                const runtime = captureTaskRuntime({ name }, 'preset');
+                if (!activation.pendingKeys.has(runtime.key) || isTaskMutationPending(runtime.key)) continue;
                 const task = getPresetTasks().find(item => item.name === name && getTaskTriggerTiming(item, 'preset') === PRESET_START_TIMING && !item.disabled);
-                if (!task) continue;
-                const runtime = captureTaskRuntime(task, 'preset');
-                if (isTaskMutationPending(runtime.key) || (__taskRunMap.get(runtime.key) && !__taskRunMap.get(runtime.key).cleaned)) continue;
+                activation.pendingKeys.delete(runtime.key);
+                if (!task || (__taskRunMap.get(runtime.key) && !__taskRunMap.get(runtime.key).cleaned)) continue;
                 await executeCommands(task.commands, task.name, runtime);
             }
         } finally {
@@ -1468,7 +1552,7 @@ function refreshPresetTasks({ hostReady = false, initialize = false, selection =
     state.lastTasksHash = '';
     refreshUI();
     if (initialize || imported || presetTaskStartup?.preset.name !== presetTaskBinding.name) {
-        presetTaskStartup = { preset: presetTaskBinding, pending: !!presetTaskBinding.name, ready: false };
+        presetTaskStartup = { preset: presetTaskBinding, pending: !!presetTaskBinding.name, ready: false, pendingKeys: new Set() };
     }
     // Selection stops the previous visit immediately. Startup waits for the host
     // to finish applying this preset's settings, rather than an earlier AFTER event.
@@ -1948,7 +2032,9 @@ async function saveTaskFromEditor(task, scope, edit, signal) {
     }
 
     // A failed save/source removal leaves the original instance usable.
-    if (shouldResetPreviousRun || taskTypeChanged) resetTaskRun(previousRuntime?.key);
+    if (shouldResetPreviousRun || taskTypeChanged) resetTaskRun(previousRuntime?.key, {
+        cancelStartup: taskTypeChanged || task.disabled === true || normalizeTaskKey(previousName) !== normalizeTaskKey(task.name),
+    });
     edit.task = task;
     edit.scope = targetScope;
     edit.isEdit = true;
@@ -1999,50 +2085,6 @@ async function deleteTask(index, scope) {
 }
 
 const getAllTaskNames = () => allTasks().filter(t => !t.disabled).map(t => t.name);
-
-// ═══════════════════════════════════════════════════════════════════════════
-// 嵌入式任务
-// ═══════════════════════════════════════════════════════════════════════════
-
-async function checkEmbeddedTasks() {
-    if (this_chid == null || !characters[this_chid]) return;
-    const avatar = characters[this_chid]?.avatar;
-    const tasks = characters[this_chid]?.data?.extensions?.[TASKS_MODULE_NAME]?.tasks;
-
-    if (Array.isArray(tasks) && tasks.length > 0 && avatar) {
-        const settings = getSettings();
-        settings.character_allowed_tasks ??= [];
-
-        if (!settings.character_allowed_tasks.includes(avatar)) {
-            const checkKey = `AlertTasks_${avatar}`;
-            if (!accountStorage.getItem(checkKey)) {
-                accountStorage.setItem(checkKey, 'true');
-                let result;
-                try {
-                    const templateFilePath = `scripts/extensions/third-party/LittleWhiteBox/modules/scheduled-tasks/embedded-tasks.html`;
-                    const templateContent = await fetch(templateFilePath).then(r => r.text());
-                    const templateElement = $(templateContent);
-                    const taskListContainer = templateElement.find('#embedded-tasks-list');
-                    tasks.forEach(task => {
-                        const taskPreview = $('#task_preview_template').children().first().clone();
-                        taskPreview.find('.task-preview-name').text(task.name);
-                        taskPreview.find('.task-preview-interval').text(`(每${task.interval}回合)`);
-                        taskPreview.find('.task-preview-commands').text(task.commands);
-                        taskListContainer.append(taskPreview);
-                    });
-                    result = await callGenericPopup(templateElement, POPUP_TYPE.CONFIRM, '', { okButton: '允许' });
-                } catch {
-                    result = await callGenericPopup(`此角色包含 ${tasks.length} 个定时任务。是否允许使用？`, POPUP_TYPE.CONFIRM, '', { okButton: '允许' });
-                }
-                if (result) {
-                    settings.character_allowed_tasks.push(avatar);
-                    saveSettingsDebounced();
-                }
-            }
-        }
-    }
-    refreshTaskLists();
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 云端任务
@@ -2290,18 +2332,6 @@ function onMessageSwiped() {
     clearAllExecutionRecords();
 }
 
-function onCharacterDeleted({ character }) {
-    const avatar = character?.avatar;
-    const settings = getSettings();
-    if (avatar && settings.character_allowed_tasks?.includes(avatar)) {
-        const index = settings.character_allowed_tasks.indexOf(avatar);
-        if (index !== -1) {
-            settings.character_allowed_tasks.splice(index, 1);
-            saveSettingsDebounced();
-        }
-    }
-}
-
 function cleanup() {
     presetTaskInitialization = null;
     delete window.__XB_TASKS_INITIALIZED__;
@@ -2340,6 +2370,50 @@ function cleanup() {
 // ═══════════════════════════════════════════════════════════════════════════
 // 公共 API
 // ═══════════════════════════════════════════════════════════════════════════
+
+// Both ID-based list controls and the existing name-based API use this mutation
+// path. The resolver retains each caller's identity rule across a pending save.
+async function setTaskProps(resolveTask, props, name) {
+    const patch = props || {};
+    const initialHit = resolveTask();
+    const disabling = !!patch.disabled && initialHit && !initialHit.task.disabled;
+    const enabling = patch.disabled === false && initialHit?.task.disabled === true;
+    const initialRuntime = initialHit ? captureTaskRuntime(initialHit.task, initialHit.scope) : null;
+    const initialKey = initialRuntime?.key;
+    let release = disabling || enabling ? holdTaskMutation(initialKey) : null;
+    // Explicit stop remains immediate, even if another save is in flight.
+    if (disabling) resetTaskRun(initialKey);
+    try {
+        if (initialHit?.scope === 'global') await globalTaskWriteTail;
+        const hit = resolveTask();
+        if (!hit) throw new Error(`找不到任务: ${name}`);
+        const previousKey = captureTaskRuntime(hit.task, hit.scope).key;
+        if (release && previousKey !== initialKey) {
+            // The ID-selected row may have been renamed by the preceding save.
+            // Move only this task's pending mutation/stop to its current run key.
+            const releasePrevious = release;
+            release = holdTaskMutation(previousKey);
+            releasePrevious();
+            if (disabling) resetTaskRun(previousKey);
+        }
+        const updated = { ...hit.task, ...patch };
+        const task = Object.hasOwn(patch, 'triggerTiming')
+            ? setTaskTriggerTiming(updated, patch.triggerTiming, hit.scope) : updated;
+        const runtime = captureTaskRuntime(task, hit.scope);
+        const list = hit.list.map((entry, index) => index === hit.index ? task : entry);
+        await persistTaskListByScope(hit.scope, list, {
+            mutation: { index: hit.index, fields: Object.keys(patch) },
+        });
+        if (Object.hasOwn(patch, 'commands') || normalizeTaskKey(task.name) !== normalizeTaskKey(hit.task.name)) {
+            resetTaskRun(previousKey, { cancelStartup: normalizeTaskKey(task.name) !== normalizeTaskKey(hit.task.name) });
+        }
+        if (enabling) reenablePresetTask(task, runtime);
+        refreshTaskLists();
+        return { ok: true, scope: hit.scope, name: task.name };
+    } finally {
+        release?.();
+    }
+}
 
 (function () {
     if (window.__XB_TASKS_FACADE__) return;
@@ -2400,31 +2474,7 @@ function cleanup() {
     }
 
     async function setProps(name, props, scope = 'all') {
-        const patch = props || {};
-        const initialHit = find(name, scope);
-        const disabling = !!patch.disabled && initialHit && !initialHit.task.disabled;
-        const initialKey = initialHit ? captureTaskRuntime(initialHit.task, initialHit.scope).key : null;
-        const release = disabling ? holdTaskMutation(initialKey) : null;
-        // Explicit stop remains immediate, even if another save is in flight.
-        if (disabling) resetTaskRun(initialKey);
-        try {
-            if (initialHit?.scope === 'global') await globalTaskWriteTail;
-            const hit = find(name, scope);
-            if (!hit) throw new Error(`找不到任务: ${name}`);
-            const previousKey = captureTaskRuntime(hit.task, hit.scope).key;
-            const updated = { ...hit.task, ...patch };
-            const task = Object.hasOwn(patch, 'triggerTiming')
-                ? setTaskTriggerTiming(updated, patch.triggerTiming, hit.scope) : updated;
-            const list = hit.list.map((entry, index) => index === hit.index ? task : entry);
-            await persistTaskListByScope(hit.scope, list);
-            if (Object.hasOwn(patch, 'commands') || normalizeTaskKey(task.name) !== normalizeTaskKey(hit.task.name)) {
-                resetTaskRun(previousKey);
-            }
-            refreshTaskLists();
-            return { ok: true, scope: hit.scope, name: task.name };
-        } finally {
-            release?.();
-        }
+        return await setTaskProps(() => find(name, scope), props, name);
     }
 
     async function exec(name) {
@@ -2646,7 +2696,41 @@ function registerSlashCommands() {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export function initTaskSettings() {
+    // Retire the former character consent records from released versions once at setup.
+    const settings = extension_settings[EXT_ID]?.tasks;
+    if (settings && Object.hasOwn(settings, 'character_allowed_tasks')) {
+        delete settings.character_allowed_tasks;
+        saveSettingsDebounced();
+    }
+    for (const key of Object.keys(accountStorage.getState())) {
+        if (key.startsWith('AlertTasks_')) accountStorage.removeItem(key);
+    }
     initPresetTaskEvents(refreshPresetTasks, PresetTasksStore.flush, PresetTasksStore.imported);
+}
+
+function taskListToggleHandler(scope) {
+    return observeAsyncCallback(async function () {
+        const checkbox = $(this);
+        const id = checkbox.closest('.task-item').attr('data-task-id');
+        const resolveTask = () => {
+            const list = getTaskListByScope(scope);
+            const index = list.findIndex(item => item?.id === id);
+            return index < 0 ? null : { scope, list, index, task: list[index] };
+        };
+        const task = resolveTask()?.task;
+        if (!task) return;
+        checkbox.prop('disabled', true);
+        try {
+            await setTaskProps(resolveTask, { disabled: checkbox.prop('checked') }, task.name);
+        } catch (error) {
+            toastr.error(TASK_SAVE_COPY.failed);
+            throw error;
+        } finally {
+            checkbox.prop('disabled', false);
+            state.lastTasksHash = '';
+            refreshTaskLists();
+        }
+    }, { source: import.meta.url, operation: 'toggleTask', scope });
 }
 
 async function initTasks() {
@@ -2697,15 +2781,7 @@ async function initTasks() {
     });
 
     $('#global_tasks_list').off('.xbTasks')
-        .on('input.xbTasks', '.disable_task', observeAsyncCallback(async function () {
-            const id = $(this).closest('.task-item').attr('data-task-id');
-            const task = getSettings().globalTasks.find(item => item?.id === id);
-            if (task) {
-                await window.XBTasks.setProps(task.name, { disabled: $(this).prop('checked') }, 'global');
-                state.lastTasksHash = '';
-                refreshTaskLists();
-            }
-        }, { source: import.meta.url, operation: 'toggleGlobalTask' }))
+        .on('input.xbTasks', '.disable_task', taskListToggleHandler('global'))
         .on('click.xbTasks', '.edit_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getSettings().globalTasks;
@@ -2726,21 +2802,7 @@ async function initTasks() {
         });
 
     $('#character_tasks_list').off('.xbTasks')
-        .on('input.xbTasks', '.disable_task', observeAsyncCallback(async function () {
-            const id = $(this).closest('.task-item').attr('data-task-id');
-            const list = getCharacterTasks();
-            const idx = list.findIndex(t => t?.id === id);
-            if (idx !== -1) {
-                const taskName = list[idx].name;
-                const wasDisabled = !!list[idx].disabled;
-                const disabled = $(this).prop('checked');
-                list[idx].disabled = disabled;
-                if (!wasDisabled && disabled) resetTaskRun(taskName);
-                await saveCharacterTasks(list);
-                state.lastTasksHash = '';
-                refreshTaskLists();
-            }
-        }, { source: import.meta.url, operation: "callback" }))
+        .on('input.xbTasks', '.disable_task', taskListToggleHandler('character'))
         .on('click.xbTasks', '.edit_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getCharacterTasks();
@@ -2761,21 +2823,7 @@ async function initTasks() {
         });
 
     $('#preset_tasks_list').off('.xbTasks')
-        .on('input.xbTasks', '.disable_task', observeAsyncCallback(async function () {
-            const id = $(this).closest('.task-item').attr('data-task-id');
-            const list = getPresetTasks();
-            const idx = list.findIndex(t => t?.id === id);
-            if (idx !== -1) {
-                const taskKey = captureTaskRuntime(list[idx], 'preset').key;
-                const wasDisabled = !!list[idx].disabled;
-                const disabled = $(this).prop('checked');
-                list[idx].disabled = disabled;
-                if (!wasDisabled && disabled) resetTaskRun(taskKey);
-                await savePresetTasks([...list]);
-                state.lastTasksHash = '';
-                refreshTaskLists();
-            }
-        }, { source: import.meta.url, operation: "callback" }))
+        .on('input.xbTasks', '.disable_task', taskListToggleHandler('preset'))
         .on('click.xbTasks', '.edit_task', function () {
             const id = $(this).closest('.task-item').attr('data-task-id');
             const list = getPresetTasks();
@@ -2808,15 +2856,9 @@ async function initTasks() {
     events.on(event_types.CHAT_CREATED, onChatCreated);
     events.on(event_types.MESSAGE_DELETED, onMessageDeleted);
     events.on(event_types.MESSAGE_SWIPED, onMessageSwiped);
-    events.on(event_types.CHARACTER_DELETED, onCharacterDeleted);
 
     $(window).off('beforeunload.xbTasks').on('beforeunload.xbTasks', cleanup);
     registerSlashCommands();
-    const embeddedTasksTimer = setTimeout(() => {
-        state.initTimers.delete(embeddedTasksTimer);
-        if (window.__XB_TASKS_INITIALIZED__) observeBackgroundTask(checkEmbeddedTasks(), { source: import.meta.url, operation: "callback" });
-    }, 1000);
-    state.initTimers.add(embeddedTasksTimer);
 
     const pluginInitTimer = setTimeout(() => {
         state.initTimers.delete(pluginInitTimer);

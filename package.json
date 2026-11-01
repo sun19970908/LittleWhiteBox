@@ -53,10 +53,12 @@
         "@codemirror/state": "^6.6.0",
         "@codemirror/view": "^6.41.1",
         "@google/genai": "^1.50.1",
+        "@jitl/quickjs-singlefile-cjs-release-sync": "0.32.0",
         "codemirror": "^6.0.2",
         "gpt-tokenizer": "^3.4.0",
         "js-sha256": "^0.11.1",
         "openai": "^6.44.0",
+        "quickjs-emscripten-core": "0.32.0",
         "showdown": "^2.1.0",
         "three": "0.180.0"
     },

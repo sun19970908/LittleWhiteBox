@@ -138,7 +138,7 @@ module.exports = {
             },
         },
         {
-            files: ['server-plugin/**/*.js'],
+            files: ['server-plugin/**/*.js', 'modules/draw/server/**/*.js', 'modules/draw/server/**/*.mjs'],
             env: {
                 browser: false,
                 node: true,

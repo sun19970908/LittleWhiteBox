@@ -82,14 +82,14 @@ function presetFile(t) {
 // - Individual request deadlines allow one recovery read; a closed editor's delayed outcome cannot alter another editor (lost edits/tasks).
 // - Ordinary preset edits preserve queued task edits and their own fields; only import/delete supersede a batch (lost edits).
 // - Failed character writes leave data/json_data untouched; successful edits publish the same task field to both (lost edits).
-// - 已确认角色内容不因允许记录失败而回滚或阻塞本次迁移，已获准角色不重复写设置（误报结果、丢修改）。
 // - 回执丢失只查询一次；仍未知时保留候选及旧脚本，重试不丢源任务、不重复创建（丢任务）。
-// - 许可设置卡住不阻塞任何类型的任务保存（无法保存用户修改）。
+// - Former consent records are retired without changing unrelated account data or current task gates.
+// - Explicit preset-entry re-enabling starts only its acknowledged task, without replaying other timings or stopped siblings.
 const compile = (file, extra = '') => transformSync(fs.readFileSync(new URL(file, import.meta.url), 'utf8') + extra, {
     format: 'cjs', target: 'es2022', define: { 'import.meta.url': JSON.stringify(file) },
 }).code;
 // Expose private entry points to the harness without replacing their implementations.
-const runtimeCode = compile('./scheduled-tasks.js', '\nexport { checkAndExecuteTasks, state, __taskRunMap, __taskExecutionMap, deleteTask, showTaskEditor, exportSingleTask, importGlobalTasks, onMessageReceived, refreshPresetTasks, beginPresetTaskInitialization, finishPresetTaskInitialization, PresetTasksStore };');
+const runtimeCode = compile('./scheduled-tasks.js', '\nexport { checkAndExecuteTasks, state, __taskRunMap, __taskExecutionMap, deleteTask, showTaskEditor, exportSingleTask, importGlobalTasks, onMessageReceived, onGenerationEnded, onMessageSwiped, onMessageDeleted, refreshPresetTasks, beginPresetTaskInitialization, finishPresetTaskInitialization, PresetTasksStore, taskListToggleHandler, saveCharacterTasks };');
 const eventCode = compile('./preset-task-events.js');
 const slashCode = compile('../../core/slash-command.js');
 const deferred = () => {
@@ -99,9 +99,11 @@ const deferred = () => {
 };
 const settle = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
-function harness(t, { taskStorage } = {}) {
+function harness(t, { taskStorage, initialSettings = {}, accountState = {}, date = Date } = {}) {
     const { document } = parseHTML('<html><head></head><body></body></html>');
-    const errors = [], warnings = [], permissionWrites = [];
+    const errors = [], warnings = [];
+    const accountRecords = { ...accountState };
+    let settingsSaves = 0;
     const win = new EventTarget();
     Object.assign(win, { document, probes: {}, starts: {}, stops: {}, signals: {}, fetch: () => 'original' });
     const emitter = new EventEmitter();
@@ -140,6 +142,10 @@ function harness(t, { taskStorage } = {}) {
     };
     };
     const $ = target => {
+        if (target && Object.hasOwn(target, 'taskId')) return {
+            closest: () => ({ attr: () => target.taskId }),
+            prop(key, value) { if (arguments.length === 1) return target[key]; target[key] = value; return this; },
+        };
         if (target === '#task_editor_template') return { clone() { editor = makeEditor(); return editor; } };
         const chain = { 0: document.createElement('div'), length: 0 };
         for (const method of ['children', 'first', 'clone', 'attr', 'text', 'find', 'prop', 'empty', 'append', 'val']) chain[method] = () => chain;
@@ -156,11 +162,11 @@ function harness(t, { taskStorage } = {}) {
         getCompletionPresetByName: name => data.get(name),
         savePreset: async (name, value, { skipUpdate } = {}) => { if (!skipUpdate) data.set(name, structuredClone(value)); },
     };
-    const settings = { enabled: true, globalTasks: globals, processedMessages: [], character_allowed_tasks: [] };
+    const settings = { enabled: true, globalTasks: globals, processedMessages: [], ...initialSettings };
     const calls = [];
     const downloads = [];
     const host = {
-        saveSettingsDebounced() {}, saveSettings: async () => { await box.fetch('/api/settings/save', { method: 'POST', body: JSON.stringify({ extension_settings: extensions.extension_settings }) }); },
+        saveSettingsDebounced() { settingsSaves++; }, saveSettings: async () => { await box.fetch('/api/settings/save', { method: 'POST', body: JSON.stringify({ extension_settings: extensions.extension_settings }) }); },
         getRequestHeaders: () => ({}), characters: [], this_chid: null,
         chat: [{ is_user: true }, { is_user: false }], callPopup: async () => true,
         eventSource: emitter, event_types,
@@ -210,6 +216,9 @@ function harness(t, { taskStorage } = {}) {
         } },
         '../../../../../preset-manager.js': { getPresetManager: () => manager },
         '../../../../../openai.js': { oai_settings: liveSettings },
+        '../../../../../util/AccountStorage.js': { accountStorage: {
+            getState: () => ({ ...accountRecords }), removeItem: key => { delete accountRecords[key]; },
+        } },
         '../../../../../utils.js': { uuidv4: randomUUID, debounce: fn => fn, download: data => downloads.push(JSON.parse(data)), getFileText: async file => file },
         '../../core/constants.js': { EXT_ID: 'test' },
         '../../core/event-manager.js': { createModuleEvents: () => ({ cleanup() {} }), event_types },
@@ -220,12 +229,11 @@ function harness(t, { taskStorage } = {}) {
         '../../shared/common/async-errors.js': { observeAsyncCallback: fn => fn, observeBackgroundTask: (work, context) => {
             const completion = Promise.resolve(work).catch(error => errors.push(error));
             if (context.operation === 'showTaskEditor') editorCompletion = completion;
-            if (context.operation === 'rememberCharacterTaskPermission') permissionWrites.push(completion);
             return completion;
         } },
     };
     const box = vm.createContext({
-        window: win, document, $, console, AbortController, AbortSignal, CustomEvent, structuredClone, Headers, Request, Response, URL, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
+        window: win, document, $, console, Date: date, AbortController, AbortSignal, CustomEvent, structuredClone, Headers, Request, Response, URL, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
         localStorage: { getItem: () => null },
         toastr: { error: error => errors.push(error), warning: warning => warnings.push(warning), success() {}, info() {} },
         setTimeout: (fn, delay, ...args) => { const id = ++timerId; timers.set(id, { fn, delay, args }); return id; },
@@ -286,7 +294,11 @@ function harness(t, { taskStorage } = {}) {
     return {
         win, api, calls, downloads, timers, intervals, storage, emitter, event_types, manager, errors, warnings, liveSettings, extensions, host, get editor() { return editor; }, transport, requests,
         savedSettings: () => JSON.parse(savedSettings),
-        waitForPermissions: () => Promise.all(permissionWrites),
+        accountRecords, settingsSaves: () => settingsSaves,
+        toggle(scope, taskId, checked) {
+            const checkbox = { taskId, checked, disabled: false };
+            return { checkbox, completion: api.taskListToggleHandler(scope).call(checkbox) };
+        },
         setFetch: fetch => { box.fetch = fetch; },
         getFetch: () => box.fetch,
         savedCharacter: avatar => savedCharacters.get(avatar),
@@ -711,20 +723,226 @@ test('pending global metadata is not executable, and closing cannot affect a new
     assert.equal(h.win.signals.old.aborted, true);
 });
 
-test('permission preferences never join the content save queue', async t => {
-    const h = harness(t), permission = deferred();
-    let permissionWrites = 0;
-    h.host.saveSettingsDebounced = () => { permissionWrites++; permission.promise.catch(error => h.errors.push(error)); };
-    h.character(task('card', 'old')); h.global(task('global', 'old')); h.preset('A', [task('preset', 'old')]); h.change('A');
-    await h.saveInEditor(h.win.XBTasks.find('card', 'character').task, 'character', 'card edit');
+test('retiring character consent preserves unrelated data and does not recreate permission settings', async t => {
+    const h = harness(t, {
+        initialSettings: { character_allowed_tasks: ['test.png'] },
+        accountState: { 'AlertTasks_test.png': 'true', 'AlertTasks_deleted.png': 'true', AlertRegex_keep: 'true', preference: 'keep' },
+    });
+    assert.equal(Object.hasOwn(h.extensions.extension_settings.test.tasks, 'character_allowed_tasks'), false);
+    assert.deepEqual(h.accountRecords, { AlertRegex_keep: 'true', preference: 'keep' });
+    assert.equal(h.settingsSaves(), 1);
+    h.api.initTaskSettings();
+    assert.equal(h.settingsSaves(), 1);
+    h.character(task('card', 'window.starts.card = 1;'));
+    await h.api.checkAndExecuteTasks('plugin_initialized');
+    assert.equal(h.win.starts.card, 1);
+    await h.saveInEditor(h.win.XBTasks.find('card', 'character').task, 'character', 'replacement');
     assert.equal(h.popup().closed, true);
-    assert.equal(permissionWrites, 1);
-    for (const [name, scope] of [['global', 'global'], ['preset', 'preset'], ['card', 'character']]) {
-        await h.saveInEditor(h.win.XBTasks.find(name, scope).task, scope, 'edited again');
-        assert.equal(h.popup().closed, true);
+    assert.equal(h.settingsSaves(), 1);
+    assert.equal(Object.hasOwn(h.extensions.extension_settings.test.tasks, 'character_allowed_tasks'), false);
+});
+
+test('task-list toggles in every scope publish only acknowledged enabled state and allow retry', async t => {
+    for (const scope of ['global', 'character', 'preset']) await t.test(scope, async t => {
+        const h = harness(t), gate = deferred(), sent = deferred();
+        const original = { ...task('panel', resident('panel')), disabled: true };
+        if (scope === 'preset') { h.preset('A', [original]); h.change('A'); }
+        else h[scope](original);
+        const previous = h.win.XBTasks.find('panel', scope).task;
+        const fetch = h.getFetch();
+        const endpoint = scope === 'global' ? '/api/settings/save' : scope === 'character' ? '/api/characters/merge-attributes' : '/api/presets/save';
+        h.setFetch(async (url, options) => {
+            if (url === endpoint) { sent.resolve(); await gate.promise; return Response.json({}, { status: 503 }); }
+            return fetch(url, options);
+        });
+        const toggling = h.toggle(scope, original.id, false);
+        const failed = assert.rejects(toggling.completion);
+        await sent.promise;
+        assert.equal(toggling.checkbox.disabled, true);
+        assert.equal(previous.disabled, true);
+        assert.equal(h.win.XBTasks.find('panel', scope).task.disabled, true);
+        gate.resolve(); await failed;
+        assert.equal(toggling.checkbox.disabled, false);
+        assert.equal(h.win.XBTasks.find('panel', scope).task.disabled, true);
+        assert.equal(h.win.starts.panel, undefined);
+        h.setFetch(fetch);
+        await h.toggle(scope, original.id, false).completion;
+        assert.equal(h.win.XBTasks.find('panel', scope).task.disabled, false);
+        assert.equal(previous.disabled, true);
+        assert.equal(h.win.starts.panel, undefined); // plugin_init is not an enable callback.
+    });
+});
+
+test('concurrent character toggles preserve independent edits without blocking other tasks or characters', async t => {
+    for (const firstSucceeds of [true, false]) await t.test(String(firstSucceeds), async t => {
+        const h = harness(t), gate = deferred(), sent = deferred();
+        t.after(() => gate.resolve());
+        const originals = [
+            { ...task('first', 'window.first = true;'), disabled: false, x: { author: ['keep'] }, authorData: { first: true } },
+            { ...task('second', 'window.second = true;'), disabled: false, x: { second: 'keep' } },
+            { ...task('resident', resident('resident')), disabled: false, authorData: { resident: true } },
+        ];
+        h.character(originals[0], 'first.png');
+        h.host.characters[0].data.extensions['xiaobaix-tasks'].tasks.push(...originals.slice(1));
+        h.savedCharacter('first.png').data.extensions['xiaobaix-tasks'].tasks = structuredClone(originals);
+        await h.win.XBTasks.exec('resident'); h.flushRecords();
+        const transport = h.transport.character;
+        let firstWrite = true;
+        h.transport.character = async (avatar, data) => {
+            if (avatar === 'first.png' && firstWrite) {
+                firstWrite = false; sent.resolve(); await gate.promise;
+                if (!firstSucceeds) throw new Error('offline');
+            }
+            await transport(avatar, data);
+        };
+        const first = h.toggle('character', 'first', true);
+        const firstOutcome = firstSucceeds ? first.completion : assert.rejects(first.completion);
+        await sent.promise;
+        const second = h.toggle('character', 'second', true);
+        await settle();
+        assert.equal(h.win.XBTasks.find('first', 'character').task.disabled, false);
+        assert.equal(h.win.XBTasks.find('second', 'character').task.disabled, false);
+        h.win.dispatchEvent(new Event('probe')); await settle();
+        assert.equal(h.win.probes.resident, 1);
+        assert.equal(h.win.signals.resident.aborted, false);
+        const other = { ...task('other', 'window.other = true;'), disabled: false };
+        h.character(other, 'other.png', 1);
+        await h.toggle('character', other.id, true).completion;
+        assert.equal(h.savedCharacter('other.png').data.extensions['xiaobaix-tasks'].tasks[0].disabled, true);
+        assert.equal(h.win.signals.resident.aborted, false);
+        h.host.this_chid = 0;
+        gate.resolve(); await firstOutcome; await second.completion;
+        const expected = originals.map(task => ({ ...task, disabled: task.id === 'second' || (task.id === 'first' && firstSucceeds) }));
+        assert.deepEqual(await h.win.XBTasks.dump('character'), expected);
+        assert.deepEqual(h.savedCharacter('first.png').data.extensions['xiaobaix-tasks'].tasks, expected);
+        assert.equal(h.win.signals.resident.aborted, false);
+        assert.equal(h.win.stops.resident, undefined);
+    });
+});
+
+test('a queued character toggle preserves a pending script edit, sibling metadata and confirmed reorder', async t => {
+    const h = harness(t), gate = deferred(), sent = deferred();
+    t.after(() => gate.resolve());
+    const panel = { ...task('panel', 'old script'), disabled: false, authorData: { keep: true } };
+    const sibling = { ...task('sibling', 'sibling script'), disabled: false, authorData: { version: 1 } };
+    h.character(panel);
+    h.host.characters[0].data.extensions['xiaobaix-tasks'].tasks.push(sibling);
+    h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks = structuredClone([panel, sibling]);
+    const transport = h.transport.character;
+    let firstWrite = true;
+    h.transport.character = async (avatar, data) => {
+        if (firstWrite) { firstWrite = false; sent.resolve(); await gate.promise; }
+        await transport(avatar, data);
+    };
+    const edited = [{ ...sibling, authorData: { version: 2 } }, { ...panel, commands: 'new script' }];
+    const saving = h.api.saveCharacterTasks(edited);
+    await sent.promise;
+    const toggling = h.toggle('character', panel.id, true);
+    await settle();
+    assert.deepEqual(await h.win.XBTasks.dump('character'), [panel, sibling]);
+    gate.resolve(); await saving; await toggling.completion;
+    const expected = [edited[0], { ...edited[1], disabled: true }];
+    assert.deepEqual(await h.win.XBTasks.dump('character'), expected);
+    assert.deepEqual(h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks, expected);
+});
+
+test('a queued explicit character assignment can restore the original value without an ID requirement', async t => {
+    for (const withId of [true, false]) await t.test(String(withId), async t => {
+        const h = harness(t), gate = deferred(), sent = deferred();
+        t.after(() => gate.resolve());
+        const original = { ...task('panel', 'unchanged script'), disabled: false, authorData: { keep: true } };
+        if (!withId) delete original.id;
+        h.character(original);
+        const transport = h.transport.character;
+        let firstWrite = true;
+        h.transport.character = async (avatar, data) => {
+            if (firstWrite) { firstWrite = false; sent.resolve(); await gate.promise; }
+            await transport(avatar, data);
+        };
+        const disabling = h.win.XBTasks.setProps('panel', { disabled: true }, 'character');
+        await sent.promise;
+        const enabling = h.win.XBTasks.setProps('panel', { disabled: false }, 'character');
+        gate.resolve(); await disabling; await enabling;
+        const content = tasks => JSON.parse(JSON.stringify(tasks)).map(task => {
+            if (!withId) delete task.id;
+            return task;
+        });
+        assert.deepEqual(content(await h.win.XBTasks.dump('character')), content([original]));
+        assert.deepEqual(content(h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks), content([original]));
+    });
+});
+
+test('idless same-name character tasks preserve distinct content and list position when saving', async t => {
+    for (const operation of ['sibling-toggle', 'rename-first']) await t.test(operation, async t => {
+        const h = harness(t);
+        const first = { ...task('same name', 'first script'), extensions: { first: ['keep'] } };
+        const second = { ...task('same name', 'second script'), extensions: { second: ['keep'] } };
+        delete first.id; delete second.id;
+        const originals = [first, second, { ...task('sibling', 'sibling script'), disabled: false }];
+        h.character(first);
+        h.host.characters[0].data.extensions['xiaobaix-tasks'].tasks.push(...originals.slice(1));
+        h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks = structuredClone(originals);
+        const expected = originals.map((task, index) => operation === 'rename-first' && index === 0
+            ? { ...task, name: 'renamed' } : operation === 'sibling-toggle' && index === 2
+                ? { ...task, disabled: true } : task);
+        if (operation === 'sibling-toggle') await h.toggle('character', 'sibling', true).completion;
+        else await h.win.XBTasks.setProps('same name', { name: 'renamed' }, 'character');
+        const content = tasks => JSON.parse(JSON.stringify(tasks)).map(task => { delete task.id; return task; });
+        assert.deepEqual(content(await h.win.XBTasks.dump('character')), content(expected));
+        assert.deepEqual(content(h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks), content(expected));
+    });
+});
+
+test('imported same-name list rows keep their ID identity while the name API keeps its existing lookup', async t => {
+    for (const scope of ['global', 'character', 'preset']) await t.test(scope, async t => {
+        const h = harness(t);
+        if (scope === 'character') h.character(task('unrelated', ''));
+        if (scope === 'preset') { h.preset('A', []); h.change('A'); }
+        const file = JSON.stringify({ type: scope, tasks: [{ ...task('same name', ''), commands: '/same', triggerTiming: 'after_ai' }] });
+        await h.api.importGlobalTasks(file); await h.api.importGlobalTasks(file);
+        const before = await h.win.XBTasks.dump(scope);
+        const [first, second] = before.filter(task => task.name === 'same name');
+        assert.ok(first && second);
+        assert.notEqual(first.id, second.id);
+        await h.toggle(scope, second.id, true).completion;
+        const toggled = before.map(task => task.id === second.id ? { ...task, disabled: true } : task);
+        const snapshot = tasks => JSON.parse(JSON.stringify(tasks));
+        assert.deepEqual(snapshot(await h.win.XBTasks.dump(scope)), snapshot(toggled));
+        await h.win.XBTasks.setProps('same name', { interval: 3 }, scope);
+        assert.deepEqual(snapshot(await h.win.XBTasks.dump(scope)), snapshot(toggled.map(task => task.id === first.id ? { ...task, interval: 3 } : task)));
+    });
+});
+
+test('an ID-selected global stop follows a queued rename without blocking unrelated tasks', async t => {
+    const h = harness(t), renamed = deferred(), firstSent = deferred(), stopped = deferred(), secondSent = deferred();
+    t.after(() => { renamed.resolve(); stopped.resolve(); });
+    h.global({ ...task('old', ''), id: 'stable-id', commands: '/must-not-run', triggerTiming: 'after_ai', disabled: false });
+    h.global({ ...task('unrelated', ''), commands: '/unrelated', triggerTiming: 'after_ai' });
+    const fetch = h.getFetch();
+    let writes = 0;
+    h.setFetch(async (url, options) => {
+        if (url === '/api/settings/save') {
+            if (++writes === 1) { firstSent.resolve(); await renamed.promise; }
+            else { secondSent.resolve(); await stopped.promise; }
+        }
+        return fetch(url, options);
+    });
+    const renaming = h.win.XBTasks.setProps('old', { name: 'new' }, 'global');
+    await firstSent.promise;
+    const stopping = h.toggle('global', 'stable-id', true);
+    await settle();
+    renamed.resolve(); await renaming;
+    await secondSent.promise;
+    try {
+        h.flushRecords();
+        await h.api.checkAndExecuteTasks('after_ai');
+        assert.deepEqual(h.calls, ['/unrelated']);
+    } finally {
+        stopped.resolve(); await stopping.completion;
     }
-    assert.equal(permissionWrites, 1);
-    permission.resolve();
+    const saved = h.win.XBTasks.find('new', 'global').task;
+    assert.equal(saved.id, 'stable-id');
+    assert.equal(saved.disabled, true);
 });
 
 test('character and preset write failures preserve the old instance; retry commits exactly once', async t => {
@@ -1040,6 +1258,156 @@ test('failed import preserves queued edits, while another preset import is not b
     assert.equal(h.storedTasks('A')[0].commands, '<<taskjs>>retry<</taskjs>>');
 });
 
+test('preset-entry re-enabling after reset starts only the selected task and is idempotent', async t => {
+    const h = harness(t);
+    h.preset('A', [entered('panel'), entered('sibling')]); h.change('A'); await h.ready(); h.flushRecords();
+    assert.deepEqual(h.win.starts, { panel: 1, sibling: 1 });
+    await h.win.xbtaskreset();
+    await h.toggle('preset', 'panel', true).completion;
+    await h.toggle('preset', 'panel', false).completion;
+    await settle(); h.flushRecords(); await settle();
+    assert.deepEqual(h.win.starts, { panel: 2, sibling: 1 });
+    assert.equal(h.win.stops.panel, 1);
+    assert.equal(h.win.signals.panel.aborted, false);
+    assert.equal(h.win.signals.sibling.aborted, true);
+    await h.win.XBTasks.setProps('panel', { disabled: false }, 'preset');
+    await settle(); h.flushRecords(); await settle();
+    assert.deepEqual(h.win.starts, { panel: 2, sibling: 1 });
+});
+
+test('preset-entry re-enabling waits for acknowledgement and never runs a failed enable', async t => {
+    for (const success of [false, true]) await t.test(String(success), async t => {
+        const h = harness(t), gate = deferred();
+        h.preset('A', [{ ...entered('panel'), disabled: true }]); h.change('A'); await h.ready();
+        h.manager.savePreset = async () => { await gate.promise; if (!success) throw new Error('offline'); };
+        const enabling = h.toggle('preset', 'panel', false);
+        const outcome = success ? enabling.completion : assert.rejects(enabling.completion);
+        await settle();
+        h.change('A'); await settle();
+        assert.equal(h.win.starts.panel, undefined);
+        assert.equal(h.win.XBTasks.find('panel', 'preset').task.disabled, true);
+        gate.resolve(); await outcome;
+        await settle(); h.flushRecords(); await settle();
+        assert.equal(h.win.starts.panel, success ? 1 : undefined);
+        assert.equal(h.win.XBTasks.find('panel', 'preset').task.disabled, !success);
+    });
+});
+
+test('a failed disable cannot revive an entry cancelled before host readiness', async t => {
+    const h = harness(t), saved = deferred();
+    t.after(() => saved.resolve());
+    h.preset('A', [entered('panel')]); h.change('A'); await settle();
+    const savePreset = h.manager.savePreset;
+    h.manager.savePreset = async () => { await saved.promise; throw new Error('offline'); };
+    const stopping = h.win.XBTasks.setProps('panel', { disabled: true }, 'preset');
+    const failed = assert.rejects(stopping);
+    await settle(); await h.ready(); await settle();
+    assert.equal(h.win.starts.panel, undefined);
+    saved.resolve(); await failed; await settle(); h.flushRecords(); await settle();
+    assert.equal(!!h.win.XBTasks.find('panel', 'preset').task.disabled, false);
+    assert.equal(h.win.starts.panel, undefined);
+    h.manager.savePreset = savePreset;
+    await h.toggle('preset', 'panel', true).completion;
+    assert.equal(h.win.starts.panel, undefined);
+    await h.toggle('preset', 'panel', false).completion;
+    await settle(); h.flushRecords(); await settle();
+    assert.equal(h.win.starts.panel, 1);
+    assert.equal(h.win.signals.panel.aborted, false);
+});
+
+test('re-enabling other timings only re-arms their original events in every scope', async t => {
+    const timings = [
+        ['plugin_init', 'plugin_initialized'], ['character_init', 'chat_created'], ['initialization', 'chat_created'],
+        ['chat_changed', 'chat_changed'], ['after_ai', 'after_ai'], ['before_user', 'before_user'],
+        ['any_message', 'before_user'], ['only_this_floor', 'after_ai'], ['after_ai', 'after_ai', 0],
+    ];
+    for (const scope of ['global', 'character', 'preset']) for (const [timing, context, interval = 1] of timings) {
+        await t.test(`${scope}/${timing}/${interval}`, async t => {
+            const h = harness(t);
+            const original = { ...task('legacy', ''), commands: '/legacy', triggerTiming: timing, interval, disabled: true };
+            if (scope === 'preset') { h.preset('A', [original]); h.change('A'); }
+            else h[scope](original);
+            await h.api.checkAndExecuteTasks(context);
+            assert.deepEqual(h.calls, []);
+            await h.toggle(scope, original.id, false).completion;
+            await settle(); h.flushRecords(); await settle();
+            assert.deepEqual(h.calls, []);
+            h.extensions.extension_settings.test.tasks.enabled = false;
+            await h.api.checkAndExecuteTasks(context);
+            assert.deepEqual(h.calls, []);
+            h.extensions.extension_settings.test.tasks.enabled = true;
+            await h.api.checkAndExecuteTasks(context);
+            assert.deepEqual(h.calls, interval ? ['/legacy'] : []);
+        });
+    }
+});
+
+test('full preset entry and re-enable dispatch a plain slash task only once across save ordering', async t => {
+    for (const release of ['before-ack', 'after-ack']) await t.test(release, async t => {
+        const h = harness(t), first = deferred(), saved = deferred(); h.win.gate = first.promise;
+        h.preset('A', [entered('first', 'window.firstStarted = true; await window.gate;'),
+            { ...entered('second'), commands: '/second', disabled: true }]);
+        h.change('A'); await h.ready();
+        assert.equal(h.win.firstStarted, true);
+        h.manager.savePreset = () => saved.promise;
+        const enabling = h.win.XBTasks.setProps('second', { disabled: false }, 'preset');
+        await settle();
+        if (release === 'before-ack') { first.resolve(); await settle(); }
+        assert.deepEqual(h.calls, []);
+        saved.resolve(); await enabling;
+        first.resolve();
+        await settle(); h.flushRecords(); await settle(); h.flushRecords(); await settle();
+        assert.deepEqual(h.calls, ['/second']);
+    });
+});
+
+test('a queued re-enable is cancelled by a subsequent stop, deletion, reset or preset exit', async t => {
+    for (const action of ['disable', 'delete', 'reset', 'exit']) await t.test(action, async t => {
+        const h = harness(t), busy = deferred();
+        h.preset('A', [{ ...entered('panel'), disabled: true }]); h.preset('B', []); h.change('A'); await h.ready();
+        h.global({ ...task('busy', ''), commands: '/busy' });
+        h.setSlash(() => busy.promise);
+        const work = h.win.XBTasks.exec('busy'); await settle();
+        await h.win.XBTasks.setProps('panel', { disabled: false }, 'preset');
+        assert.equal(h.win.starts.panel, undefined);
+        if (action === 'disable') await h.win.XBTasks.setProps('panel', { disabled: true }, 'preset');
+        if (action === 'delete') await h.api.deleteTask(0, 'preset');
+        if (action === 'reset') await h.win.xbtaskreset();
+        if (action === 'exit') h.change('B');
+        busy.resolve(); await work; h.flushRecords(); await settle();
+        assert.equal(h.win.starts.panel, undefined);
+        if (action === 'reset') { h.change('A'); await settle(); assert.equal(h.win.starts.panel, undefined); }
+    });
+});
+
+test('re-enabling waits for the old instance cleanup before starting its replacement', async t => {
+    const h = harness(t), cleanup = deferred(); h.win.cleanup = cleanup.promise;
+    h.preset('A', [entered('panel', resident('panel') + 'onCleanup(() => window.cleanup);')]);
+    h.change('A'); await h.ready(); h.flushRecords();
+    await h.win.XBTasks.setProps('panel', { disabled: true }, 'preset');
+    await h.win.XBTasks.setProps('panel', { disabled: false }, 'preset');
+    await settle(); h.flushRecords(); await settle();
+    assert.equal(h.win.starts.panel, 1);
+    cleanup.resolve(); await settle(); h.flushRecords(); await settle();
+    assert.equal(h.win.starts.panel, 2);
+});
+
+test('an earlier visit enable receipt cannot revive the returning visit after reset', async t => {
+    const h = harness(t), saved = deferred();
+    h.preset('A', [{ ...entered('panel'), disabled: true }]); h.preset('B', []); h.change('A'); await h.ready();
+    h.manager.savePreset = () => saved.promise;
+    const enabling = h.win.XBTasks.setProps('panel', { disabled: false }, 'preset'); await settle();
+    h.change('B'); h.change('A'); await settle();
+    // Returning creates a legitimate full-entry request; cancel it so only the
+    // old save's explicit enable continuation could start an unwanted instance.
+    await h.win.xbtaskreset(); h.change('A');
+    saved.resolve(); await enabling; await settle(); h.flushRecords(); await settle();
+    assert.equal(h.win.starts.panel, undefined);
+    assert.equal(h.storedTasks('A')[0].disabled, false);
+    h.change('B'); h.change('A'); await settle(); h.flushRecords(); await settle();
+    assert.equal(h.win.starts.panel, 1);
+});
+
 test('opted-in entry waits for readiness, starts once, stops on exit and starts anew on return', async t => {
     const h = harness(t);
     h.preset('A', [entered('A'), task('legacy-init', resident('legacy')), { ...task('manual', resident('manual')), interval: 0, triggerTiming: 'after_ai' }]);
@@ -1193,13 +1561,31 @@ test('leaving and returning while deletion saves still reads the pending empty l
 });
 
 
+test('ineligible same-name tasks do not hide an enabled preset entry task', async t => {
+    const h = harness(t);
+    h.preset('A', [task('panel', resident('legacy'), 'legacy'),
+        { ...entered('panel', resident('disabled')), id: 'disabled', disabled: true },
+        { ...entered('panel'), commands: '/entry' }]);
+    h.change('A'); await h.ready(); h.flushRecords(); await settle();
+    assert.deepEqual(h.calls, ['/entry']);
+    assert.equal(h.win.starts.legacy, undefined);
+    assert.equal(h.win.starts.disabled, undefined);
+});
+
 test('next entry task uses current definition after an earlier startup awaits', async t => {
-    const h = harness(t), gate = deferred(); h.win.gate = gate.promise;
-    h.preset('A', [entered('first', 'await window.gate;'), entered('second', resident('old'))]);
-    h.change('A'); await h.ready();
-    await h.win.XBTasks.setJS('second', resident('new'), { scope: 'preset' });
-    gate.resolve(); await settle(); h.flushRecords(); await settle();
-    assert.equal(h.win.starts.old, undefined); assert.equal(h.win.starts.new, 1);
+    for (const source of ['api', 'editor']) await t.test(source, async t => {
+        const h = harness(t), gate = deferred(); h.win.gate = gate.promise;
+        h.preset('A', [entered('first', 'await window.gate;'), entered('second', resident('old'))]);
+        h.change('A'); await h.ready();
+        if (source === 'api') await h.win.XBTasks.setJS('second', resident('new'), { scope: 'preset' });
+        else {
+            await h.saveInEditor(h.win.XBTasks.find('second', 'preset').task, 'preset', `<<taskjs>>${resident('new')}<</taskjs>>`);
+            assert.equal(h.popup().closed, true);
+        }
+        assert.equal(h.win.starts.new, undefined);
+        gate.resolve(); await settle(); h.flushRecords(); await settle();
+        assert.equal(h.win.starts.old, undefined); assert.equal(h.win.starts.new, 1);
+    });
 });
 
 test('detached panel startup and native clicks survive body return without locking unrelated tasks', async t => {
@@ -1669,6 +2055,71 @@ test('cleanup failures are reported and do not skip other registered cleanups', 
     assert.deepEqual(h.calls, ['/flush']);
     assert.ok(h.errors.some(error => error?.name === 'AggregateError'));
     assert.equal(h.api.__taskRunMap.size, 0);
+});
+
+test('completed replies, generated swipes and rerolls each trigger once at the same floor in every scope', async t => {
+    for (const scope of ['global', 'character', 'preset']) for (const timing of ['after_ai', 'any_message', 'only_this_floor']) {
+        await t.test(`${scope}/${timing}`, async t => {
+            let now = 1000;
+            const h = harness(t, { date: class extends Date { static now() { return now; } } });
+            const original = { ...task('reply', ''), commands: '/reply', triggerTiming: timing };
+            if (scope === 'preset') { h.preset('A', [original]); h.change('A'); }
+            else h[scope](original);
+            const expected = [], replies = [];
+            for (const [generation, swipeId] of [0, 1, 2, 0].entries()) {
+                now += 100; // flushRecords releases execution locks, not the 50ms task cooldown.
+                // ST 1.14/1.18 saveReply refreshes send_date for every generated reply.
+                const reply = { is_user: false, mes: `reply ${generation}`, swipe_id: swipeId, send_date: new Date(now).toISOString() };
+                replies.push(reply);
+                if (generation === 3) {
+                    // Regenerate deletes the old reply and creates a fresh message, not another swipe.
+                    h.host.chat.pop(); h.api.onMessageDeleted(); h.host.chat.push(reply);
+                } else {
+                    Object.assign(h.host.chat[1], reply);
+                    if (swipeId > 0) h.api.onMessageSwiped();
+                }
+                assert.equal(h.host.chat.length, 2);
+                if (generation % 2 === 0) await h.api.onMessageReceived(1);
+                else await h.api.onGenerationEnded(h.host.chat.length);
+                expected.push('/reply');
+                assert.deepEqual(h.calls, expected);
+                h.flushRecords(); now += 100;
+                // A duplicate after lock release and cooldown must still be deduplicated.
+                await h.api.onGenerationEnded(h.host.chat.length);
+                await h.api.onMessageReceived(1);
+                assert.deepEqual(h.calls, expected);
+                if (generation === 2) for (const existing of replies) {
+                    now += 100;
+                    Object.assign(h.host.chat[1], existing);
+                    h.api.onMessageSwiped(); await settle(); h.flushRecords();
+                    assert.deepEqual(h.calls, expected); // Browsing stored swipes is not generation.
+                }
+            }
+        });
+    }
+});
+
+test('reply event guards still exclude disabled tasks, interval zero and non-completed AI messages', async t => {
+    const h = harness(t);
+    const original = { ...task('active', ''), commands: '/active', triggerTiming: 'after_ai' };
+    h.global(original);
+    h.global({ ...original, id: 'disabled', name: 'disabled', commands: '/disabled', disabled: true });
+    h.global({ ...original, id: 'manual', name: 'manual', commands: '/manual', interval: 0 });
+    const reply = { is_user: false, mes: 'completed reply', swipe_id: 1, send_date: '2026-01-01T00:00:00.000Z' };
+    for (const guard of [{ is_user: true }, { is_system: true }, { mes: '...' }]) {
+        h.host.chat[1] = { ...reply, ...guard };
+        await h.api.onMessageReceived(1);
+        await h.api.onGenerationEnded(h.host.chat.length);
+        assert.deepEqual(h.calls, []);
+    }
+    h.host.chat[1] = reply;
+    h.extensions.extension_settings.test.tasks.enabled = false;
+    await h.api.onMessageReceived(1);
+    await h.api.onGenerationEnded(h.host.chat.length);
+    assert.deepEqual(h.calls, []);
+    h.extensions.extension_settings.test.tasks.enabled = true;
+    await h.api.onGenerationEnded(h.host.chat.length);
+    assert.deepEqual(h.calls, ['/active']);
 });
 
 test('host command receives cancellation but keeps reentry suppression until it really settles', async t => {

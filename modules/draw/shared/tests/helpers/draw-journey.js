@@ -34,7 +34,7 @@ export async function fixture(sources, options = {}) {
  'debug-core.js':'export const xbLog={error:(...a)=>globalThis.__drawJourneyReview.counters.errors.push(a)};',
  'generate-interceptor.js':'export const GENERATE_INTERCEPTOR_ORDER={};export function registerGenerateInterceptor(){}export function unregisterGenerateInterceptor(){}',
  'viewport.js':'export const getSafeViewportStyles=()=>"";export const observeViewport=()=>()=>{};',
- 'pending-image-jobs.js':'export const PendingJobState={CANCELLING:"cancelling"};export const getPendingImageJobSlots=async()=>new Map();export const discardPendingImageSlot=async()=>{};',
+ 'pending-image-jobs.js':'export const PendingJobState={CANCELLING:"cancelling",ADOPTING:"adopting"};export const PendingJobAdoptionPhase={READY:"ready"};export const listPendingImageJobs=async()=>[];export const getPendingImageJobSlots=async()=>new Map();export const discardPendingImageSlot=async()=>{};',
  'recoverable-image-jobs.js':'export const isPendingJobLeaseLost=()=>false;',
  'script.js':'export const messageFormatting=(text)=>text;'
  };

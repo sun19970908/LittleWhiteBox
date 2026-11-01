@@ -58,7 +58,6 @@ const guardianState = {
     table: {},
     regexCache: {},
     bypass: false,
-    origVarApi: null,
     lastMetaSyncAt: 0
 };
 
@@ -1378,112 +1377,6 @@ export function applyRulesDeltaToTable(delta) {
     rulesSaveToMeta();
 }
 
-/**
- * install variable API patch
- */
-function installVariableApiPatch() {
-    try {
-        const ctx = getContext();
-        const api = ctx?.variables?.local;
-        if (!api || guardianState.origVarApi) return;
-
-        guardianState.origVarApi = {
-            set: api.set?.bind(api),
-            add: api.add?.bind(api),
-            inc: api.inc?.bind(api),
-            dec: api.dec?.bind(api),
-            del: api.del?.bind(api)
-        };
-
-        if (guardianState.origVarApi.set) {
-            api.set = (name, value) => {
-                try {
-                    if (guardianState.bypass) return guardianState.origVarApi.set(name, value);
-
-                    let finalValue = value;
-                    if (value && typeof value === 'object' && !Array.isArray(value)) {
-                        const hasRuleKey = Object.keys(value).some(k => k.startsWith('$'));
-                        if (hasRuleKey) {
-                            const { cleanValue, rulesDelta } = rulesLoadFromTree(value, normalizePath(name));
-                            finalValue = cleanValue;
-                            applyRulesDeltaToTable(rulesDelta);
-                        }
-                    }
-
-                    const res = guardValidate('set', normalizePath(name), finalValue);
-                    if (!res.allow) return;
-                    return guardianState.origVarApi.set(name, res.value);
-                } catch {
-                    return;
-                }
-            };
-        }
-
-        if (guardianState.origVarApi.add) {
-            api.add = (name, delta) => {
-                try {
-                    if (guardianState.bypass) return guardianState.origVarApi.add(name, delta);
-
-                    const res = guardValidate('bump', normalizePath(name), delta);
-                    if (!res.allow) return;
-
-                    const cur = Number(getValueAtPath(normalizePath(name)));
-                    if (!Number.isFinite(cur)) {
-                        return guardianState.origVarApi.set(name, res.value);
-                    }
-
-                    const next = res.value;
-                    const diff = Number(next) - cur;
-                    return guardianState.origVarApi.add(name, diff);
-                } catch {
-                    return;
-                }
-            };
-        }
-
-        if (guardianState.origVarApi.inc) {
-            api.inc = (name) => api.add?.(name, 1);
-        }
-
-        if (guardianState.origVarApi.dec) {
-            api.dec = (name) => api.add?.(name, -1);
-        }
-
-        if (guardianState.origVarApi.del) {
-            api.del = (name) => {
-                try {
-                    if (guardianState.bypass) return guardianState.origVarApi.del(name);
-
-                    const res = guardValidate('delNode', normalizePath(name));
-                    if (!res.allow) return;
-                    return guardianState.origVarApi.del(name);
-                } catch {
-                    return;
-                }
-            };
-        }
-    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "installVariableApiPatch" }, caughtError); }
-}
-
-/**
- * uninstall variable API patch
- */
-function uninstallVariableApiPatch() {
-    try {
-        const ctx = getContext();
-        const api = ctx?.variables?.local;
-        if (!api || !guardianState.origVarApi) return;
-
-        if (guardianState.origVarApi.set) api.set = guardianState.origVarApi.set;
-        if (guardianState.origVarApi.add) api.add = guardianState.origVarApi.add;
-        if (guardianState.origVarApi.inc) api.inc = guardianState.origVarApi.inc;
-        if (guardianState.origVarApi.dec) api.dec = guardianState.origVarApi.dec;
-        if (guardianState.origVarApi.del) api.del = guardianState.origVarApi.del;
-
-        guardianState.origVarApi = null;
-    } catch (caughtError) { console.warn({ source: import.meta.url, operation: "uninstallVariableApiPatch" }, caughtError); }
-}
-
 /* ============ Snapshots / Rollback ============= */
 
 function getSnapMap() {
@@ -2696,9 +2589,6 @@ export function initVariablesCore() {
     // load rules
     rulesLoadFromMeta();
 
-    // install API patch
-    installVariableApiPatch();
-
     // bind events
     bindEvents();
 
@@ -2752,9 +2642,6 @@ export function cleanupVariablesCore() {
     events = null;
     afterAiGateDispose?.();
     afterAiGateDispose = null;
-
-    // uninstall API patch
-    uninstallVariableApiPatch();
 
     // clear rules
     rulesClearCache();

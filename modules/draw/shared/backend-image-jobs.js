@@ -1,6 +1,7 @@
 import { createIdentifier } from '../../../shared/common/identifier.js';
 import { SERVER_PLUGIN_BASE, SERVER_PLUGIN_VERSION } from '../../../shared/server-plugin/identity.js';
 import { SERVER_PLUGIN_COPY } from '../../../shared/server-plugin/copy.js';
+import { drawingRuntimeHeaders } from './drawing-runtime-client.js';
 
 const JOBS_ENDPOINT = `${SERVER_PLUGIN_BASE}/v1/jobs`;
 const STATUS_ENDPOINT = `${SERVER_PLUGIN_BASE}/status`;
@@ -222,7 +223,7 @@ export async function fetchImageBackendJobsStatus({
         if (!response.ok) return { ready: false };
         const data = await response.json().catch(() => null);
         return data?.ok === true
-            ? { ready: true, version: String(data.version || ''), capabilities: Array.isArray(data.capabilities) ? data.capabilities.map(String) : [] }
+            ? { ready: true, version: String(data.version || ''), runtimeHostAbi: data.runtimeHostAbi, capabilities: Array.isArray(data.capabilities) ? data.capabilities.map(String) : [] }
             : { ready: false };
     } catch (error) {
         if (signal?.aborted) throw error;
@@ -303,6 +304,7 @@ export function createImageBackendJobsClient({
 
     async function requestJson(path, { method = 'GET', body, signal, signals = [] } = {}) {
         const headers = getHeaders();
+        if (method === 'POST' && path === JOBS_ENDPOINT) Object.assign(headers, drawingRuntimeHeaders());
         const serializedBody = body === undefined ? undefined : JSON.stringify(body);
         const scope = createRequestScope(signal, signals);
         try {

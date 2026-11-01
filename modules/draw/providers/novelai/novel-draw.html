@@ -1341,7 +1341,11 @@ body:has(#view-gallery.active #nd_batch.btn-primary) .gallery-notice { top: calc
                     </div>
                     <p class="form-hint">画什么、怎么画：分级、构图、角色外貌与服装、动作、光影、物理约束与内容偏好。</p>
                     <textarea aria-label="场景规则" id="nd_prompt_format" class="prompt-textarea" rows="8"></textarea>
-                </div></div></div>
+                </div></div>
+                <details id="nd_prompt_tool_definitions">
+                    <summary>submit_scene_plan</summary>
+                    <div id="nd_prompt_tool_fields" class="chain-fields"></div>
+                </details></div>
 
 
 
@@ -1374,7 +1378,7 @@ body:has(#view-gallery.active #nd_batch.btn-primary) .gallery-notice { top: calc
                         <div class="card-title"><i class="fa-solid fa-eye"></i> 请求内容预览</div>
                         <span class="chain-toggle-icon" aria-hidden="true"></span>
                     </summary>
-                    <p class="form-hint">此处展示默认请求结构；自定义结构以“最近一次实际请求”为准。</p>
+                    <p class="form-hint">跟随当前草稿；世界书、正文与数量在运行时填入。</p>
                     <div id="nd_prompt_chain" class="prompt-chain-container"></div>
                 </details>
 

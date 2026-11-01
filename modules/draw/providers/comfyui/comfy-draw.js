@@ -26,7 +26,7 @@ import { ComfyDrawStorage } from "../../../../core/server-storage.js";
 import { generateAndParseScenePlan, prepareScenePlannerInput } from "../../shared/scene-planner.js";
 import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
 import { stripDrawImageSlots } from "../../shared/image-marker-syntax.js";
-import { assertSceneSourceUnchanged } from "../../shared/scene-placement.js";
+import { bindScenePlanSource } from "../../shared/scene-placement.js";
 import { retryScenePlanning } from "../../shared/planner-retry.js";
 import { WorldbookProcessor } from "../../shared/worldbook-processor.js";
 import {
@@ -62,7 +62,7 @@ import {
     reportImageBackendJobState,
 } from "../../shared/backend-image-jobs.js";
 import { submitRecoverableImageJob } from "../../shared/recoverable-image-jobs.js";
-import { submitProviderDrawRun } from "../../shared/draw-run-production.js";
+import { submitProviderDrawRun } from "../../shared/draw-run-browser.js";
 import { cancelFloorDrawWork, captureDrawCancellationTarget } from "../../shared/draw-run-controls.js";
 import { createCharacterEnabledControl, getCharacterEnabledFromCard } from "../../shared/character-enabled-control.js";
 import { createCharacterLibraryUi } from "../../shared/character-library-ui.js";
@@ -4686,7 +4686,7 @@ export async function generateAndInsertImages({
                         providerSettings: comfySettings,
                         sharedSettings: sharedSettingsSnapshot,
                     });
-                    return prepareScenePlannerInput({ ...plannerOptions, maxPlanImages });
+                    return prepareScenePlannerInput({ ...plannerOptions, maxPlanImages, executionTarget: 'server' });
                 },
                 createGenerationRecipe: prepared => createComfyGenerationRecipe({
                     settings: comfySettings,
@@ -4714,8 +4714,7 @@ export async function generateAndInsertImages({
                 message, messageId: resolvedMessageId, signal, promptOverride, negativePromptOverride, onStateChange,
             });
             if (signal.aborted) throw new Error('已取消');
-            if (built.sceneSource) assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), built.sceneSource.sourceHash);
-            return built;
+            return { ...built, tasks: bindScenePlanSource(built.tasks, built.sceneSource, normalizeMessageSceneSourceText(message.mes)) };
         }, { maxRetries: sharedSettingsSnapshot.plannerMaxRetries, signal, onStateChange });
         return await runPreparedComfySlots({ ctx, message, messageId: resolvedMessageId,
             sourceText: message.mes, tasks, settings: comfySettings,

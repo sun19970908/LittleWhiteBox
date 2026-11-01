@@ -26,7 +26,7 @@ import { SdDrawStorage } from "../../../../core/server-storage.js";
 import { generateAndParseScenePlan, prepareScenePlannerInput } from "../../shared/scene-planner.js";
 import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
 import { stripDrawImageSlots } from "../../shared/image-marker-syntax.js";
-import { assertSceneSourceUnchanged } from "../../shared/scene-placement.js";
+import { bindScenePlanSource } from "../../shared/scene-placement.js";
 import { retryScenePlanning } from "../../shared/planner-retry.js";
 import { WorldbookProcessor } from "../../shared/worldbook-processor.js";
 import {
@@ -53,7 +53,7 @@ import {
     reportImageBackendJobState,
 } from "../../shared/backend-image-jobs.js";
 import { submitRecoverableImageJob } from "../../shared/recoverable-image-jobs.js";
-import { submitProviderDrawRun } from "../../shared/draw-run-production.js";
+import { submitProviderDrawRun } from "../../shared/draw-run-browser.js";
 import { cancelFloorDrawWork, captureDrawCancellationTarget } from "../../shared/draw-run-controls.js";
 import { createCharacterEnabledControl, getCharacterEnabledFromCard } from "../../shared/character-enabled-control.js";
 import { createCharacterLibraryUi } from "../../shared/character-library-ui.js";
@@ -694,7 +694,6 @@ async function fetchSdProxy(path, body = {}, { signal, generationConfig, attempt
     if (!response.ok) {
         const text = await response.text().catch(() => '');
         const error = classifySdError(text || response.statusText || `HTTP ${response.status}`);
-        error.status = response.status;
         throw imageHttpFailure(error, response.status);
     }
 
@@ -3840,7 +3839,7 @@ export async function generateAndInsertImages({
                         providerSettings: sdSettings,
                         sharedSettings: sharedSettingsSnapshot,
                     });
-                    return prepareScenePlannerInput({ ...plannerOptions, maxPlanImages });
+                    return prepareScenePlannerInput({ ...plannerOptions, maxPlanImages, executionTarget: 'server' });
                 },
                 createGenerationRecipe: () => createSdGenerationRecipe({
                     settings: sdSettings,
@@ -3872,8 +3871,7 @@ export async function generateAndInsertImages({
                 onStateChange,
             });
             if (signal.aborted) throw new Error('已取消');
-            if (built.sceneSource) assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), built.sceneSource.sourceHash);
-            return built;
+            return { ...built, tasks: bindScenePlanSource(built.tasks, built.sceneSource, normalizeMessageSceneSourceText(message.mes)) };
         }, { maxRetries: sharedSettingsSnapshot.plannerMaxRetries, signal, onStateChange });
         return await runPreparedSdSlots({ ctx, message, messageId: resolvedMessageId,
             sourceText: message.mes, tasks, settings: sdSettings,

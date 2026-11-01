@@ -20,7 +20,7 @@ globalThis.document = new EventTarget();
 const stubs = {
     'extensions.js': 'export const getContext = () => globalThis.__drawRecoveryTest.ctx;',
     'user.js': 'export const getCurrentUserHandle = () => globalThis.__drawRecoveryTest.owner ?? "fixture";',
-    'script.js': 'export const getRequestHeaders = () => ({});',
+    'script.js': 'export const getRequestHeaders = () => ({});export const saveChatDebounced=()=>{void globalThis.__drawRecoveryTest.ctx.saveChat();};',
     'event-manager.js': `
         export const event_types = { CHAT_CHANGED: 'chat_changed' };
         export const createModuleEvents = () => ({ on() {}, cleanup() {} });
@@ -287,9 +287,9 @@ for (const mode of ['complete', 'fail', 'discard']) {
                 run, marker,
                 chatTarget: { kind: 'group', chatId: 'chat-1', endpoint: '/api/chats/group/get', body: { id: 'chat-1' } },
                 resolveTarget: () => ({ runId, marker, message, messageId: 0, swipeIndex: 1, chatId: 'chat-1' }),
-                confirmSlots: () => host.ctx.saveChat(),
             });
             assert.equal(adopted.status, 'ready');
+            await host.ctx.saveChat(); // Simulate the host autosave, not drawing's adoption gate.
             assert.deepEqual(adopted.record.items.map(item => item.previewMetadata.postPrompt), ['tail-0', 'tail-1']);
             assert.deepEqual(adopted.record.items.map(item => item.previewMetadata.orientation), ['landscape', 'landscape']);
             const { jobId, leaseId } = adopted.record;

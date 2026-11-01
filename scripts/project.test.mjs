@@ -67,7 +67,7 @@ test('independent module pipelines and unregistered page entries fail project va
 test('internal generators cannot write installed outputs outside total-build staging', () => {
     const env = { ...process.env };
     delete env.LWB_BUILD_STAGE;
-    const files = ['dist/manifest.json', 'server-plugin/littlewhitebox-server/draw-runs/vendor/agent-core-node.cjs', 'modules/assistant/assistant-file-manifest.json'];
+    const files = ['dist/manifest.json', 'dist/server/runtime.json', 'modules/assistant/assistant-file-manifest.json'];
     const hashes = () => files.map(file => createHash('sha256').update(fs.readFileSync(path.join(root, file))).digest('hex'));
     const before = hashes();
     const probe = 'try { await import(process.argv[1]); } catch (error) { process.stdout.write(JSON.stringify({code:error.code})); process.exitCode=1; }';

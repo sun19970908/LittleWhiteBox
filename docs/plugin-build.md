@@ -36,6 +36,7 @@ dist/
   host/plugin.js          SillyTavern 固定装载入口
   apps/                   带内容哈希的独立页面入口
   runtime/                带内容哈希的延迟公共入口
+  server/                 签名的自包含绘图执行包与许可证
   shared/                 从真实依赖图提取的公共块
   assets/                 CSS、小型资源及构建器生成的 Worker
   manifest.json           入口、CSS、依赖与确定性 buildId

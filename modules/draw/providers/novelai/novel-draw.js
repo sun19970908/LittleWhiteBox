@@ -11,6 +11,7 @@ import { extensionFolderPath } from "../../../../core/constants.js";
 import { deleteGalleryImages, exportGalleryZipPart } from '../../shared/gallery-batch.js';
 import { GALLERY_JPEG_COPY } from '../../shared/gallery-image-codec.js';
 import { SERVER_PLUGIN_BASE, SERVER_PLUGIN_VERSION } from '../../../../shared/server-plugin/identity.js';
+import { drawingRuntimeHeaders, DRAWING_RUNTIME_ABI } from '../../shared/drawing-runtime-client.js';
 import { SERVER_PLUGIN_COPY } from '../../../../shared/server-plugin/copy.js';
 import { DRAW_BACKEND_COPY, createDrawBackendStatusCopy } from '../../shared/draw-backend-copy.js';
 import { createModuleEvents, event_types } from "../../../../core/event-manager.js";
@@ -125,7 +126,7 @@ import {
 import { NovelV5RequestError, V5_QUALITY_IDS, V5_UC_IDS } from "./novel-v5-request.js";
 import { compile as compileNovelScenePlan, compileNovelImageRequest } from "./compiler.js";
 import { readNovelV5ErrorText, readNovelV5FinalImage, NovelV5StreamError } from "./novel-v5-stream.js";
-import { decodeNovelBackendJobResult, hasNovelV5FinalImageCapability } from "./novel-backend-job-result.js";
+import { decodeNovelBackendJobResult } from "./novel-backend-job-result.js";
 import {
     createImageBackendJobMonitorRegistry,
     createImageBackendJobsClient,
@@ -135,7 +136,7 @@ import {
     reportImageBackendJobState,
 } from "../../shared/backend-image-jobs.js";
 import { submitRecoverableImageJob } from "../../shared/recoverable-image-jobs.js";
-import { submitProviderDrawRun } from "../../shared/draw-run-production.js";
+import { submitProviderDrawRun } from "../../shared/draw-run-browser.js";
 import { cancelFloorDrawWork, captureDrawCancellationTarget } from "../../shared/draw-run-controls.js";
 import { migrateLegacyNovelPromptSettings } from "./novel-prompt-migration.js";
 import { WorldbookProcessor } from "../../shared/worldbook-processor.js";
@@ -183,13 +184,14 @@ import { IMAGE_SAVE_BUTTON_HTML, IMAGE_SAVING_INDICATOR_HTML } from '../../share
 import { replaceSceneSlotElements } from "../../shared/scene-slot-dom.js";
 import { createSceneSource, normalizeMessageSceneSourceText } from "../../shared/scene-source.js";
 import { createDrawImageSlotRegex, stripDrawImageSlots } from "../../shared/image-marker-syntax.js";
-import { ScenePlacementError, assertSceneSourceUnchanged } from "../../shared/scene-placement.js";
+import { ScenePlacementError, bindScenePlanSource } from "../../shared/scene-placement.js";
 import { retryScenePlanning } from "../../shared/planner-retry.js";
 import { pickNeighborAfterRemoval, reorderPresetsByIds } from "../../shared/preset-order.js";
 import { submitPreparedChatImages, registerPreparedImageProvider } from "../../shared/prepared-chat-images.js";
 import { prepareImageInput } from '../../shared/prepared-image-input.js';
 import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImagePhase, getFloorImageState, releaseFloorImageJob, observeFloorImageJob, failFloorImageJob, clearFloorImageJobs, resolveFloorImageJobTarget, rebaseFloorImageJobsAfterSwipeDeletion } from '../../shared/floor-image-job.js';
 import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
+import { requestNovelImageWithRetry } from './novel-request-retry.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
 import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
@@ -219,7 +221,6 @@ const NAI_BACKEND_TEST = `${NAI_BACKEND_BASE}/v1/test`;
 const NAI_BACKEND_TEST_V2 = `${NAI_BACKEND_BASE}/v2/test`;
 const NAI_BACKEND_STATUS = `${NAI_BACKEND_BASE}/status`;
 const NAI_BACKEND_MIN_VERSION = SERVER_PLUGIN_VERSION;
-const NAI_BACKEND_V5_MIN_VERSION = SERVER_PLUGIN_VERSION;
 const NAI_BACKEND_STATUS_TIMEOUT = 5000;
 const NAI_BACKEND_STATUS_ATTEMPTS = 2;
 const NAI_BACKEND_STATUS_RETRY_DELAY_MS = 1000;
@@ -264,6 +265,7 @@ async function fetchBackendPluginStatus(signal) {
             return {
                 ready: true,
                 version,
+                runtimeHostAbi: data.runtimeHostAbi,
                 capabilities: Array.isArray(data.capabilities) ? data.capabilities.map(String) : [],
             };
         }
@@ -302,7 +304,7 @@ async function checkBackendPluginStatus({ signal } = {}) {
     return status;
 }
 
-async function assertV5BackendCapability(signal) {
+async function assertDrawingRuntimeHost(signal) {
     const status = await checkBackendPluginStatus({ signal });
     if (!status.ready) {
         const reason = status.reason === 'not_installed'
@@ -311,14 +313,13 @@ async function assertV5BackendCapability(signal) {
                 ? `版本过旧（当前 v${status.version || '未知'}）`
                 : '未就绪';
         throw new NovelDrawError(
-            `NovelAI V5 后端插件${reason}。${SERVER_PLUGIN_COPY.install}`,
+            `绘图后端插件${reason}。${SERVER_PLUGIN_COPY.install}`,
             ErrorType.NETWORK,
         );
     }
-    if (!isVersionAtLeast(status.version, NAI_BACKEND_V5_MIN_VERSION)
-        || !status.capabilities?.includes('v5-msgpack-stream')) {
+    if (status.runtimeHostAbi !== DRAWING_RUNTIME_ABI) {
         throw new NovelDrawError(
-            `当前后端插件不支持 NovelAI V5 流协议。${SERVER_PLUGIN_COPY.update}`,
+            `请完成这一次后台升级，以后绘图功能随扩展更新。${SERVER_PLUGIN_COPY.update}`,
             ErrorType.NETWORK,
         );
     }
@@ -1452,7 +1453,7 @@ async function generateViaBackend({ url, legacyBaseUrl, apiKey, insecure, payloa
             attempt.submit(signal);
             return fetch(endpoint, {
                 method: 'POST',
-                headers: getRequestHeaders(),
+                headers: { ...getRequestHeaders(), ...drawingRuntimeHeaders() },
                 signal,
                 body,
             });
@@ -1498,7 +1499,7 @@ async function generateV5ViaBackend({ url, apiKey, insecure, payload, signal, ti
         attempt.submit(signal);
         response = await fetch(NAI_BACKEND_GENERATE_STREAM, {
             method: 'POST',
-            headers: getRequestHeaders(),
+            headers: { ...getRequestHeaders(), ...drawingRuntimeHeaders() },
             signal,
             body,
         });
@@ -1556,11 +1557,11 @@ async function testApiConnection(apiKey, baseUrl, opts = {}) {
         // 后端发送模式：前端提供最终端点与探针报文，server plugin 只负责传输。
         if (sendMode === 'backend') {
             if (probe.multipart) {
-                await assertV5BackendCapability(controller.signal);
+                await assertDrawingRuntimeHost(controller.signal);
             }
             const request = endpoint => fetch(endpoint, {
                 method: 'POST',
-                headers: getRequestHeaders(),
+                headers: { ...getRequestHeaders(), ...drawingRuntimeHeaders() },
                 signal: controller.signal,
                 body: JSON.stringify({
                     url: endpoint === NAI_BACKEND_TEST ? (resolvedBase || '') : apiUrl,
@@ -1699,7 +1700,7 @@ async function executePreparedNovelRequest(prepared, requestConfig, signal) {
         if (signal?.aborted) throw new NovelDrawError('已取消', ErrorType.ABORTED);
         if (requestConfig.sendMode === 'backend') {
             if (prepared.isV5) {
-                await assertV5BackendCapability(controller.signal);
+                await assertDrawingRuntimeHost(controller.signal);
                 const response = await generateV5ViaBackend({
                     attempt,
                     url: prepared.apiUrl,
@@ -1854,13 +1855,6 @@ async function runNovelImageBatch({
                     ErrorType.NETWORK,
                 );
             }
-            if (prepared.some(item => item.isV5) && !hasNovelV5FinalImageCapability(backendStatus)) {
-                detachScope.dispose();
-                throw new NovelDrawError(
-                    `当前后端插件不支持 NovelAI V5 后台结果。${SERVER_PLUGIN_COPY.update}也可关闭“小白X后台任务”。`,
-                    ErrorType.NETWORK,
-                );
-            }
             const backendRequest = compiledBatch
                 ? {
                     provider: compiledBatch.provider,
@@ -1961,10 +1955,12 @@ async function runNovelImageBatch({
         }
         try {
             const base64 = await enqueueImageRequest(
-                async () => {
-                    if (await onItemStarting?.({ index }) === false) return null;
-                    return executePreparedNovelRequest(prepared[index], requestConfig, signal);
-                },
+                () => requestNovelImageWithRetry({
+                    request: () => executePreparedNovelRequest(prepared[index], requestConfig, signal),
+                    sendMode: requestConfig.sendMode,
+                    signal,
+                    beforeRequest: () => onItemStarting?.({ index }),
+                }),
                 {
                     signal,
                     batchKey: queueBatch,
@@ -2945,6 +2941,7 @@ async function generateAndInsertImages({
                 preparePlanner: async ({ maxPlanImages }) => {
                     job.phase = 'llm';
                     return prepareScenePlannerInput({
+                        executionTarget: 'server',
                         ...await buildNovelScenePlannerOptions({
                             sceneSource,
                             presentCharacters,
@@ -3000,8 +2997,7 @@ async function generateAndInsertImages({
                 }));
                 if (signal.aborted) throw new NovelDrawError('已取消', ErrorType.ABORTED);
                 await maybeAutoLearnFromTasks(planned, settings);
-                assertSceneSourceUnchanged(normalizeMessageSceneSourceText(message.mes), source.sceneSource.sourceHash);
-                return planned;
+                return bindScenePlanSource(planned, source.sceneSource, normalizeMessageSceneSourceText(message.mes));
             }, { maxRetries: settings.plannerMaxRetries, signal, onStateChange });
         } catch (e) {
             console.error('[NovelDraw] 场景分析原始错误:', e);
@@ -4067,6 +4063,9 @@ async function handleFrameMessage(event) {
             const currentPrompts = getActivePromptPreset() || {};
             const model = String(data.model || getActiveParamsPreset()?.params?.model || '');
             const promptDraft = {
+                layout: data.promptDraft?.layout ?? currentPrompts.layout,
+                topSystem: data.promptDraft?.topSystem ?? currentPrompts.topSystem,
+                sceneRules: data.promptDraft?.sceneRules ?? currentPrompts.sceneRules,
                 modelGuideOverrides: normalizeNovelPromptGuideOverrides(
                     data.promptDraft?.modelGuideOverrides ?? currentPrompts.modelGuideOverrides,
                 ),
