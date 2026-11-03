@@ -180,9 +180,18 @@ export function createMessageSourceTracker() {
         observeCompletion(context, floor) {
             const { chat } = context;
             const message = chat[floor];
-            if (getChatIdentity(context) !== owner || !message || message.is_user || equal(completions.get(message), message)) return false;
-            completions.set(message, read(message));
-            return true;
+            if (getChatIdentity(context) !== owner || !message || message.is_user) return false;
+            const previous = completions.get(message);
+            if (equal(previous, message)) return false;
+            // A continuation appends to the same floor's mes. That is not a new completion:
+            // re-running the summary rewrites the memory body (its cross references are
+            // model-written), which breaks the prompt prefix and with it every cached token.
+            const continued = Boolean(previous)
+                && typeof previous.mes === 'string' && typeof message.mes === 'string'
+                && message.mes.length > previous.mes.length
+                && message.mes.startsWith(previous.mes);
+            completions.set(message, read(message));   // always advance, or the next continuation compares against stale text
+            return !continued;
         },
         // Caller owns the existing serial consistency-write session. No second queue.
         async synchronize(context, apply, readCurrent = () => context) {
