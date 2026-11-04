@@ -133,6 +133,8 @@ let state = {
     cacheStats: { count: 0, sizeMB: '0' },
     imageTitleMode: 'none',
     saveAsJpeg: false,
+    autoSaveImages: false,
+    saveImagesByFolder: false,
     selectedParamsPresetId: null,
     paramsPresets: [],
     characterTags: [],
@@ -142,6 +144,7 @@ let state = {
     autoLearnMode: 'new_only',
     autoLearnGroupId: '',
     danbooruLocalDB: false,
+    autoGenerateImages: true,
     showFloorButton: true,
     showFloatingButton: false,
     promptPresets: [],
@@ -3579,6 +3582,8 @@ function applyStateToUI() {
         $('nd_cache_size').textContent = (state.cacheStats?.sizeMB || 0) + ' MB';
         const titleModeSel = $('nd_image_title_mode');
         $('nd_save_as_jpeg').checked = state.saveAsJpeg === true;
+        $('nd_auto_save_images').checked = state.autoSaveImages === true;
+        $('nd_save_by_folder').checked = state.saveImagesByFolder === true;
         if (titleModeSel) titleModeSel.value = ['none', 'overlay', 'collapse'].includes(state.imageTitleMode)
             ? state.imageTitleMode : 'none';
 
@@ -3603,6 +3608,8 @@ function applyStateToUI() {
         $('nd_danbooru_local').checked = !!state.danbooruLocalDB;
         $('nd_danbooru_local_sub').classList.toggle('hidden', !state.danbooruLocalDB);
         $('nd_danbooru_local_status').textContent = state.danbooruLocalDB ? '已加载' : '未加载';
+        $('nd_continuity_enabled').checked = state.continuityEnabled !== false;
+        $('nd_auto_generate_images').checked = state.autoGenerateImages !== false;
         renderFilterRules(state.messageFilterRules);
     } catch (e) {
         console.error('[ND-UI] applyStateToUI 部分失败:', e);
@@ -4215,6 +4222,20 @@ function updateModelOptions() {
     );
     $('nd_auto_smea_group').classList.toggle('hidden', isV5);
     $('nd_variety_boost_group').classList.toggle('hidden', isV5);
+
+    // V5 Full Medium Effort 锁参：14 步 / Euler Ancestral / CFG 重缩放 0 / Heavy 负面预设
+    const isMedium = model === 'nai-diffusion-5-full-medium';
+    const mediumHint = 'Medium Effort 固定参数：14 步、Euler Ancestral、重缩放 0、Heavy 负面';
+    const lockControl = (el, locked, lockedValue) => {
+        el.disabled = locked;
+        el.title = locked ? mediumHint : '';
+        if (locked && lockedValue !== undefined) el.value = lockedValue;
+    };
+    lockControl($('nd_steps'), isMedium, isMedium ? 14 : undefined);
+    lockControl($('nd_sampler_sel'), isMedium, isMedium ? 'k_euler_ancestral' : undefined);
+    lockControl($('nd_cfg_rescale'), isMedium, isMedium ? 0 : undefined);
+    lockControl($('nd_v5_uc'), isMedium, isMedium ? 'heavy' : undefined);
+
     const characterLimit = capability.maxCharactersPerImage || 10;
     $('nd_max_chars').max = String(characterLimit);
     $('nd_max_chars').value = Math.min(characterLimit, Math.max(0, Number($('nd_max_chars').value) || 0));
@@ -4378,6 +4399,20 @@ window.addEventListener('message', event => {
                 state.saveAsJpeg = data.saveAsJpeg === true;
                 $('nd_save_as_jpeg').checked = state.saveAsJpeg;
                 $('nd_save_as_jpeg').disabled = false;
+                galleryFeedback.show(data.state, data.text);
+                break;
+            }
+            if (data.target === 'image-save') {
+                state.autoSaveImages = data.autoSaveImages === true;
+                state.saveImagesByFolder = data.saveImagesByFolder === true;
+                $('nd_auto_save_images').checked = state.autoSaveImages;
+                $('nd_save_by_folder').checked = state.saveImagesByFolder;
+                $('nd_auto_save_images').disabled = $('nd_save_by_folder').disabled = false;
+                galleryFeedback.show(data.state, data.text);
+                break;
+            }
+            if (data.target === 'image-folder') {
+                $('nd_open_image_folder').disabled = false;
                 galleryFeedback.show(data.state, data.text);
                 break;
             }
@@ -4748,6 +4783,16 @@ function initializePage() {
         postToParent({ type: 'SAVE_DANBOORU_LOCAL_DB', enabled });
     });
 
+    $('nd_continuity_enabled').addEventListener('change', () => {
+        state.continuityEnabled = $('nd_continuity_enabled').checked;
+        postToParent({ type: 'SAVE_CONTINUITY_ENABLED', enabled: state.continuityEnabled });
+    });
+
+    $('nd_auto_generate_images').addEventListener('change', () => {
+        state.autoGenerateImages = $('nd_auto_generate_images').checked;
+        postToParent({ type: 'SAVE_AUTO_GENERATE_IMAGES', autoGenerateImages: state.autoGenerateImages });
+    });
+
     // clear all characters
     $('nd_char_clear').addEventListener('click', () => {
         const savedCount = persistedCharacters().length;
@@ -4815,6 +4860,19 @@ function initializePage() {
     $('nd_save_as_jpeg')?.addEventListener('change', () => {
         $('nd_save_as_jpeg').disabled = true;
         postToParent({ type: 'SAVE_JPEG', saveAsJpeg: $('nd_save_as_jpeg').checked });
+    });
+
+    // 自动保存 / 按日期保存：两个开关一起提交，等宿主回执后再恢复控件；打开文件夹由宿主执行。
+    for (const id of ['nd_auto_save_images', 'nd_save_by_folder']) {
+        $(id)?.addEventListener('change', () => {
+            $('nd_auto_save_images').disabled = $('nd_save_by_folder').disabled = true;
+            postToParent({ type: 'SAVE_IMAGE_SAVE_OPTIONS', autoSaveImages: $('nd_auto_save_images').checked,
+                saveImagesByFolder: $('nd_save_by_folder').checked });
+        });
+    }
+    $('nd_open_image_folder')?.addEventListener('click', () => {
+        $('nd_open_image_folder').disabled = true;
+        postToParent({ type: 'OPEN_IMAGE_FOLDER' });
     });
 
     // 批量管理
