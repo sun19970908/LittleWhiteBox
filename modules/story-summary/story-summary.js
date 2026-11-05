@@ -212,6 +212,7 @@ import { invalidateLexicalIndex, warmupIndex, addEventDocuments, addChunkDocumen
 import { trackVectorActivity } from './vector/runtime/vector-activity.js';
 import { checkVectorCacheConsistency, recordVectorCacheDiagnostic } from './vector/storage/package/service.js';
 import { createMessageSourceTracker } from './data/message-sources.js';
+import { filterText } from './vector/utils/text-filter.js';
 import { getChatIdentity } from './data/chat-identity.js';
 import { applySummarySectionEdit } from './data/section-edits.js';
 import { retainSourceChange, synchronizeSourceCaches } from './data/source-sync.js';
@@ -225,7 +226,7 @@ const handleFrameMessageEvent = observeAsyncCallback(handleFrameMessage, { sourc
 // ═══════════════════════════════════════════════════════════════════════════
 
 const MODULE_ID = "storySummary";
-const messageSources = createMessageSourceTracker();
+const messageSources = createMessageSourceTracker(filterText);
 const embeddingConnection = createEmbeddingConnection({
     synchronizeConfig: synchronizeSavedSummaryConfig,
     prepareRuntime: warmupActiveVectorCache,

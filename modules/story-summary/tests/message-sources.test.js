@@ -410,3 +410,23 @@ test('a deletion notification uses its L2 basis even if an appended reply has re
     tracker.retain(context, { kind: 'delete' });
     assert.equal(tracker.inspect(context).rollbackFromFloor, null);
 });
+
+test('edits inside filtered thoughts do not mark dirty floors, while prose edits do', () => {
+    const filter = text => String(text || '').replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    const context = { chatId: 'chat', chat: [
+        { mes: 'hello', name: 'AI', is_user: false },
+        { mes: '<think>initial reasoning</think>actual reply', name: 'AI', is_user: false },
+    ] };
+    const tracker = createMessageSourceTracker(filter);
+    tracker.reset(context);
+
+    // Edit only reasoning inside <think>...</think>
+    context.chat[1].mes = '<think>updated reasoning with typo fix</think>actual reply';
+    assert.equal(tracker.inspect(context), null, 'modifying filtered thoughts must not mark dirty floor');
+
+    // Edit actual reply outside <think>
+    context.chat[1].mes = '<think>updated reasoning with typo fix</think>actual reply edited';
+    const change = tracker.inspect(context);
+    assert.notEqual(change, null, 'prose edit must be detected as dirty');
+    assert.deepEqual(change.editedFloors, [1]);
+});

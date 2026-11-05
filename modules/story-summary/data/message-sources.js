@@ -3,23 +3,30 @@ import { getChatIdentity } from './chat-identity.js';
 const selection = message => ({ swipe_id: message?.swipe_id ?? 0, swipeCount: message?.swipes?.length ?? 0,
     swipeText: message?.swipes?.[message?.swipe_id ?? 0] });
 const read = message => ({ message, mes: message?.mes, name: message?.name, is_user: message?.is_user, ...selection(message) });
-const sameInput = (source, message) => source?.mes === message?.mes
-    && source.name === message?.name && source.is_user === message?.is_user;
-const sameSelection = (source, message) => {
-    const current = selection(message);
-    // Removing an unselected candidate can renumber the active branch without
-    // changing its source. Removing the active candidate can keep its index.
-    if (current.swipeCount < source.swipeCount) return source.swipeText === current.swipeText && sameInput(source, message);
-    return source.swipe_id === current.swipe_id;
-};
-const sameSource = (source, message) => sameInput(source, message) && sameSelection(source, message);
-const equal = (source, message) => source?.message === message && sameSource(source, message);
 const firstFloor = (a, b) => a === null ? b : b === null ? a : Math.min(a, b);
 const unionFloors = (a, b) => [...new Set([...a, ...b])].sort((a, b) => a - b);
 
 // Two distinct facts: completed AI notifications, and successfully retired sources.
 // Both are page-local. Notification deduplication can never confirm cache safety.
-export function createMessageSourceTracker() {
+export function createMessageSourceTracker(filter = null) {
+    const sameInput = (source, message) => {
+        if (source?.name !== message?.name || source?.is_user !== message?.is_user) return false;
+        if (source?.mes === message?.mes) return true;
+        if (filter && filter(source?.mes) === filter(message?.mes)) {
+            source.mes = message?.mes;
+            return true;
+        }
+        return false;
+    };
+    const sameSelection = (source, message) => {
+        const current = selection(message);
+        // Removing an unselected candidate can renumber the active branch without
+        // changing its source. Removing the active candidate can keep its index.
+        if (current.swipeCount < source.swipeCount) return source.swipeText === current.swipeText && sameInput(source, message);
+        return source.swipe_id === current.swipe_id;
+    };
+    const sameSource = (source, message) => sameInput(source, message) && sameSelection(source, message);
+    const equal = (source, message) => source?.message === message && sameSource(source, message);
     let owner = null;
     let sources = [];
     let generation = 0;
