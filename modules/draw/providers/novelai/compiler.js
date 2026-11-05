@@ -1,9 +1,25 @@
+import { createIdentifier as createVibeCacheKey } from '../../../../shared/common/identifier.js';
 import { assembleCharacterPrompts, joinTags } from '../../shared/character-prompts.js';
 import { getNovelModelCapability, isNovelV5Model } from './novel-model-capabilities.js';
 import { resolveNovelAIBackendImageApi, resolveNovelAIImageApi } from './novel-request-config.js';
 import { buildNovelV5RequestBody } from './novel-v5-request.js';
 
 const MAX_SEED = 0xFFFFFFFF;
+
+
+// 仅保留结构合法的 Vibe 引用，并把强度钳制到 0～1
+function normalizeVibeReferences(value) {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter(item => item && typeof item.encoding === 'string' && item.encoding)
+        .map(item => {
+            const strength = Number(item.strength);
+            return {
+                encoding: item.encoding,
+                strength: Number.isFinite(strength) ? Math.min(1, Math.max(0, strength)) : 0.6,
+            };
+        });
+}
 
 function requireObject(value, label) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -57,7 +73,9 @@ export function buildNovelAIRequestBody({
     params = {},
     defaultParams = {},
     seed,
+    vibeReferences = [],
 } = {}) {
+    const vibes = normalizeVibeReferences(vibeReferences);
     const effective = mergeNovelParams(defaultParams, params);
     const width = effective.width;
     const height = effective.height;
@@ -114,6 +132,17 @@ export function buildNovelAIRequestBody({
         char_caption: prompt.uc || '',
         centers: [prompt.center || { x: 0.5, y: 0.5 }],
     }));
+    // Vibe 氛围转移（仅 v4 / v4.5；编码与模型绑定，由上层按当前模型预先备好）。
+    // 没有参考图时不输出这两个字段，避免给 API 发空数组。
+    const vibePayload = vibes.length > 0
+        ? {
+            reference_image_multiple_cached: vibes.map(vibe => ({
+                cache_secret_key: createVibeCacheKey(),
+                data: vibe.encoding,
+            })),
+            reference_strength_multiple: vibes.map(vibe => vibe.strength),
+        }
+        : {};
     return {
         action: 'generate',
         input: String(scene || ''),
@@ -139,6 +168,7 @@ export function buildNovelAIRequestBody({
             use_coords: useCoords,
             legacy_uc: false,
             normalize_reference_strength_multiple: true,
+            ...vibePayload,
             deliberate_euler_ancestral_bug: false,
             prefer_brownian: true,
             image_format: 'png',
@@ -195,6 +225,7 @@ export function compileNovelImageRequest(request, generationRecipe, seed) {
             negativePrompt: request?.negativePrompt,
             params,
             seed,
+            vibeReferences: request?.vibeReferences ?? recipe.vibeReferences ?? [],
         }),
         isV5: capability.transport === 'msgpack-stream',
         transport,
@@ -228,6 +259,7 @@ export function compile(scenePlan, generationRecipe) {
             tags: task?.scene || '',
             continuityChars: structuredClone(task?.chars || []),
             providerMetadata: {
+                presetId: String(recipe.presetId || ''),
                 autoLearnCharacters: recipe.autoLearnEnabled && Array.isArray(task?.chars)
                     ? task.chars
                     : [],
@@ -244,6 +276,7 @@ export function compile(scenePlan, generationRecipe) {
                 ...promptData,
                 orientation: task.orientation,
                 params: recipe.params,
+                vibeReferences: recipe.vibeReferences,
             }, recipe, normalizeSeed(recipe.seeds[index], index));
             return {
                 request: {

@@ -2,7 +2,7 @@
 // 画廊和缓存管理模块
 
 import { getContext } from "../../../../../../extensions.js";
-import { hasPreviewImage, DRAW_SLOT_COPY, PreviewStatus } from './image-record.js';
+import { hasPreviewImage, DRAW_SLOT_COPY, PreviewStatus, PUBLIC_DRAW_SOURCE } from './image-record.js';
 
 import { getSharedDrawSettings } from './draw-settings.js';
 import { convertImageToJpeg, GALLERY_JPEG_COPY } from './gallery-image-codec.js';
@@ -75,7 +75,7 @@ export function getBase64ImagePayload(value) {
     return { base64: parsed.data, format };
 }
 
-function blobToDataUrl(blob) {
+export function blobToDataUrl(blob) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = () => resolve(String(reader.result || ''));
@@ -619,6 +619,7 @@ export async function storePreview(opts) {
         chapterPath = '',
         chapterTitle = '',
         continuityChars = null,
+        presetId = '',
     } = opts;
     const database = await openDB();
     const ctx = getContext();
@@ -652,6 +653,7 @@ export async function storePreview(opts) {
                 chatId: resolvedChatId,
                 characterName: resolvedCharacterName,
                 source,
+                presetId,
                 bookId,
                 bookTitle,
                 chapterPath,
@@ -1055,12 +1057,12 @@ export async function clearExpiredCache(cacheDays = 3) {
                     const isFailed = record.status === 'failed' || (!record.base64 && !record.savedUrl);
                     const shouldTrimSavedBase64 = !!record.savedUrl && !!record.base64;
 
-                    // Chat image rows are durable user inputs/results, not a
+                    // Chat and public API images are durable user inputs/results, not a
                     // disposable request cache. Only explicit gallery/slot
                     // deletion may remove the last copy of their TAG or image.
                     const chatImage = record.chatId && record.messageId !== undefined
                         && record.messageId !== null && record.messageId !== '' && !record.source;
-                    if (!chatImage && (isExpiredUnsaved || (isFailed && record.timestamp < cutoff))) {
+                    if (!chatImage && record.source !== PUBLIC_DRAW_SOURCE && (isExpiredUnsaved || (isFailed && record.timestamp < cutoff))) {
                         revokePreviewObjectUrl(record.imgId);
                         cursor.delete(); 
                         cleaned++; 
@@ -1113,6 +1115,143 @@ export async function clearAllCache() {
             reject(e);
         }
     });
+}
+
+const THUMB_MAX_DIM = 256;
+
+function normalizeImageDataUrl(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    return raw.startsWith('data:') ? raw : `data:image/jpeg;base64,${raw}`;
+}
+
+export function createThumbnailDataUrl(base64) {
+    if (typeof Image === 'undefined' || typeof document === 'undefined') return Promise.resolve(null);
+    const dataUrl = normalizeImageDataUrl(base64);
+    if (!dataUrl) return Promise.resolve(null);
+    return new Promise((resolve) => {
+        const img = new Image();
+        let settled = false;
+        const finish = (value) => { if (!settled) { settled = true; resolve(value); } };
+        img.onload = () => {
+            try {
+                const w0 = img.naturalWidth || img.width;
+                const h0 = img.naturalHeight || img.height;
+                if (!w0 || !h0) return finish(null);
+                const scale = Math.min(1, THUMB_MAX_DIM / Math.max(w0, h0));
+                const w = Math.max(1, Math.round(w0 * scale));
+                const h = Math.max(1, Math.round(h0 * scale));
+                const canvas = document.createElement('canvas');
+                canvas.width = w;
+                canvas.height = h;
+                const ctx = canvas.getContext('2d');
+                // JPEG 无 alpha 通道，先铺白底防止透明 PNG 变黑
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, w, h);
+                ctx.drawImage(img, 0, 0, w, h);
+                finish(canvas.toDataURL('image/jpeg', 0.7));
+            } catch {
+                finish(null);
+            }
+        };
+        img.onerror = () => finish(null);
+        img.src = dataUrl;
+    });
+}
+
+// JPEG 的 base64 魔数以 /9j/ 开头。输入可能带 data: 前缀，也可能是纯 base64
+// （后台任务路径回传的 PNG 不带前缀），因此不能靠前缀判断格式，直接嗅探内容。
+export function isJpegBase64(value) {
+    const raw = String(value || '').trim();
+    if (!raw) return false;
+    const body = raw.startsWith('data:') ? raw.slice(raw.indexOf(',') + 1) : raw;
+    return body.startsWith('/9j/');
+}
+
+// Compression keeps the lossless source in the existing image folder. The
+// gallery owns only the preview; explicit gallery deletion still leaves saved files.
+let legacyConversion = null;
+export function convertLegacyPreviewsToJpeg(options = {}) {
+    if (!legacyConversion) {
+        legacyConversion = convertLegacyPreviews(options).finally(() => { legacyConversion = null; });
+    }
+    return legacyConversion;
+}
+
+async function convertLegacyPreviews({ onProgress } = {}) {
+    const database = await openDB();
+    const rows = await getGalleryMetadata();
+    const stats = { total: rows.length, converted: 0, skipped: 0, failed: 0, savedBytes: 0 };
+    const changedSlots = new Set();
+    for (const [index, row] of rows.entries()) {
+        try {
+            const record = await getPreview(row.imgId);
+            if (!record?.base64 || getBase64ImagePayload(record.base64).format !== 'png') {
+                stats.skipped++;
+                continue;
+            }
+            const original = record.base64;
+            const converted = await convertImageToJpeg(original);
+            if (!isJpegBase64(converted) || converted.length >= original.length) {
+                stats.skipped++;
+                continue;
+            }
+            const thumb = await createThumbnailDataUrl(converted);
+            // Save the bytes we are about to replace. An old savedUrl may now
+            // return a login page, a different image, or a lossy copy.
+            const image = getBase64ImagePayload(original);
+            const savedUrl = await saveImageToServer({
+                base64: image.base64,
+                charName: record.characterName || getChatCharacterName(),
+                fileName: `original_${record.imgId}`,
+                format: image.format,
+            });
+            if (!savedUrl) throw new Error(GALLERY_JPEG_COPY.originalSaveFailed);
+            const changed = await new Promise((resolve, reject) => {
+                const tx = database.transaction(DB_STORE, 'readwrite');
+                const store = tx.objectStore(DB_STORE);
+                const request = store.get(record.imgId);
+                let written = false;
+                request.onsuccess = () => {
+                    const latest = request.result;
+                    // Do not resurrect deletions or overwrite a concurrent image/save.
+                    if (!latest || latest.base64 !== original || latest.savedUrl !== record.savedUrl) return;
+                    latest.base64 = converted;
+                    latest.savedUrl = savedUrl;
+                    if (thumb) latest.thumbBase64 = thumb;
+                    store.put(withGalleryMetadata(latest));
+                    written = true;
+                    changedSlots.add(latest.slotId);
+                };
+                tx.oncomplete = () => resolve(written);
+                tx.onerror = tx.onabort = () => reject(storageWriteError(tx));
+            });
+            if (changed) {
+                stats.converted++;
+                stats.savedBytes += Math.max(0, Math.round((original.length - converted.length) * 0.75));
+            } else stats.skipped++;
+        } catch (error) {
+            stats.failed++;
+            console.warn('[Gallery] JPEG conversion retained original:', row.imgId, error);
+        } finally {
+            onProgress?.(index + 1, stats.total);
+        }
+    }
+    if (changedSlots.size) {
+        invalidateCache();
+        publishCacheChange([...changedSlots]);
+    }
+    return stats;
+}
+
+// 预设缩略图候选：一次扫描分出「用该预设生成过的图」与其他成功图，
+// 均按时间倒序。旧记录没有 presetId，只能在 others 里手动认。
+export async function getThumbnailCandidates(presetId = '') {
+    const records = (await getGalleryMetadata()).filter(record => record.displayable);
+    return {
+        matched: records.filter(record => presetId && record.presetId === presetId),
+        others: records.filter(record => !presetId || record.presetId !== presetId),
+    };
 }
 
 export async function getGallerySummary() {
