@@ -253,6 +253,134 @@ test('only the selected swipe is reset; replay and deleting that floor restore e
     assert.equal(money(), 100);
 });
 
+for (const count of [1, 2]) {
+    test(`replacement behind ${count} trailing users is idempotent and rolls back only the AI-owned batches`, () => {
+        begin().commit(inc(-20));
+        continueTurn().commit(inc(-5));
+        h.executor.applyStateForMessage(1, '<state>角色.金钱: +4</state>');
+        api.apply(inc(3));
+        const ai = ctx().chat[1];
+        const retained = structuredClone(ai.extra[key].entries.filter(entry => entry.scope !== 'turn'));
+        const init = structuredClone(ctx().chat[0]);
+        for (let index = 0; index < count; index++) {
+            ctx().chat.push({
+                mes: `user ${index}`, is_user: true, swipe_id: 0,
+                swipes: [`user ${index}`, 'alternate user'],
+                extra: { foreign: { value: index } }, swipe_info: [{ extra: { foreign: index } }, { extra: {} }],
+            });
+        }
+        const users = ctx().chat.slice(2);
+        const savedUsers = structuredClone(users);
+        assert.equal(money(), 82);
+        for (let iteration = 0; iteration < 3; iteration++) {
+            const turn = api.beginTurn({ floor: 1, swipeId: 0 });
+            assert.equal(money(), 107);
+            assert.deepEqual(ai.extra[key].entries.filter(entry => entry.scope !== 'turn'), retained);
+            assert.equal(ai.extra[key].entries.filter(entry => entry.scope === 'turn').length, 1);
+            assert.equal(turn.commit(inc(-20)).status, 'success');
+            assert.equal(money(), 87);
+            assert.deepEqual(ctx().chat[0], init);
+            assert.deepEqual(ctx().chat.slice(2), savedUsers);
+            assert.ok(users.every((user, index) => ctx().chat[index + 2] === user));
+            assert.deepEqual(ai.swipe_info[0].extra[key], ai.extra[key]);
+            h.executor.rebuildStateV2();
+            assert.equal(money(), 87);
+        }
+    });
+}
+
+test('tail user records replay after the changed AI without leaking future ownership into its submission', () => {
+    begin().commit(inc(-20));
+    continueTurn().commit(inc(-5));
+    for (const text of [
+        '<state>角色.金钱: +10\n未来: {"计数":1}</state>',
+        '<state>角色.金钱: +7</state>',
+    ]) {
+        ctx().chat.push({ mes: text, is_user: true, swipe_id: 0, extra: { foreign: 'keep' }, swipe_info: [{ extra: {} }] });
+        h.executor.applyStateForMessage(ctx().chat.length - 1, text);
+        if (ctx().chat.length === 3) api.apply(inc(3));
+    }
+    assert.equal(money(), 95);
+    const users = ctx().chat.slice(2);
+    const savedUsers = structuredClone(users);
+    for (let iteration = 0; iteration < 2; iteration++) {
+        const turn = api.beginTurn({ floor: 1, swipeId: 0 });
+        assert.equal(money(), 120, 'request baseline includes replayed tail-user effects');
+        const before = snapshot();
+        const rejected = turn.commit({ ops: [{ op: 'inc', path: '未来.计数', delta: 1 }] });
+        assert.equal(rejected.status, 'failed', 'future user ownership is unavailable at the earlier AI floor');
+        assert.deepEqual(snapshot(), before);
+        const result = turn.commit({ ops: [{ op: 'set', path: '角色.金钱', value: 60 }] });
+        assert.equal(result.status, 'success');
+        assert.equal(result.changes[0].oldValue, 100, 'new operations execute at the actual AI position');
+        assert.equal(money(), 80, 'tail deltas are replayed after the new AI assignment');
+        assert.deepEqual(readStoredValue(ctx(), '未来'), { 计数: 1 });
+        assert.deepEqual(ctx().chat.slice(2), savedUsers);
+        assert.ok(users.every((user, index) => ctx().chat[index + 2] === user));
+        h.executor.rebuildStateV2();
+        assert.equal(money(), 80);
+    }
+});
+
+test('replacement allows only the latest AI followed exclusively by explicit non-system users', () => {
+    begin().commit(inc(-20));
+    const ai = structuredClone(ctx().chat[1]);
+    for (const suffix of [
+        [{ mes: 'system', is_system: true }, { mes: 'user', is_user: true }],
+        [{ mes: 'user', is_user: true }, { mes: 'new AI' }, { mes: 'user', is_user: true }],
+        [{ mes: 'user/system', is_user: true, is_system: true }],
+        [{ mes: 'not an explicit user', is_user: 1 }],
+    ]) {
+        ctx().chat.splice(2, Infinity, ...suffix);
+        const before = snapshot();
+        assert.throws(() => api.beginTurn({ floor: 1, swipeId: 0 }), { code: 'invalid_turn_target' });
+        assert.deepEqual(snapshot(), before);
+    }
+    ctx().chat.splice(2, Infinity, { mes: 'user', is_user: true }, { mes: 'latest AI', swipe_id: 0 }, { mes: 'user', is_user: true });
+    const before = snapshot();
+    assert.throws(() => api.beginTurn({ floor: 1, swipeId: 0 }), { code: 'invalid_turn_target' });
+    assert.throws(() => api.beginContinuation({ floor: 3, swipeId: 0 }), { code: 'invalid_turn_target' });
+    assert.deepEqual(snapshot(), before);
+    assert.equal(api.beginTurn({ floor: 3, swipeId: 0 }).commit(inc(-5)).status, 'success');
+    assert.equal(money(), 75);
+    assert.deepEqual(ctx().chat[1], ai);
+});
+
+for (const [mutation, mutate] of [
+    ['append a user', () => ctx().chat.push({ mes: 'new user', is_user: true })],
+    ['append an AI', () => ctx().chat.push({ mes: 'new AI' })],
+    ['append a system', () => ctx().chat.push({ mes: 'new system', is_system: true })],
+    ['delete a user', () => ctx().chat.pop()],
+    ['replace a user', () => { ctx().chat[2] = structuredClone(ctx().chat[2]); }],
+    ['reorder users', () => { [ctx().chat[2], ctx().chat[3]] = [ctx().chat[3], ctx().chat[2]]; }],
+    ['edit the first user', () => { ctx().chat[2].mes += ' edit'; }],
+    ['edit the last user', () => { ctx().chat[3].mes += ' edit'; }],
+    ['switch a user swipe', () => { ctx().chat[2].swipe_id = 1; }],
+    ['edit a saved user swipe', () => { ctx().chat[2].swipes[0] += ' edit'; }],
+    ['edit user swipe data', () => { ctx().chat[2].swipe_info[0].extra.foreign = 'edit'; }],
+    ['edit a user state record', () => { ctx().chat[2].extra[key].entries[0].ops[0].delta++; }],
+    ['turn a user into an AI', () => { ctx().chat[2].is_user = false; }],
+    ['turn a user into a system', () => { ctx().chat[2].is_system = true; }],
+    ['replace the AI', () => { ctx().chat[1] = structuredClone(ctx().chat[1]); }],
+    ['switch the AI swipe', () => { ctx().chat[1].swipe_id = 1; }],
+    ['edit the AI body', () => { ctx().chat[1].mes += ' edit'; }],
+    ['turn the AI into a user', () => { ctx().chat[1].is_user = true; }],
+]) {
+    test(`replacement behind users rejects stale results after ${mutation}`, () => {
+        begin().commit(inc(-20));
+        for (let index = 0; index < 2; index++) {
+            ctx().chat.push({ mes: `user ${index}`, is_user: true, swipe_id: 0, swipes: [`user ${index}`], swipe_info: [{ extra: {} }] });
+            api.apply(inc(1));
+        }
+        const turn = api.beginTurn({ floor: 1, swipeId: 0 });
+        mutate();
+        const before = snapshot();
+        assert.throws(() => turn.assertCurrent(), { code: 'stale_turn_target' });
+        assert.throws(() => turn.commit(inc(-10)), { code: 'stale_turn_target' });
+        assert.deepEqual(snapshot(), before);
+    });
+}
+
 test('replacement invalidates a cached terminal checkpoint without losing its prefix', () => {
     for (let floor = 2; floor < 100; floor++) {
         ctx().chat.push({ mes: 'prose', swipe_id: 0 });

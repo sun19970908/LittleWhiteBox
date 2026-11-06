@@ -15,8 +15,10 @@ export function createTurnStateApi({ context, prepare, save, receipt, notify }) 
     function begin({ floor, swipeId } = {}, continuation = false) {
         const ctx = context();
         const message = ctx?.chat?.[floor];
-        if (!ctx?.chatId || !message || floor !== ctx.chat.length - 1 || message.is_user || message.is_system
-            || swipeId !== (message.swipe_id ?? 0)) fail('invalid_turn_target');
+        if (!ctx?.chatId || !Number.isInteger(floor) || !message || message.is_user || message.is_system
+            || swipeId !== (message.swipe_id ?? 0)
+            || (continuation ? floor !== ctx.chat.length - 1
+                : !ctx.chat.slice(floor + 1).every(item => item?.is_user === true && !item.is_system))) fail('invalid_turn_target');
         const runtime = prepare(ctx, context);
         const records = readRecords(ctx.chat);
         const previous = readRecord(message);
@@ -41,6 +43,10 @@ export function createTurnStateApi({ context, prepare, save, receipt, notify }) 
         const identity = [ctx.chatId, ctx.characterId, ctx.groupId];
         const chat = ctx.chat, metadata = ctx.chatMetadata;
         const body = message.mes;
+        // Tail users are replayed, never rewritten. Snapshot their complete saved
+        // content as well as object identity so a stale request cannot cross edits.
+        const length = chat.length, tail = chat.slice(floor + 1);
+        const tailContent = JSON.stringify(tail);
         const signature = () => JSON.stringify([
             prefixDigests(readRecords(chat)).at(-1),
             metadata.variables, metadata.LWB_RULES_V2,
@@ -51,8 +57,10 @@ export function createTurnStateApi({ context, prepare, save, receipt, notify }) 
             const current = context();
             if (committed || current?.chat !== chat || current.chatMetadata !== metadata
                 || JSON.stringify([current.chatId, current.characterId, current.groupId]) !== JSON.stringify(identity)
-                || current.chat.length - 1 !== floor || current.chat[floor] !== message
-                || (message.swipe_id ?? 0) !== swipeId || message.mes !== body || signature() !== baseline) fail('stale_turn_target');
+                || current.chat.length !== length || current.chat[floor] !== message || message.is_user || message.is_system
+                || (message.swipe_id ?? 0) !== swipeId || message.mes !== body
+                || tail.some((item, index) => chat[floor + index + 1] !== item)
+                || JSON.stringify(tail) !== tailContent || signature() !== baseline) fail('stale_turn_target');
         }
         return {
             assertCurrent,

@@ -67,6 +67,9 @@ import "./modules/story-outline/story-outline.js";
 import { initTts, cleanupTts, installTtsPublicApi } from "./modules/tts/tts.js";
 import { initEnaPlanner, cleanupEnaPlanner } from "./modules/ena-planner/ena-planner.js";
 import { initAssistant, cleanupAssistant } from "./modules/assistant/assistant.js";
+import { createPublicAgentApi } from './modules/agent-core/public-api.js';
+import { loadSharedAgentSettings } from './modules/agent-core/settings-repository.js';
+import { setHostRequestHeadersProvider } from './shared/host-request-headers.js';
 import { initEbook, cleanupEbook } from "./modules/ebook/ebook.js";
 import {
     activateTauriTavernChatSurface,
@@ -519,6 +522,13 @@ function cleanupDeprecatedData() {
 }
 
 let isXiaobaixEnabled = settings.enabled;
+setHostRequestHeadersProvider(() => window.SillyTavern.getContext().getRequestHeaders());
+const publicAgentApi = createPublicAgentApi({
+    isEnabled: () => isXiaobaixEnabled,
+    loadSettings: loadSharedAgentSettings,
+    loadCore: () => import('./modules/agent-core/browser-entry.js'),
+});
+window.xiaobaixAgent = publicAgentApi.api;
 let drawProviderTransitionGeneration = 0;
 let moduleCleanupFunctions = new Map();
 const HOST_BRIDGES = {
@@ -725,6 +735,7 @@ async function toggleAllFeatures(enabled) {
         document.dispatchEvent(new CustomEvent('xiaobaixEnabledChanged', { detail: { enabled: true } }));
         $(document).trigger('xiaobaix:enabled:toggle', [true]);
     } else {
+        publicAgentApi.cancelAll();
         try { window.XB_captureAndStoreStates && window.XB_captureAndStoreStates(); } catch (e) { console.warn({ source: import.meta.url, operation: "toggleAllFeatures" }, e); }
         cleanupXiaobaiOs();
         cleanupChatMessageImages();
