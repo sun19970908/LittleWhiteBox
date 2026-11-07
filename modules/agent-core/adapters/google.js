@@ -478,6 +478,9 @@ function buildConversation(messages) {
                 parts: [
                     ...(message.content ? [buildTextPart(message.content)] : []),
                     ...message.tool_calls.map((toolCall) => ({
+                        // Hand-built or cross-provider history has no Gemini signature.
+                        // Genuine Google responses use preservedContents above.
+                        thoughtSignature: 'skip_thought_signature_validator',
                         functionCall: {
                             ...(() => {
                                 const providerId = Object.prototype.hasOwnProperty.call(toolCall, 'providerToolCallId')

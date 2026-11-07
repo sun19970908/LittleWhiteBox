@@ -13,6 +13,7 @@ import { isTrustedIframeEvent, postToIframe } from "../../core/iframe-messaging.
 import { AssistantStorage } from "../../core/server-storage.js";
 import { createAssistantHostWindow } from "./assistant-host-window.js";
 import { TOOL_NAMES } from "./app-src/tooling.js";
+import { CARD_SKILL, cardSkillContent } from '../card-workspace/assistant-contract.js';
 import { normalizeSlashSkillTrigger } from "./app-src/slash-command-policy.js";
 import { applyPatchUpdateToText, parseApplyPatch } from "../agent-core/tools/apply-patch.js";
 import { buildPatchFailureResult, runPatchValidationAndApply } from "../agent-core/tools/apply-patch-execution.js";
@@ -124,6 +125,7 @@ let editorContextCache = null;
 let localSourcesToolRuntime = null;
 let assistantFrameReady = false;
 let pendingOpenSettingsReveal = false;
+let pendingDraftMessage = '';
 const planLedger = createPlanLedger({ plansTable: assistantPlansTable });
 
 function summarizeLocalSourcesForDebug(localSources) {
@@ -316,6 +318,9 @@ async function buildAssistantRuntimePayload(signal) {
             version: getLocalSourcesToolRuntime().getWorkspaceState().version,
         },
         ...skillsRuntime,
+        skillsPromptSummary: [skillsRuntime.skillsPromptSummary,
+            `- ${CARD_SKILL.title} | ${CARD_SKILL.summary} | ReadSkill id: ${CARD_SKILL.id}`,
+        ].filter(Boolean).join('\n'),
     };
 }
 
@@ -2206,20 +2211,27 @@ async function readSkillsCatalogTool(_args = {}, options = {}) {
             details: String(result.content || ''),
         };
     }
+    const builtins = [{ ...CARD_SKILL, content: undefined, builtin: true }];
+    const skills = [...result.catalog.skills, ...builtins];
     return {
         ok: true,
         name: result.name,
         version: result.catalog.version,
-        total: result.catalog.skills.length,
-        enabledCount: result.catalog.skills.filter((item) => item.enabled !== false).length,
-        skills: result.catalog.skills,
-        summaryText: result.summaryText,
-        content: result.content,
+        total: result.catalog.skills.length + builtins.length,
+        enabledCount: result.catalog.skills.filter((item) => item.enabled !== false).length + builtins.length,
+        skills,
+        summaryText: [result.summaryText, ...builtins.map(skill => `${skill.title} | ${skill.summary} | ReadSkill id: ${skill.id}`)].filter(Boolean).join('\n'),
+        content: JSON.stringify({ ...result.catalog, skills }, null, 2),
     };
 }
 
 async function readSkillTool(args = {}, options = {}) {
     const byId = String(args.id || '').trim();
+    if (byId === CARD_SKILL.id || (!byId && args.filename === `${extensionFolderPath}/${CARD_SKILL.path}`)) {
+        const filename = `${extensionFolderPath}/${CARD_SKILL.path}`;
+        const body = await readTextFile(filename, options);
+        return { ok: true, ...CARD_SKILL, filename, content: cardSkillContent(body, extensionFolderPath), builtin: true };
+    }
     const byFilename = normalizeSkillFileName(args.filename || '');
     if (!byId && !byFilename) {
         return {
@@ -3188,6 +3200,14 @@ async function runJavaScriptApi(args = {}, options = {}) {
 
 async function executeToolCall(name, args, options = {}) {
     switch (name) {
+        case TOOL_NAMES.CARD_FILES: {
+            const { runCardFiles } = await import('../card-workspace/service.js');
+            const result = await runCardFiles(args, options);
+            const { localSources } = await workspaceRepository.readWorkspace();
+            await getLocalSourcesToolRuntime().hydrateLocalSources(localSources);
+            options.onLocalSourcesUpdated?.(localSources, getLocalSourcesToolRuntime().getWorkspaceState());
+            return result;
+        }
         case TOOL_NAMES.LS:
             return await listDirectory(args, options);
         case TOOL_NAMES.GLOB:
@@ -3269,12 +3289,33 @@ function getAssistantHostWindow() {
     return hostWindow;
 }
 
-function openAssistant() {
-    if (!getAssistantHostWindow().open()) return;
+function revealDraftMessage() {
+    if (!pendingDraftMessage || !assistantFrameReady) return;
+    postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:compose', payload: { text: pendingDraftMessage } });
+    pendingDraftMessage = '';
+}
+
+export async function openCardWorkspace({ variables = false } = {}) {
+    if (!window.xiaobaixAssistant) await initAssistant();
+    const card = await executeToolCall(TOOL_NAMES.CARD_FILES, { action: 'open' });
+    setAssistantEditorContext({ source: 'card-files', note: `角色卡：${card.name}。工作区：${card.root}。ReadSkill id: ${CARD_SKILL.id}` });
+    const workspace = await workspaceRepository.readWorkspace();
+    await workspaceRepository.saveWorkspaceUiState({ ...workspace, isWorkspaceOpen: true, workspacePanelMode: 'workspace',
+        selectedFilePath: card.paths.find(path => variables && path.includes('/tasks/') && path.endsWith('.js')) || `${card.root}card.json`,
+        fileSearchQuery: '', showModifiedOnly: false, mobileWorkspacePane: 'viewer' });
+    openAssistant({ draftMessage: `帮我${variables ? '制作变量卡' : '修改角色卡'}「${card.name}」。先看看已有文件，再和我一起调整。` });
+    if (assistantFrameReady) postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:card-workspace', payload: { path: `${card.root}card.json`, localSources: workspace.localSources } });
+    return card;
+}
+
+function openAssistant(options = {}) {
+    if (typeof options.draftMessage === 'string') pendingDraftMessage = options.draftMessage;
+    if (!getAssistantHostWindow().open()) { revealDraftMessage(); return; }
     settingsLoaded = false;
 
     // eslint-disable-next-line no-restricted-syntax -- Guarded inside handleIframeMessage via isTrustedIframeEvent.
     window.addEventListener('message', handleIframeMessageEvent);
+    revealDraftMessage();
 }
 
 async function pushAssistantConfigToIframe(options = {}) {
@@ -3349,6 +3390,7 @@ function closeAssistant() {
     getLocalSourcesToolRuntime().clearLocalSources();
     assistantFrameReady = false;
     pendingOpenSettingsReveal = false;
+    pendingDraftMessage = '';
 }
 
 async function handleIframeMessage(event) {
@@ -3363,6 +3405,7 @@ async function handleIframeMessage(event) {
             assistantFrameReady = true;
             await pushAssistantConfigToIframe();
             postEditorContextToIframe();
+            revealDraftMessage();
             if (pendingOpenSettingsReveal) {
                 revealAssistantSettings();
             }

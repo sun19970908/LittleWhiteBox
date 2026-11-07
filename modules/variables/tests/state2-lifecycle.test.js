@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { setImmediate } from 'node:timers';
 import { createHarness, loadVariablesCore, readStoredValue } from './helpers/state2-harness.js';
+import { formatPath } from '../state2/path.js';
 
 // Exercise actual core callbacks with controlled readiness and post-turn dependencies.
 // Host DOM readiness itself and neighbouring task modules are not simulated.
@@ -18,7 +19,8 @@ const emit = (event, ...args) => host.handlers.get(event)?.(...(args.length ? ar
 const settled = () => new Promise(resolve => setImmediate(resolve));
 const spend = () => globalThis.LWB_StateV2.apply({ ops: [{ op: 'inc', path: '角色.金钱', delta: -20 }] });
 const record = () => ctx().chat[1].extra?.[KEY];
-const storedOps = floor => (ctx().chat[floor].extra?.[KEY]?.entries || []).flatMap(entry => entry.ops);
+const storedOps = floor => (ctx().chat[floor].extra?.[KEY]?.entries || []).flatMap(entry => entry.ops)
+    .map(op => ({ ...op, path: formatPath(op.path) }));
 const syncBody = (floor, body) => {
     ctx().chat[floor].mes = body;
     return harness.executor.applyStateForMessage(floor, body);

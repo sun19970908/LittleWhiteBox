@@ -76,10 +76,10 @@
 
 ```json
 {
-  "v": 1,
+  "v": 2,
   "entries": [
-    { "kind": "text", "roots": ["角色"], "blocks": ["3f9a1c2e7d84b605"], "rules": [], "ops": [{ "op": "set", "source": "text", "path": "角色", "value": { "金钱": 100, "日志": [] } }] },
-    { "kind": "call", "source": "json", "roots": [], "ops": [{ "op": "inc", "source": "json", "path": "角色.金钱", "delta": -10 }] },
+    { "kind": "text", "roots": ["角色"], "blocks": ["3f9a1c2e7d84b605"], "rules": [], "ops": [{ "op": "set", "source": "text", "path": ["角色"], "value": { "金钱": 100, "日志": [] } }] },
+    { "kind": "call", "source": "json", "roots": [], "ops": [{ "op": "inc", "source": "json", "path": ["角色", "金钱"], "delta": -10 }] },
     { "kind": "call", "source": "text", "roots": [], "blocks": ["b71d0e4412a6c908"], "rules": [], "ops": [] }
   ]
 }

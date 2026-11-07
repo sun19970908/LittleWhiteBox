@@ -41,6 +41,7 @@ import {
     TOP_OP_RE,
 } from "./varevent-editor.js";
 import { observeAsyncCallback, observeBackgroundTask } from '../../shared/common/async-errors.js';
+import { initVariableUpdater, cleanupVariableUpdater, notifyVariableReplyReady } from './updater/host.js';
 
 
 /* ============ Module Constants ============= */
@@ -2336,6 +2337,7 @@ function notifyStateAfterAi(chatId, messageId, message) {
                 job.lastText = unchanged ? readMessageText(message) : text;
                 job.lastGeneration = generation;
                 await executeQueuedVareventJsAfterTurn();
+                if (isCurrent()) notifyVariableReplyReady(messageId);
             }
         } finally {
             job.pending = false;
@@ -2636,6 +2638,7 @@ export function initVariablesCore() {
         beginContinuation: stateApi.beginContinuation,
     };
     openStateChat();
+    initVariableUpdater(stateApi);
 }
 
 /**
@@ -2645,6 +2648,8 @@ export function cleanupVariablesCore() {
     try { xbLog.info('variablesCore', '变量系统清理'); } catch (error) { console.warn({ source: import.meta.url, operation: 'cleanupVariablesCore' }, error); }
     if (!initialized) return;
     resetStateAfterAiJobs();
+
+    cleanupVariableUpdater();
 
     // cleanup events
     events?.cleanup();

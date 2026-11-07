@@ -28,6 +28,8 @@ import { createSessionStore } from './state/session-store.js';
 import { createWorkspaceStore } from './workspace/workspace-store.js';
 import { closeAssistantWorkspace } from './workspace/workspace-lifecycle.js';
 import { ACTIVITY_COPY } from './ui/activity-copy.js';
+import { locateFile } from '../../card-workspace/files.js';
+import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
 import { createAttachmentsManager } from './attachments.js';
 import { renderAppChrome, renderContextHint, resolveWorkspaceWidth } from './ui/app-chrome.js';
 import { bindContextMeter, renderContextMeter } from './ui/context-meter.js';
@@ -558,6 +560,16 @@ async function saveSkillFile(targetPath = '') {
     }
 }
 
+async function editCardFiles(path = '') {
+    try {
+        if (!await flushPendingWorkspaceChanges()) return;
+        const result = await requestHostTool(TOOL_NAMES.CARD_FILES, path ? { action: 'save', paths: [path] } : { action: 'open' });
+        if (path) showToast(result.ok ? (result.results.some(item => item.hasUnsavedEdits) ? CARD_COPY.savedLater : CARD_COPY.saved)
+            : result.results.filter(item => !item.saved).map(item => item.error).join('\n'));
+        else openWorkspacePanelTarget(`${result.root}card.json`);
+    } catch (error) { showToast(describeError(error)); }
+}
+
 function renderWorkspacePanel(container, options = {}) {
     if (state.workspacePanelMode === 'memory') {
         ensureSkillSelection({ fallbackToFirst: false });
@@ -668,7 +680,12 @@ function renderWorkspacePanel(container, options = {}) {
         showRestoreButton: true,
         showRenameButton: true,
         showDeleteButton: true,
-        showSaveButton: false,
+        showSaveButton: !!locateFile(state.selectedFilePath || ''),
+        saveLabel: CARD_COPY.save,
+        canSaveFile: file => !!locateFile(file.path),
+        onSaveFile: path => observeBackgroundTask(editCardFiles(path), { source: import.meta.url, operation: 'saveCardFile' }),
+        extraNavActions: [{ action: 'open-card', icon: 'file', label: CARD_COPY.open,
+            onClick: () => observeBackgroundTask(editCardFiles(), { source: import.meta.url, operation: 'openCardFiles' }) }],
     });
 }
 
@@ -2042,6 +2059,11 @@ window.addEventListener('message', (event) => {
         return;
     }
     const data = event.data || {};
+    if (data.type === 'xb-assistant:card-workspace') {
+        observeBackgroundTask(applyExternalLocalSources(data.payload.localSources).then(() => openWorkspacePanelTarget(data.payload.path)),
+            { source: import.meta.url, operation: 'openCardWorkspace' });
+        return;
+    }
     if (data.type === 'xb-assistant:prepare-close') {
         observeBackgroundTask(closeAssistantAfterWorkspaceFlush(), { source: import.meta.url, operation: "callback" });
         return;
@@ -2071,6 +2093,16 @@ window.addEventListener('message', (event) => {
             applyConfig(data.payload.config);
         } else {
             render();
+        }
+        return;
+    }
+
+    if (data.type === 'xb-assistant:compose') {
+        const input = document.querySelector('#xb-assistant-input');
+        if (input && !input.value.trim()) {
+            input.value = String(data.payload?.text || '');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.focus();
         }
         return;
     }

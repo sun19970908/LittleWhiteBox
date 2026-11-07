@@ -296,6 +296,31 @@ function getCharacterTasks(c = characters[this_chid]) {
     return c.data.extensions[TASKS_MODULE_NAME].tasks;
 }
 
+// Domain editors save one task through the same queue and confirmation as the task UI.
+export function readCharacterTaskSnapshot() {
+    const character = characters[this_chid];
+    if (!character || getContext().groupId) throw new Error(TASK_SAVE_COPY.characterRequired);
+    return { avatar: character.avatar, name: character.name, tasks: structuredClone(getCharacterTasks(character)) };
+}
+
+export async function saveCharacterTask({ avatar, previous, task, signal }) {
+    const character = characters[this_chid];
+    if (!character || character.avatar !== avatar || getContext().groupId) throw new Error(TASK_SAVE_COPY.characterRequired);
+    const tasks = getCharacterTasks(character);
+    const index = task.id ? tasks.findIndex(item => item.id === task.id) : -1;
+    if (JSON.stringify(index < 0 ? null : tasks[index]) !== JSON.stringify(previous)) throw new Error(TASK_SAVE_COPY.changed);
+    const next = structuredClone(task);
+    const previousRuntime = index < 0 ? null : captureTaskRuntime(tasks[index], 'character');
+    if (index < 0) next.id ||= uuidv4();
+    const desired = tasks.slice();
+    if (index < 0) desired.push(next); else desired[index] = next;
+    await saveCharacterTasks(desired, { target: { character }, signal, expectedTask: { id: task.id, previous } });
+    if (previousRuntime) resetTaskRun(previousRuntime.key, { cancelStartup: true });
+    state.lastTasksHash = '';
+    if (window.__XB_TASKS_INITIALIZED__) refreshUI();
+    return next.id;
+}
+
 // The host replaces character objects after editing a card (including its lorebook).
 // The avatar identifies the saved card; object identity does not identify a write queue.
 const characterTaskWrites = new Map();
@@ -354,7 +379,7 @@ async function onCharacterEdited() {
     }
 }
 
-async function saveCharacterTasks(tasks, { signal, target, mutation } = {}) {
+async function saveCharacterTasks(tasks, { signal, target, mutation, expectedTask } = {}) {
     throwIfSignalAborted(signal);
     const character = resolveTaskCharacter(target?.character || characters[this_chid]);
     if (!character) throw new Error(TASK_SAVE_COPY.characterRequired);
@@ -375,6 +400,10 @@ async function saveCharacterTasks(tasks, { signal, target, mutation } = {}) {
     });
     const work = (previousWrite?.tail || Promise.resolve()).then(async () => {
         throwIfSignalAborted(signal);
+        if (expectedTask) {
+            const currentTask = expectedTask.id ? getCharacterTasks(resolveTaskCharacter(character)).find(item => item.id === expectedTask.id) || null : null;
+            if (JSON.stringify(currentTask) !== JSON.stringify(expectedTask.previous)) throw new Error(TASK_SAVE_COPY.changed);
+        }
         const merged = mergeTaskListChanges(base, snapshot, getCharacterTasks(resolveTaskCharacter(character)), mutation, identities);
         await saveCharacterTasksConfirmed(avatar, TASKS_MODULE_NAME, merged, signal);
         // Publish to the current copy of this card, never the object retired by ST.

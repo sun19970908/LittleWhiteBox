@@ -64,7 +64,7 @@ export function setLocalVariable(name, value) {
 
     copySourceFile(tempDir, 'parser.js', source => source
         .replace("import jsyaml from '../../../libs/js-yaml.mjs';", `import jsyaml from '${yamlModuleUrl}';`));
-    for (const name of ['semantic.js', 'executor.js', 'json-input.js', 'records.js', 'checkpoints.js', 'rebuild.js', 'legacy-log.js', 'turn-state.js', 'index.js']) copySourceFile(tempDir, name);
+    for (const name of ['semantic.js', 'path.js', 'path-v1.js', 'diagnostics.js', 'executor.js', 'json-input.js', 'records.js', 'checkpoints.js', 'rebuild.js', 'legacy-log.js', 'turn-state.js', 'index.js']) copySourceFile(tempDir, name);
     copySourceFile(tempDir, 'guard-core.js');
     copySourceFile(tempDir, 'guard.js', source => source
         .replace("import { getContext } from '../../../../../../extensions.js';", "import { getContext } from './mock-extensions.js';"));
@@ -131,6 +131,9 @@ export const parseValueForSet = value => value;
 export const preprocessBumpAliases = value => value;
 export const executeQueuedVareventJsAfterTurn = async () => { afterAi.vareventCalls += 1; await afterAi.afterTurn(); };
 export const stripYamlInlineComment = value => value;
+export const initVariableUpdater = () => {};
+export const cleanupVariableUpdater = () => {};
+export const notifyVariableReplyReady = () => {};
 export const OP_MAP = {};
 export const TOP_OP_RE = /never/;
 export const observeAsyncCallback = callback => callback;

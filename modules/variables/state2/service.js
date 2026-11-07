@@ -3,7 +3,7 @@ import { parseJsonInput, publicOperationName, StateInputError, getStateInputSche
 import { createTurnStateApi } from './turn-state.js';
 import { executeStateOperations } from './executor.js';
 import { replaceRules } from './guard-core.js';
-import { bodyBlocks, readRecord, readRecords, writeRecord, ownedRoots, bodyUpdate, parseEntry, withEntry } from './records.js';
+import { bodyBlocks, readRecord, readRecords, writeRecord, ownedRoots, bodyUpdate, parseEntry, withEntry, upgradeChatPaths } from './records.js';
 import { convertLegacyLog, stageLegacyLog, LEGACY_CONVERSION_ERROR } from './legacy-log.js';
 import { calculateRebuild, publishRebuild, refreshLiveCheckpoint } from './rebuild.js';
 
@@ -59,13 +59,15 @@ export function cleanupStateService() {
 
 function prepare(ctx, context = getContext, legacy) {
     if (!ctx?.chatMetadata || !Array.isArray(ctx.chat)) throw Object.assign(new Error(MESSAGES[SERVICE_ERROR.NO_CHAT]), { code: SERVICE_ERROR.NO_CHAT });
-    if (convertLegacyLog(ctx, legacy)) scheduleSave(ctx, context);
+    const legacyConverted = convertLegacyLog(ctx, legacy);
     const identity = chatIdentity(ctx);
     let runtime = runtimes.get(ctx.chat);
     if (!runtime || runtime.identity !== identity) {
+        if (upgradeChatPaths(ctx, legacyConverted)) scheduleSave(ctx, context);
         runtime = { identity, roots: ownedRoots(readRecords(ctx.chat)) };
         runtimes.set(ctx.chat, runtime);
     }
+    else if (legacyConverted && upgradeChatPaths(ctx, true)) scheduleSave(ctx, context);
     return runtime;
 }
 

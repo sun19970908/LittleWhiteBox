@@ -88,7 +88,7 @@ test('duplicate index deletion including dot/bracket aliases rejects the entire 
     for (const [first, second] of [
         ['data.a.0', 'data.a.0'],
         ['data.a.0', 'data.a[0]'],
-        ['data.a.1', 'data.a["01"]'],
+        ['data.a.1', 'data.a["1"]'],
     ]) {
         seed();
         reject([

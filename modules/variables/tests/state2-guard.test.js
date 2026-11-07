@@ -49,7 +49,7 @@ $schema 数据
 
     assert.deepEqual(
         rules.map(item => item.path),
-        ['数据', '数据.背包', '数据.背包.[*]', '数据.背包.[*].名称', '数据.背包.[*].数量'],
+        ['数据', '数据.背包', '数据.背包[*]', '数据.背包[*].名称', '数据.背包[*].数量'],
     );
     assert.deepEqual(getRuleNode('数据.背包.0'), { typeLock: 'object', allowedKeys: ['名称', '数量'] });
     assert.deepEqual(getRuleNode('数据.背包.0.数量'), { typeLock: 'number' });

@@ -23,6 +23,26 @@ test.beforeEach(() => {
 });
 test.after(() => h.cleanup());
 
+// Independent updates must never remove a previous success merely by starting,
+// failing or being abandoned. A late result must not cross a new chat/state.
+test('staged replacement preserves live state until a valid current submission commits', () => {
+    begin().commit(inc(-20));
+    continueTurn().commit(inc(-5));
+    const before = snapshot();
+    const staged = api.stageTurn(target());
+    assert.equal(JSON.parse(staged.snapshot.variables.角色).金钱, 100);
+    assert.deepEqual(snapshot(), before);
+    const rejected = staged.commit({ ops: [...inc(-7).ops, { op: 'inc', path: '未管理.值', delta: 1 }] });
+    assert.equal(rejected.status, 'failed');
+    assert.deepEqual(snapshot(), before);
+    const competing = api.stageTurn(target());
+    assert.equal(staged.commit(inc(-10)).status, 'success');
+    assert.equal(money(), 90);
+    assert.throws(() => competing.commit(inc(-15)), { code: 'stale_turn_target' });
+    h.executor.rebuildStateV2();
+    assert.equal(money(), 90);
+});
+
 test('same-floor continuations preserve the original submission and append one separate batch each', () => {
     begin().commit(inc(-20));
     const original = record();

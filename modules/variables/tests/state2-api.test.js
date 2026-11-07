@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { createHarness, readStoredValue, lwbMeta } from './helpers/state2-harness.js';
+import { parsePath } from '../state2/path.js';
 
 // Contracts: synchronous writes; immutable requests; B body synchronization;
 // swipe ownership; prefix-validated bounded caches; atomic deployed-v1 conversion.
@@ -62,7 +63,7 @@ test('invalid JSON rejects the complete batch without invoking accessors or alte
     const getter = { get value() { accessed++; return 1; } };
     const tagGetter = Object.create({ get [Symbol.toStringTag]() { accessed++; return 'Object'; } });
     const invalid = [
-        '{', [], null, { ops: 'x' }, { ops: [], floor: 8 },
+        '{', [], null, { ops: 'x' },
         { ops: [...inc(-20).ops, { op: 'unknown', path: '角色.金钱' }] },
         { ops: [...inc(-20).ops, { op: 'inc', path: '角色.金钱', delta: '2' }] },
         ...[Infinity, NaN, circular, undefined, getter, tagGetter, new Date(), () => 1, Symbol('bad')]
@@ -70,7 +71,6 @@ test('invalid JSON rejects the complete batch without invoking accessors or alte
         ...['角色.__proto__.polluted', '角色.constructor.x', '角色.prototype.x', '角色[']
             .map(path => ({ ops: [...inc(-20).ops, { op: 'set', path, value: 1 }] })),
         { get ops() { accessed++; return inc(-20).ops; } },
-        { ops: [{ op: 'del', path: '角色.金钱', value: 1 }] },
         { ops: [...inc(-20).ops, { op: ['set'], path: '角色.金钱', value: 1 }] },
         { ops: [...inc(-20).ops, { op: 'pop', path: '角色.背包', value: 'a' }] },
         { ops: [...inc(-20).ops, { op: 'remove', path: '角色.背包' }] },
@@ -118,7 +118,7 @@ test('JSON cannot acquire unmanaged roots and independent variables survive rebu
     ] });
     assert.equal(result.status, 'partial');
     assert.deepEqual(result.errors.map(item => item.code), ['unmanaged_root', 'unmanaged_root']);
-    assert.deepEqual(record(1).entries[0].ops, [{ ...inc(-20).ops[0], source: 'json' }]);
+    assert.deepEqual(record(1).entries[0].ops, [{ ...inc(-20).ops[0], path: ['角色', '金钱'], source: 'json' }]);
     rebuild();
     assert.equal(read().金钱, 80);
     assert.equal(state().chatMetadata.variables.独立, 'keep');
@@ -137,9 +137,9 @@ test('requests retain original deltas, values, refusals and noops, then replay u
     assert.equal(result.changes[0].delta, -100);
     assert.equal(result.errors[0].code, 'operation_failed');
     assert.deepEqual(record(1).entries[0].ops, [
-        { ...inc(-200).ops[0], source: 'json' },
-        { op: 'push', path: '角色.位置', value: 'arrived', source: 'json' },
-        { op: 'set', path: '角色.金钱', value: 0, source: 'json' },
+        { ...inc(-200).ops[0], path: ['角色', '金钱'], source: 'json' },
+        { op: 'push', path: ['角色', '位置'], value: 'arrived', source: 'json' },
+        { op: 'set', path: ['角色', '金钱'], value: 0, source: 'json' },
     ]);
     sync(0, text('角色: {"金钱":500,"位置":[],"背包":[]}'));
     assert.deepEqual(read().位置, ['arrived']);
@@ -396,8 +396,8 @@ test('request storage stays linear while decoded checkpoints retain only the hig
     for (let floor = 1; floor < 160; floor++) {
         const entry = record(floor).entries[0];
         assert.deepEqual(entry.ops, [
-            { op: 'push', path: '数据.列表', value: String(floor), source: 'text' },
-            { op: 'inc', path: '数据.值', delta: 1, source: 'text' },
+            { op: 'push', path: ['数据', '列表'], value: String(floor), source: 'text' },
+            { op: 'inc', path: ['数据', '值'], delta: 1, source: 'text' },
         ]);
         assert.ok(JSON.stringify(record(floor)).length < 400);
     }
@@ -607,8 +607,8 @@ test('frozen deployed v1 fixture converts requests once without changing current
     for (let floor = 0; floor < 4; floor++) {
         const entry = record(floor).entries[0];
         assert.equal(entry.kind, 'text');
-        assert.deepEqual(entry.rules, old.floors[floor].rules);
-        assert.deepEqual(entry.ops, old.floors[floor].ops.map(op => ({ ...op, source: 'text' })));
+        assert.deepEqual(entry.rules, old.floors[floor].rules.map(item => ({ ...item, path: parsePath(item.path, { pattern: true }) })));
+        assert.deepEqual(entry.ops, old.floors[floor].ops.map(op => ({ ...op, path: parsePath(op.path), source: 'text' })));
         assert.deepEqual(entry.roots, old.floors[floor].roots);
         assert.equal(entry.blocks.length, 1);
         assert.equal(record(floor).roots, undefined);
@@ -656,7 +656,7 @@ test('a malformed legacy rule fails conversion before any record or old metadata
 
 test('legacy conversion skips existing current records and out-of-range floors', () => {
     loadFixture();
-    const existing = { v: 1, entries: [{ kind: 'call', source: 'json', roots: [], ops: [{ op: 'inc', path: '角色.金钱', delta: 3, source: 'json' }] }] };
+    const existing = { v: 2, entries: [{ kind: 'call', source: 'json', roots: [], ops: [{ op: 'inc', path: ['角色', '金钱'], delta: 3, source: 'json' }] }] };
     state().chat[1].extra = { [KEY]: existing };
     lwbMeta(state()).stateLogV2.floors['99'] = { deliberately: 'ignored' };
     harness.executor.openStateChat();

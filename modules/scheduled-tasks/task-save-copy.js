@@ -7,6 +7,7 @@ export const TASK_SAVE_COPY = Object.freeze({
     nameRequired: '请输入任务名称。',
     commandsRequired: '请输入脚本命令。',
     characterRequired: '请先打开要保存任务的角色卡。',
+    changed: '任务已变化，请重新读取后保存。',
     presetRequired: '请先选择一个 OpenAI 预设。',
     presetChanged: 'Preset was replaced during task save',
 });

@@ -1,9 +1,12 @@
 import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, getWebSearchToolDefinition } from '../../agent-core/web/tools.js';
+import { CARD_TOOL } from '../../card-workspace/assistant-contract.js';
+import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
 
 // ============================================================
 // 工具名称常量
 // ============================================================
 export const TOOL_NAMES = {
+    CARD_FILES: CARD_TOOL.function.name,
     LS: 'LS',
     GLOB: 'Glob',
     GREP: 'Grep',
@@ -36,6 +39,7 @@ export const TOOL_NAMES = {
 // 工具定义
 // ============================================================
 export const TOOL_DEFINITIONS = [
+    CARD_TOOL,
     {
         type: 'function',
         function: {
@@ -611,6 +615,8 @@ function truncateInlineText(value = '', limit = 220) {
 
 export function describeToolCall(name, args = {}) {
     switch (name) {
+        case TOOL_NAMES.CARD_FILES:
+            return args.action === 'save' ? CARD_COPY.save : CARD_COPY.open;
         case TOOL_NAMES.LS:
             return `查看目录 ${args.path || ''}${args.offset ? `:${args.offset}` : ''}`.trim();
         case TOOL_NAMES.GLOB:

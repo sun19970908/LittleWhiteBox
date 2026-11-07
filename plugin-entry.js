@@ -28,6 +28,7 @@ import { initButtonCollapse } from "./widgets/button-collapse.js";
 import { initVariablesPanel, cleanupVariablesPanel } from "./modules/variables/variables-panel.js";
 import { initStreamingGeneration } from "./modules/streaming-generation.js";
 import { initVariablesCore, cleanupVariablesCore } from "./modules/variables/variables-core.js";
+import { openVariableSettings } from './modules/variables/updater/host.js';
 import { initControlAudio } from "./modules/control-audio.js";
 import {
     initRenderer,
@@ -909,6 +910,10 @@ async function setupSettings() {
         syncFeatureActionButtons();
 
         // variables mode selector
+        $("#xiaobaix_variables_open_settings").on('click', () => {
+            if (!isXiaobaixEnabled) return;
+            try { openVariableSettings(); } catch (error) { toastr.warning(error.message); }
+        });
         $("#xiaobaix_variables_mode")
             .val(settings.variablesMode || "1.0")
             .on("change", function () {

@@ -26,7 +26,7 @@ test('migration retains explicit empty production ownership and every failed req
     harness.executor.openStateChat();
     assert.deepEqual(ctx().chatMetadata.variables, before);
     assert.deepEqual(entries(0)[0].roots, []);
-    assert.deepEqual(entries(0)[0].ops, old.ops.map(op => ({ ...op, source: 'text' })));
+    assert.deepEqual(entries(0)[0].ops, old.ops.map(op => ({ ...op, path: [op.path], source: 'text' })));
     harness.executor.rebuildStateV2();
     assert.equal(readStoredValue(ctx(), 'X'), 'keep');
     assert.equal(readStoredValue(ctx(), 'independent'), 'safe');

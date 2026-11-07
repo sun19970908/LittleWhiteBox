@@ -6,6 +6,7 @@ import { createModuleEvents, event_types } from "../../core/event-manager.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
 import { createVariablesPanelRuntime } from "./variables-panel-runtime.js";
 import { observeBackgroundTask } from '../../shared/common/async-errors.js';
+import { formatPath } from './state2/path.js';
 
 
 const CONFIG = {
@@ -140,7 +141,7 @@ const getRulesTable = () => {
   }
 };
 
-const pathKey = (arr)=>{ try { return (arr||[]).map(String).join('.'); } catch { return ''; } };
+const pathKey = (arr)=> extension_settings?.[EXT_ID]?.variablesMode === '2.0' ? formatPath(arr || []) : (arr || []).map(String).join('.');
 const getRuleNodeByPath = (arr)=> (pathKey(arr) ? (getRulesTable()||{})[pathKey(arr)] : undefined);
 const hasAnyRule = (n) => {
   if (!n) return false;
@@ -352,7 +353,7 @@ class VariablesPanel {
     const parsed=this.parseValue(v), hasChildren=typeof parsed==='object' && parsed!==null;
     const disp = l===0? this.formatTopLevelValue(v) : this.formatValue(v);
     const ruleNode=getRuleNodeByPath(fullPath);
-    return $(`<div class="vm-item ${l>0?'vm-tree-level-var':''}" data-key="${k}" data-type="${t||''}" ${l>0?`data-level="${l}"`:''} data-path="${this.escape(pathKey(fullPath))}">
+    return $(`<div class="vm-item ${l>0?'vm-tree-level-var':''}" data-key="${this.escape(k)}" data-type="${t||''}" ${l>0?`data-level="${l}"`:''} data-path="${this.escape(pathKey(fullPath))}">
       <div class="vm-item-header">
         <div class="vm-item-name vm-item-name-visible">${this.escape(k)}${badgesHtml(ruleNode)}<span class="vm-item-separator">:</span></div>
         <div class="vm-tree-value">${disp}</div>
@@ -389,7 +390,7 @@ class VariablesPanel {
     return inf;
   }
 
-  renderChildren(obj,level,parentPath){ return Object.entries(obj).map(([k,v])=> this.createVariableItem(null,k,v,level,[...(parentPath||[]),k])[0].outerHTML).join(''); }
+  renderChildren(obj,level,parentPath){ return Object.entries(obj).map(([k,v])=> this.createVariableItem(null,k,v,level,[...(parentPath||[]),Array.isArray(obj) ? Number(k) : k])[0].outerHTML).join(''); }
 
   handleTouch(e){
     if($(e.target).closest('.vm-item-controls').length) return;
@@ -539,6 +540,15 @@ class VariablesPanel {
 
   formatPath(t,path){
     if(!Array.isArray(path)||!path.length) return '';
+    if(extension_settings?.[EXT_ID]?.variablesMode === '2.0'){
+      let current=this.parseValue(this.vt(t).getter(path[0]));
+      const parts=[String(path[0])];
+      for(let i=1;i<path.length;i++){
+        const key=Array.isArray(current) && /^(0|[1-9]\d*)$/.test(String(path[i])) ? Number(path[i]) : String(path[i]);
+        parts.push(key); current=current?.[key];
+      }
+      return formatPath(parts);
+    }
     let out=String(path[0]), cur=this.parseValue(this.vt(t).getter(path[0]));
     for(let i=1;i<path.length;i++){
       const k=String(path[i]), isNum=/^\d+$/.test(k);

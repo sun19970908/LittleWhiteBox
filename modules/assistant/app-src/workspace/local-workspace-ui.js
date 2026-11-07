@@ -371,6 +371,8 @@ export function renderWorkspace(container, options = {}) {
         showRenameButton = true,
         showDeleteButton = true,
         showSaveButton = false,
+        saveLabel = C.save,
+        extraNavActions = [],
     } = options;
 
     if (!container) return;
@@ -428,6 +430,7 @@ export function renderWorkspace(container, options = {}) {
     const navActions = document.createElement('div');
     navActions.className = 'xb-assistant-workspace-action-group';
     if (!hideNavActions) {
+        for (const action of extraNavActions) navActions.appendChild(createActionButton({ ...action, disabled }));
         navActions.append(
             createActionButton({
                 action: 'download-all', icon: 'download', label: C.downloadAll,
@@ -579,7 +582,7 @@ export function renderWorkspace(container, options = {}) {
     fileActions.className = 'xb-assistant-workspace-action-group';
     const path = selectedMatch.file.path;
     const actions = [
-        { action: 'save-file', icon: 'save', label: C.save, show: showSaveButton, disabled: disabled || !canSaveFile(selectedMatch.file), callback: onSaveFile },
+        { action: 'save-file', icon: 'save', label: saveLabel, show: showSaveButton, disabled: disabled || !canSaveFile(selectedMatch.file), callback: onSaveFile },
         { action: 'download-file', icon: 'download', label: C.download, show: showDownloadButton, callback: onDownloadFile },
         { action: 'restore-file', icon: 'restore', label: C.restore, show: showRestoreButton, disabled: !hasOriginalSnapshot(selectedMatch.file), callback: onRestoreFile },
         { action: 'rename-file', icon: 'rename', label: C.rename, show: showRenameButton, callback: onRenamePath },
