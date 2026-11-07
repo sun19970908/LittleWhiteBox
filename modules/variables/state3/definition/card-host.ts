@@ -1,0 +1,46 @@
+import { CARD_EXTENSION } from './format.js';
+import { decodeBundle, locateVariableFile, prepareVariableWrite, projectVariableFiles, variableExtensionWrite, type CardFile } from './card-files.js';
+import { digest } from './digest.js';
+import { readFiles, storeFiles, observeTree } from '../../../card-workspace/workspace.js';
+
+interface Character { name: string; avatar: string; data: { extensions?: Record<string, unknown> } }
+interface Target { avatar: string; root: string }
+interface Host {
+    readCharacter(avatar: string, signal?: AbortSignal): Promise<Character>;
+    assertCard(avatar: string): void;
+    request(url: string, body: unknown, signal?: AbortSignal): Promise<unknown>;
+    publishCharacter(card: Character): void;
+    unconfirmed: string;
+}
+
+/** The host supplies I/O; the owned bundle and writeback protocol belong to 3.0. */
+export function variableCardHost(host: Host) {
+    const read = async (target: Target, signal?: AbortSignal) => {
+        const card = await host.readCharacter(target.avatar, signal);
+        return projectVariableFiles(target.root, card.data.extensions?.[CARD_EXTENSION]);
+    };
+    return {
+        read,
+        async save(target: Target, file: CardFile, signal?: AbortSignal, companions: { file: CardFile }[] = []) {
+            const files = [file, ...companions.map(item => item.file)];
+            const card = await host.readCharacter(target.avatar, signal);
+            const { bundle, unchanged } = prepareVariableWrite(target.root, files, card.data.extensions?.[CARD_EXTENSION]);
+            if (!unchanged) {
+                host.assertCard(target.avatar);
+                await host.request('/api/characters/merge-attributes', variableExtensionWrite(card, bundle), signal);
+                const saved = await host.readCharacter(target.avatar, signal);
+                if (digest(decodeBundle(saved.data.extensions?.[CARD_EXTENSION])) !== digest(bundle)) {throw new Error(host.unconfirmed);}
+                host.publishCharacter(saved);
+            }
+            const projected = projectVariableFiles(target.root, bundle);
+            return { unchanged, originalGroupHash: digest(bundle), contents: files.map(item => projected.find(candidate => candidate.path === item.path)!.content) };
+        },
+        async refresh(target: Target, signal?: AbortSignal) {
+            const scopeRoot = `${target.root}variables/`, observed = await observeTree(scopeRoot);
+            const previous = (await readFiles()).flatMap(file => file.path?.startsWith(target.root) && locateVariableFile(file.path.slice(target.root.length)) ? [file.path] : []);
+            const refreshed = await read(target, signal);
+            await storeFiles(refreshed, { observed, scopeRoot,
+                removePaths: previous.filter(path => !refreshed.some(item => item.path === path)) });
+        },
+    };
+}

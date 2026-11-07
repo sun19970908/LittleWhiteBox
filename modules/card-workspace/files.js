@@ -1,10 +1,13 @@
+import { locateVariableFile, projectVariableFiles } from '../variables/state3/definition/card-files.js';
+import { CARD_EXTENSION } from '../variables/state3/definition/format.js';
+import { CARD_ROOT, rootFor } from './paths.js';
+export { CARD_ROOT, rootFor } from './paths.js';
+
 // File layout and projections are shared by the tool, host and workspace UI.
-export const CARD_ROOT = 'local/cards/';
 export const CARD_FILE = 'card.json';
 export const TEXT_FIELDS = ['description', 'personality', 'scenario', 'mes_example', 'system_prompt', 'post_history_instructions', 'creator_notes'];
 export const CARD_FIELDS = ['name', 'tags', 'creator', 'character_version'];
 export const json = value => JSON.stringify(value, null, 2);
-export const rootFor = avatar => `${CARD_ROOT}${encodeURIComponent(avatar)}/`;
 export const without = (value, keys) => Object.fromEntries(Object.entries(value).filter(([key]) => !keys.includes(key)));
 
 export function locateFile(path) {
@@ -15,6 +18,8 @@ export function locateFile(path) {
     const relative = parts.join('/');
     const base = { avatar, root: rootFor(avatar), relative };
     if (relative === CARD_FILE) return { ...base, kind: 'card' };
+    const variables = locateVariableFile(relative);
+    if (variables) return { ...base, ...variables };
     const field = TEXT_FIELDS.find(key => relative === `${key}.md`);
     if (field) return { ...base, kind: 'field', field };
     let match = relative.match(/^message\/(0|[1-9]\d*)\.md$/);
@@ -50,5 +55,6 @@ export function cardFiles(avatar, data, books) {
     for (const [name, book] of books) for (const [id, entry] of Object.entries(book.entries || {})) addItem('world', `world_book/${encodeURIComponent(name)}`, id, entry, 'md');
     for (const item of data.extensions?.regex_scripts || []) addItem('regex', 'regex', item.id, item, 'html');
     for (const item of data.extensions?.['xiaobaix-tasks']?.tasks || []) addItem('tasks', 'tasks', item.id, item, 'js');
+    files.push(...projectVariableFiles(root, data.extensions?.[CARD_EXTENSION]));
     return files;
 }

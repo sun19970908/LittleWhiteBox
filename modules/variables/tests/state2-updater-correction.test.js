@@ -18,8 +18,10 @@ const task = { systemPrompt: 'state task', messages: [{ role: 'user', content: '
 test.before(async () => {
     h = await createHarness();
     for (const name of ['copy.js', 'preset.js', 'transport.js', 'correction.js']) {
-        writeFileSync(path.join(h.tempDir, name), readFileSync(path.resolve('modules/variables/updater', name), 'utf8'));
+        writeFileSync(path.join(h.tempDir, name), readFileSync(path.resolve('modules/variables/updater', name), 'utf8')
+            .replace("'../shared/context-copy.js'", "'./context-copy.js'"));
     }
+    writeFileSync(path.join(h.tempDir, 'context-copy.js'), readFileSync('modules/variables/shared/context-copy.ts', 'utf8'));
     const source = readFileSync('modules/variables/updater/controller.js', 'utf8')
         .replaceAll("'../state2/", "'./")
         .replace("import { latestReply, hasBodyUpdate } from './context.js';", `
@@ -74,19 +76,18 @@ test('malformed and rule-rejected writes get one correction with original reply 
         assert.deepEqual(sent[1].messages.slice(0, -1), task.messages);
         const feedback = JSON.parse(sent[1].messages.at(-1).content.split('\n\n').at(-1));
         assert.deepEqual(feedback.submission.toolCalls, first.toolCalls); assert.ok(feedback.errors.length);
-        // A fresh replacement attempt must stage the rollback of the earlier successful update.
-        api.stageTurn({ floor: 1, swipeId: 0 }).commit({ ops: [] });
+        // A fresh replacement attempt must revoke the earlier successful update.
+        api.beginUpdate({ floor: 1, swipeId: 0 }).commit({ ops: [] });
     }
 });
 
-test('second rejection preserves the old successful submission and does not make a third request', async () => {
-    api.stageTurn({ floor: 1, swipeId: 0 }).commit(input(-5));
-    const before = JSON.stringify(ctx().chat[1].extra[key]);
+test('second rejection keeps the real rollback and does not make a third request', async () => {
+    api.beginUpdate({ floor: 1, swipeId: 0 }).commit(input(-5));
     const bad = response({ ops: [{ op: 'inc', path: '角色.金币', delta: '5' }] });
     const { sent } = setup([bad, bad]); await controller.update();
     assert.equal(sent.length, 2); assert.equal(controller.status().phase, 'failed');
-    assert.equal(readStoredValue(ctx(), '角色').金币, 95);
-    assert.equal(JSON.stringify(ctx().chat[1].extra[key]), before);
+    assert.equal(readStoredValue(ctx(), '角色').金币, 100);
+    assert.deepEqual(ctx().chat[1].extra[key].entries[0].ops, []);
 });
 
 test('network, saving, cancellation and stale state never trigger an extra model submission', async () => {
@@ -103,4 +104,21 @@ test('network, saving, cancellation and stale state never trigger an extra model
     assert.equal(readStoredValue(ctx(), '角色').金币, 95);
     ctx().saveChat = function () { this.saveCount++; };
     await controller.retrySave(); assert.equal(failedSave.sent.length, 1);
+});
+
+test('rollback save failure never calls the model; retry saves the revoked state without restoring its receipt', async () => {
+    api.beginUpdate({ floor: 1, swipeId: 0 }).commit(input(-20));
+    ctx().chat[1].extra.LittleWhiteBox_variableUpdate = { changes: [{}] };
+    const { sent } = setup([response(input(-5))]);
+    ctx().saveChat = () => { throw new Error('save failed'); };
+    await controller.update();
+    assert.equal(sent.length, 0);
+    assert.equal(readStoredValue(ctx(), '角色').金币, 100);
+    assert.equal(ctx().chat[1].extra.LittleWhiteBox_variableUpdate, undefined);
+    assert.equal(controller.status().saveFailed, true);
+    ctx().saveChat = function () { this.saveCount++; };
+    await controller.retrySave();
+    assert.equal(sent.length, 0);
+    assert.equal(controller.status().phase, 'ready');
+    assert.deepEqual(ctx().chat[1].extra[key].entries[0].ops, []);
 });

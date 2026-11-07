@@ -33,7 +33,7 @@ try {
 
 建立会话时固定一份当前配置，完整继承渠道、鉴权、模型、温度发送开关、输出上限、采样、思考和工具协议设置。修改设置影响后续新会话，不会在一个工具循环中途更换模型。本接口不提供配置覆盖或设置写回。
 
-会话没有私有聊天记录：每次 `chat` 都传入调用方决定使用的完整历史。会话内同一时间只能进行一次请求；独立会话可以并行。
+会话没有私有聊天记录：每次 `chat` 都传入调用方决定使用的完整历史。会话内同一时间只能进行一次模型请求；独立会话可以并行。
 
 ## 单轮调用
 
@@ -117,7 +117,26 @@ async function runTask({ api = 'main', systemPrompt, initialMessages, tools,
 
 ## 联网
 
-联网使用 Agent 页面里的全局配置，不分主、副模型。调用联网不需要先建立模型会话，模型会话也不会自动获得联网工具。
+联网使用 Agent 页面里的全局配置，不分主、副模型。模型会话不会自动获得联网工具；是否向模型提供工具、执行哪些调用仍由调用方决定。
+
+### 会话内分页联网
+
+调用方持有工具循环时，使用 `session.web`：
+
+- `session.web.getTools()` 返回搜索、网页读取和 `ToolResultRead` 的独立定义副本，搜索／读取的说明包含长结果续读方式。
+- `await session.web.search({ query, maxResults, signal })` 和 `await session.web.fetch({ urls, signal })` 读取当前全局联网配置；模型配置仍保持建立会话时的快照。
+- 小结果保持原有结构。长结果返回 `{ ok, status, data }`，`status` 区分 `read`、`partial`、`failed`；`data` 含 `reference`、`text`、`offset`、`nextOffset`、`totalChars`。单页大小和续读规则与小白助手共用。
+- `session.web.read({ reference, offset, signal })` 只读取当前会话暂存的结果，不发网络请求。省略 `offset` 从开头读取，使用上一页的 `nextOffset` 继续；`nextOffset: null` 表示末尾。
+- 页文本是原始 JSON 结果的片段，不能把每一页单独当完整 JSON 解析。连续页合并后可还原正文、逐网址失败信息与完整诊断；分页外层的错误消息只是预览。
+- `read` 的未知、已释放或已被缓存淘汰的引用抛出 `tool_result_expired`；越界位置抛出 `tool_result_range_invalid`。调用方可以把这两类错误作为工具结果交回模型，决定是否换位置或重新读取来源；接口不会自动重抓。
+
+引用只属于本会话，主、副会话或独立任务不能互读。结果仅暂存在内存中，按现有联网结果预算保留；`dispose()`、会话信号取消或停用小白X会清空暂存内容，已经返回给调用方的页不受影响。`getTools`、`read` 及继续联网均不能使用已关闭的会话。单次联网请求的 `signal` 只取消该请求，不关闭会话。
+
+执行这三个工具后，仍由调用方使用 `session.toolResult(call, value)` 追加结果并决定下一轮，不新增自动执行或自动循环。
+
+### 独立读取原始结果
+
+无需建立模型会话、或自行管理结果时，使用独立的 `agent.web`。这个入口返回原始结果，不创建分页缓存：
 
 ```js
 const web = window.xiaobaixAgent.web;
@@ -149,7 +168,7 @@ async function executeTool(name, args, signal) {
 - `session.dispose()` 取消当前请求并结束会话。
 - 关闭小白X总开关会取消公共请求并使旧会话失效；重新启用后建立新会话即可。公共对象仍可用于查询状态。
 - 取消不会在稍后返回成功结果。接口不重试付费调用，也不在失败后切换模型或联网渠道。
-- 错误通过 Promise 拒绝传播，包含稳定错误码及脱敏说明，适用时包含 HTTP 状态；不暴露原始 SDK 异常、请求对象或配置凭据。
+- 异步请求的错误通过 Promise 拒绝传播；同步接口直接抛出。错误包含稳定错误码及脱敏说明，适用时包含 HTTP 状态；不暴露原始 SDK 异常、请求对象或配置凭据。
 
 ## 构建与所有权
 

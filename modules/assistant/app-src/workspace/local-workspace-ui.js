@@ -14,6 +14,7 @@ import { getPathExtension } from '../../../agent-core/tools/text-file-types.js';
 import { buildCodeRows, buildDiffRows } from './local-workspace-diff.js';
 import { updateChromeIcon } from '../ui/chrome-icons.js';
 import { WORKSPACE_COPY as C } from './workspace-copy.js';
+import { displayCardWorkspacePath } from '../../../card-workspace/paths.js';
 
 function createActionButton({ action, icon, label, onClick, disabled = false, pressed, className = '' }) {
     const button = document.createElement('button');
@@ -473,6 +474,7 @@ export function renderWorkspace(container, options = {}) {
         ? (activePath || 'local/')
         : (activePath ? `${activePath.split('/').slice(0, -1).join('/')}/` : 'local/');
     const isWorkspaceRootDirectory = currentDirectoryPath === 'local/';
+    const displayDirectoryPath = displayCardWorkspacePath(currentDirectoryPath);
     if (!hideTreeActions) {
         const treeActions = document.createElement('div');
         treeActions.className = 'xb-assistant-workspace-tree-actions';
@@ -480,11 +482,11 @@ export function renderWorkspace(container, options = {}) {
         createActions.className = 'xb-assistant-workspace-action-group';
         createActions.append(
             createActionButton({
-                action: 'new-file', icon: 'newFile', label: C.directoryAction(C.newFile, currentDirectoryPath),
+                action: 'new-file', icon: 'newFile', label: C.directoryAction(C.newFile, displayDirectoryPath),
                 onClick: () => onCreateFile(currentDirectoryPath),
             }),
             createActionButton({
-                action: 'new-directory', icon: 'newDirectory', label: C.directoryAction(C.newDirectory, currentDirectoryPath),
+                action: 'new-directory', icon: 'newDirectory', label: C.directoryAction(C.newDirectory, displayDirectoryPath),
                 onClick: () => onCreateDirectory(currentDirectoryPath),
             }),
         );
@@ -492,11 +494,11 @@ export function renderWorkspace(container, options = {}) {
         directoryActions.className = 'xb-assistant-workspace-action-group';
         directoryActions.append(
             createActionButton({
-                action: 'rename-directory', icon: 'rename', label: C.directoryAction(C.renameDirectory, currentDirectoryPath),
+                action: 'rename-directory', icon: 'rename', label: C.directoryAction(C.renameDirectory, displayDirectoryPath),
                 disabled: isWorkspaceRootDirectory, onClick: () => onRenamePath(currentDirectoryPath),
             }),
             createActionButton({
-                action: 'delete-directory', icon: 'clear', label: C.directoryAction(C.deleteDirectory, currentDirectoryPath),
+                action: 'delete-directory', icon: 'clear', label: C.directoryAction(C.deleteDirectory, displayDirectoryPath),
                 disabled: isWorkspaceRootDirectory, onClick: () => onDeletePath(currentDirectoryPath),
             }),
         );
@@ -551,8 +553,9 @@ export function renderWorkspace(container, options = {}) {
     viewerInfo.appendChild(mobileBackButton);
 
     const viewerPath = document.createElement('strong');
-    viewerPath.textContent = selectedMatch.file.path;
-    viewerPath.title = selectedMatch.file.path;
+    const displayPath = displayCardWorkspacePath(selectedMatch.file.path);
+    viewerPath.textContent = displayPath;
+    viewerPath.title = displayPath;
     viewerInfo.appendChild(viewerPath);
     if (isModifiedFile(selectedMatch.file)) {
         const modifiedIndicator = document.createElement('span');
@@ -603,7 +606,7 @@ export function renderWorkspace(container, options = {}) {
     if (workspaceState.viewerMode === 'current') {
         const editorMount = document.createElement('div');
         editorMount.className = 'xb-assistant-workspace-editor';
-        editorMount.setAttribute('aria-label', C.edit(selectedMatch.file.path));
+        editorMount.setAttribute('aria-label', C.edit(displayPath));
         codeWrap.appendChild(editorMount);
         ensureWorkspaceEditor(container, editorMount, {
             path: selectedMatch.file.path,

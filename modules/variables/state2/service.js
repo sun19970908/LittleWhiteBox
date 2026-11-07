@@ -1,6 +1,6 @@
 import { getContext } from '../../../../../../extensions.js';
 import { parseJsonInput, publicOperationName, StateInputError, getStateInputSchema } from './json-input.js';
-import { createTurnStateApi } from './turn-state.js';
+import { createTurnStateApi, resumePendingTurn } from './turn-state.js';
 import { executeStateOperations } from './executor.js';
 import { replaceRules } from './guard-core.js';
 import { bodyBlocks, readRecord, readRecords, writeRecord, ownedRoots, bodyUpdate, parseEntry, withEntry, upgradeChatPaths } from './records.js';
@@ -64,10 +64,12 @@ function prepare(ctx, context = getContext, legacy) {
     let runtime = runtimes.get(ctx.chat);
     if (!runtime || runtime.identity !== identity) {
         if (upgradeChatPaths(ctx, legacyConverted)) scheduleSave(ctx, context);
-        runtime = { identity, roots: ownedRoots(readRecords(ctx.chat)) };
+        const records = readRecords(ctx.chat);
+        runtime = { identity, roots: ownedRoots(records), pendingTurn: records.some(record => record?.resumeAt !== undefined) };
         runtimes.set(ctx.chat, runtime);
     }
     else if (legacyConverted && upgradeChatPaths(ctx, true)) scheduleSave(ctx, context);
+    if (resumePendingTurn(ctx, runtime)) scheduleSave(ctx, context);
     return runtime;
 }
 

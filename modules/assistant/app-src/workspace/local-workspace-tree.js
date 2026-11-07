@@ -1,3 +1,5 @@
+import { displayCardWorkspaceName, displayCardWorkspacePath } from '../../../card-workspace/paths.js';
+
 export function buildWorkspaceTree(localSources = [], options = {}) {
     const selectedSourceId = String(options.selectedSourceId || 'all').trim() || 'all';
     const searchQuery = String(options.searchQuery || '').trim().toLowerCase();
@@ -18,7 +20,7 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
         const root = {
             key: `source:${source.sourceId}`,
             type: 'dir',
-            label: source.label,
+            label: displayCardWorkspaceName(rootPath, source.label),
             sourceId: source.sourceId,
             path: rootPath,
             children: [],
@@ -34,12 +36,13 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
             segments.forEach((segment, index) => {
                 const nextKey = `${parentKey}/dir:${segments.slice(0, index + 1).join('/')}`;
                 if (!dirIndex.has(nextKey)) {
+                    const path = `${rootPath}${segments.slice(0, index + 1).join('/')}/`;
                     const nextNode = {
                         key: nextKey,
                         type: 'dir',
-                        label: segment,
+                        label: displayCardWorkspaceName(path, segment),
                         sourceId: source.sourceId,
-                        path: `${rootPath}${segments.slice(0, index + 1).join('/')}/`,
+                        path,
                         children: [],
                         modified: false,
                     };
@@ -56,14 +59,15 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
         (Array.isArray(source.directories) ? source.directories : []).forEach((directoryPath) => {
             const normalizedDirectoryPath = String(directoryPath || '').trim();
             if (!normalizedDirectoryPath) return;
-            if (searchQuery && !`${source.label}/${normalizedDirectoryPath}`.toLowerCase().includes(searchQuery)) return;
+            const searchText = `${source.label}/${normalizedDirectoryPath}\n${displayCardWorkspacePath(rootPath + normalizedDirectoryPath)}`.toLowerCase();
+            if (searchQuery && !searchText.includes(searchQuery)) return;
             ensureDirectoryNode(normalizedDirectoryPath);
         });
 
         source.files.forEach((file) => {
             const modified = isModifiedFile(file);
             if (modifiedOnly && !modified) return;
-            const searchText = `${source.label}/${file.relativePath}`.toLowerCase();
+            const searchText = `${source.label}/${file.relativePath}\n${displayCardWorkspacePath(file.path)}`.toLowerCase();
             if (searchQuery && !searchText.includes(searchQuery)) return;
 
             const segments = file.relativePath.split('/').filter(Boolean);
@@ -72,7 +76,7 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
             parent.children.push({
                 key: `file:${file.path}`,
                 type: 'file',
-                label: file.name,
+                label: displayCardWorkspaceName(file.path, file.name),
                 sourceId: source.sourceId,
                 path: file.path,
                 modified,

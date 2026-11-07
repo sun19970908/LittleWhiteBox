@@ -1,6 +1,7 @@
 'use strict';
 
 const { MAX_TIMEOUT_MS } = require('../providers/upstream.js');
+const vertexContract = require('../../../agent-core/vertex-contract.cjs');
 
 const { MAX_ENVELOPE_BYTES } = require('../../../../server-plugin/littlewhitebox-server/runtime-contract.js');
 const MAX_IMAGE_ITEMS = 20;
@@ -13,6 +14,7 @@ const AGENT_CHANNELS = new Set([
     'openai-responses',
     'anthropic',
     'google',
+    'google-vertex',
     'sillytavern-openai-compatible',
     'sillytavern-claude',
     'sillytavern-google',
@@ -234,6 +236,7 @@ function validateAgent(value) {
         'currentPresetName', 'provider', 'baseUrl', 'model', 'apiKey',
         'temperature', 'sendTemperature', 'maxTokens', 'timeoutMs',
         'toolMode', 'reasoning', 'sampling',
+        ...(channel === 'google-vertex' ? ['vertex'] : []),
     ];
     const config = assertExactKeys(agent.providerConfig, allowedConfigFields, 'agent.providerConfig', [
         'provider', 'baseUrl', 'model', 'maxTokens', 'timeoutMs', 'toolMode', 'reasoning',
@@ -243,6 +246,14 @@ function validateAgent(value) {
         requireString(config.currentPresetName, 'agent.providerConfig.currentPresetName', { allowEmpty: true });
     }
     requireString(config.model, 'agent.providerConfig.model');
+    if (channel === 'google-vertex') {
+        const vertex = assertExactKeys(config.vertex, Object.keys(vertexContract.defaults), 'agent.providerConfig.vertex');
+        for (const [key, value] of Object.entries(vertex)) {
+            if (typeof vertexContract.defaults[key] === 'boolean') requireBoolean(value, `agent.providerConfig.vertex.${key}`);
+            else requireString(value, `agent.providerConfig.vertex.${key}`, { allowEmpty: true });
+        }
+        if (!vertexContract.authModes.some(mode => mode.value === vertex.authMode)) throw invalid('agent.providerConfig.vertex.authMode is invalid');
+    }
     requireString(config.baseUrl, 'agent.providerConfig.baseUrl', { allowEmpty: true });
     if (Object.hasOwn(config, 'apiKey')) {
         requireString(config.apiKey, 'agent.providerConfig.apiKey', { allowEmpty: true });

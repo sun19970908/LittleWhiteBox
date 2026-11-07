@@ -3,6 +3,8 @@ import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { normalizeAgentSettings } from '../config.js';
 import { createPublicAgentApi } from '../public-api.js';
+import { TOOL_RESULT_PAGE_CHARS } from '../runtime/tool-result-pages.js';
+import { WEB_RESPONSE_BYTES } from '../web/http.js';
 
 // Offline semantic boundaries: configuration isolation, caller-owned tool rounds,
 // provider replay, cancellation/concurrency, credentials and existing web routing.
@@ -478,6 +480,128 @@ test('web abort and host disable reject pending fetches and never return late da
     h.setEnabled(true);
     const aborted = new AbortController(); aborted.abort();
     await rejectsCode(h.api.web.search({ query: 'fixture', signal: aborted.signal }), 'AGENT_ABORTED');
+});
+
+for (const provider of ['tavily', 'exa']) test(`session ${provider} pages retain complete web text without another HTTP request`, async t => {
+    const text = 'x'.repeat(TOOL_RESULT_PAGE_CHARS * 3) + '😀FINAL_PAGE';
+    let requests = 0;
+    await withFetch(t, async () => {
+        requests++;
+        return json(provider === 'tavily'
+            ? { results: [{ url: 'https://example.com/', raw_content: text }] }
+            : { results: [{ url: 'https://example.com/', text }], statuses: [{ id: 'https://example.com/', status: 'success' }] });
+    });
+    const h = harness({ settings: settings({ webProvider: provider }) });
+    const session = await h.api.openSession();
+    t.after(() => session.dispose());
+    const definitions = session.web.getTools();
+    assert.deepEqual(definitions.map(tool => tool.function.name), ['web_search', 'web_fetch', 'ToolResultRead']);
+    definitions[0].function.parameters.properties.query.type = 'changed';
+    assert.equal(session.web.getTools()[0].function.parameters.properties.query.type, 'string');
+    const first = await session.web.fetch({ urls: ['https://example.com/'] });
+    assert.equal(first.status, 'read'); assert.equal(first.ok, true);
+    const { reference, totalChars } = first.data;
+    assert.deepEqual(session.web.read({ reference }).data, first.data);
+    let combined = first.data.text, next = first.data.nextOffset;
+    while (next !== null) {
+        const page = session.web.read({ reference, offset: next }).data;
+        assert.equal(page.offset, next); assert.ok(page.text.length <= TOOL_RESULT_PAGE_CHARS);
+        assert.equal(page.reference, reference); assert.equal(page.totalChars, totalChars);
+        combined += page.text; next = page.nextOffset;
+    }
+    assert.equal(combined.length, totalChars);
+    assert.equal(JSON.parse(combined).results[0].text, text);
+    const middle = session.web.read({ reference, offset: 17 }).data;
+    assert.equal(middle.text, combined.slice(17, 17 + TOOL_RESULT_PAGE_CHARS));
+    assert.deepEqual(session.web.read({ reference, offset: totalChars }).data,
+        { reference, offset: totalChars, nextOffset: null, totalChars, text: '' });
+    assert.equal(requests, 1); assert.equal(h.coreLoads(), 0);
+    const replay = session.toolResult({ id: 'page-read', name: 'ToolResultRead', arguments: '{}' }, first);
+    assert.deepEqual(JSON.parse(replay.content), first);
+});
+
+test('session search pages and small raw results use current shared web settings', async t => {
+    const requests = [], text = 'SEARCH'.repeat(TOOL_RESULT_PAGE_CHARS);
+    await withFetch(t, async (url, init) => {
+        requests.push({ url, body: JSON.parse(init.body) });
+        return json({ results: [{ title: 'source', url: 'https://example.com/', content: requests.length === 1 ? 'small' : text }] });
+    });
+    const h = harness(), session = await h.api.openSession();
+    t.after(() => session.dispose());
+    const small = await session.web.search({ query: 'small' });
+    assert.equal(small.results[0].content, 'small'); assert.equal(Object.hasOwn(small, 'data'), false);
+    h.setSettings(settings({ tavilyApiKey: 'changed-key', tavilyBaseUrl: 'https://new.example.com' }));
+    const large = await session.web.search({ query: 'large' });
+    assert.equal(large.status, 'read'); assert.ok(large.data.nextOffset > 0);
+    assert.equal(requests[1].body.api_key, 'changed-key'); assert.equal(requests[1].url, 'https://new.example.com/search');
+    assert.equal(h.settingsReads(), 3); assert.equal(h.coreLoads(), 0);
+});
+
+test('paged partial extraction retains all failure diagnostics and redacts provider secrets', async t => {
+    const text = 'PAGE'.repeat(TOOL_RESULT_PAGE_CHARS);
+    await withFetch(t, async () => json({ results: [{ url: 'https://example.com/', raw_content: text }],
+        failed_results: [{ url: 'https://example.org/', error: 'tavily-secret-fixture DIAGNOSTIC_' + 'z'.repeat(400) }], request_id: 'request-fixture' }));
+    const h = harness(), session = await h.api.openSession();
+    t.after(() => session.dispose());
+    const first = await session.web.fetch({ urls: ['https://example.com/', 'https://example.org/'] });
+    assert.equal(first.ok, false); assert.equal(first.status, 'partial');
+    let textResult = first.data.text, offset = first.data.nextOffset;
+    while (offset !== null) {
+        const page = session.web.read({ reference: first.data.reference, offset }).data;
+        textResult += page.text; offset = page.nextOffset;
+    }
+    const result = JSON.parse(textResult);
+    assert.equal(result.results[0].text, text); assert.equal(result.requestId, 'request-fixture');
+    assert.deepEqual(result.failedUrls, ['https://example.org/']);
+    assert.equal(result.failures[0].code, 'web_source_unavailable');
+    assert.ok(result.failures[0].message.endsWith('z'.repeat(400)));
+    assert.equal(textResult.includes('tavily-secret-fixture'), false);
+});
+
+test('session references isolate owners; eviction and invalid ranges have stable error codes', async t => {
+    const text = 'x'.repeat(Math.floor(WEB_RESPONSE_BYTES * 0.6));
+    await withFetch(t, async () => json({ results: [{ url: 'https://example.com/', raw_content: text }] }));
+    const h = harness(), first = await h.api.openSession(), second = await h.api.openSession();
+    const otherFacade = harness(), third = await otherFacade.api.openSession();
+    t.after(() => { first.dispose(); second.dispose(); third.dispose(); });
+    const a = await first.web.fetch({ urls: ['https://example.com/'] });
+    const b = await second.web.fetch({ urls: ['https://example.com/'] });
+    const c = await third.web.fetch({ urls: ['https://example.com/'] });
+    assert.equal(new Set([a.data.reference, b.data.reference, c.data.reference]).size, 3);
+    for (const owner of [second, third]) assert.throws(() => owner.web.read({ reference: a.data.reference }), { code: 'tool_result_expired' });
+    for (const offset of [-1, a.data.totalChars + 1]) assert.throws(() => first.web.read({ reference: a.data.reference, offset }), { code: 'tool_result_range_invalid' });
+    for (const input of [{ reference: '' }, { reference: a.data.reference, offset: '1' }, { reference: a.data.reference, offset: 1.5 }, { reference: a.data.reference, unknown: true }]) {
+        assert.throws(() => first.web.read(input), { code: 'AGENT_INVALID_INPUT' });
+    }
+    await first.web.fetch({ urls: ['https://example.com/'] });
+    assert.throws(() => first.web.read({ reference: a.data.reference }), { code: 'tool_result_expired' });
+    assert.deepEqual(second.web.read({ reference: b.data.reference }).data, b.data);
+});
+
+for (const ending of ['dispose', 'abort', 'disable']) test(`session web ${ending} rejects pending and late results, and closes retained pages`, async t => {
+    const entered = deferred(), release = deferred(); let signal, requests = 0;
+    await withFetch(t, async (_url, init) => {
+        requests++;
+        if (requests === 1) return json({ results: [{ url: 'https://example.com/', raw_content: 'x'.repeat(TOOL_RESULT_PAGE_CHARS * 2) }] });
+        signal = init.signal; entered.resolve(); return release.promise;
+    });
+    const controller = new AbortController(), h = harness();
+    const session = await h.api.openSession({ signal: controller.signal });
+    const first = await session.web.fetch({ urls: ['https://example.com/'] });
+    const pending = session.web.fetch({ urls: ['https://example.org/'] });
+    await entered.promise;
+    const code = ending === 'dispose' ? 'AGENT_SESSION_DISPOSED' : ending === 'abort' ? 'AGENT_ABORTED' : 'AGENT_DISABLED';
+    if (ending === 'dispose') session.dispose();
+    else if (ending === 'abort') controller.abort();
+    else { h.setEnabled(false); h.cancelAll(); }
+    await rejectsCode(pending, code); assert.equal(signal.aborted, true);
+    assert.throws(() => session.web.getTools(), { code });
+    assert.throws(() => session.web.read({ reference: first.data.reference }), { code });
+    await rejectsCode(session.web.search({ query: 'after-close' }), code);
+    release.resolve(json({ results: [{ url: 'https://example.org/', raw_content: 'late data' }] }));
+    h.setEnabled(true);
+    assert.throws(() => session.web.read({ reference: first.data.reference }), { code });
+    assert.equal(requests, 2);
 });
 
 test('official Exa still uses the existing browser backend routing', async t => {

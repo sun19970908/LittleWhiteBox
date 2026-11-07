@@ -119,6 +119,11 @@ const GOOGLE_LATEST = effortCapability(
     ['minimal', 'low', 'medium', 'high'],
     'high',
 );
+// Explicit Vertex channel contract for 3.8 / 4 Argon, independent of relay aliases.
+const VERTEX_CURRENT = effortCapability(
+    'vertex-gemini-current', ['inherit', 'on'], ['low', 'medium', 'high'], 'medium',
+    { temperatureOmitModes: OMIT_TEMPERATURE_ALWAYS },
+);
 const HOST_GOOGLE_LATEST = effortCapability(
     'sillytavern-google-3-flash',
     ['inherit', 'on'],
@@ -149,6 +154,8 @@ export function resolveReasoningCapability(context = {}) {
             return ANTHROPIC_LATEST;
         case 'sillytavern-claude':
             return HOST_ANTHROPIC_LATEST;
+        case 'google-vertex':
+            return VERTEX_CURRENT;
         case 'google':
             return GOOGLE_LATEST;
         case 'sillytavern-google':

@@ -94,7 +94,7 @@ test('the skill worldbook example executes annotations without persisting them',
     const text = readFileSync(new URL('../../card-workspace/skill/references/xiaobaix-game-state.md', import.meta.url), 'utf8');
     const examples = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
     const example = examples.find(value => value.state?.ops);
-    const result = api.stageTurn({ floor: 1, swipeId: 0 }).commit(example.state);
+    const result = api.beginUpdate({ floor: 1, swipeId: 0 }).commit(example.state);
     assert.equal(result.errors.length, 0);
     assert.equal(read('西厢').人物.红娘.好感, 55);
     assert.equal(read('西厢').大事记.length, 1);

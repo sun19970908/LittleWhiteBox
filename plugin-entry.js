@@ -27,7 +27,11 @@ import {
 import { initButtonCollapse } from "./widgets/button-collapse.js";
 import { initVariablesPanel, cleanupVariablesPanel } from "./modules/variables/variables-panel.js";
 import { initStreamingGeneration } from "./modules/streaming-generation.js";
-import { initVariablesCore, cleanupVariablesCore } from "./modules/variables/variables-core.js";
+import { initVariablesCore as initLegacyVariablesCore, cleanupVariablesCore as cleanupLegacyVariablesCore } from "./modules/variables/variables-core.js";
+import { initState3, cleanupState3, openState3, syncState3Mode } from './modules/variables/state3/index.js';
+
+function initVariablesCore() { initLegacyVariablesCore(); initState3(); }
+function cleanupVariablesCore() { cleanupState3(); cleanupLegacyVariablesCore(); }
 import { openVariableSettings } from './modules/variables/updater/host.js';
 import { initControlAudio } from "./modules/control-audio.js";
 import {
@@ -912,12 +916,17 @@ async function setupSettings() {
         // variables mode selector
         $("#xiaobaix_variables_open_settings").on('click', () => {
             if (!isXiaobaixEnabled) return;
-            try { openVariableSettings(); } catch (error) { toastr.warning(error.message); }
+            if (settings.variablesMode === '3.0') {
+                observeBackgroundTask(openState3().catch(error => toastr.warning(error.message)), { source: import.meta.url, operation: 'openState3' });
+            } else {
+                try { openVariableSettings(); } catch (error) { toastr.warning(error.message); }
+            }
         });
         $("#xiaobaix_variables_mode")
             .val(settings.variablesMode || "1.0")
             .on("change", function () {
                 settings.variablesMode = String($(this).val() || "1.0");
+                syncState3Mode();
                 saveSettingsDebounced();
                 toastr.info(`变量系统已切换为 ${settings.variablesMode}`);
             });

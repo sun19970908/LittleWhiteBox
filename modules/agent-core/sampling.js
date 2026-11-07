@@ -24,6 +24,7 @@ const PROVIDER_FIELDS = {
 };
 
 export function samplingParametersFor(provider) {
+    if (provider === 'google-vertex') return [];
     const fields = PROVIDER_FIELDS[provider] || {};
     return SAMPLING_PARAMETERS.filter(parameter => Object.hasOwn(fields, parameter.key));
 }
@@ -51,6 +52,7 @@ const CLAUDE_FIXED_SAMPLING_MODELS = new Set([
 ]);
 
 export function buildSamplingParameters(provider, sampling, context = {}) {
+    if (provider === 'google-vertex') return {};
     const normalized = normalizeSampling(sampling);
     const parameters = Object.fromEntries(samplingParametersFor(provider)
         .filter(parameter => normalized[parameter.key]?.enabled)

@@ -93,7 +93,7 @@ for (const imageProvider of ['novelai', 'sd-webui', 'comfyui']) {
                 assert.equal(Object.hasOwn(envelope.agent.providerConfig, 'modelListAuth'), false);
                 assert.doesNotThrow(() => validate(envelope));
                 for (const key of ['provider', 'baseUrl', 'model', 'apiKey', 'temperature', 'sendTemperature',
-                    'maxTokens', 'timeoutMs', 'toolMode', 'reasoning']) {
+                    'maxTokens', 'timeoutMs', 'toolMode', 'reasoning', 'vertex']) {
                     assert.deepEqual(envelope.agent.providerConfig[key], prepared.agent.providerConfig[key]);
                 }
                 assert.deepEqual(prepared, original, 'drawing must not change settings used by other Agent callers');

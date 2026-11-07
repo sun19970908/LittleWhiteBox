@@ -8,6 +8,8 @@ import { resolveReasoningCapability, getReasoningModeOptions, getReasoningEffort
 import { getModelListAuthOptions, normalizeModelListAuth, supportsModelListAuth } from '../agent-core/model-list-auth.js';
 import { createPreset, HOST_BINDING, HOST_PROVIDER } from './model.js';
 import { TEXT_API_COPY as COPY, deletionMessage } from './copy.js';
+import { VERTEX_PROVIDER, normalizeVertexConfig } from '../agent-core/vertex-config.js';
+import { buildVertexSettingsMarkup, bindVertexSettings, readVertexSettings, syncVertexSettings } from '../agent-core/ui/vertex-settings.js';
 
 export function mountTextApiSettings(root, { feature, namespace }) {
     const doc = root.ownerDocument;
@@ -184,14 +186,33 @@ export function mountTextApiSettings(root, { feature, namespace }) {
         }
         control(COPY.provider, select([{ value: HOST_PROVIDER, label: COPY.host }, ...PROVIDER_OPTIONS], draft.provider, value => { draft.provider = value; render(); }));
         if (draft.provider !== HOST_PROVIDER) {
-            control(COPY.url, input('baseUrl'));
-            const prefix = element('div', null, 'text-api-grid');
-            control(COPY.prefix, select([{ value: 'auto', label: COPY.autoPrefix }, { value: 'custom', label: COPY.customPrefix }], draft.prefixMode, value => { draft.prefixMode = value; render(); }), prefix);
-            if (draft.prefixMode === 'custom') control(COPY.customPrefix, input('customPrefix'), prefix);
-            fields.append(prefix);
-            const key = input('apiKey', 'password'); const keyRow = element('div', null, 'text-api-inline');
-            const reveal = button(COPY.show, () => { key.type = key.type === 'password' ? 'text' : 'password'; reveal.textContent = key.type === 'password' ? COPY.show : COPY.hide; });
-            keyRow.append(key, reveal); control(COPY.key, keyRow);
+            const vertex = draft.provider === VERTEX_PROVIDER;
+            if (!vertex || normalizeVertexConfig(draft.vertex).authMode === 'relay') {
+                control(COPY.url, input('baseUrl'));
+                const prefix = element('div', null, 'text-api-grid');
+                control(COPY.prefix, select([{ value: 'auto', label: COPY.autoPrefix }, { value: 'custom', label: COPY.customPrefix }], draft.prefixMode, value => { draft.prefixMode = value; render(); }), prefix);
+                if (draft.prefixMode === 'custom') control(COPY.customPrefix, input('customPrefix'), prefix);
+                fields.append(prefix);
+            }
+            if (vertex) {
+                draft.vertex = normalizeVertexConfig(draft.vertex);
+                const section = element('div');
+                section.style.display = 'contents';
+                // eslint-disable-next-line no-unsanitized/property -- Static first-party markup; credentials are assigned as input values below.
+                section.innerHTML = buildVertexSettingsMarkup();
+                fields.append(section);
+                syncVertexSettings(section, draft.provider, draft.vertex);
+                bindVertexSettings(section, () => {
+                    const before = draft.vertex.authMode;
+                    draft.vertex = readVertexSettings(section, draft.vertex); revision++;
+                    if (before !== draft.vertex.authMode) render();
+                }, message => feedback(message, true));
+            }
+            if (!vertex || draft.vertex.authMode !== 'service-account') {
+                const key = input('apiKey', 'password'); const keyRow = element('div', null, 'text-api-inline');
+                const reveal = button(COPY.show, () => { key.type = key.type === 'password' ? 'text' : 'password'; reveal.textContent = key.type === 'password' ? COPY.show : COPY.hide; });
+                keyRow.append(key, reveal); control(COPY.key, keyRow);
+            }
             const modelInput = input('model');
             modelInput.onchange = () => renderParameters();
             control(COPY.model, modelInput);
@@ -227,7 +248,8 @@ export function mountTextApiSettings(root, { feature, namespace }) {
             const details = element('details'); details.open = existing?.open ?? parametersOpen;
             details.append(element('summary', COPY.sampling));
             const grid = element('div', null, 'text-api-grid');
-            control(COPY.temperature, input('temperature', 'number'), grid); control(COPY.maxTokens, input('maxTokens', 'number'), grid);
+            if (draft.provider !== VERTEX_PROVIDER) control(COPY.temperature, input('temperature', 'number'), grid);
+            control(COPY.maxTokens, input('maxTokens', 'number'), grid);
             const stream = element('input'); stream.type = 'checkbox'; stream.checked = draft.stream;
             stream.onchange = () => { draft.stream = stream.checked; revision++; feedback(''); };
             control(COPY.stream, stream, details).classList.add('text-api-check'); details.append(grid);
@@ -247,7 +269,7 @@ export function mountTextApiSettings(root, { feature, namespace }) {
             if (existing) existing.replaceWith(details); else fields.append(details);
         }
         renderParameters();
-        if (feature === 'planner' && !draft.apiKey.trim()) fields.append(element('p', COPY.plannerKey, 'text-api-status'));
+        if (feature === 'planner' && draft.provider !== VERTEX_PROVIDER && !draft.apiKey.trim()) fields.append(element('p', COPY.plannerKey, 'text-api-status'));
     }
     async function refresh() {
         if (busy) return;

@@ -2,6 +2,7 @@ import {
     TOOL_DEFINITIONS,
     TOOL_NAMES,
     formatToolResultDisplay,
+    getAssistantToolDefinitions,
 } from './tooling.js';
 import { createAssistantRuntime } from './runtime.js';
 import { settleAssistantRunFailure } from './runtime/run-failure.js';
@@ -12,13 +13,13 @@ import {
     createAgentAdapter,
 } from '../../agent-core/provider-config.js';
 import { buildWorkspaceUserContextTextForState } from './context/current-context.js';
+import { readableCardWorkspacePath } from '../../card-workspace/paths.js';
 import { normalizeMemoryFiles } from './memory/memory-files.js';
 import {
     DEFAULT_PRESET_NAME,
     normalizeJsApiPermission,
     normalizeAssistantConfig,
 } from '../../agent-core/config.js';
-import { isWebConfigured } from '../../agent-core/web/tools.js';
 import {
     normalizeSlashCommand,
     normalizeSlashSkillTrigger,
@@ -1038,6 +1039,8 @@ function describeError(error) {
     if (lowered === 'directory_path_required') return '还没有提供要查看的目录路径。';
     if (lowered === 'glob_pattern_required') return '还没有提供 glob 路径模式。';
     if (lowered === 'empty_query') return '搜索词是空的，换一个明确点的关键词就行。';
+    if (lowered === 'tool_result_expired') return ACTIVITY_COPY.resultExpired;
+    if (lowered === 'tool_result_range_invalid') return ACTIVITY_COPY.resultRangeInvalid;
     return raw;
 }
 
@@ -1068,14 +1071,8 @@ function isJsApiPermissionEnabled() {
 
 function getEnabledToolDefinitions(options = {}) {
     const role = options.role === 'delegate' ? 'delegate' : 'main';
-    let definitions = isJsApiPermissionEnabled()
-        ? TOOL_DEFINITIONS
-        : TOOL_DEFINITIONS.filter((tool) => tool?.function?.name !== TOOL_NAMES.RUN_JAVASCRIPT_API);
     const providerConfig = getActiveProviderConfig(role === 'delegate' ? { role: 'delegate' } : {});
-    if (!isWebConfigured(providerConfig)) {
-        definitions = definitions.filter((tool) => tool?.function?.name !== TOOL_NAMES.WEB_SEARCH);
-    }
-    return definitions;
+    return getAssistantToolDefinitions({ providerConfig, jsApiEnabled: isJsApiPermissionEnabled() });
 }
 
 const chatUi = createChatUi({
@@ -1252,18 +1249,19 @@ function buildWorkspaceUserContextText() {
 function buildExternalEditorContextText() {
     const context = normalizeExternalEditorContext(state.externalEditorContext);
     if (!context) return '';
+    const filePath = readableCardWorkspacePath(context.filePath);
 
     const lines = ['[Current context]'];
     if (context.filePath) {
-        lines.push(`用户当前打开了文件：${context.filePath}`);
+        lines.push(`用户当前打开了文件：${filePath}`);
     }
     if (context.lineStart) {
         lines.push(
             context.filePath
                 ? (
                     context.lineEnd && context.lineEnd !== context.lineStart
-                        ? `用户当前选中了 ${context.filePath} 的第 ${context.lineStart} 到 ${context.lineEnd} 行：`
-                        : `用户当前选中了 ${context.filePath} 的第 ${context.lineStart} 行：`
+                        ? `用户当前选中了 ${filePath} 的第 ${context.lineStart} 到 ${context.lineEnd} 行：`
+                        : `用户当前选中了 ${filePath} 的第 ${context.lineStart} 行：`
                 )
                 : (
                     context.lineEnd && context.lineEnd !== context.lineStart

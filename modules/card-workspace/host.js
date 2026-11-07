@@ -6,6 +6,12 @@ import { saveCharacterTask } from '../scheduled-tasks/scheduled-tasks.js';
 import { allowScopedScripts } from '../../../../../extensions/regex/engine.js';
 import { COPY } from './copy.js';
 import { CARD_FIELDS, projectCard, projectItem, json } from './files.js';
+import { CARD_EXTENSION } from '../variables/state3/definition/format.js';
+import { projectVariableFiles } from '../variables/state3/definition/card-files.js';
+import { variableCardHost } from '../variables/state3/definition/card-host.js';
+
+const variableFiles = variableCardHost({ readCharacter, assertCard, request, publishCharacter, unconfirmed: COPY.unconfirmed });
+export const refreshVariableFiles = variableFiles.refresh;
 
 export function currentCard() {
     const ctx = getContext(), card = ctx.characters[ctx.characterId];
@@ -85,6 +91,7 @@ function readValue(target, card) {
 export async function readTarget(target, signal) {
     if (target.kind === 'world') return projectItem(target, (await readBook(target.book, signal))?.entries?.[target.id]);
     const card = (await readCharacter(target.avatar, signal)).data;
+    if (target.kind === 'variables') return projectVariableFiles(target.root, card.extensions?.[CARD_EXTENSION]).find(file => file.path === target.root + target.relative)?.content ?? null;
     if (['card', 'field', 'greeting'].includes(target.kind)) return readValue(target, card);
     const list = target.kind === 'regex' ? card.extensions?.regex_scripts : card.extensions?.['xiaobaix-tasks']?.tasks;
     return projectItem(target, list?.find(item => item.id === target.id));
@@ -93,6 +100,7 @@ export async function readTarget(target, signal) {
 export async function saveFile(target, file, signal, companions = []) {
     assertCard(target.avatar);
     if (target.kind === 'world') return saveWorldFile(target, file, signal, companions);
+    if (target.kind === 'variables') return variableFiles.save(target, file, signal, companions);
     const card = (await readCharacter(target.avatar, signal)).data;
     if (['card', 'field', 'greeting'].includes(target.kind)) {
         const before = readValue(target, card);

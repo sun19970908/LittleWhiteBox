@@ -2,7 +2,7 @@ import { getWebSearchToolDefinition, getWebFetchToolDefinition, runWebSearchTool
 import { isWebConfigured } from '../../../../agent-core/web/settings.js';
 import type { ManagementTool, ManagementResult } from '../../../capabilities/management/index.js';
 import { ADMINISTRATOR_COPY } from '../ui/copy.js';
-import { TOOL_RESULT_READ } from './result-tools.js';
+import { withPagedToolResult } from '../../../../agent-core/runtime/tool-result-contract.js';
 
 export function createAdministratorWebTools(config: Record<string, unknown> = {}, signal?: AbortSignal) {
     const tools: ManagementTool[] = isWebConfigured(config) ? [
@@ -10,9 +10,9 @@ export function createAdministratorWebTools(config: Record<string, unknown> = {}
             target: (args: Record<string, unknown>) => String(args.query ?? '') },
         { definition: getWebFetchToolDefinition(), effect: 'read', label: ADMINISTRATOR_COPY.webFetch,
             target: (args: Record<string, unknown>) => Array.isArray(args.urls) ? args.urls.join(', ') : '' },
-    ].map(tool => ({ ...tool, definition: { ...tool.definition, function: { ...tool.definition.function,
-        description: `${tool.definition.function.description}\nThe web result fields are returned in data, alongside the administrator operation status and receipt. Large results are paged through ${TOOL_RESULT_READ}.`,
-    } } })) as ManagementTool[] : [];
+    ].map(tool => ({ ...tool, definition: withPagedToolResult({ ...tool.definition, function: { ...tool.definition.function,
+        description: `${tool.definition.function.description}\nThe web result fields are returned in data, alongside the administrator operation status and receipt.`,
+    } }) })) as ManagementTool[] : [];
     return {
         tools,
         owns: (name: string) => name === WEB_SEARCH_TOOL_NAME || name === WEB_FETCH_TOOL_NAME,

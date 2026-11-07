@@ -6,6 +6,7 @@ const { test } = require('node:test');
 const drawRuntime = require('./runtime-fixture.js').bundle.drawRuntime;
 const { createDrawRunManager } = require('../draw-runs/draw-run-manager.js');
 const { createEnvelopeValidator } = require('../../../modules/draw/server/draw-runs/envelope.js');
+const vertexContract = require('../../../modules/agent-core/vertex-contract.cjs');
 
 function createEnvelope(runId, overrides = {}) {
     const sourceText = 'Hello.';
@@ -986,6 +987,27 @@ test('post-child cancellation preserves the dispatched manifest and forwards can
     assert.ok(cancelled.handoffManifest);
     assert.equal(Number.isFinite(cancelled.cancelRequestedAt), true);
     assert.deepEqual(imageJobService.cancellations, [{ owner: 'alice', jobId: 'draw-run:run-test-003' }]);
+});
+
+// Acceptance: Vertex credentials are execution input only, never public run state or errors.
+test('Vertex JSON and private keys are redacted from failed run projections', async t => {
+    const privateKey = '-----BEGIN PRIVATE KEY-----\nvertex-private-fixture\n-----END PRIVATE KEY-----';
+    const account = JSON.stringify({ type: 'service_account', private_key: privateKey });
+    const { manager } = createManager({ runtime: createRuntime({
+        async executePreparedScenePlanner() { throw new Error(`${account} ${privateKey} ${encodeURIComponent(privateKey)}`); },
+    }) });
+    t.after(() => manager.close());
+    const envelope = createEnvelope('run-vertex-redaction');
+    envelope.agent.channel = 'google-vertex';
+    Object.assign(envelope.agent.providerConfig, { provider: 'google-vertex', apiKey: '',
+        vertex: { ...vertexContract.defaults, authMode: 'service-account', serviceAccountJson: account } });
+    manager.create('alice', envelope, {});
+    const failed = await waitFor(() => {
+        const run = manager.get('alice', envelope.runId);
+        return run?.state === 'failed' ? run : null;
+    });
+    assert.doesNotMatch(JSON.stringify(failed), /vertex-private-fixture|serviceAccountJson/);
+    assert.match(failed.error.message, /\[redacted\]/);
 });
 
 test('retained compiler failures redact the image provider credentials still owned by that phase', async (t) => {

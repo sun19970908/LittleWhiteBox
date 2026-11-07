@@ -1,5 +1,6 @@
 import { PROVIDER_OPTIONS } from '../agent-core/provider-resolution.js';
 import { normalizeModelListAuth } from '../agent-core/model-list-auth.js';
+import { vertexConfigFields } from '../agent-core/vertex-config.js';
 import { TEXT_API_COPY as COPY } from './copy.js';
 
 export const TEXT_API_SETTINGS_KEY = 'textApiPresets';
@@ -12,6 +13,7 @@ export function createPreset(id, name, input = {}) {
     return {
         id, name, provider: input.provider ?? HOST_PROVIDER,
         baseUrl: input.baseUrl ?? '', apiKey: input.apiKey ?? '', model: input.model ?? '',
+        ...vertexConfigFields(input.provider, input.vertex),
         prefixMode: input.prefixMode ?? 'auto', customPrefix: input.customPrefix ?? '',
         stream: input.stream ?? true, temperature: input.temperature ?? null,
         maxTokens: input.maxTokens ?? null, sampling: structuredClone(input.sampling ?? {}),

@@ -23,24 +23,79 @@ test.beforeEach(() => {
 });
 test.after(() => h.cleanup());
 
-// Independent updates must never remove a previous success merely by starting,
-// failing or being abandoned. A late result must not cross a new chat/state.
-test('staged replacement preserves live state until a valid current submission commits', () => {
+// Independent re-updates really roll back the owned submission before context
+// generation. Failure keeps that rollback; late results cannot cross a new state.
+test('independent replacement publishes its rollback before reading or committing', () => {
     begin().commit(inc(-20));
     continueTurn().commit(inc(-5));
+    const staged = api.beginUpdate(target());
+    assert.equal(money(), 100);
     const before = snapshot();
-    const staged = api.stageTurn(target());
-    assert.equal(JSON.parse(staged.snapshot.variables.角色).金钱, 100);
-    assert.deepEqual(snapshot(), before);
     const rejected = staged.commit({ ops: [...inc(-7).ops, { op: 'inc', path: '未管理.值', delta: 1 }] });
     assert.equal(rejected.status, 'failed');
     assert.deepEqual(snapshot(), before);
-    const competing = api.stageTurn(target());
+    const competing = api.beginUpdate(target());
     assert.equal(staged.commit(inc(-10)).status, 'success');
     assert.equal(money(), 90);
     assert.throws(() => competing.commit(inc(-15)), { code: 'stale_turn_target' });
     h.executor.rebuildStateV2();
     assert.equal(money(), 90);
+});
+
+test('independent update uses its real execution point and preserves the later suffix across completion or reopening', async () => {
+    for (const outcome of ['success', 'failure', 'reopen']) {
+        h.reset();
+        ctx().chat = [{ mes: 'init', swipe_id: 0 }, { mes: 'AI', swipe_id: 0, swipe_info: [{ extra: {} }] }];
+        api = h.executor.createStateApi();
+        api.applyText('<state>角色: {"金钱":100}</state>', { floor: 0 });
+        api.beginTurn({ floor: 1, swipeId: 0 }).commit(inc(-20));
+        ctx().chat.push({ mes: 'user', is_user: true, swipe_id: 0, swipe_info: [{ extra: {} }] });
+        api.apply(inc(10));
+        const tail = structuredClone(ctx().chat[2]);
+        const turn = api.beginUpdate({ floor: 1, swipeId: 0 });
+        assert.equal(money(), 100);
+        assert.equal(ctx().chat[1].extra[key].resumeAt, 0);
+        assert.deepEqual(ctx().chat[2], tail);
+        if (outcome === 'success') {
+            const result = turn.commit(inc(-30));
+            assert.equal(result.changes[0].oldValue, 100);
+            assert.equal(money(), 80);
+            assert.equal(turn.finish(), false);
+        } else if (outcome === 'failure') {
+            assert.equal(turn.commit({ ops: [{ op: 'inc', path: '未管理.值', delta: 1 }] }).status, 'failed');
+            assert.equal(turn.finish(), true);
+            assert.equal(money(), 110, 'only the user +10 resumes; old AI -20 stays revoked');
+        } else {
+            const saved = structuredClone({ chat: ctx().chat, chatMetadata: ctx().chatMetadata });
+            const reopened = await createHarness();
+            try {
+                Object.assign(reopened.env.state.ctx, saved);
+                reopened.executor.openStateChat();
+                assert.equal(readStoredValue(reopened.env.state.ctx, '角色').金钱, 110);
+                assert.equal(reopened.env.state.ctx.chat[1].extra[key].resumeAt, undefined);
+                reopened.executor.openStateChat();
+                assert.equal(readStoredValue(reopened.env.state.ctx, '角色').金钱, 110);
+            } finally { reopened.cleanup(); }
+            turn.finish();
+        }
+        assert.equal(ctx().chat[1].extra[key].resumeAt, undefined);
+        assert.deepEqual(ctx().chat[2], tail);
+    }
+});
+
+test('a first independent update and read-only context observation do not replace or roll back live state', () => {
+    const variables = ctx().chatMetadata.variables, rules = ctx().chatMetadata.LWB_RULES_V2;
+    const before = snapshot();
+    const first = api.beginUpdate(target());
+    assert.equal(first.rolledBack, false);
+    assert.strictEqual(ctx().chatMetadata.variables, variables);
+    assert.strictEqual(ctx().chatMetadata.LWB_RULES_V2, rules);
+    assert.deepEqual(snapshot(), before);
+    first.commit(inc(-20));
+    const settled = snapshot();
+    api.observeTurn(target()).assertCurrent();
+    assert.deepEqual(snapshot(), settled);
+    assert.equal(money(), 80);
 });
 
 test('same-floor continuations preserve the original submission and append one separate batch each', () => {

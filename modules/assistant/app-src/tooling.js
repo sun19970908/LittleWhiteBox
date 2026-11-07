@@ -1,4 +1,6 @@
-import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, getWebSearchToolDefinition } from '../../agent-core/web/tools.js';
+import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, getWebSearchToolDefinition, getWebFetchToolDefinition, isWebConfigured } from '../../agent-core/web/tools.js';
+import { ACTIVITY_COPY } from './ui/activity-copy.js';
+import { getToolResultReadDefinition, TOOL_RESULT_READ, withPagedToolResult } from '../../agent-core/runtime/tool-result-contract.js';
 import { CARD_TOOL } from '../../card-workspace/assistant-contract.js';
 import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
 
@@ -12,6 +14,8 @@ export const TOOL_NAMES = {
     GREP: 'Grep',
     READ: 'Read',
     WEB_SEARCH: WEB_SEARCH_TOOL_NAME,
+    WEB_FETCH: WEB_FETCH_TOOL_NAME,
+    TOOL_RESULT_READ,
     WRITE: 'Write',
     APPLY_PATCH: 'apply_patch',
     DELETE: 'Delete',
@@ -148,7 +152,9 @@ export const TOOL_DEFINITIONS = [
             },
         },
     },
-    getWebSearchToolDefinition(),
+    withPagedToolResult(getWebSearchToolDefinition()),
+    withPagedToolResult(getWebFetchToolDefinition()),
+    getToolResultReadDefinition(),
     {
         type: 'function',
         function: {
@@ -257,7 +263,7 @@ export const TOOL_DEFINITIONS = [
                 'Execute documented public SillyTavern frontend JavaScript APIs.',
                 'Use this when STscript or slash commands do not provide the needed entry point and you need to inspect, read, or operate on public frontend objects and state such as chatMetadata, saveMetadata, or public extension exports.',
                 'This is not arbitrary JS execution; only documented public APIs are allowed.',
-                'Code can directly use injected `ctx` and `st`; `ctx` comes from getContext(), and `st` only exposes public script / extensions / slash namespaces. Simple destructuring, simple arrow callbacks, `if`, `for...of`, `try/catch`, and constrained read-only inspection are supported.',
+                'Code can directly use injected `ctx` and `st`; `ctx` comes from getContext(), and `st` exposes public script / extensions / slash namespaces plus `st.state3`, documented by ReadSkill builtin-state3. Simple destructuring, simple arrow callbacks, `if`, `for...of`, `try/catch`, and constrained read-only inspection are supported.',
                 'Request modes: use `inspect` for unknown structures, `read` for known fields, and `effect` only for side-effectful calls.',
                 'Typical `inspect` usage: Object.keys(ctx.chatMetadata), typeof ctx.someField, Array.isArray(ctx.chat), or small JSON/stringified samples.',
                 'Typical `read` usage: directly return a known field such as ctx.chatMetadata.LittleWhiteBox.summary.',
@@ -583,6 +589,16 @@ export const TOOL_DEFINITIONS = [
     },
 ];
 
+export function isWebTool(name) {
+    return name === TOOL_NAMES.WEB_SEARCH || name === TOOL_NAMES.WEB_FETCH;
+}
+
+export function getAssistantToolDefinitions({ providerConfig = {}, jsApiEnabled = false } = {}) {
+    const webEnabled = isWebConfigured(providerConfig);
+    return TOOL_DEFINITIONS.filter(({ function: { name } }) =>
+        (jsApiEnabled || name !== TOOL_NAMES.RUN_JAVASCRIPT_API) && (webEnabled || !isWebTool(name)));
+}
+
 function safeJsonParse(text, fallback = null) {
     try {
         return JSON.parse(text || 'null');
@@ -627,6 +643,10 @@ export function describeToolCall(name, args = {}) {
             return `读取文件 ${(args.filePath || args.path || '')}${args.tail ? ` tail:${args.tail}` : args.offset ? `:${args.offset}` : args.startLine ? `:${args.startLine}` : ''}`.trim();
         case TOOL_NAMES.WEB_SEARCH:
             return `联网搜索 ${args.query || ''}`.trim();
+        case TOOL_NAMES.WEB_FETCH:
+            return ACTIVITY_COPY.webFetch(Array.isArray(args.urls) ? args.urls : []);
+        case TOOL_NAMES.TOOL_RESULT_READ:
+            return ACTIVITY_COPY.readResultPage;
         case TOOL_NAMES.WRITE:
             return `写入文件 ${args.filePath || args.path || ''}`.trim();
         case TOOL_NAMES.APPLY_PATCH:
@@ -873,6 +893,27 @@ export function formatToolResultDisplay(message) {
                 parsed.error ? `错误：${parsed.error}` : '',
                 ...rules.map((rule) => `- ${rule}`),
             ].filter(Boolean).join('\n'),
+        };
+    }
+
+    if ((isWebTool(message.toolName) || message.toolName === TOOL_NAMES.TOOL_RESULT_READ)
+        && parsed.data?.reference && typeof parsed.data.text === 'string') {
+        return { summary: ACTIVITY_COPY.resultPage(parsed.data.offset, parsed.data.totalChars), details: parsed.data.text };
+    }
+
+    if (message.toolName === TOOL_NAMES.WEB_FETCH) {
+        const results = Array.isArray(parsed.results) ? parsed.results : [];
+        const failures = Array.isArray(parsed.failures) ? parsed.failures : [];
+        return {
+            summary: [
+                results.length ? ACTIVITY_COPY.webFetched(results.length) : '',
+                failures.length ? ACTIVITY_COPY.webFetchFailed(failures.length) : '',
+                parsed.ok === false ? parsed.message || parsed.error : '',
+            ].filter(Boolean).join('\n'),
+            details: [
+                ...results.map(item => [item.title, item.url, item.text].filter(Boolean).join('\n')),
+                ...failures.map(item => [item.url, item.code, item.httpStatus, item.message].filter(Boolean).join(' · ')),
+            ].join('\n\n'),
         };
     }
 

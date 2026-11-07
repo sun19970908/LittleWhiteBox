@@ -230,6 +230,10 @@ class VariablesPanel {
   removeContainer(){ this.state.container?.remove(); this.state.container=null; }
 
   open(){
+    if(extension_settings?.[EXT_ID]?.variablesMode === '3.0') {
+      void import('./state3/index.js').then(module => module.openState3()).catch(error => toastr.error(error.message));
+      return;
+    }
     if(!this.state.isEnabled) return toastr.warning('请先启用变量面板');
     this.createContainer(); this.bindEvents(); this.state.isOpen=true; this.state.container.show();
     this.state.rulesChecksum = JSON.stringify(getRulesTable()||{});

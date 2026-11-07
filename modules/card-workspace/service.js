@@ -1,7 +1,8 @@
-import { currentCard, linkedBooks, readCharacter, readBook, readTarget, saveFile } from './host.js';
+import { currentCard, linkedBooks, readCharacter, readBook, readTarget, refreshVariableFiles, saveFile } from './host.js';
 import { readFiles, storeFiles, observePaths } from './workspace.js';
 import { cardFiles, locateFile, rootFor } from './files.js';
 import { COPY } from './copy.js';
+import { variableFileGroup, variableGroupChanged } from '../variables/state3/definition/card-files.js';
 
 // Only live writeback operations serialize here. Editor text stays in the
 // Assistant workspace, not in this run-local queue.
@@ -41,15 +42,21 @@ function selectedPaths(paths) {
 }
 
 async function refreshFiles(paths, signal) {
-    const requested = selectedPaths(paths), observed = await observePaths(requested), files = [];
+    const requested = selectedPaths(paths), observed = await observePaths(requested), files = [], roots = new Set();
     for (const path of requested) {
         const target = locateFile(path);
         if (!target) throw new Error(COPY.unsupported);
+        if (target.kind === 'variables') {
+            if (roots.has(target.root)) continue;
+            roots.add(target.root);
+            await refreshVariableFiles(target, signal);
+            continue;
+        }
         const content = await readTarget(target, signal);
         if (content === null) throw new Error(`${COPY.missing}: ${path}`);
         files.push({ path, content });
     }
-    await storeFiles(files, { observed });
+    if (files.length) await storeFiles(files, { observed });
     return { paths: requested, refreshed: true };
 }
 
@@ -58,6 +65,11 @@ async function saveFiles(paths, signal) {
     for (const path of selectedPaths(paths)) {
         const file = files.find(item => item.path === path), target = locateFile(path);
         if (!file || !target) { results.push({ path, saved: false, error: !file ? COPY.missing : COPY.unsupported }); continue; }
+        if (target.kind === 'variables') {
+            const key = `${target.root}variables`;
+            if (!groups.has(key)) groups.set(key, variableFileGroup(target.root, files, locateFile));
+            continue;
+        }
         const key = ['world', 'regex', 'tasks'].includes(target.kind) ? `${target.root}${target.kind}/${target.book || ''}/${target.id}` : path;
         if (!groups.has(key)) groups.set(key, []);
         groups.get(key).push({ target, file });
@@ -67,11 +79,13 @@ async function saveFiles(paths, signal) {
             signal?.throwIfAborted();
             const [first, ...companions] = entries;
             const result = await saveFile(first.target, first.file, signal, companions);
-            const receipts = entries.map((item, index) => ({ path: item.file.path, content: result.contents?.[index] ?? result.content }));
+            const receipts = entries.map((item, index) => ({ path: item.file.path, content: result.contents?.[index] ?? result.content,
+                ...(result.originalGroupHash && item.target.settings ? { originalGroupHash: result.originalGroupHash } : {}) }));
             await storeFiles(receipts, { baselineOnly: true });
             const latest = await readFiles();
+            const groupChanged = first.target.kind === 'variables' && variableGroupChanged(first.target.root, entries, latest);
             results.push(...receipts.map((item, index) => ({ path: item.path, saved: true, unchanged: result.unchanged === true,
-                hasUnsavedEdits: latest.some(file => file.path === item.path && file.content !== entries[index].file.content) })));
+                hasUnsavedEdits: groupChanged || latest.some(file => file.path === item.path && file.content !== entries[index].file.content) })));
         } catch (error) {
             results.push(...entries.map(item => ({ path: item.file.path, saved: false, error: error.message })));
         }

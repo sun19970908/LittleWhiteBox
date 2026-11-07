@@ -19,10 +19,11 @@ Read and search with scope local. Write creates files; apply_patch changes parts
 card.json contains ${CARD_FIELDS.join(', ')} and world (the primary linked lorebook name). Other extensions remain on the card untouched.
 ${TEXT_FIELDS.map(key => `${key}.md`).join(', ')} map to the corresponding card fields.
 message/0.md is the first greeting. Consecutive numbers starting at 1 are alternate greetings. Append at the next number to add a greeting.
-world_book/<encoded-book-name>/<numeric-uid>.json contains entry settings; the matching .md contains its content. A new book is created when its first entry is saved. Set world in card.json to link a primary book. Existing shared lorebook edits affect its other users too.
+world_book/<book-name>/<numeric-uid>.json contains entry settings; the matching .md contains its content. A new book is created when its first entry is saved. Set world in card.json to link a primary book. Existing shared lorebook edits affect its other users too.
 regex/<id>.json contains scoped regex settings; the matching .html contains replaceString.
 tasks/<id>.json contains LittleWhiteBox task settings; the matching .js contains the complete commands, including taskjs wrappers when used.
-Book names and IDs in paths use encodeURIComponent encoding. New regex/task IDs can be distinct descriptive strings. Existing filenames keep the original IDs. Settings files omit id, uid and the separate body field. Omitted settings preserve saved values. Create both files for a new entry and submit both paths together. Settings and code of an existing entry can also be saved separately.
+Card paths keep Chinese, other Unicode names and spaces readable. Reuse paths returned by the tools. Literal percent signs, path separators and control characters inside a name are percent-escaped; the same path works with Read, Write, apply_patch and CardFiles.
+New regex/task IDs can be distinct descriptive strings. Existing filenames keep the original IDs. Settings files omit id, uid and the separate body field. Omitted settings preserve saved values. Create both files for a new entry and submit both paths together. Settings and code of an existing entry can also be saved separately.
 
 ## Write back and continue
 CardFiles save applies only named files and returns one result per file, including saved, unchanged and error. It does not execute task scripts or reset chat variables. Unfinished scripts can be saved. Missing workspace files do not delete card content. A partial failure leaves successful writes in place and failed files editable; retry only the failed files after correcting them.

@@ -29,9 +29,18 @@ export function createUpdateController({ context, stateApi, assemble, request, s
         active = last = run;
         changed();
         try {
-            const turn = stateApi.stageTurn(target);
+            const turn = stateApi.beginUpdate(target);
+            run.turn = turn;
+            if (turn.rolledBack) {
+                delete target.message.extra?.[RECEIPT_KEY];
+                delete target.message.swipe_info?.[target.swipeId]?.extra?.[RECEIPT_KEY];
+                run.saveFailed = true;
+                await saveUpdate(ctx, target, run.abort.signal);
+                run.saveFailed = false;
+            }
             const config = settings();
-            run.task = await assemble(ctx, target, turn.snapshot, config, run.abort.signal);
+            run.abort.signal.throwIfAborted(); turn.assertCurrent();
+            run.task = await assemble(ctx, target, config, run.abort.signal);
             run.abort.signal.throwIfAborted(); turn.assertCurrent();
             let task = run.task;
             for (let attempt = 0; attempt < 2; attempt++) {
@@ -64,15 +73,25 @@ export function createUpdateController({ context, stateApi, assemble, request, s
         } catch (error) {
             change(run, run.abort.signal.aborted ? 'cancelled' : 'failed', run.abort.signal.aborted ? '' : error.message);
         } finally {
-            if (active === run) active = null;
-            changed();
+            try {
+                if (run.turn?.finish()) {
+                    run.saveFailed = true;
+                    await saveUpdate(ctx, target);
+                    run.saveFailed = false;
+                }
+            } catch (error) {
+                change(run, 'failed', `${COPY.failedSave}\n${error.message}`);
+            } finally {
+                if (active === run) active = null;
+                changed();
+            }
         }
     }
     async function retrySave() {
         if (!last?.saveFailed || !current(last)) throw new Error(COPY.stale);
         await saveUpdate(context(), last.target);
         last.saveFailed = false;
-        change(last, last.result.changes.length ? 'success' : 'noop');
+        change(last, last.result && !last.result.errors.length ? (last.result.changes.length ? 'success' : 'noop') : 'ready');
     }
     function status() {
         if (last && current(last)) return { phase: last.phase, error: last.error, result: last.result, input: last.input,

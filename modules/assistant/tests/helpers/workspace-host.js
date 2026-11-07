@@ -13,13 +13,14 @@ export async function loadWorkspaceHostTools() {
         './shared/local-workspace-kernel.js', '../agent-core/tools/apply-patch.js',
         '../agent-core/tools/apply-patch-execution.js', './shared/workspace-protocol.js',
         './shared/read-window.js', './shared/lookup-scope.js',
+        '../card-workspace/paths.js', '../agent-core/runtime/ordered-concurrent-read.js',
         '../../shared/common/async-errors.js',
         '../../shared/common/json-candidate.js',
     ]);
     const imports = new Map(parse(code, { ecmaVersion: 'latest', sourceType: 'module' }).body
         .filter(node => node.type === 'ImportDeclaration').map(node => [node.source.value, node.specifiers]));
     const output = await build({
-        stdin: { contents: `${code}\nmanifestCache = { files: [] };\nexport { readFile, writeLocalFile, batchWriteLocalFiles, applyLocalPatch, deleteLocalFile, createLocalDirectoryTool, moveLocalFile };`, sourcefile: hostPath, resolveDir: path.dirname(hostPath) },
+        stdin: { contents: `${code}\nmanifestCache = { files: [] };\nexport { listDirectory, globFiles, grepFiles, readFile, writeLocalFile, batchWriteLocalFiles, applyLocalPatch, deleteLocalFile, createLocalDirectoryTool, moveLocalFile };`, sourcefile: hostPath, resolveDir: path.dirname(hostPath) },
         bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
         plugins: [{ name: 'workspace-host-test', setup(builder) {
             builder.onResolve({ filter: /.*/ }, args => real.has(args.path)
@@ -34,6 +35,7 @@ export async function loadWorkspaceHostTools() {
     // eslint-disable-next-line no-unsanitized/method -- Compiled local production code, no user input.
     const host = await import(`data:text/javascript;base64,${Buffer.from(output.outputFiles[0].text).toString('base64')}`);
     const handlers = {
+        LS: host.listDirectory, Glob: host.globFiles, Grep: host.grepFiles,
         Read: host.readFile,
         Write: host.writeLocalFile, BatchWriteFiles: host.batchWriteLocalFiles,
         apply_patch: host.applyLocalPatch, Delete: host.deleteLocalFile,

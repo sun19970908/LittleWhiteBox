@@ -3,6 +3,7 @@ import { normalizeReasoningConfig } from './reasoning-config.js';
 import { normalizeSampling } from './sampling.js';
 import { normalizeAgentApiKey } from './provider-auth.js';
 import { DEFAULT_MODEL_LIST_AUTH, normalizeModelListAuth, supportsModelListAuth } from './model-list-auth.js';
+import { VERTEX_PROVIDER, VERTEX_DEFAULTS, vertexConfigFields } from './vertex-config.js';
 
 export const DEFAULT_PROVIDER = 'openai-compatible';
 export const DEFAULT_PRESET_NAME = '默认';
@@ -20,6 +21,10 @@ export const AGENT_JSAPI_PERMISSION_OPTIONS = Object.freeze([
 ]);
 
 export const DEFAULT_MODEL_CONFIGS = {
+    [VERTEX_PROVIDER]: {
+        baseUrl: '', model: 'gemini-3.8-flash', apiKey: '', vertex: { ...VERTEX_DEFAULTS },
+        temperature: 1, maxTokens: DEFAULT_MAX_TOKENS, sendTemperature: true, sampling: {},
+    },
     'openai-responses': {
         baseUrl: 'https://api.openai.com/v1',
         model: 'gpt-4.1-mini',
@@ -144,6 +149,7 @@ export function normalizeModelConfigs(modelConfigs = {}) {
             baseUrl: String(source.baseUrl ?? defaults.baseUrl ?? ''),
             model: String(source.model ?? defaults.model ?? ''),
             apiKey: normalizeAgentApiKey(source.apiKey ?? defaults.apiKey),
+            ...vertexConfigFields(provider, source.vertex),
             ...(supportsModelListAuth(provider) ? { modelListAuth: normalizeModelListAuth(source.modelListAuth, provider) } : {}),
             temperature: source.temperature ?? defaults.temperature,
             maxTokens: normalizeMaxTokens(source.maxTokens, defaults.maxTokens),

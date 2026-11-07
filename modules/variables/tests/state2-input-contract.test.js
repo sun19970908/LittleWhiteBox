@@ -96,7 +96,7 @@ test('annotated submissions execute and replay without granting metadata any aut
     const before = structuredClone(input);
     assert.deepEqual(collectToolInputIssues(input, api.getInputSchema()), []);
     const target = { floor: 1, swipeId: 0 };
-    const result = api.stageTurn(target).commit(input);
+    const result = api.beginUpdate(target).commit(input);
     assert.equal(result.status, 'success');
     assert.equal(readStoredValue(ctx(), '角色').金钱, 90);
     assert.equal(readStoredValue(ctx(), '西厢').人物.红娘.态度, attitude);
@@ -111,8 +111,9 @@ test('annotated submissions execute and replay without granting metadata any aut
     harness.executor.rebuildStateV2();
     assert.equal(readStoredValue(ctx(), '角色').金钱, 90);
     assert.equal(readStoredValue(ctx(), '西厢').人物.红娘.态度, attitude);
+    const retry = api.beginUpdate(target);
     const saved = structuredClone({ chat: ctx().chat, meta: ctx().chatMetadata });
-    const rejected = api.stageTurn(target).commit({ ops: [{ op: 'set', path: '西厢.人物.红娘',
+    const rejected = retry.commit({ ops: [{ op: 'set', path: '西厢.人物.红娘',
         value: { 态度: attitude, 非模板字段: true }, old: {}, 理由: '说明不能授权破坏模板' }] });
     assert.equal(rejected.status, 'failed');
     assert.deepEqual({ chat: ctx().chat, meta: ctx().chatMetadata }, saved);

@@ -8,6 +8,7 @@ import {
 } from './config.js';
 import { normalizeWebSettings } from './web/settings.js';
 import { supportsModelListAuth } from './model-list-auth.js';
+import { VERTEX_PROVIDER, VERTEX_LABEL, vertexRuntimeFields } from './vertex-config.js';
 import {
     resolveRuntimeReasoning,
 } from './reasoning-capabilities.js';
@@ -27,6 +28,7 @@ export const PROVIDER_OPTIONS = Object.freeze([
     { value: 'sillytavern-google', label: '酒馆 Google AI' },
     { value: 'anthropic', label: 'Anthropic' },
     { value: 'google', label: 'Google AI' },
+    { value: VERTEX_PROVIDER, label: VERTEX_LABEL },
 ]);
 
 export function isSillyTavernProvider(provider = '') {
@@ -87,6 +89,7 @@ export function resolveActiveProviderConfig(configValue = {}, options = {}) {
             baseUrl: String(providerConfig.baseUrl || ''),
             model: String(providerConfig.model || ''),
             apiKey: String(providerConfig.apiKey || ''),
+            ...vertexRuntimeFields(provider, providerConfig),
             ...(supportsModelListAuth(provider) ? { modelListAuth: providerConfig.modelListAuth } : {}),
             ...normalizeWebSettings(config),
             temperature: resolveTemperature(providerConfig),
@@ -123,6 +126,7 @@ export function resolveActiveProviderConfig(configValue = {}, options = {}) {
         baseUrl: String(providerConfig.baseUrl || ''),
         model: String(providerConfig.model || ''),
         apiKey: String(providerConfig.apiKey || ''),
+        ...vertexRuntimeFields(provider, providerConfig),
         ...(supportsModelListAuth(provider) ? { modelListAuth: providerConfig.modelListAuth } : {}),
         ...normalizeWebSettings(config),
         temperature: resolveTemperature(providerConfig),

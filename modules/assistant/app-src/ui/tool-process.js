@@ -23,14 +23,13 @@ export function createToolProcess({ project, renderText }) {
                 } else {
                     element.className = 'xb-assistant-operation';
                     const dot = document.createElement('i'), label = document.createElement('span');
-                    const status = document.createElement('span'), note = document.createElement('small');
+                    const note = document.createElement('small');
                     dot.className = 'xb-assistant-operation-dot';
-                    dot.setAttribute('aria-hidden', 'true');
+                    dot.setAttribute('role', 'img');
                     label.className = 'xb-assistant-operation-label';
-                    status.className = 'xb-assistant-operation-status';
                     note.className = 'xb-assistant-operation-note';
-                    element.append(dot, label, status, note);
-                    view = { element, label, status, note };
+                    element.append(dot, label, note);
+                    view = { element, dot, label, note };
                 }
             }
             if (row.type === 'text') {
@@ -42,7 +41,8 @@ export function createToolProcess({ project, renderText }) {
                 if (view.label.textContent !== row.label) view.label.textContent = row.label;
                 if (view.element.dataset.status !== row.status) {
                     view.element.dataset.status = row.status;
-                    view.status.textContent = C.statuses[row.status];
+                    view.dot.setAttribute('aria-label', C.statuses[row.status]);
+                    view.dot.title = C.statuses[row.status];
                 }
                 if (view.note.textContent !== row.note) view.note.textContent = row.note;
                 view.note.hidden = !row.note;

@@ -1,0 +1,87 @@
+import type { PublicAgentSession, AgentChatResult } from '../../../agent-core/public-api.js';
+import type { Result, RunOptions } from '../types.js';
+import type { SettlementService } from '../runtime/service.js';
+import type { createState3Macros } from './macros.js';
+import { state3Context as getContext, type createHostAdapter } from '../runtime/host.js';
+import { captureContext } from '../../shared/context-capture.js';
+import { passageText } from '../../shared/passage.js';
+import { compileDefinition } from '../definition/compile.js';
+import { buildUpdateTask, correctionMessages } from './prompts.js';
+import { SUBMIT_TOOL } from './tools.js';
+import { readSettings } from '../runtime/settings.js';
+import { reject, diagnostic } from '../engine/diagnostics.js';
+
+export function parseSubmission(response: AgentChatResult): unknown[] {
+    if (response.truncated || response.completion !== 'complete') {reject('model-submission', { completion: response.completion, truncated: response.truncated, response: response.text });}
+    if (response.toolCalls?.length !== 1 || response.toolCalls[0].name !== SUBMIT_TOOL) {reject('model-submission', { response: response.text });}
+    let args;
+    try { args = JSON.parse(response.toolCalls[0].arguments); } catch { reject('model-submission'); }
+    if (!args || Object.keys(args).length !== 1 || !Array.isArray(args.state)) {reject('model-submission');}
+    return args.state;
+}
+
+export function createState3Updater({ service, adapter, macros, available, changed }: { service: SettlementService; adapter: ReturnType<typeof createHostAdapter>; macros: ReturnType<typeof createState3Macros>; available(): void; changed?(): void }) {
+    let controller: AbortController | undefined, phase = 'ready';
+    const setPhase = (value: string) => { phase = value; changed?.(); };
+    const cancel = () => { controller?.abort(); };
+    async function prepare(signal?: AbortSignal) {
+        available();
+        const staged = await service.stage({ replaceSource: 'model', signal });
+        const ctx = getContext(), message = ctx.chat[staged.target.floor];
+        if (!message || message.is_user || message.is_system || !message.mes?.trim()) {reject('target-missing');}
+        const snapshot = adapter.capture(staged.target.floor);
+        // A body submission owns this reply. Switching to model updates requires
+        // removing that block, so manual and automatic entry points cannot double it.
+        if (/<state3>[\s\S]*?<\/state3>/.test(message.mes)) {reject('body-owner');}
+        const compiled = compileDefinition(staged.bundle);
+        const reservation = buildUpdateTask(compiled, staged.snapshot, { target: staged.target, messages: [] });
+        const context = await captureContext(ctx, { ...staged.target, message }, reservation,
+            (text: string) => passageText(text).replace(/<state3>[\s\S]*?<\/state3>/g, ''), signal,
+            () => macros.expose({ compiled, state: staged.snapshot }));
+        staged.assertCurrent();
+        if (!adapter.isCurrent(snapshot)) {reject('stale-target');}
+        return { ok: true, staged, task: buildUpdateTask(compiled, staged.snapshot, context) };
+    }
+    return {
+        cancel,
+        status: () => ({ phase, busy: Boolean(controller) }),
+        async previewRequest({ signal }: RunOptions = {}) {
+            const prepared = await prepare(signal);
+            return prepared.task;
+        },
+        async update(): Promise<Result> {
+            if (controller) {reject('commit-busy');}
+            const own = new AbortController(); controller = own; const { signal } = own;
+            let session: PublicAgentSession | undefined;
+            try {
+                setPhase('preparing');
+                const prepared = await prepare(signal);
+                if (!window.xiaobaixAgent?.openSession) {reject('agent-unavailable');}
+                session = await window.xiaobaixAgent.openSession({ api: readSettings().source, signal });
+                let task = prepared.task;
+                for (let attempt = 0; attempt < 2; attempt++) {
+                    setPhase(attempt ? 'correcting' : 'requesting');
+                    const response = await session.chat({ ...task, signal });
+                    prepared.staged.assertCurrent(); signal.throwIfAborted();
+                    let input: unknown, preview: Result;
+                    try {
+                        input = parseSubmission(response);
+                        preview = await prepared.staged.run(input, { preview: true, source: 'model', signal });
+                    } catch (error) { preview = { ok: false, diagnostics: [diagnostic(error)] }; }
+                    if (preview.ok) {
+                        setPhase('saving');
+                        const result = await prepared.staged.run(input, { preview: false, source: 'model', signal });
+                        setPhase(result.ok ? result.saved ? 'success' : 'unsaved' : 'failed');
+                        return result;
+                    }
+                    if (attempt || response.truncated || response.completion !== 'complete') { setPhase('failed'); return preview; }
+                    task = { ...task, messages: [...task.messages, ...correctionMessages(response, preview.diagnostics, session.toolResult)] };
+                }
+                return { ok: false, diagnostics: [{ code: 'model-submission' }] };
+            } catch (error) {
+                setPhase(signal.aborted ? 'cancelled' : 'failed');
+                return { ok: false, diagnostics: [signal.aborted ? { code: 'cancelled' } : diagnostic(error)] };
+            } finally { session?.dispose(); controller = undefined; changed?.(); }
+        },
+    };
+}

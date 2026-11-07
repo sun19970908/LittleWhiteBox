@@ -1,8 +1,15 @@
 import { resolveActiveProviderConfig } from './provider-resolution.js';
+import { vertexSecrets } from './vertex-config.js';
 import { buildProviderAssistantToolCallMessage, buildProviderToolResultMessage, resolveResultToolCalls } from './runtime/protocol.js';
 import { isWebConfigured, resolveWebProvider } from './web/settings.js';
 import { fetchWebContents, searchWeb } from './web/retrieval.js';
 import { buildWebSearchToolResult, getWebFetchToolDefinition, getWebSearchToolDefinition } from './web/tools.js';
+import { getToolResultReadDefinition, withPagedToolResult } from './runtime/tool-result-contract.js';
+import { createWebResults } from './runtime/web-results.js';
+
+// References are local to a module lifetime and a single owning session, not reusable IDs.
+const webReferenceScope = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+let webSessionSequence = 0;
 
 const ERRORS = Object.freeze({
     AGENT_DISABLED: 'LittleWhiteBox is disabled.',
@@ -111,7 +118,12 @@ function collectSecrets(value, secrets, seen = new Set()) {
     if (!value || typeof value !== 'object' || seen.has(value)) return;
     seen.add(value);
     for (const [key, item] of Object.entries(value)) {
-        if (/api_?key$/i.test(key) && typeof item === 'string' && item) secrets.add(item);
+        if (/api_?key$|^serviceAccountJson$/i.test(key) && typeof item === 'string' && item) {
+            secrets.add(item);
+            if (key === 'serviceAccountJson') {
+                for (const secret of vertexSecrets(item)) secrets.add(secret);
+            }
+        }
         else if (/baseurl$/i.test(key) && typeof item === 'string' && item) {
             secrets.add(item);
             try {
@@ -288,6 +300,7 @@ export function createPublicAgentApi({ isEnabled, loadSettings, loadCore }) {
             if (!config.model.trim()) throw failure('AGENT_NOT_CONFIGURED');
             op.check();
             const lifetime = new AbortController();
+            const webResults = createWebResults(prefix => `${prefix}-${webReferenceScope}-${++webSessionSequence}`);
             let closedCode = '';
             let busy = false;
             let adapter;
@@ -296,6 +309,7 @@ export function createPublicAgentApi({ isEnabled, loadSettings, loadCore }) {
                 if (closedCode) return;
                 closedCode = code;
                 lifetime.abort();
+                webResults.clear();
                 options.signal?.removeEventListener('abort', onAbort);
                 sessions.delete(close);
             }
@@ -303,9 +317,39 @@ export function createPublicAgentApi({ isEnabled, loadSettings, loadCore }) {
                 if (closedCode) throw failure(closedCode);
                 if (!enabled()) throw failure('AGENT_DISABLED');
             }
+            async function pagedWebRequest(input, kind) {
+                try {
+                    check();
+                    const result = await webRequest(input, kind, [lifetime.signal]);
+                    check();
+                    return webResults.project(result);
+                } catch (error) {
+                    throw publicError(closedCode ? failure(closedCode) : error, secrets);
+                }
+            }
             options.signal?.addEventListener('abort', onAbort, { once: true });
             sessions.add(close);
             const session = Object.freeze({
+                web: Object.freeze({
+                    getTools() {
+                        check();
+                        return cloneJson([withPagedToolResult(getWebSearchToolDefinition()),
+                            withPagedToolResult(getWebFetchToolDefinition()), getToolResultReadDefinition()]);
+                    },
+                    search(input) { return pagedWebRequest(input, 'search'); },
+                    fetch(input) { return pagedWebRequest(input, 'fetch'); },
+                    read(input) {
+                        try {
+                            check();
+                            validateOptions(input, ['reference', 'offset', 'signal']);
+                            validateSignal(input.signal);
+                            requireInput(typeof input.reference === 'string' && Boolean(input.reference.trim()));
+                            requireInput(input.offset === undefined || Number.isSafeInteger(input.offset));
+                            if (input.signal?.aborted) throw failure('AGENT_ABORTED');
+                            return webResults.read(input);
+                        } catch (error) { throw publicError(error, secrets); }
+                    },
+                }),
                 async chat(input) {
                     let request;
                     let acquired = false;
@@ -370,7 +414,7 @@ export function createPublicAgentApi({ isEnabled, loadSettings, loadCore }) {
         finally { op?.finish(); }
     }
 
-    async function webRequest(input, kind) {
+    async function webRequest(input, kind, signals = []) {
         const secrets = new Set();
         let op;
         try {
@@ -382,7 +426,7 @@ export function createPublicAgentApi({ isEnabled, loadSettings, loadCore }) {
             } else {
                 requireInput(Array.isArray(input.urls) && input.urls.every(url => typeof url === 'string'));
             }
-            op = operation([input.signal]);
+            op = operation([...signals, input.signal]);
             const settings = await readSettings(op, secrets);
             op.check();
             const result = kind === 'search'

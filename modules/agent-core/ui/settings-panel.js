@@ -33,6 +33,8 @@ import { bindWebSettingsGuide, readWebSettingsForm, syncWebSettingsForm } from '
 import { getModelListAuthOptions, normalizeModelListAuth, supportsModelListAuth } from '../model-list-auth.js';
 import { SAMPLING_PARAMETERS, normalizeSampling } from '../sampling.js';
 import { readSamplingForm, syncSamplingForm, bindSamplingSettings, validateSamplingForm } from './sampling-settings.js';
+import { normalizeVertexConfig, vertexConfigFields, vertexRuntimeFields, VERTEX_PROVIDER } from '../vertex-config.js';
+import { readVertexSettings, syncVertexSettings, bindVertexSettings } from './vertex-settings.js';
 
 function refillSelect(select, options, placeholderLabel = '') {
     select.replaceChildren();
@@ -235,6 +237,7 @@ export function createAgentSettingsPanel(deps = {}) {
             delegateBaseUrl: String(delegateProviderConfig.baseUrl || ''),
             delegateModel: String(delegateProviderConfig.model || ''),
             delegateApiKey: String(delegateProviderConfig.apiKey || ''),
+            delegateVertex: normalizeVertexConfig(delegateProviderConfig.vertex),
             delegateModelListAuth: normalizeModelListAuth(delegateProviderConfig.modelListAuth, delegateProvider),
             delegateTemperature: normalizeTemperature(delegateProviderConfig.temperature, 1),
             delegateMaxTokens: normalizeMaxTokens(delegateProviderConfig.maxTokens),
@@ -255,6 +258,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: String(providerConfig.baseUrl || ''),
             model: String(providerConfig.model || ''),
             apiKey: String(providerConfig.apiKey || ''),
+            vertex: normalizeVertexConfig(providerConfig.vertex),
             modelListAuth: normalizeModelListAuth(providerConfig.modelListAuth, provider),
             temperature: normalizeTemperature(providerConfig.temperature, 1),
             maxTokens: normalizeMaxTokens(providerConfig.maxTokens),
@@ -273,6 +277,7 @@ export function createAgentSettingsPanel(deps = {}) {
             delegateBaseUrl: String(providerConfig.baseUrl || ''),
             delegateModel: String(providerConfig.model || ''),
             delegateApiKey: String(providerConfig.apiKey || ''),
+            delegateVertex: normalizeVertexConfig(providerConfig.vertex),
             delegateModelListAuth: normalizeModelListAuth(providerConfig.modelListAuth, provider),
             delegateTemperature: normalizeTemperature(providerConfig.temperature, 1),
             delegateMaxTokens: normalizeMaxTokens(providerConfig.maxTokens),
@@ -353,6 +358,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl,
             model,
             apiKey: root.querySelector('#xb-assistant-api-key')?.value.trim() || '',
+            ...vertexConfigFields(provider, readVertexSettings(root, draft.vertex)),
             ...(supportsModelListAuth(provider) ? { modelListAuth: normalizeModelListAuth(
                 root.querySelector('#xb-assistant-model-list-auth')?.value ?? draft.modelListAuth,
                 provider,
@@ -370,6 +376,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: delegateBaseUrl,
             model: delegateModel,
             apiKey: root.querySelector('#xb-assistant-delegate-api-key')?.value.trim() ?? draft.delegateApiKey ?? '',
+            ...vertexConfigFields(delegateProvider, readVertexSettings(root, draft.delegateVertex, 'delegate')),
             ...(supportsModelListAuth(delegateProvider) ? { modelListAuth: normalizeModelListAuth(
                 root.querySelector('#xb-assistant-delegate-model-list-auth')?.value ?? draft.delegateModelListAuth,
                 delegateProvider,
@@ -406,6 +413,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: providerConfig.baseUrl,
             model: providerConfig.model,
             apiKey: providerConfig.apiKey,
+            vertex: normalizeVertexConfig(providerConfig.vertex),
             modelListAuth: providerConfig.modelListAuth,
             temperature: providerConfig.temperature,
             maxTokens: providerConfig.maxTokens,
@@ -424,6 +432,7 @@ export function createAgentSettingsPanel(deps = {}) {
             delegateBaseUrl: delegateProviderConfig.baseUrl,
             delegateModel: delegateProviderConfig.model,
             delegateApiKey: delegateProviderConfig.apiKey,
+            delegateVertex: normalizeVertexConfig(delegateProviderConfig.vertex),
             delegateModelListAuth: delegateProviderConfig.modelListAuth,
             delegateTemperature: delegateProviderConfig.temperature,
             delegateMaxTokens: delegateProviderConfig.maxTokens,
@@ -447,6 +456,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: String(draft.baseUrl || ''),
             model: String(draft.model || ''),
             apiKey: String(draft.apiKey || ''),
+            ...vertexConfigFields(draft.provider, draft.vertex),
             ...(supportsModelListAuth(draft.provider) ? { modelListAuth: normalizeModelListAuth(draft.modelListAuth, draft.provider) } : {}),
             temperature: normalizeTemperature(draft.temperature, 1),
             maxTokens: normalizeMaxTokens(draft.maxTokens),
@@ -468,6 +478,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: String(draft.delegateBaseUrl || ''),
             model: String(draft.delegateModel || ''),
             apiKey: String(draft.delegateApiKey || ''),
+            ...vertexConfigFields(draft.delegateProvider, draft.delegateVertex),
             ...(supportsModelListAuth(draft.delegateProvider) ? { modelListAuth: normalizeModelListAuth(draft.delegateModelListAuth, draft.delegateProvider) } : {}),
             temperature: normalizeTemperature(draft.delegateTemperature, 1),
             maxTokens: normalizeMaxTokens(draft.delegateMaxTokens),
@@ -505,6 +516,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: draft.baseUrl || '',
             model: draft.model || '',
             apiKey: draft.apiKey || '',
+            ...vertexRuntimeFields(draft.provider, draft),
             ...(supportsModelListAuth(draft.provider) ? { modelListAuth: normalizeModelListAuth(draft.modelListAuth, draft.provider) } : {}),
             ...normalizeWebSettings(draft),
             temperature: draft.sendTemperature === false ? undefined : normalizeTemperature(draft.temperature, 1),
@@ -532,6 +544,7 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: draft.delegateBaseUrl || '',
             model: draft.delegateModel || '',
             apiKey: draft.delegateApiKey || '',
+            ...vertexRuntimeFields(draft.delegateProvider, { baseUrl: draft.delegateBaseUrl, apiKey: draft.delegateApiKey, vertex: draft.delegateVertex }),
             ...(supportsModelListAuth(draft.delegateProvider) ? { modelListAuth: normalizeModelListAuth(draft.delegateModelListAuth, draft.delegateProvider) } : {}),
             ...normalizeWebSettings(draft),
             temperature: draft.delegateSendTemperature === false ? undefined : normalizeTemperature(draft.delegateTemperature, 1),
@@ -677,6 +690,7 @@ export function createAgentSettingsPanel(deps = {}) {
             modeSelect.value = mode;
         }
         if (capabilityText) {
+            capabilityText.hidden = provider === VERTEX_PROVIDER;
             capabilityText.textContent = capability.unsupportedReason
                 || `能力配置：${capability.profileId}`;
         }
@@ -777,6 +791,7 @@ export function createAgentSettingsPanel(deps = {}) {
         if (baseUrlInput) baseUrlInput.value = draft.baseUrl || '';
         if (modelInput) modelInput.value = draft.model || '';
         if (apiKeyInput) apiKeyInput.value = draft.apiKey || '';
+        syncVertexSettings(root, provider, draft.vertex);
         syncModelListAuthControls(root, provider, draft.modelListAuth);
         if (maxTokensInput) maxTokensInput.value = String(normalizeMaxTokens(draft.maxTokens));
         syncWebSettingsForm(root, draft);
@@ -802,6 +817,7 @@ export function createAgentSettingsPanel(deps = {}) {
         if (delegateBaseUrlInput) delegateBaseUrlInput.value = draft.delegateBaseUrl || '';
         if (delegateModelInput) delegateModelInput.value = draft.delegateModel || '';
         if (delegateApiKeyInput) delegateApiKeyInput.value = draft.delegateApiKey || '';
+        syncVertexSettings(root, delegateProvider, draft.delegateVertex, 'delegate');
         syncModelListAuthControls(root, delegateProvider, draft.delegateModelListAuth, 'delegate');
         if (delegateMaxTokensInput) delegateMaxTokensInput.value = String(normalizeMaxTokens(draft.delegateMaxTokens));
         if (delegateToolModeWrap) {
@@ -1259,6 +1275,11 @@ export function createAgentSettingsPanel(deps = {}) {
 
     function bindSettingsPanelEvents(root) {
         if (!root?.querySelector?.('#xb-assistant-provider')) return;
+        bindVertexSettings(root, () => {
+            const draft = syncConfigDraft(root);
+            syncVertexSettings(root, draft.provider, draft.vertex);
+            syncVertexSettings(root, draft.delegateProvider, draft.delegateVertex, 'delegate');
+        }, showToast);
 
         root.querySelector('#xb-assistant-provider')?.addEventListener('change', (event) => {
             const nextProvider = event.currentTarget.value;

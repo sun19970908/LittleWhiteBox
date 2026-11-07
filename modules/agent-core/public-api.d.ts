@@ -70,7 +70,9 @@ export interface AgentChatResult {
 export interface PublicAgentSession {
     chat(input: AgentChatInput): Promise<AgentChatResult>;
     toolResult(call: AgentToolCall, value: JsonValue): AgentToolResult;
-    /** Permanently closes this session and aborts its active request. */
+    /** Optional caller-executed web tools with this session's temporary result pages. */
+    web: PublicSessionWeb;
+    /** Permanently closes this session, aborts its requests and clears retained web results. */
     dispose(): void;
 }
 export interface PublicAgentStatus {
@@ -97,6 +99,31 @@ export interface WebFetchResult {
     results: JsonObject[];
     failures: { url: string; code: string; httpStatus?: number; message?: string }[];
     failedUrls: string[];
+}
+export interface WebResultPage {
+    reference: string;
+    /** A slice of the original JSON result, not independently parseable JSON. */
+    text: string;
+    offset: number;
+    nextOffset: number | null;
+    totalChars: number;
+}
+export interface PagedWebResult {
+    ok: boolean;
+    status: 'read' | 'partial' | 'failed';
+    data: WebResultPage;
+    error?: string;
+    /** A diagnostic preview; the full original diagnostic remains in the retained JSON. */
+    message?: string;
+}
+export interface WebResultReadInput { reference: string; offset?: number; signal?: AbortSignal }
+export interface PublicSessionWeb {
+    /** Paged search/fetch definitions plus ToolResultRead; does not enable tools automatically. */
+    getTools(): AgentToolDefinition[];
+    search(input: WebSearchInput): Promise<WebSearchResult | PagedWebResult>;
+    fetch(input: WebFetchInput): Promise<WebFetchResult | PagedWebResult>;
+    /** Local read; throws tool_result_expired or tool_result_range_invalid for unavailable ranges. */
+    read(input: WebResultReadInput): { ok: true; data: WebResultPage };
 }
 export interface PublicAgentApi {
     getStatus(): Promise<PublicAgentStatus>;

@@ -115,7 +115,7 @@ export function resolveResultToolCalls(result = {}, providerConfig = {}, options
     if (directToolCalls.length) return directToolCalls;
 
     const provider = String(result?.provider || providerConfig?.provider || '').toLowerCase();
-    if (provider !== 'google') return [];
+    if (provider !== 'google' && provider !== 'google-vertex') return [];
     return normalizeToolCalls(extractGoogleProviderToolCalls(result?.providerPayload, options), options);
 }
 

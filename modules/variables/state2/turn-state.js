@@ -12,14 +12,14 @@ const ERRORS = {
 function fail(code) { throw Object.assign(new Error(ERRORS[code]), { code }); }
 
 export function createTurnStateApi({ context, prepare, save, receipt, notify }) {
-    function begin({ floor, swipeId } = {}, continuation = false, staged = false) {
+    function begin({ floor, swipeId } = {}, continuation = false, updating = false, observing = false) {
         const ctx = context();
         const message = ctx?.chat?.[floor];
         if (!ctx?.chatId || !Number.isInteger(floor) || !message || message.is_user || message.is_system
             || swipeId !== (message.swipe_id ?? 0)
             || (continuation ? floor !== ctx.chat.length - 1
                 : !ctx.chat.slice(floor + 1).every(item => item?.is_user === true && !item.is_system))) fail('invalid_turn_target');
-        const runtime = prepare(ctx, context);
+        const runtime = observing ? null : prepare(ctx, context);
         const records = readRecords(ctx.chat);
         const previous = readRecord(message);
         const entries = previous?.entries || [];
@@ -28,19 +28,26 @@ export function createTurnStateApi({ context, prepare, save, receipt, notify }) 
         const empty = { kind: 'call', source: 'json', scope: TURN_SCOPE, roots: [], ops: [] };
         // Replacement rolls back every owned batch on THIS floor only, leaving
         // one durable slot. Continuation does not publish anything until commit.
-        let prepared;
-        if (!continuation && firstTurn !== -1
-            && (entries[firstTurn].ops.length || entries.some((entry, index) => index > firstTurn && entry.scope === TURN_SCOPE))) {
-            records[floor] = { ...previous, entries: entries.flatMap((entry, index) =>
-                entry.scope !== TURN_SCOPE ? [entry] : index === firstTurn ? [empty] : []) };
-            const rebuilt = calculateRebuild(ctx, records, runtime.roots);
-            if (staged) prepared = rebuilt;
-            else {
-                writeRecord(message, rebuilt.records[floor]);
-                publishRebuild(ctx.chatMetadata, rebuilt);
-                runtime.roots = rebuilt.roots;
-                save(ctx, context);
-            }
+        const hasOld = firstTurn !== -1 && entries.some(entry => entry.scope === TURN_SCOPE && entry.ops.length);
+        const deferred = updating && (entries.slice(slot).some(entry => entry.scope !== TURN_SCOPE)
+            || records.slice(floor + 1).some(record => record?.entries.length));
+        let rollbackRecord;
+        if (!observing && !continuation && (hasOld || deferred || (firstTurn !== -1 && entries.some((entry, index) => index > firstTurn && entry.scope === TURN_SCOPE)))) {
+            const kept = entries.filter(entry => entry.scope !== TURN_SCOPE);
+            kept.splice(slot, 0, empty);
+            records[floor] = { ...previous, v: RECORD_VERSION, entries: kept };
+            // Only a pending suffix needs a durable execution cursor. Its requests
+            // stay in their own swipes; there is no second variable state or copy.
+            if (deferred) records[floor].resumeAt = slot;
+            const prefix = deferred ? records.slice(0, floor + 1) : records;
+            if (deferred) prefix[floor] = { ...records[floor], entries: kept.slice(0, slot) };
+            const rebuilt = calculateRebuild(ctx, prefix, runtime.roots);
+            rollbackRecord = records[floor];
+            writeRecord(message, rollbackRecord);
+            publishRebuild(ctx.chatMetadata, rebuilt);
+            runtime.roots = rebuilt.roots;
+            runtime.pendingTurn = deferred;
+            save(ctx, context);
         }
         // Only the submission's durable slot survives refresh; the in-flight
         // request and stale-result check exist for this call only.
@@ -66,21 +73,31 @@ export function createTurnStateApi({ context, prepare, save, receipt, notify }) 
                 || tail.some((item, index) => chat[floor + index + 1] !== item)
                 || JSON.stringify(tail) !== tailContent || signature() !== baseline) fail('stale_turn_target');
         }
+        const observation = { assertCurrent };
+        if (observing) return observation;
         return {
             assertCurrent,
-            ...(staged ? { snapshot: structuredClone({
-                variables: prepared?.variables ?? metadata.variables ?? {},
-                rules: prepared?.rules ?? metadata.LWB_RULES_V2 ?? {},
-            }) } : {}),
+            rolledBack: Boolean(rollbackRecord),
+            finish() {
+                const current = context();
+                if (committed || current?.chat !== chat || current.chatMetadata !== metadata
+                    || JSON.stringify([current.chatId, current.characterId, current.groupId]) !== JSON.stringify(identity)
+                    || readRecord(message) !== rollbackRecord || rollbackRecord?.resumeAt === undefined) return false;
+                // Failure/cancellation restores only the retained later requests,
+                // never the old AI submission that was explicitly rolled back.
+                prepare(ctx, context);
+                return true;
+            },
             commit(input) {
                 const ops = parseJsonInput(input);
                 assertCurrent();
                 const entry = { ...empty, ops };
-                const next = staged ? (prepared?.records || records).slice() : readRecords(ctx.chat);
+                const next = readRecords(ctx.chat);
                 const current = next[floor] || { v: RECORD_VERSION, entries: [] };
                 const entries = current.entries.slice();
                 entries[slot] = entry;
                 next[floor] = { ...current, entries };
+                delete next[floor].resumeAt;
                 const rebuilt = calculateRebuild(ctx, next, runtime.roots, entry);
                 const result = receipt(rebuilt.result);
                 // Any operation error rejects this entire batch before publication.
@@ -89,6 +106,7 @@ export function createTurnStateApi({ context, prepare, save, receipt, notify }) 
                 writeRecord(message, rebuilt.records[floor]);
                 publishRebuild(ctx.chatMetadata, rebuilt);
                 runtime.roots = rebuilt.roots;
+                runtime.pendingTurn = false;
                 committed = true;
                 save(ctx, context);
                 notify(result, floor, rebuilt.result.changes);
@@ -99,8 +117,26 @@ export function createTurnStateApi({ context, prepare, save, receipt, notify }) 
     return {
         beginTurn: options => begin(options),
         beginContinuation: options => begin(options, true),
-        // The independent updater reads a rollback candidate without publishing it.
-        // Cancellation/failure preserves the previous successful submission.
-        stageTurn: options => begin(options, false, true),
+        beginUpdate: options => begin(options, false, true),
+        observeTurn: options => begin(options, false, false, true),
     };
+}
+
+// Recover an interrupted independent update before any new state operation.
+// Saved records own the suffix; removing the cursor and replaying them once
+// retains user/API changes without resurrecting the removed turn submission.
+export function resumePendingTurn(ctx, runtime) {
+    if (!runtime.pendingTurn) return false;
+    const records = readRecords(ctx.chat);
+    const pending = records.flatMap((record, floor) => record?.resumeAt === undefined ? [] : [floor]);
+    for (const floor of pending) {
+        records[floor] = { ...records[floor] };
+        delete records[floor].resumeAt;
+    }
+    const rebuilt = calculateRebuild(ctx, records, runtime.roots);
+    for (const floor of pending) writeRecord(ctx.chat[floor], rebuilt.records[floor]);
+    publishRebuild(ctx.chatMetadata, rebuilt);
+    runtime.roots = rebuilt.roots;
+    runtime.pendingTurn = false;
+    return true;
 }

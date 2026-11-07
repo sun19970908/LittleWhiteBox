@@ -1,0 +1,144 @@
+import { getContext } from '../../../../../../../extensions.js';
+import { getRequestHeaders } from '../../../../../../../../script.js';
+import { CHAT_KEY } from '../definition/format.js';
+import { clone } from '../engine/data.js';
+import { reject } from '../engine/diagnostics.js';
+import { createSaveQueue } from './persistence.js';
+import type { History, HostAdapter, Receipt, Snapshot, Success, SwipeRecord } from '../types.js';
+import type { CaptureContext } from '../../shared/context-capture.js';
+
+interface Holder { extra?: Record<string, unknown> }
+export interface ChatMessage extends Holder {
+    name?: string; send_date?: string;
+    swipe_id?: number; swipe_info?: Holder[]; swipes?: string[]; mes?: string; is_user?: boolean; is_system?: boolean;
+}
+export interface Context extends CaptureContext {
+    chat: ChatMessage[]; chatMetadata: Record<string, unknown>; chatId: string; characterId: number; groupId?: string | null;
+    characters: { name: string; chat: string; avatar: string; data?: { extensions?: Record<string, unknown> } }[]; saveChat(): Promise<void>;
+}
+interface HostSnapshot extends Snapshot {
+    chat: ChatMessage[]; messages: ChatMessage[]; metadata: Record<string, unknown>; chatId: string; characterId: number;
+    message?: ChatMessage; holder?: Holder; revision?: number;
+    destination: { ch_name: string; file_name: string; avatar_url: string }; saveChat(): Promise<void>;
+}
+export const state3Context = () => getContext() as unknown as Context;
+export const inGroup = (ctx: Context) => ctx.groupId !== null && ctx.groupId !== undefined;
+function selected(message: ChatMessage): Holder | undefined {
+    const swipe = message.swipe_id ?? 0;
+    return message.swipe_info?.[swipe] ?? (swipe === 0 && (message.swipes?.length || 0) <= 1 ? message : undefined);
+}
+function record(message: ChatMessage): SwipeRecord {
+    return (selected(message)?.extra?.[CHAT_KEY] as SwipeRecord | undefined) ?? { entries: [] };
+}
+export function selectedRecords(chat: ChatMessage[]): SwipeRecord[] { return chat.map(message => clone(record(message))); }
+function latestReply(ctx: Context): number {
+    for (let index = ctx.chat.length - 1; index >= 0; index--) {if (!ctx.chat[index].is_user && !ctx.chat[index].is_system) {return index;}}
+    return ctx.chat.length - 1;
+}
+
+/** The topology cache only lives while this chat is open. Prose and visibility never enter it. */
+export function createHostAdapter({ committed }: { committed?: (result: Success) => void } = {}) {
+    const enqueueSave = createSaveQueue();
+    let retry: (() => Promise<void>) | undefined;
+    let observedChat: ChatMessage[] | undefined;
+    let observed: { message: ChatMessage; entries: Receipt[] }[] = [];
+    const remember = () => {
+        const ctx = state3Context();
+        observedChat = ctx.chat;
+        observed = ctx.chat.map(message => ({ message, entries: clone(record(message).entries) }));
+    };
+    const adapter: HostAdapter<HostSnapshot> & {
+        remember(): void;
+        rememberOrder(): boolean;
+        selectionChange(kind: 'delete' | 'swipe', index?: number): { previous: Receipt[]; next: Receipt[] };
+        retrySave(): Promise<{ ok: true; saved: true }>;
+    } = {
+        capture(index) {
+            const ctx = state3Context();
+            if (!ctx.chatId || !Array.isArray(ctx.chat)) {reject('chat-missing');}
+            if (inGroup(ctx)) {reject('character-missing');}
+            const character = ctx.characters?.[ctx.characterId];
+            if (!character) {reject('character-missing');}
+            index ??= latestReply(ctx);
+            const history = ctx.chatMetadata[CHAT_KEY] as History | undefined, message = ctx.chat[index];
+            if (history && history.format !== 2) {reject('history-format');}
+            return { chat: ctx.chat, messages: [...ctx.chat], metadata: ctx.chatMetadata, chatId: ctx.chatId, characterId: ctx.characterId,
+                history: clone(history), records: selectedRecords(ctx.chat), index, message, holder: message && selected(message),
+                revision: history?.revision, target: { floor: index, swipeId: message?.swipe_id ?? 0 },
+                destination: { ch_name: character.name, file_name: character.chat, avatar_url: character.avatar }, saveChat: () => ctx.saveChat() };
+        },
+        isCurrent(snapshot) {
+            const ctx = state3Context(), history = ctx.chatMetadata[CHAT_KEY] as History | undefined;
+            return ctx.chat === snapshot.chat && ctx.chatMetadata === snapshot.metadata && ctx.chatId === snapshot.chatId
+                && ctx.characterId === snapshot.characterId && !inGroup(ctx) && history?.revision === snapshot.revision
+                && (!snapshot.message || (ctx.chat.includes(snapshot.message) && selected(snapshot.message) === snapshot.holder
+                    && (snapshot.message.swipe_id ?? 0) === snapshot.target.swipeId));
+        },
+        publish(snapshot, { history, records }) {
+            if (!adapter.isCurrent(snapshot)) {reject('stale-target');}
+            snapshot.metadata[CHAT_KEY] = clone(history);
+            records.forEach((value, index) => {
+                const message = snapshot.messages[index];
+                if (!message) {return;}
+                for (const holder of new Set([message, selected(message)].filter((item): item is Holder => Boolean(item)))) {
+                    holder.extra ||= {};
+                    if (value.entries.length) {holder.extra[CHAT_KEY] = clone(value);}
+                    else {delete holder.extra[CHAT_KEY];}
+                }
+            });
+            remember();
+            const save = async () => {
+                const ctx = state3Context();
+                if (ctx.chat !== snapshot.chat || ctx.chatMetadata !== snapshot.metadata
+                    || (ctx.chatMetadata[CHAT_KEY] as History | undefined)?.revision !== history.revision) {reject('stale-target');}
+                await snapshot.saveChat();
+                const response = await fetch('/api/chats/get', { method: 'POST', headers: getRequestHeaders(),
+                    body: JSON.stringify(snapshot.destination), cache: 'no-store' });
+                if (!response.ok) {reject('save-unconfirmed', { status: response.status });}
+                const saved: unknown = await response.json();
+                const metadata = Array.isArray(saved) ? saved[0]?.chat_metadata?.[CHAT_KEY] : undefined;
+                // Native chat saves may already have persisted a later publication.
+                if (typeof metadata?.revision !== 'number' || metadata.revision < history.revision) {reject('save-unconfirmed');}
+                if (retry === requestSave) {retry = undefined;}
+            };
+            const requestSave = () => enqueueSave(snapshot.metadata, save);
+            retry = requestSave;
+            return requestSave;
+        },
+        committed,
+        remember,
+        rememberOrder() {
+            const ctx = state3Context();
+            if (ctx.chat !== observedChat || ctx.chat.length < observed.length) {return false;}
+            if (ctx.chat.length === observed.length && ctx.chat.every((message, index) => observed[index].message === message)) {return false;}
+            const prior = new Map(observed.map(item => [item.message, item]));
+            if (observed.some(item => !ctx.chat.includes(item.message))) {return false;}
+            // UI movement only updates this transient order; no variable reads,
+            // writes, settlement, or persistence are caused by editing the chat.
+            observed = ctx.chat.map(message => prior.get(message) || { message, entries: clone(record(message).entries) });
+            return true;
+        },
+        selectionChange(kind, index) {
+            const ctx = state3Context();
+            let previous: Receipt[] = [], next: Receipt[] = [];
+            if (ctx.chat === observedChat) {
+                if (kind === 'delete') {
+                    // Only a strict suffix deletion restores state. Middle deletions and reordering do nothing.
+                    const prefix = ctx.chat.every((message, position) => observed[position]?.message === message);
+                    if (prefix && ctx.chat.length < observed.length) {previous = observed.slice(ctx.chat.length).flatMap(item => item.entries);}
+                } else if (index !== undefined && ctx.chat[index]) {
+                    const message = ctx.chat[index], old = observed.find(item => item.message === message);
+                    const current = record(message).entries;
+                    if (old && old.entries.map(item => item.id).join() !== current.map(item => item.id).join()) {
+                        previous = old.entries; next = clone(current);
+                    }
+                }
+            }
+            remember();
+            return { previous, next };
+        },
+        async retrySave() { if (!retry) {reject('nothing-to-save');} await retry(); return { ok: true, saved: true }; },
+    };
+    remember();
+    return adapter;
+}

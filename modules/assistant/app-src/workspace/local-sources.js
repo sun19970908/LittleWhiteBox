@@ -30,6 +30,7 @@ import { buildWorkspacePreconditions, workspaceMutationScopes, WORKSPACE_CONFLIC
 import { WORKSPACE_COPY } from './workspace-copy.js';
 import { TOOL_NAMES } from '../tooling.js';
 import { buildWorkspaceTree, collectDirectoryExpansionKeys } from './local-workspace-tree.js';
+import { displayCardWorkspacePath } from '../../../card-workspace/paths.js';
 import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 
 
@@ -1219,8 +1220,8 @@ export function createLocalSourcesManager(deps) {
 
         const confirmed = window.confirm(
             fileMatch
-                ? `确定删除 ${currentPath} 吗？`
-                : `确定删除目录 ${currentPath} 及其下 ${directoryMatch.files.length} 个文件吗？`,
+                ? `确定删除 ${displayCardWorkspacePath(currentPath)} 吗？`
+                : `确定删除目录 ${displayCardWorkspacePath(currentPath)} 及其下 ${directoryMatch.files.length} 个文件吗？`,
         );
         if (!confirmed) return false;
         const result = await callWorkspaceHostTool(TOOL_NAMES.DELETE, {
@@ -1242,7 +1243,7 @@ export function createLocalSourcesManager(deps) {
                 || selectWorkspaceFile(targetPath)
                 || selectWorkspaceDirectory(targetPath);
             if (!opened) {
-                showToast?.(`没有找到 ${targetPath}`);
+                showToast?.(`没有找到 ${displayCardWorkspacePath(targetPath)}`);
                 return false;
             }
             render?.();

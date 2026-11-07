@@ -1457,7 +1457,7 @@ export function injectAssistantStyles(rootId) {
         .xb-assistant-process-text:first-child { margin-top: 0; }
         .xb-assistant-operation {
             display: grid;
-            grid-template-columns: 7px minmax(0, 1fr) auto;
+            grid-template-columns: 7px minmax(0, 1fr);
             align-items: baseline;
             gap: 0 8px;
             padding: 5px 0;
@@ -1467,14 +1467,11 @@ export function injectAssistantStyles(rootId) {
         }
         .xb-assistant-operation-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
         .xb-assistant-operation-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .xb-assistant-operation-status { white-space: nowrap; }
         .xb-assistant-operation-note { grid-column: 2 / -1; overflow-wrap: anywhere; color: #a34236; font: inherit; }
-        .xb-assistant-operation[data-status="succeeded"] .xb-assistant-operation-dot,
-        .xb-assistant-operation[data-status="succeeded"] .xb-assistant-operation-status { color: #277866; }
-        .xb-assistant-operation[data-status="failed"] .xb-assistant-operation-dot,
-        .xb-assistant-operation[data-status="failed"] .xb-assistant-operation-status { color: #a34236; }
-        .xb-assistant-operation[data-status="unconfirmed"] .xb-assistant-operation-status,
-        .xb-assistant-operation[data-status="partial"] .xb-assistant-operation-status { color: #966317; }
+        .xb-assistant-operation[data-status="succeeded"] .xb-assistant-operation-dot { color: #277866; }
+        .xb-assistant-operation[data-status="failed"] .xb-assistant-operation-dot { color: #a34236; }
+        .xb-assistant-operation[data-status="unconfirmed"] .xb-assistant-operation-dot,
+        .xb-assistant-operation[data-status="partial"] .xb-assistant-operation-dot { color: #966317; }
         .xb-assistant-operation[data-status="running"] .xb-assistant-operation-dot { animation: xb-assistant-operation-pulse 1.2s ease-in-out infinite; }
         @keyframes xb-assistant-operation-pulse { 50% { opacity: .35; } }
         @media (prefers-reduced-motion: reduce) { .xb-assistant-operation-dot { animation: none !important; } }

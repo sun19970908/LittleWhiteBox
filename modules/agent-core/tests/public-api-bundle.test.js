@@ -32,6 +32,9 @@ test('the shipped Agent entry supports caller-owned replay and host invalidation
         } }) }),
     });
     const session = await api.openSession({ api: 'main' });
+    // This external tool protocol must also be reachable from the shipped entry, not only source imports.
+    assert.deepEqual(session.web.getTools().map(tool => tool.function.name), ['web_search', 'web_fetch', 'ToolResultRead']);
+    assert.throws(() => session.web.read({ reference: 'unavailable' }), { code: 'tool_result_expired' });
     const tools = [{ type: 'function', function: { name: 'record', parameters: { type: 'object' } } }];
     const messages = [{ role: 'user', content: 'fixture' }];
     const first = await session.chat({ messages, tools });

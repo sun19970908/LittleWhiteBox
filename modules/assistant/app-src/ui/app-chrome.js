@@ -2,6 +2,7 @@ import { describeMemoryFile, findMemoryFileByPath } from '../memory/memory-files
 import { ACTIVITY_COPY as C } from './activity-copy.js';
 import { updateChromeIcon } from './chrome-icons.js';
 import { WORKSPACE_COPY as W } from '../workspace/workspace-copy.js';
+import { displayCardWorkspacePath } from '../../../card-workspace/paths.js';
 
 function appendSvgPath(svg, d) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -68,7 +69,7 @@ export function collectContextHintItems(state = {}) {
 
     if (state.isWorkspaceOpen) {
         if (selectedTreePath && String(selectedTreePath).endsWith('/') && (!selectedFilePath || selectedTreePath !== selectedFilePath)) {
-            const parts = [`工作区目录：${selectedTreePath}`];
+            const parts = [`工作区目录：${displayCardWorkspacePath(selectedTreePath)}`];
             if (!selectedFilePath) {
                 parts.push('未锁定具体文件');
             }
@@ -78,7 +79,7 @@ export function collectContextHintItems(state = {}) {
             const memoryDescriptor = isMemoryPanel ? describeMemoryFile(memoryFile, selectedFilePath) : null;
             const parts = [isMemoryPanel
                 ? `记忆区${memoryDescriptor.kindLabel}：${memoryDescriptor.displayName}`
-                : `工作区文件：${selectedFilePath}`];
+                : `工作区文件：${displayCardWorkspacePath(selectedFilePath)}`];
             if (workspaceSelection.filePath === selectedFilePath && (workspaceSelection.text || workspaceSelection.lineStart)) {
                 if (workspaceSelection.lineStart) {
                     parts.push(

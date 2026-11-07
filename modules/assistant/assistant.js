@@ -14,6 +14,9 @@ import { AssistantStorage } from "../../core/server-storage.js";
 import { createAssistantHostWindow } from "./assistant-host-window.js";
 import { TOOL_NAMES } from "./app-src/tooling.js";
 import { CARD_SKILL, cardSkillContent } from '../card-workspace/assistant-contract.js';
+import { readableCardWorkspacePath, readableCardWorkspaceRelativePath } from '../card-workspace/paths.js';
+import { STATE3_SKILL, state3SkillContent, cardWorkspaceRequest } from '../variables/state3/skill/contract.js';
+import { withExtensionJsApiManifest, state3JsApiNamespace } from '../variables/state3/skill/public-api.js';
 import { normalizeSlashSkillTrigger } from "./app-src/slash-command-policy.js";
 import { applyPatchUpdateToText, parseApplyPatch } from "../agent-core/tools/apply-patch.js";
 import { buildPatchFailureResult, runPatchValidationAndApply } from "../agent-core/tools/apply-patch-execution.js";
@@ -102,6 +105,7 @@ const EMPTY_SKILLS_CATALOG = Object.freeze({
     version: 1,
     skills: [],
 });
+const BUILTIN_SKILLS = [CARD_SKILL, STATE3_SKILL];
 const MAX_SKILL_PROMPT_ITEMS = 20;
 const MAX_READ_FILE_BYTES = 100 * 1024;
 const MAX_JSAPI_RETURN_CHARS = 50 * 1024;
@@ -319,7 +323,7 @@ async function buildAssistantRuntimePayload(signal) {
         },
         ...skillsRuntime,
         skillsPromptSummary: [skillsRuntime.skillsPromptSummary,
-            `- ${CARD_SKILL.title} | ${CARD_SKILL.summary} | ReadSkill id: ${CARD_SKILL.id}`,
+            ...BUILTIN_SKILLS.map(skill => `- ${skill.title} | ${skill.summary} | ReadSkill id: ${skill.id}`),
         ].filter(Boolean).join('\n'),
     };
 }
@@ -435,7 +439,7 @@ async function loadJsApiManifest(signal) {
     if (!response.ok) {
         throw new Error(`jsapi_manifest_load_failed:${response.status}`);
     }
-    jsApiManifestCache = await response.json();
+    jsApiManifestCache = withExtensionJsApiManifest(await response.json());
     return jsApiManifestCache;
 }
 
@@ -517,6 +521,7 @@ function buildDocumentedJsApiNamespace(manifest = {}, documentedContext) {
     };
 
     return Object.freeze({
+        state3: state3JsApiNamespace(globalThis.LWB_StateV3),
         script: cloneDocumentedNamespace(
             scriptModule,
             createAllowedPathTree(Array.isArray(manifest.allowedPaths) ? manifest.allowedPaths : [], 'st.script.'),
@@ -608,6 +613,7 @@ function buildRuntimeJsApiManifest(manifest = {}, documentedContext, st) {
                     .filter((item) => runtimeAllowedSet.has(item)),
             ),
             st: {
+                state3: uniqueSorted(((manifest.namespaces || {}).st?.state3 || []).filter(item => runtimeAllowedSet.has(item))),
                 script: uniqueSorted(
                     (((manifest.namespaces || {}).st && Array.isArray(manifest.namespaces.st.script))
                         ? manifest.namespaces.st.script
@@ -1144,9 +1150,10 @@ function compileGlobPattern(pattern) {
 }
 
 function matchesGlob(publicPath, relativePath, matcher) {
-    const fullPath = normalizePathForMatch(publicPath);
-    const shortPath = normalizePathForMatch(relativePath);
-    if (matcher.regex.test(fullPath) || matcher.regex.test(shortPath)) {
+    const fullPath = normalizePathForMatch(readableCardWorkspacePath(publicPath));
+    const shortPath = normalizePathForMatch(readableCardWorkspaceRelativePath(publicPath, relativePath));
+    if (matcher.regex.test(fullPath) || matcher.regex.test(shortPath)
+        || matcher.regex.test(normalizePathForMatch(publicPath)) || matcher.regex.test(normalizePathForMatch(relativePath))) {
         return true;
     }
     if (matcher.basenameRegex) {
@@ -2211,7 +2218,7 @@ async function readSkillsCatalogTool(_args = {}, options = {}) {
             details: String(result.content || ''),
         };
     }
-    const builtins = [{ ...CARD_SKILL, content: undefined, builtin: true }];
+    const builtins = BUILTIN_SKILLS.map(skill => ({ ...skill, content: undefined, builtin: true }));
     const skills = [...result.catalog.skills, ...builtins];
     return {
         ok: true,
@@ -2227,10 +2234,12 @@ async function readSkillsCatalogTool(_args = {}, options = {}) {
 
 async function readSkillTool(args = {}, options = {}) {
     const byId = String(args.id || '').trim();
-    if (byId === CARD_SKILL.id || (!byId && args.filename === `${extensionFolderPath}/${CARD_SKILL.path}`)) {
-        const filename = `${extensionFolderPath}/${CARD_SKILL.path}`;
+    const builtin = BUILTIN_SKILLS.find(skill => byId === skill.id || (!byId && args.filename === `${extensionFolderPath}/${skill.path}`));
+    if (builtin) {
+        const filename = `${extensionFolderPath}/${builtin.path}`;
         const body = await readTextFile(filename, options);
-        return { ok: true, ...CARD_SKILL, filename, content: cardSkillContent(body, extensionFolderPath), builtin: true };
+        const render = builtin.id === CARD_SKILL.id ? cardSkillContent : state3SkillContent;
+        return { ok: true, ...builtin, filename, content: render(body, extensionFolderPath), builtin: true };
     }
     const byFilename = normalizeSkillFileName(args.filename || '');
     if (!byId && !byFilename) {
@@ -3295,16 +3304,18 @@ function revealDraftMessage() {
     pendingDraftMessage = '';
 }
 
-export async function openCardWorkspace({ variables = false } = {}) {
+/** @param {{ variables?: boolean, version?: string }} [options] */
+export async function openCardWorkspace({ variables = false, version } = {}) {
     if (!window.xiaobaixAssistant) await initAssistant();
     const card = await executeToolCall(TOOL_NAMES.CARD_FILES, { action: 'open' });
-    setAssistantEditorContext({ source: 'card-files', note: `角色卡：${card.name}。工作区：${card.root}。ReadSkill id: ${CARD_SKILL.id}` });
+    const request = cardWorkspaceRequest(card, { variables, version, variablesMode: extensionsModule.extension_settings?.LittleWhiteBox?.variablesMode });
+    setAssistantEditorContext({ source: 'card-files', note: `角色卡：${card.name}。工作区：${readableCardWorkspacePath(card.root)}。ReadSkill id: ${request.skillId}` });
     const workspace = await workspaceRepository.readWorkspace();
     await workspaceRepository.saveWorkspaceUiState({ ...workspace, isWorkspaceOpen: true, workspacePanelMode: 'workspace',
-        selectedFilePath: card.paths.find(path => variables && path.includes('/tasks/') && path.endsWith('.js')) || `${card.root}card.json`,
+        selectedFilePath: request.selectedFilePath,
         fileSearchQuery: '', showModifiedOnly: false, mobileWorkspacePane: 'viewer' });
-    openAssistant({ draftMessage: `帮我${variables ? '制作变量卡' : '修改角色卡'}「${card.name}」。先看看已有文件，再和我一起调整。` });
-    if (assistantFrameReady) postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:card-workspace', payload: { path: `${card.root}card.json`, localSources: workspace.localSources } });
+    openAssistant({ draftMessage: request.draftMessage });
+    if (assistantFrameReady) postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:card-workspace', payload: { path: request.state3 ? request.selectedFilePath : `${card.root}card.json`, localSources: workspace.localSources } });
     return card;
 }
 

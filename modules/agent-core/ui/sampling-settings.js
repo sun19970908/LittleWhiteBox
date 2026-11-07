@@ -55,7 +55,8 @@ function updateSamplingSummary(section) {
 export function syncSamplingForm(root, { provider, temperature, sendTemperature, sampling }, scope = 'main') {
     const section = root.querySelector(`[data-sampling-scope="${scope}"]`);
     if (!section) return;
-    const supported = new Set(['temperature', ...samplingParametersFor(provider).map(parameter => parameter.key)]);
+    const supported = new Set(provider === 'google-vertex' ? [] : ['temperature', ...samplingParametersFor(provider).map(parameter => parameter.key)]);
+    section.hidden = !supported.size;
     const values = normalizeSampling(sampling);
     for (const parameter of PARAMETERS) {
         const row = section.querySelector(`[data-sampling-key="${parameter.key}"]`);

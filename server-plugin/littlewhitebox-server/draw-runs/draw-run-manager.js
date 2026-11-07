@@ -47,8 +47,19 @@ function collectSecrets(value, output = new Set()) {
     };
     if (!value || typeof value !== 'object') return output;
     Object.entries(value).forEach(([key, child]) => {
-        if (/api[-_]?key|authorization|password|token|secret|auth$/i.test(key)) {
+        if (key === 'serviceAccountJson' && typeof child === 'string') {
             addSecret(child);
+            addSecret(JSON.stringify(child).slice(1, -1));
+            try { collectSecrets(JSON.parse(child), output); }
+            catch (error) { if (!(error instanceof SyntaxError)) throw error; }
+            return;
+        }
+        if (/api[-_]?key|private[-_]?key|authorization|password|token|secret|auth$/i.test(key)) {
+            addSecret(child);
+            if (typeof child === 'string') {
+                addSecret(JSON.stringify(child).slice(1, -1));
+                addSecret(encodeURIComponent(child));
+            }
             return;
         }
         if (typeof child === 'string' && /(?:base)?url|host/i.test(key)) {

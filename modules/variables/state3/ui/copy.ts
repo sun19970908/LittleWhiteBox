@@ -1,0 +1,53 @@
+import { diagnostic } from '../engine/diagnostics.js';
+import type { Diagnostic } from '../types.js';
+export const COPY = {
+    title: '变量 3.0', author: '制作规则', play: '当前聊天', close: '关闭', assistant: '交给小白助手',
+    draftHelp: '草稿可以不完整。先保存草稿，再检查规则；保存到角色卡不会改变当前聊天。',
+    draft: '规则草稿', files: '编辑文件', saveDraft: '保存草稿', savedDraft: '草稿已保存', check: '检查并试算',
+    saveCard: '保存到角色卡', savedCard: '规则已保存到角色卡', example: '载入护符样例', exampleConfirm: '将替换编辑器中的规则草稿，尚未保存。继续吗？',
+    enable: '在此聊天启用', upgrade: '应用卡上新规则', previewUpgrade: '预览规则变更',
+    notEnabled: '此聊天还没有启用 3.0 规则。保存卡规则后可在这里启用。已有 2.0 状态不会迁入。',
+    action: '动作', parameters: '动作参数（JSON）', preview: '试算', commit: '执行动作', cancel: '取消', undo: '撤销最近一次提交',
+    omitParameter: '不填写',
+    state: '当前状态', update: '更新变量', updateSettings: '独立更新', mode: '更新方式', model: '更新模型', saveSettings: '保存更新设置', previewRequest: '预览实际请求',
+    modes: { off: '关闭', manual: '手动', auto: '回复后自动' }, sources: { main: '小白助手 · 主助手 API', delegate: '小白助手 · 分身 API' },
+    undoReply: '撤销此回复的全部结算',
+    savedRules: '卡上规则',
+    result: '结算结果', empty: '没有状态变化', success: '结算成功', previewed: '试算成功，未改变聊天',
+    failed: '本次未生效', saved: '已保存', unconfirmed: '结果已生效，但未确认保存。请重试保存，不要重复执行动作。', retrySave: '重试保存',
+    refreshing: '正在读取…', newFunction: '新建函数', functionName: '函数名（字母、数字、下划线或短横线）',
+    phases: { ready: '', preparing: '正在读取资料', requesting: '正在更新', correcting: '正在纠正提交', saving: '正在保存', success: '已更新', unsaved: '尚未保存', failed: '更新失败', cancelled: '已取消' } as Record<string, string>,
+    reasons: { input: '直接修改', action: '动作', derive: '关联计算', correct: '按规则修正', trigger: '状态触发' },
+    errors: {
+        'not-enabled': '当前聊天尚未启用规则。', 'already-enabled': '当前聊天已有规则，请使用应用新规则。',
+        'definition-missing': '尚未保存角色卡规则。', 'definition-shape': '规则包格式不完整。', 'definition-schema': '规则定义的结构不正确。',
+        'history-format': '这份聊天使用了未发布的旧版 3.0 试验记录，不能作为正式存档读取。',
+        'trigger-cycle': '触发规则无法收敛，本次没有生效。',
+        'notification-failed': '结果已生效，但通知其他功能时出错。',
+        'input-shape': '提交格式不正确，请按卡提供的字段或动作提交。',
+        'path': '路径需要由字段名组成的数组。', 'json': '提交中有不能保存的值。',
+        'missing-parent': '要写入的父对象不存在，请先创建它。', 'array-index': '数组位置不合法。',
+        'function_exception': '自定义函数执行失败。', 'target-missing': '找不到要更新的回复。',
+        'nothing-to-save': '没有等待重试保存的结果。',
+        'state-schema': '结算后的状态不符合定义。', 'constraint': '结算未通过规则检查。',
+        'action-precondition': '动作的前提不成立。', 'action-parameters': '动作参数不符合要求。', 'action-missing': '找不到这个动作。',
+        'permission': '此字段不允许通过当前方式修改。', 'derived-write': '此字段由规则计算，不能直接修改。',
+        'stale-target': '聊天、回复或起点已变化，请重新试算。', 'cancelled': '已取消，状态未改变。',
+        'save-unconfirmed': '无法确认聊天已经保存。', 'draft-conflict': '草稿已被其他编辑修改，请重新打开后合并。',
+        'dependency-cycle': '规则存在循环依赖。',
+        'rule-write-conflict': '多条关联规则同时负责同一字段。', 'correction-unstable': '修正规则不能得到稳定结果。',
+        'function-missing': '缺少规则引用的函数。', 'function-undeclared': '函数没有在定义中声明。',
+        'function_timeout': '函数计算超时，本次未生效。', 'function_aborted': '函数计算已取消。',
+        'nothing-to-undo': '此回复没有可撤销的提交。', 'chat-missing': '请先打开聊天。', 'character-missing': '请先选择角色卡。',
+        'commit-busy': '正在处理上一笔结果，请稍候。', 'stage-consumed': '这次结果已经提交，请重新试算。',
+        'body-owner': '此回复包含正文结算块，已由正文入口负责；删除该块后才能改用独立更新。',
+        'agent-unavailable': '请先启用并配置小白助手的 Agent API。', 'model-submission': '模型没有提交一次完整的变量修改，本次未生效。',
+        'async-schema': '结构校验应是同步规则；领域自定义计算请使用规则函数。',
+    },
+};
+export function errorText(error: unknown): string {
+    const detail = error && typeof error === 'object' && 'code' in error ? error as Diagnostic : diagnostic(error);
+    const label = (COPY.errors as Record<string, string>)[detail.code] || detail.message || detail.code || COPY.failed;
+    return [typeof detail.operation === 'number' ? '第 ' + (detail.operation + 1) + ' 条操作' : '', Array.isArray(detail.path) ? detail.path.join(' → ') : '', detail.rule,
+        Array.isArray(detail.rules) ? detail.rules.join(' → ') : '', detail.functionId, label].filter(Boolean).join(' · ');
+}
