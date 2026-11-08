@@ -17,7 +17,7 @@ const settings = (provider, key = 'fixture-secret') => ({ provider: 'openai-comp
 const call = (name, args) => ({ text: '', toolCalls: [{ id: name, name, arguments: JSON.stringify(args) }] });
 const done = { text: 'Verified.', toolCalls: [] };
 
-function runtimeHarness(t, { config = settings('tavily'), delegateConfig = settings('exa'), steps, delegateSteps = [], session = false }) {
+function runtimeHarness(t, { config = settings('tavily'), delegateConfig = settings('exa'), steps, delegateSteps = [], session = false, jsApiEnabled = false }) {
     t.mock.method(console, 'info', () => {});
     const run = { id: 'web-test', controller: new AbortController(), toolRequestIds: new Set(), workspaceBaseline: [] };
     const state = { activeRun: run, messages: [{ role: 'user', content: 'Read the public reference.' }], archivedTurnCount: 0 };
@@ -31,7 +31,8 @@ function runtimeHarness(t, { config = settings('tavily'), delegateConfig = setti
         formatToolResultDisplay, normalizeAttachments: () => [], normalizeThoughtBlocks: () => [],
         buildUserContentParts: message => message.content,
         getActiveProviderConfig: () => config, getDelegateProviderConfig: () => delegateConfig,
-        getToolDefinitions: ({ role }) => getAssistantToolDefinitions({ providerConfig: role === 'delegate' ? delegateConfig : config }),
+        getToolDefinitions: ({ role }) => getAssistantToolDefinitions({ providerConfig: role === 'delegate' ? delegateConfig : config, jsApiEnabled }),
+        isJsApiEnabled: () => jsApiEnabled,
         SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000,
         MAX_TOOL_ROUNDS: 6, REQUEST_TIMEOUT_MS: 1000,
         isAbortError: error => error.name === 'AbortError' || error.message === 'assistant_aborted',
@@ -64,6 +65,15 @@ test('both web definitions share the existing contracts and respect the selected
             }
         }
     }
+});
+
+// 验收：用户禁止 JS 时，即使模型沿用旧工具调用也不派发执行；代价：越权执行。
+test('disabled JavaScript API stays blocked even if a model submits the tool call', async t => {
+    const harness = runtimeHarness(t, { steps: [call(TOOL_NAMES.RUN_JAVASCRIPT_API, { code: 'return 1;' }), done] });
+    await harness.start();
+    const receipt = harness.requests.at(-1).messages.find(message => message.role === 'tool');
+    assert.equal(JSON.parse(receipt.content).error, 'jsapi_permission_denied');
+    assert.equal(harness.requests.every(request => !request.tools.some(tool => tool.function.name === TOOL_NAMES.RUN_JAVASCRIPT_API)), true);
 });
 
 for (const provider of ['tavily', 'exa']) {

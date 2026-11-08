@@ -3,11 +3,25 @@ import { ACTIVITY_COPY } from './ui/activity-copy.js';
 import { getToolResultReadDefinition, TOOL_RESULT_READ, withPagedToolResult } from '../../agent-core/runtime/tool-result-contract.js';
 import { CARD_TOOL } from '../../card-workspace/assistant-contract.js';
 import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
+import { LOOKUP_SCOPES, LOOKUP_SCOPE_PROJECT, LOOKUP_SCOPE_LOCAL } from '../shared/lookup-scope.js';
+import { INSPECT_PAGE_TOOL } from '../../live-page-inspection/tool-contract.ts';
+import { COPY as INSPECTION_COPY } from '../../live-page-inspection/contract.ts';
+
+function lookupScopeParameter(pathParameter = 'path') {
+    return {
+        type: 'string',
+        enum: LOOKUP_SCOPES,
+        description: `File source: ${LOOKUP_SCOPE_PROJECT} = project source code (default); ${LOOKUP_SCOPE_LOCAL} = session workspace. The directory or file path goes in ${pathParameter}, not scope.`,
+    };
+}
+
+const LOOKUP_PATH_DESCRIPTION = 'Optional directory or exact file path. Project paths omit `public/`; workspace paths keep the full `local/` prefix.';
 
 // ============================================================
 // 工具名称常量
 // ============================================================
 export const TOOL_NAMES = {
+    INSPECT_PAGE: INSPECT_PAGE_TOOL.function.name,
     CARD_FILES: CARD_TOOL.function.name,
     LS: 'LS',
     GLOB: 'Glob',
@@ -43,6 +57,7 @@ export const TOOL_NAMES = {
 // 工具定义
 // ============================================================
 export const TOOL_DEFINITIONS = [
+    INSPECT_PAGE_TOOL,
     CARD_TOOL,
     {
         type: 'function',
@@ -52,14 +67,12 @@ export const TOOL_DEFINITIONS = [
                 'List files and directories inside a directory path.',
                 'Returns first-level entries only; does not recurse and does not read file contents.',
                 'Best for directory-level discovery and structural narrowing by path.',
-                'Default scope is project source code only; `local/` workspace lookup requires `scope: "local"`.',
-                'When `scope: "local"` is used, keep writing the real path as `local/...`; for example `scope: "local"` + `path: "local/"` is valid.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    path: { type: 'string', description: 'Site-root-relative tool path without `public/`, for example scripts/extensions/third-party/ or scripts/extensions/third-party/LittleWhiteBox/modules/.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to list only the `local/` workspace tree.' },
+                    path: { type: 'string', description: 'Directory path. Project paths omit `public/`; workspace paths keep the full `local/` prefix.' },
+                    scope: lookupScopeParameter(),
                     offset: { type: 'number', description: 'Optional 1-based entry offset for paging. Default 1.' },
                     limit: { type: 'number', description: 'Maximum number of first-level entries to return. Default 100, max 300.' },
                 },
@@ -75,17 +88,15 @@ export const TOOL_DEFINITIONS = [
             description: [
                 'Fast file pattern matching tool for project code and `local/` workspace files.',
                 'Matches file paths only; does not inspect file contents.',
-                'Default scope is project source code only; use `scope: "local"` to search only the session workspace.',
-                'When `scope: "local"` is used, workspace paths still use the normal `local/...` form.',
                 'Best for file discovery and path-level narrowing when you know a directory, extension, or naming pattern.',
-                'Supports a path scope so you can search inside one directory instead of the full selected scope.',
+                'The optional path filters results to one directory or exact file.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
                     pattern: { type: 'string', description: 'Glob path pattern without `public/`, for example scripts/extensions/third-party/LittleWhiteBox/modules/**/*.js.' },
-                    path: { type: 'string', description: 'Optional directory or exact file path inside the selected lookup scope. Project paths omit `public/`.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to search only `local/` files.' },
+                    path: { type: 'string', description: LOOKUP_PATH_DESCRIPTION },
+                    scope: lookupScopeParameter(),
                 },
                 required: ['pattern'],
                 additionalProperties: false,
@@ -98,18 +109,17 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.GREP,
             description: [
                 'Fast content search tool for project code and `local/` workspace files.',
-                'It first builds a candidate set from the selected scope, then searches the current live contents of those candidate files.',
-                'When `scope: "local"` is used, workspace paths still use the normal `local/...` form.',
+                'It first builds a candidate set from the selected file source, then searches the current live contents of those candidate files.',
                 'Uses regex search by default and returns matching files with line-level match details.',
                 'Best for content-level narrowing by keyword, symbol name, error text, or regex before reading files.',
-                'Supports both directory scope and file-pattern filtering so you can narrow searches before reading files.',
+                'The optional path and include fields filter by directory or exact file and by file pattern, respectively.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
                     pattern: { type: 'string', description: 'grep/rg-style search pattern. Treated as regex by default.' },
-                    path: { type: 'string', description: 'Optional directory or exact file path inside the selected lookup scope. Project paths omit `public/`.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to search only `local/` files.' },
+                    path: { type: 'string', description: LOOKUP_PATH_DESCRIPTION },
+                    scope: lookupScopeParameter(),
                     include: { type: 'string', description: 'Optional file path glob filter, for example **/*.js or modules/assistant/**/*.js.' },
                     outputMode: {
                         type: 'string',
@@ -132,8 +142,6 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.READ,
             description: [
                 'Read a text file or directory using the current instance\'s live contents.',
-                'Default scope is project source code only; use `scope: "local"` to read only `local/...` workspace paths.',
-                'When `scope: "local"` is used, `filePath` still needs the full `local/...` path.',
                 'For some explicit public file paths, direct live reads may still work even if the path is not in the index.',
                 'Returns numbered lines for files and plain entry names for directories; large reads include continuation hints.',
                 'Use `tail` only when you need the last N lines of a file; otherwise omit it entirely.',
@@ -141,8 +149,8 @@ export const TOOL_DEFINITIONS = [
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Site-root-relative tool path without `public/`, for example scripts/extensions/third-party/LittleWhiteBox/index.js or local/.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to read only `local/` workspace files or directories.' },
+                    filePath: { type: 'string', description: 'File or directory path. Project paths omit `public/`; workspace paths keep the full `local/` prefix.' },
+                    scope: lookupScopeParameter('filePath'),
                     offset: { type: 'number', description: 'Optional line offset (1-based). Default 1.' },
                     limit: { type: 'number', description: 'Optional maximum number of lines or directory entries to return. Default 2000.' },
                     tail: { type: 'number', description: 'Optional number of final file lines to return. Use by itself; cannot be combined with offset, limit, startLine, or endLine. Omit the field entirely when unused; do not send `tail: 0`.' },
@@ -260,25 +268,23 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.RUN_JAVASCRIPT_API,
             description: [
-                'Execute documented public SillyTavern frontend JavaScript APIs.',
+                'Run JavaScript against the live SillyTavern frontend.',
                 'Use this when STscript or slash commands do not provide the needed entry point and you need to inspect, read, or operate on public frontend objects and state such as chatMetadata, saveMetadata, or public extension exports.',
-                'This is not arbitrary JS execution; only documented public APIs are allowed.',
-                'Code can directly use injected `ctx` and `st`; `ctx` comes from getContext(), and `st` exposes public script / extensions / slash namespaces plus `st.state3`, documented by ReadSkill builtin-state3. Simple destructuring, simple arrow callbacks, `if`, `for...of`, `try/catch`, and constrained read-only inspection are supported.',
-                'Request modes: use `inspect` for unknown structures, `read` for known fields, and `effect` only for side-effectful calls.',
-                'Typical `inspect` usage: Object.keys(ctx.chatMetadata), typeof ctx.someField, Array.isArray(ctx.chat), or small JSON/stringified samples.',
-                'Typical `read` usage: directly return a known field such as ctx.chatMetadata.LittleWhiteBox.summary.',
-                'Typical `effect` usage: calls such as ctx.saveMetadata() or other state-changing frontend APIs.',
-                '`apiPaths` may be omitted for read-only inspection and precise reads, or kept at container level; side-effect requests must declare exact paths. `safety` is explanatory only, not the security boundary. Code must explicitly return the final result.',
+                'Code runs as an async function with normal JavaScript syntax and top-level await. Injected `ctx` and `getContext()` expose the documented context; `st` contains public script / extensions / slash namespaces, `st.state3` (ReadSkill builtin-state3), and `st.iframeRenderer` (modules/live-page-inspection/references/verify-changes.md). The API reference lists available entry points; nested data is read from the live instance.',
+                'The script itself returns the result; a return inside a callback only returns to that callback. Use return null when there is no data to return.',
+                'The tool classifies the code automatically as inspect, read, effect, or unknown; state-changing and unresolved operations go through user confirmation.',
+                'Returns ok, output, execution diagnostics, and any truncation flags. usedApis and calledApis describe references found in the code, not an execution trace. Return a focused result rather than an entire chat or metadata tree.',
+                'Cancellation stops waiting and checks for cancellation as the script resumes. Already-started saves or network requests are not undone. After a cancellation or execution error, inspect the affected state before retrying a modification.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    code: { type: 'string', description: 'Execute JavaScript carefully and safely. Code must explicitly return the final result.' },
+                    code: { type: 'string', description: 'Async JavaScript function body, including a return for the final result.' },
                     purpose: { type: 'string', description: 'What this code is intended to do.' },
                     apiPaths: {
                         type: 'array',
                         items: { type: 'string' },
-                        description: 'Optional public API path declarations. For inspect/read this may be omitted or kept at container level such as ctx.chatMetadata; for effect requests exact paths are required.',
+                        description: 'Optional API references for explaining the request to the user, such as ctx.chatMetadata or ctx.saveMetadata. These do not grant permissions or replace code analysis.',
                     },
                     safety: { type: 'string', description: 'Optional safety note, for example read-only or which objects/state may be modified. Mainly used for explanation and approval copy.' },
                     expectedOutput: { type: 'string', description: 'What result is expected to be returned.' },
@@ -631,6 +637,8 @@ function truncateInlineText(value = '', limit = 220) {
 
 export function describeToolCall(name, args = {}) {
     switch (name) {
+        case TOOL_NAMES.INSPECT_PAGE:
+            return INSPECTION_COPY.label;
         case TOOL_NAMES.CARD_FILES:
             return args.action === 'save' ? CARD_COPY.save : CARD_COPY.open;
         case TOOL_NAMES.LS:
@@ -872,6 +880,13 @@ export function formatToolResultDisplay(message) {
         return {
             summary: message.content || '',
             details: '',
+        };
+    }
+
+    if (message.toolName === TOOL_NAMES.INSPECT_PAGE) {
+        return {
+            summary: parsed.ok === false ? parsed.message : [INSPECTION_COPY.result, parsed.next ? INSPECTION_COPY.continued : ''].filter(Boolean).join(' · '),
+            details: [parsed.frame ? JSON.stringify(parsed.frame, null, 2) : '', parsed.content || ''].filter(Boolean).join('\n\n'),
         };
     }
 
@@ -1237,7 +1252,7 @@ export function formatToolResultDisplay(message) {
         const status = parsed.skipped === true
             ? '已跳过'
             : execution.isAborted === true
-                ? '已中止'
+                ? ACTIVITY_COPY.statuses.unconfirmed
                 : parsed.ok === false
                     ? '失败'
                     : '成功';
@@ -1249,7 +1264,7 @@ export function formatToolResultDisplay(message) {
                     ? '执行操作'
                     : '未知';
         const lines = [
-            `已执行 JS API：${parsed.code || ''}`,
+            `JS API 请求：${parsed.code || ''}`,
             `请求性质：${requestKind}`,
             `状态：${status}`,
         ];
@@ -1257,7 +1272,7 @@ export function formatToolResultDisplay(message) {
             lines.push(`错误：${execution.errorMessage}`);
         }
         if (Array.isArray(parsed.calledApis) && parsed.calledApis.length) {
-            lines.push(`实际调用：${parsed.calledApis.join(', ')}`);
+            lines.push(`代码涉及的调用：${parsed.calledApis.join(', ')}`);
         } else if (Array.isArray(parsed.usedApis) && parsed.usedApis.length) {
             lines.push(`使用 API：${parsed.usedApis.join(', ')}`);
         }

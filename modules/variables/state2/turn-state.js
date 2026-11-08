@@ -4,7 +4,7 @@ import { calculateRebuild, publishRebuild } from './rebuild.js';
 
 // Replacement and continuation submissions share ownership. Ordinary API calls
 // and body initialization never acquire this marker and are never rolled back.
-const TURN_SCOPE = 'turn';
+export const TURN_SCOPE = 'turn';
 const ERRORS = {
     invalid_turn_target: '只能更新最后一条 AI 回复的当前 swipe',
     stale_turn_target: '目标回复或变量已变化，请重新更新变量',

@@ -1,6 +1,7 @@
 import { pluginAsset } from '../../../core/build-assets.js';
 import { analyzeJavaScriptApiRequest } from '../runtime-src/jsapi-runtime.js';
-import { withExtensionJsApiManifest } from '../../variables/state3/skill/public-api.js';
+import { JSAPI_CANCEL_NOTICE } from '../shared/jsapi-contract.js';
+import { withAssistantJsApiManifest } from '../shared/extension-jsapi-manifest.ts';
 import { createDelegateRunner } from '../../agent-core/runtime/delegate-runner.js';
 import { agentErrorGuidance } from '../../agent-core/runtime/error-guidance.js';
 import { runWebSearchTool, runWebFetchTool } from '../../agent-core/web/tools.js';
@@ -50,7 +51,7 @@ async function loadJsApiManifest() {
             if (!response.ok) {
                 throw new Error(`jsapi_manifest_load_failed:${response.status}`);
             }
-            return withExtensionJsApiManifest(await response.json());
+            return withAssistantJsApiManifest(await response.json());
         }).catch((error) => {
             jsApiManifestPromise = null;
             throw error;
@@ -274,7 +275,9 @@ export function createAssistantRuntime(deps) {
     function cancelActiveRun(notice = '本轮请求已终止。') {
         const run = state.activeRun;
         if (!run) return;
-        run.cancelNotice = notice;
+        const pendingJs = [...pendingToolCalls.values()].some(entry =>
+            entry.runId === run.id && entry.toolName === TOOL_NAMES.RUN_JAVASCRIPT_API && entry.dispatched);
+        run.cancelNotice = pendingJs ? `${notice} ${JSAPI_CANCEL_NOTICE}` : notice;
         state.progressLabel = '终止中';
         run.controller.abort();
         clearPendingToolCalls(run.id, new Error('tool_aborted'));
@@ -494,6 +497,7 @@ export function createAssistantRuntime(deps) {
 
                 const jsApiNeedsApproval = !(
                     jsApiAnalysis
+                    && !jsApiAnalysis.analysisError
                     && Array.isArray(jsApiAnalysis.validationErrors)
                     && jsApiAnalysis.validationErrors.length > 0
                 ) && shouldRequireJsApiApproval(jsApiAnalysis?.requestKind || 'unknown');

@@ -9,6 +9,7 @@ export const DEFAULT_PROVIDER = 'openai-compatible';
 export const DEFAULT_PRESET_NAME = '默认';
 export const DEFAULT_PERMISSION_MODE = 'default';
 export const DEFAULT_JSAPI_PERMISSION = 'deny';
+export const AGENT_JSAPI_PERMISSION_LABEL = 'JavaScript API 权限';
 export const DEFAULT_MAX_TOKENS = 32000;
 export const AGENT_SETTINGS_CONFIG_VERSION = 1;
 export const AGENT_PERMISSION_MODE_OPTIONS = Object.freeze([

@@ -14,6 +14,7 @@ import {
 } from '../../agent-core/provider-config.js';
 import { buildWorkspaceUserContextTextForState } from './context/current-context.js';
 import { readableCardWorkspacePath } from '../../card-workspace/paths.js';
+import { INVALID_LOOKUP_SCOPE, describeInvalidLookupScope } from '../shared/lookup-scope.js';
 import { normalizeMemoryFiles } from './memory/memory-files.js';
 import {
     DEFAULT_PRESET_NAME,
@@ -1018,7 +1019,7 @@ function describeError(error) {
     if (lowered === 'local_path_required') return '这个工具只能操作 `local/` 下的会话内临时工作区文件。';
     if (lowered === 'workspace_scope_local_required') return '要读取或搜索 `local/` 工作区，请显式传 `scope: "local"`。';
     if (lowered === 'workspace_scope_local_only') return '当前已切到 `local` 工作区作用域，因此这里只能读取或搜索 `local/` 路径。';
-    if (lowered === 'invalid_lookup_scope') return '`scope` 只支持 `project` 或 `local`。';
+    if (lowered === INVALID_LOOKUP_SCOPE) return describeInvalidLookupScope();
     if (lowered === 'unsupported_text_file') return '目前只支持文本类工作区文件。';
     if (lowered === 'local_source_not_found') return '源 `local/` 路径不存在，无法完成这次移动。';
     if (lowered === 'local_file_not_found') return '目标 `local/` 文件不存在；可以先用 Write 新建。';

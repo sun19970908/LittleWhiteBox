@@ -22,6 +22,14 @@
 .xb-variable-settings .xb-variable-help { font-size:14px; line-height:1.65; }
 .xb-variable-settings .xb-variable-help h3 { font-size:inherit; margin:20px 0 8px; }
 .xb-variable-settings .xb-variable-help p { margin:8px 0; }
+.xb-variable-settings .xb-variable-change { padding:10px 0; border-bottom:1px solid var(--SmartThemeBorderColor,#718096); }
+.xb-variable-settings .xb-variable-change p { margin:6px 0; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; }
+.xb-variable-settings .xb-variable-change strong { font-weight:600; }
+.xb-variable-settings .xb-variable-annotations { border:0; margin:6px 0 0; padding:0; font-size:13px; }
+.xb-variable-settings .xb-variable-annotations summary { padding:4px 0; opacity:.8; }
+.xb-variable-settings .xb-variable-annotations dl { display:grid; grid-template-columns:fit-content(30%) minmax(0,1fr); gap:5px 12px; margin:6px 0; }
+.xb-variable-settings .xb-variable-annotations dt,.xb-variable-settings .xb-variable-annotations dd { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.xb-variable-settings .xb-variable-error { color:var(--warning,#f5b880); }
 .xb-variable-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:8px 0 4px; font-size:13px; }
 .xb-variable-controls button { color:inherit; background:var(--black30a,#0002); border:1px solid var(--SmartThemeBorderColor,#718096); border-radius:5px; padding:5px 9px; font:inherit; cursor:pointer; }
 .xb-variable-controls [role=status] { opacity:.8; }

@@ -16,7 +16,11 @@ import { TOOL_NAMES } from "./app-src/tooling.js";
 import { CARD_SKILL, cardSkillContent } from '../card-workspace/assistant-contract.js';
 import { readableCardWorkspacePath, readableCardWorkspaceRelativePath } from '../card-workspace/paths.js';
 import { STATE3_SKILL, state3SkillContent, cardWorkspaceRequest } from '../variables/state3/skill/contract.js';
-import { withExtensionJsApiManifest, state3JsApiNamespace } from '../variables/state3/skill/public-api.js';
+import { state3JsApiNamespace } from '../variables/state3/skill/public-api.js';
+import { withAssistantJsApiManifest } from './shared/extension-jsapi-manifest.ts';
+import { iframeRendererJsApiNamespace } from '../iframe-renderer/assistant-api.ts';
+import { processMessageById } from '../iframe-renderer.js';
+import { isTauriTavernChatSurfaceManaged } from '../../integrations/tauritavern/environment.js';
 import { normalizeSlashSkillTrigger } from "./app-src/slash-command-policy.js";
 import { applyPatchUpdateToText, parseApplyPatch } from "../agent-core/tools/apply-patch.js";
 import { buildPatchFailureResult, runPatchValidationAndApply } from "../agent-core/tools/apply-patch-execution.js";
@@ -140,10 +144,6 @@ function summarizeLocalSourcesForDebug(localSources) {
         fileCount: files.length,
         samplePaths: files.slice(0, 6).map((file) => String(file?.publicPath || file?.path || '')).filter(Boolean),
     };
-}
-
-function uniqueSorted(items) {
-    return Array.from(new Set(Array.from(items || []).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'en'));
 }
 
 function trimEditorContextText(text = '', limit = 1200) {
@@ -439,7 +439,7 @@ async function loadJsApiManifest(signal) {
     if (!response.ok) {
         throw new Error(`jsapi_manifest_load_failed:${response.status}`);
     }
-    jsApiManifestCache = withExtensionJsApiManifest(await response.json());
+    jsApiManifestCache = withAssistantJsApiManifest(await response.json());
     return jsApiManifestCache;
 }
 
@@ -522,6 +522,7 @@ function buildDocumentedJsApiNamespace(manifest = {}, documentedContext) {
 
     return Object.freeze({
         state3: state3JsApiNamespace(globalThis.LWB_StateV3),
+        iframeRenderer: iframeRendererJsApiNamespace(processMessageById, isTauriTavernChatSurfaceManaged()),
         script: cloneDocumentedNamespace(
             scriptModule,
             createAllowedPathTree(Array.isArray(manifest.allowedPaths) ? manifest.allowedPaths : [], 'st.script.'),
@@ -538,103 +539,6 @@ function buildDocumentedJsApiNamespace(manifest = {}, documentedContext) {
             createAllowedPathTree(Array.isArray(manifest.allowedPaths) ? manifest.allowedPaths : [], 'st.slash.'),
         ),
     });
-}
-
-function collectAvailableJsApiPaths(value, prefix, target, seen = new WeakSet()) {
-    if (!prefix || !target) return;
-    target.add(prefix);
-
-    if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
-        return;
-    }
-    if (typeof value === 'object' || typeof value === 'function') {
-        if (seen.has(value)) return;
-        seen.add(value);
-    }
-
-    Object.keys(value).forEach((key) => {
-        if (!key) return;
-        collectAvailableJsApiPaths(value[key], `${prefix}.${key}`, target, seen);
-    });
-}
-
-function doesJsApiPathExist(pathText, ctx, st) {
-    const segments = String(pathText || '').split('.').filter(Boolean);
-    if (!segments.length) return false;
-
-    let current = null;
-    if (segments[0] === 'ctx') {
-        current = ctx;
-    } else if (segments[0] === 'st') {
-        current = st;
-    } else {
-        return false;
-    }
-
-    for (let index = 1; index < segments.length; index += 1) {
-        const segment = segments[index];
-        if (current == null || !(segment in current)) {
-            return false;
-        }
-        current = current[segment];
-    }
-
-    return true;
-}
-
-function buildRuntimeJsApiManifest(manifest = {}, documentedContext, st) {
-    const availablePaths = new Set();
-    collectAvailableJsApiPaths(documentedContext, 'ctx', availablePaths);
-    collectAvailableJsApiPaths(st, 'st', availablePaths);
-
-    const staticAllowedPaths = Array.isArray(manifest.allowedPaths) ? manifest.allowedPaths : [];
-    const runtimeAllowedPaths = uniqueSorted(staticAllowedPaths.filter((item) => availablePaths.has(item)));
-    const runtimeAllowedSet = new Set(runtimeAllowedPaths);
-    const runtimeCallablePaths = uniqueSorted(
-        (Array.isArray(manifest.callablePaths) ? manifest.callablePaths : [])
-            .filter((item) => runtimeAllowedSet.has(item) && doesJsApiPathExist(item, documentedContext, st)),
-    );
-    const runtimeCallableSet = new Set(runtimeCallablePaths);
-    const sourceSemantics = manifest && typeof manifest.apiSemantics === 'object' && manifest.apiSemantics
-        ? manifest.apiSemantics
-        : {};
-
-    return {
-        ...manifest,
-        allowedPaths: runtimeAllowedPaths,
-        callablePaths: runtimeCallablePaths,
-        apiSemantics: Object.fromEntries(
-            Object.entries(sourceSemantics)
-                .filter(([key, value]) => runtimeCallableSet.has(key) && value),
-        ),
-        namespaces: {
-            ctx: uniqueSorted(
-                ((manifest.namespaces && Array.isArray(manifest.namespaces.ctx)) ? manifest.namespaces.ctx : [])
-                    .filter((item) => runtimeAllowedSet.has(item)),
-            ),
-            st: {
-                state3: uniqueSorted(((manifest.namespaces || {}).st?.state3 || []).filter(item => runtimeAllowedSet.has(item))),
-                script: uniqueSorted(
-                    (((manifest.namespaces || {}).st && Array.isArray(manifest.namespaces.st.script))
-                        ? manifest.namespaces.st.script
-                        : [])
-                        .filter((item) => runtimeAllowedSet.has(item)),
-                ),
-                extensions: uniqueSorted(
-                    (((manifest.namespaces || {}).st && Array.isArray(manifest.namespaces.st.extensions))
-                        ? manifest.namespaces.st.extensions
-                        : [])
-                        .filter((item) => runtimeAllowedSet.has(item)),
-                ),
-                slash: uniqueSorted(
-                    (((manifest.namespaces || {}).st && Array.isArray(manifest.namespaces.st.slash))
-                        ? manifest.namespaces.st.slash
-                        : [])
-                        .filter((item) => runtimeAllowedSet.has(item)),
-                ),
-            },
-        },
-    };
 }
 
 function normalizeWorkspaceName(input) {
@@ -3158,18 +3062,17 @@ async function runJavaScriptApi(args = {}, options = {}) {
         const rawContext = getContext();
         const documentedContext = buildDocumentedJsApiContext(rawContext, manifest);
         const st = buildDocumentedJsApiNamespace(manifest, documentedContext);
-        const runtimeManifest = buildRuntimeJsApiManifest(manifest, documentedContext, st);
         const result = await runtimeModule.runJavaScriptApi({
             code,
             purpose,
             apiPaths,
             safety,
             expectedOutput,
-            manifest: runtimeManifest,
+            manifest,
             ctx: documentedContext,
             st,
+            signal: options.signal,
         });
-        ensureNotAborted(options.signal);
         const shapedOutput = shapeJavaScriptApiOutputForTransport(result?.output);
         const shapedNote = shapedOutput.charLimited
             ? [
@@ -3180,6 +3083,7 @@ async function runJavaScriptApi(args = {}, options = {}) {
         return buildJavaScriptApiToolResult({
             ...result,
             ...shapedOutput,
+            truncated: result?.truncated === true || shapedOutput.truncated,
             note: shapedNote,
         });
     } catch (error) {
@@ -3202,13 +3106,17 @@ async function runJavaScriptApi(args = {}, options = {}) {
             calledApis: [],
             note: [code, purpose, expectedOutput].every(Boolean)
                 ? ''
-                : '必须至少提供 code、purpose、expectedOutput；effect 请求还需要精确 apiPaths。',
+                : '必须提供 code、purpose、expectedOutput。',
         });
     }
 }
 
 async function executeToolCall(name, args, options = {}) {
     switch (name) {
+        case TOOL_NAMES.INSPECT_PAGE: {
+            const { runLivePageInspection } = await import('../live-page-inspection/service.ts');
+            return runLivePageInspection(args);
+        }
         case TOOL_NAMES.CARD_FILES: {
             const { runCardFiles } = await import('../card-workspace/service.js');
             const result = await runCardFiles(args, options);

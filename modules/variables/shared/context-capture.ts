@@ -7,7 +7,6 @@ import { CONTEXT_COPY as COPY } from './context-copy.js';
 
 const MATERIAL_ORDER = ['personaDescription', 'charDescription', 'charPersonality',
     'worldInfoBefore', 'worldInfoAfter', 'scenario', 'dialogueExamples', 'chatHistory'];
-let capturing = false;
 let captureSequence = 0;
 
 interface Prompt { identifier?: string; name?: string; role?: string; content: string; [key: string]: unknown }
@@ -16,6 +15,7 @@ interface Manager {
     preparePrompt(prompt: Prompt, ...args: unknown[]): HostPrompt;
     isPromptDisabledForActiveCharacter(identifier: string): boolean;
     setChatCompletion(...args: never[]): unknown;
+    tryGenerate(): Promise<unknown>;
 }
 interface ContentPart { type: string; text?: string; [key: string]: unknown }
 interface CapturedMessage { role: string; content: string | ContentPart[]; tool_calls?: unknown[] }
@@ -29,16 +29,43 @@ export interface CaptureContext {
 }
 interface CaptureTarget { floor: number; swipeId: number; message: { name?: string; extra?: Record<PropertyKey, unknown> } }
 
+let contextQueue: { run<T>(task: () => Promise<T>): Promise<T>; dispose(): void } | undefined;
+
+// The host's debounced token preview also calls Generate and uses this same
+// prompt manager. Serialize both owners before either installs/reads a layout.
+export function initContextCapture() {
+    if (contextQueue || !promptManager) {return;}
+    const manager = promptManager as unknown as Manager, original = manager.tryGenerate;
+    let tail = Promise.resolve();
+    const run = <T>(task: () => Promise<T>): Promise<T> => {
+        const result = tail.then(task);
+        // The caller receives the original rejection; a failed job must not
+        // poison later native previews or variable updates.
+        tail = result.then(() => {}, () => {});
+        return result;
+    };
+    const preview = () => run(() => original.call(manager));
+    manager.tryGenerate = preview;
+    contextQueue = { run, dispose() { if (manager.tryGenerate === preview) {manager.tryGenerate = original;} } };
+}
+
+export function cleanupContextCapture() { contextQueue?.dispose(); contextQueue = undefined; }
+
 // Version-neutral host capture. It never modifies stored variables or rules.
-// Engines with independent macro projections may expose and restore those here.
+// Callers may project macros or lore for this capture and restore them on exit.
 export async function captureContext(ctx: CaptureContext, target: CaptureTarget, reservation: unknown,
-    cleanPassage: (text: string) => string, signal: AbortSignal | undefined, exposeState?: () => () => void) {
-    if (capturing) {throw new Error(COPY.contextBusy);}
+    cleanPassage: (text: string) => string, signal: AbortSignal | undefined, prepareCapture?: () => () => void) {
+    initContextCapture();
+    if (!contextQueue) {throw new Error(COPY.contextUnavailable);}
+    return contextQueue.run(() => capture(ctx, target, reservation, cleanPassage, signal, prepareCapture));
+}
+
+async function capture(ctx: CaptureContext, target: CaptureTarget, reservation: unknown,
+    cleanPassage: (text: string) => string, signal: AbortSignal | undefined, prepareCapture?: () => () => void) {
     if (isGenerating()) {throw new Error(COPY.busy);}
     if (main_api !== 'openai' || !promptManager) {throw new Error(COPY.contextUnavailable);}
     if (target.message.extra?.[IGNORE_SYMBOL]) {throw new Error(COPY.targetMissing);}
     signal?.throwIfAborted();
-    capturing = true;
     const manager = promptManager as unknown as Manager;
     const nonce = `${Date.now()}-${++captureSequence}`;
     const captureSignal = signal || new AbortController().signal;
@@ -49,7 +76,7 @@ export async function captureContext(ctx: CaptureContext, target: CaptureTarget,
         collection: manager.getPromptCollection, prepare: manager.preparePrompt,
         disabled: manager.isPromptDisabledForActiveCharacter, inspection: manager.setChatCompletion,
     };
-    let restoreState: (() => void) | undefined, stateRestored = false;
+    let restoreProjection: (() => void) | undefined, projectionRestored = false;
     let captured: { chat: CapturedMessage[] } | undefined, targetSeen = false, interrupted = false;
     const prepare = function(this: Manager, prompt: Prompt, ...args: unknown[]) {
         const result = original.prepare.call(this, prompt, ...args);
@@ -78,12 +105,12 @@ export async function captureContext(ctx: CaptureContext, target: CaptureTarget,
         if (manager.preparePrompt === prepare) {manager.preparePrompt = original.prepare;}
         if (manager.isPromptDisabledForActiveCharacter === disabled) {manager.isPromptDisabledForActiveCharacter = original.disabled;}
         if (manager.setChatCompletion === inspect) {manager.setChatCompletion = original.inspection;}
-        if (!stateRestored) { stateRestored = true; restoreState?.(); }
+        if (!projectionRestored) { projectionRestored = true; restoreProjection?.(); }
     };
     const started = (_type: string, options?: { signal?: AbortSignal }) => { if (options?.signal !== captureSignal) { interrupted = true; restore(); } };
     const chatChanged = () => { interrupted = true; restore(); };
     try {
-        restoreState = exposeState?.();
+        restoreProjection = prepareCapture?.();
         manager.getPromptCollection = collection; manager.preparePrompt = prepare;
         manager.isPromptDisabledForActiveCharacter = disabled; manager.setChatCompletion = inspect;
         ctx.eventSource.on(ctx.eventTypes.CHAT_COMPLETION_PROMPT_READY, capture);
@@ -122,6 +149,5 @@ export async function captureContext(ctx: CaptureContext, target: CaptureTarget,
         ctx.eventSource.removeListener(ctx.eventTypes.CHAT_COMPLETION_PROMPT_READY, capture);
         ctx.eventSource.removeListener(ctx.eventTypes.GENERATION_STARTED, started);
         ctx.eventSource.removeListener(ctx.eventTypes.CHAT_CHANGED, chatChanged);
-        capturing = false;
     }
 }

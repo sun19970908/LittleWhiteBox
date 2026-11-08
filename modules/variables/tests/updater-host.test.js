@@ -15,9 +15,9 @@ test('updater host preserves regeneration through its own deletion, but cancels 
     const sandbox = { extension_settings: { LittleWhiteBox: { variablesCore: { enabled: true }, variablesMode: '2.0' } },
         getContext: () => ctx, isGenerating: () => false, createModuleEvents: () => ({ on: (key, fn) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
         initializeSettings() {}, requestUpdate() {}, readSettings: () => ({ mode: 'auto' }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
-        createUpdateController: () => ({ update: async () => { updates++; }, cancel() {}, dispose() { disposed++; }, status: () => ({}) }),
+        createUpdateController: () => ({ update: async () => { updates++; }, cancel() {}, invalidate() {}, dispose() { disposed++; }, status: () => ({}) }),
         createUpdaterView: () => ({ refresh() {}, mountControls() {}, dispose() {} }),
-        cancelAnimationFrame() {}, requestAnimationFrame: () => 1, observeBackgroundTask() {}, COPY: {},
+        cancelAnimationFrame() {}, requestAnimationFrame: () => 1, observeBackgroundTask() {}, removeLegacyResults: () => false, COPY: {},
     };
     runInNewContext(source + '\nglobalThis.host = { initVariableUpdater, notifyVariableReplyReady, cleanupVariableUpdater };', sandbox);
     sandbox.host.initVariableUpdater({});
@@ -36,4 +36,61 @@ test('updater host preserves regeneration through its own deletion, but cancels 
     }
     sandbox.host.cleanupVariableUpdater();
     assert.equal(disposed, 1); assert.equal(handlers.size, 0);
+});
+
+test('S1: pending swipe recovery follows native DOM restoration without settling or saving', async () => {
+    const source = readFileSync('modules/variables/updater/host.js', 'utf8')
+        .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '').replaceAll('import.meta.url', "'updater-host-test'");
+    const handlers = new Map(), frames = new Map(), observers = new Set();
+    let ctx, mode = 'auto', updates = 0, saves = 0, mounts = 0, sequence = 0;
+    const floor = {}, chatNode = { querySelector: () => floor };
+    const event_types = Object.fromEntries(['GENERATION_STARTED', 'MESSAGE_RECEIVED', 'MESSAGE_DELETED', 'CHAT_CHANGED',
+        'MESSAGE_SWIPED', 'MESSAGE_SWIPE_DELETED', 'MESSAGE_UPDATED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'SETTINGS_UPDATED'].map(key => [key, key]));
+    const sandbox = { extension_settings: { LittleWhiteBox: { variablesCore: { enabled: true }, variablesMode: '2.0' } },
+        getContext: () => ctx, isGenerating: () => false, createModuleEvents: () => ({ on: (key, fn) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
+        initializeSettings() {}, requestUpdate() {}, readSettings: () => ({ mode }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
+        createUpdateController: () => ({ update: async () => { updates++; }, cancel() {}, invalidate() {}, dispose() {}, status: () => ({}) }),
+        createUpdaterView: () => ({ refresh() {}, mountControls() { mounts++; }, dispose() {} }),
+        document: { getElementById: () => chatNode, querySelectorAll: () => [] },
+        MutationObserver: class {
+            constructor(callback) { this.callback = callback; this.targets = []; observers.add(this); }
+            observe(target, options) { this.targets.push({ target, options }); }
+            disconnect() { observers.delete(this); }
+        },
+        cancelAnimationFrame: id => frames.delete(id), requestAnimationFrame: fn => { frames.set(++sequence, fn); return sequence; },
+        observeBackgroundTask() {}, removeLegacyResults: () => false, COPY: {},
+    };
+    const resetChat = () => { ctx = { chat: [{ mes: 'older', swipe_id: 0, swipes: ['older'] }, { mes: 'last' }], saveChat: async () => { saves++; } }; };
+    const emit = (name, ...args) => handlers.get(name)?.(...args);
+    const flush = () => { const pending = [...frames.values()]; frames.clear(); pending.forEach(fn => fn()); };
+    const pendingSwipe = () => { ctx.chat[0].swipe_id = 1; emit('MESSAGE_SWIPED', 0); emit('GENERATION_STARTED', 'swipe', {}, false); flush(); };
+    resetChat();
+    runInNewContext(source + '\nglobalThis.host = { initVariableUpdater, cleanupVariableUpdater };', sandbox);
+    sandbox.host.initVariableUpdater({}); flush();
+    for (const restore of ['replace-floor', 'rewrite-swipeid']) {
+        pendingSwipe();
+        assert.equal(observers.size, 1);
+        const [observer] = observers;
+        assert.equal(observer.targets[0].target, chatNode);
+        assert.equal(observer.targets[0].options.childList, true);
+        assert.equal(observer.targets[0].options.subtree, undefined);
+        assert.equal(observer.targets[1].target, floor);
+        assert.deepEqual([...observer.targets[1].options.attributeFilter], ['swipeid']);
+        // No completion event: native rollback alone changes DOM after stop.
+        const before = mounts;
+        ctx.chat[0].swipe_id = 0;
+        observer.callback([{ type: restore === 'replace-floor' ? 'childList' : 'attributes' }]);
+        flush();
+        assert.equal(mounts, before + 1);
+        assert.equal(observers.size, 0);
+    }
+    for (const boundary of ['MESSAGE_RECEIVED', 'CHAT_CHANGED', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPE_DELETED', 'off', 'dispose']) {
+        resetChat(); pendingSwipe();
+        assert.equal(observers.size, 1);
+        if (boundary === 'off') { mode = 'off'; emit('SETTINGS_UPDATED'); flush(); mode = 'auto'; }
+        else if (boundary === 'dispose') sandbox.host.cleanupVariableUpdater();
+        else { if (boundary === 'CHAT_CHANGED') resetChat(); await emit(boundary, 0); }
+        assert.equal(observers.size, 0, boundary);
+    }
+    assert.equal(updates, 0); assert.equal(saves, 0); assert.equal(frames.size, 0);
 });

@@ -17,8 +17,9 @@ const task = { systemPrompt: 'state task', messages: [{ role: 'user', content: '
 
 test.before(async () => {
     h = await createHarness();
-    for (const name of ['copy.js', 'preset.js', 'transport.js', 'correction.js']) {
+    for (const name of ['copy.js', 'world-info.js', 'preset.js', 'transport.js', 'correction.js', 'result.js', 'result-diff.js', 'history-result.js', 'legacy-result.js']) {
         writeFileSync(path.join(h.tempDir, name), readFileSync(path.resolve('modules/variables/updater', name), 'utf8')
+            .replaceAll("'../state2/", "'./")
             .replace("'../shared/context-copy.js'", "'./context-copy.js'"));
     }
     writeFileSync(path.join(h.tempDir, 'context-copy.js'), readFileSync('modules/variables/shared/context-copy.ts', 'utf8'));
@@ -109,6 +110,9 @@ test('network, saving, cancellation and stale state never trigger an extra model
 test('rollback save failure never calls the model; retry saves the revoked state without restoring its receipt', async () => {
     api.beginUpdate({ floor: 1, swipeId: 0 }).commit(input(-20));
     ctx().chat[1].extra.LittleWhiteBox_variableUpdate = { changes: [{}] };
+    // Retired receipts are removed at chat load, before the controller runs.
+    const { removeLegacyResults } = await import('../updater/legacy-result.js');
+    removeLegacyResults(ctx().chat);
     const { sent } = setup([response(input(-5))]);
     ctx().saveChat = () => { throw new Error('save failed'); };
     await controller.update();
@@ -121,4 +125,62 @@ test('rollback save failure never calls the model; retry saves the revoked state
     assert.equal(sent.length, 0);
     assert.equal(controller.status().phase, 'ready');
     assert.deepEqual(ctx().chat[1].extra[key].entries[0].ops, []);
+});
+
+test('live annotations never persist; history recomputes results after reopen and invalidation never revives notes', async () => {
+    const submission = { 判定: '本段已发生', ops: [{ op: 'inc', path: '角色.金币', delta: -5, old: 999, 原因: '实际消费', 自定义: { 已核对: true } }] };
+    setup([response(submission)]); await controller.update();
+    const saved = JSON.stringify({ chat: ctx().chat, meta: ctx().chatMetadata });
+    for (const marker of ['实际消费', '本段已发生', '自定义', 'LittleWhiteBox_variableUpdate', 'oldValue', 'newValue']) assert.ok(!saved.includes(marker), marker);
+    const live = controller.result().batches[0];
+    assert.deepEqual(live.operations[0].changes, [{ path: '角色.金币', kind: 'changed', before: 100, after: 95 }]);
+    assert.deepEqual(live.operations[0].annotations, [['old', 999], ['原因', '实际消费'], ['自定义', { 已核对: true }]]);
+    assert.deepEqual(live.annotations, [['判定', '本段已发生']]);
+    controller.invalidate();
+    const history = controller.result().batches[0];
+    assert.deepEqual(history.operations[0].changes, live.operations[0].changes);
+    assert.deepEqual(history.operations[0].annotations, []);
+    assert.equal(JSON.stringify({ chat: ctx().chat, meta: ctx().chatMetadata }), saved);
+    setup([]);
+    assert.deepEqual(controller.result().batches[0], history);
+});
+
+test('chat, body, swipe, deletion and external rollback discard live explanations instead of attaching them to history', async () => {
+    for (const change of ['chat', 'body', 'swipe', 'delete', 'rollback']) {
+        h.reset(); ctx().chat = [{ mes: 'init' }, { mes: 'passage' }];
+        api = h.executor.createStateApi(); api.applyText('<state>角色: {"金币":100}</state>', { floor: 0 });
+        setup([response({ ops: [{ ...input(-5).ops[0], reason: 'live-only' }] })]); await controller.update();
+        if (change === 'chat') ctx().chatId = 'other';
+        if (change === 'body') ctx().chat[1].mes = 'edited';
+        if (change === 'swipe') ctx().chat[1].swipe_id = 1;
+        if (change === 'delete') ctx().chat.pop();
+        if (change === 'rollback') api.beginUpdate({ floor: 1, swipeId: 0 }).commit({ ops: [] });
+        assert.ok(!JSON.stringify(controller.result()).includes('live-only'), change);
+        // Returning to the old selection must not resurrect an already discarded note.
+        ctx().chatId = 'test-chat';
+        if (ctx().chat[1]) { ctx().chat[1].mes = 'passage'; ctx().chat[1].swipe_id = 0; }
+        assert.ok(!JSON.stringify(controller.result()).includes('live-only'), change);
+    }
+});
+
+test('R4: historical results use their original execution point across checkpoints, tail deletion and multiple batches without saving', async () => {
+    ctx().chat = [ctx().chat[0]];
+    for (let floor = 1; floor <= 100; floor++) {
+        ctx().chat.push({ mes: `floor-${floor}`, swipe_id: 0, swipe_info: [{ extra: {} }] });
+        api.beginTurn({ floor, swipeId: 0 }).commit(input(1));
+    }
+    assert.equal(ctx().chatMetadata.extensions.LittleWhiteBox.stateCkptV2.points.length, 2);
+    setup([]);
+    for (const floor of [100, 50]) {
+        if (floor === 50) { ctx().chat.splice(51); h.executor.rebuildStateV2(); }
+        const before = JSON.stringify({ chat: ctx().chat, meta: ctx().chatMetadata, saves: ctx().saveCount });
+        assert.deepEqual(controller.result().batches[0].operations[0].changes,
+            [{ path: '角色.金币', kind: 'changed', before: 99 + floor, after: 100 + floor }]);
+        assert.equal(JSON.stringify({ chat: ctx().chat, meta: ctx().chatMetadata, saves: ctx().saveCount }), before);
+    }
+    api.beginContinuation({ floor: 50, swipeId: 0 }).commit(input(-5));
+    const batches = controller.result().batches;
+    assert.equal(batches.length, 2);
+    assert.deepEqual(batches[1].operations[0].changes, [{ path: '角色.金币', kind: 'changed', before: 150, after: 145 }]);
+    assert.equal(readStoredValue(ctx(), '角色').金币, 145);
 });

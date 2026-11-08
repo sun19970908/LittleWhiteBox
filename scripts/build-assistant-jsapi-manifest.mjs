@@ -418,9 +418,15 @@ function buildManifest(entries) {
     const slashPaths = new Set();
     const allowedPaths = new Set();
     const callablePaths = new Set();
+    const asyncPaths = new Set();
 
     entries.forEach((entry) => {
         const derivedPaths = getDerivedPaths(entry);
+        if (/\basync\s+(?:function\b|\([^)]*\)\s*=>|[a-zA-Z_$][\w$]*\s*=>)/.test(entry.signature)) {
+            for (const item of Object.values(derivedPaths).flat()) {
+                if (shouldTreatAsCallable(entry, item)) asyncPaths.add(item);
+            }
+        }
         derivedPaths.ctx.forEach((item) => {
             ctxPaths.add(item);
             addAllowedPathWithParents(item, allowedPaths);
@@ -474,6 +480,7 @@ function buildManifest(entries) {
             },
         },
         callablePaths: uniqueSorted(callablePaths),
+        asyncPaths: uniqueSorted(asyncPaths),
         apiSemantics: {},
         allowedPaths: uniqueSorted(allowedPaths),
     };

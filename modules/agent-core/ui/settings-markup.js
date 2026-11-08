@@ -2,6 +2,7 @@ import { buildWebSettingsMarkup } from './web-settings.js';
 import { buildSamplingSettingsMarkup } from './sampling-settings.js';
 import { buildVertexSettingsMarkup } from './vertex-settings.js';
 import { PROVIDER_OPTIONS } from '../provider-resolution.js';
+import { AGENT_JSAPI_PERMISSION_LABEL } from '../config.js';
 function escapeHtml(text = '') {
     return String(text || '')
         .replace(/&/g, '&amp;')
@@ -162,7 +163,7 @@ export function buildAgentSettingsPanelMarkup(options = {}) {
                 <select id="xb-assistant-permission-mode"></select>
             </label>
             <label>
-                <span>JavaScript API 权限</span>
+                <span>${escapeHtml(AGENT_JSAPI_PERMISSION_LABEL)}</span>
                 <select id="xb-assistant-jsapi-permission"></select>
             </label>` : '';
     const tabsMarkup = showDelegateSettings ? `

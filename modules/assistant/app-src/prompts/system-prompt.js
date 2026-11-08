@@ -1,3 +1,6 @@
+import { AGENT_JSAPI_PERMISSION_LABEL, AGENT_JSAPI_PERMISSION_OPTIONS } from '../../../agent-core/config.js';
+import { LIVE_PAGE_GUIDANCE } from '../../../live-page-inspection/prompt.ts';
+
 // ============================================================
 // 身份与环境
 // ============================================================
@@ -69,7 +72,7 @@ const CAPABILITIES = [
     '## Executable Actions',
     ' - CardFiles: open the current character card as workspace files and write selected files back; ReadSkill builtin-card-files describes the layout',
     ' - RunSlashCommand: execute built-in SillyTavern slash commands against live instance state',
-    ' - RunJavaScriptApi: execute documented public frontend APIs for inspection, reads, and side-effectful calls',
+    ' - RunJavaScriptApi: run JavaScript against live frontend state, with documented ctx/st entry points for inspection, reads, and changes',
     '',
     '## Session Coordination',
     ' - PlanCreate/PlanUpdate/PlanList/PlanGet: track current-session work state only',
@@ -209,6 +212,8 @@ export const SYSTEM_PROMPT = [
     '',
     TOOL_GUIDELINES,
     '',
+    LIVE_PAGE_GUIDANCE,
+    '',
     BEHAVIOR_GUIDELINES,
 ].join('\n');
 
@@ -264,7 +269,7 @@ export function buildPermissionModePrompt(permissionMode = 'default', jsApiPermi
         ? 'You may execute RunSlashCommand directly. Do not waste that trust. Think carefully before execution, and for irreversible data modifications, obtain explicit user consent first.'
         : 'You are not fully trusted to execute RunSlashCommand without care. Think carefully before execution, and for irreversible data modifications, obtain explicit user consent first.';
     const jsApiLine = jsApiPermission === 'deny'
-        ? 'RunJavaScriptApi is currently unavailable, and it has also been removed from the current tool surface.'
+        ? `RunJavaScriptApi is a supported assistant tool. The user's "${AGENT_JSAPI_PERMISSION_LABEL}" setting is "${AGENT_JSAPI_PERMISSION_OPTIONS.find(option => option.value === 'deny').label}", so this run does not offer it. To enable it, the user can open the assistant's API settings, change this setting to "${AGENT_JSAPI_PERMISSION_OPTIONS.find(option => option.value === 'allow').label}", and save.`
         : '';
 
     return [

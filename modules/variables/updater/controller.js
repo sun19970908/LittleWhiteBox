@@ -1,12 +1,12 @@
-import { fingerprint } from '../state2/records.js';
+import { prefixDigests, readRecords } from '../state2/records.js';
 import { latestReply, hasBodyUpdate } from './context.js';
 import { COPY } from './copy.js';
 import { saveUpdate } from './persistence.js';
 import { StateInputError } from '../state2/json-input.js';
 import { SubmissionError } from './transport.js';
 import { correctionTask } from './correction.js';
-
-export const RECEIPT_KEY = 'LittleWhiteBox_variableUpdate';
+import { presentResult } from './result.js';
+import { hasUpdateRecord, readUpdateResult } from './history-result.js';
 
 export function createUpdateController({ context, stateApi, assemble, request, settings, assertAvailable, changed }) {
     let active = null;
@@ -17,10 +17,12 @@ export function createUpdateController({ context, stateApi, assemble, request, s
         return ctx.chat === run.ctx.chat && identity(ctx) === run.identity
             && ctx.chat[run.target.floor] === run.target.message && run.target.message.mes === run.body
             && ctx.chat.slice(run.target.floor + 1).every(message => message.is_user === true && !message.is_system)
-            && (run.target.message.swipe_id ?? 0) === run.target.swipeId;
+            && (run.target.message.swipe_id ?? 0) === run.target.swipeId
+            && (run.history === undefined || run.history === prefixDigests(readRecords(ctx.chat)).at(-1));
     }
     function change(run, phase, error = '') { Object.assign(run, { phase, error }); changed(); }
     const cancel = () => { active?.abort.abort(); };
+    const invalidate = () => { cancel(); last = null; };
     async function update() {
         if (active) throw new Error(COPY.busy);
         assertAvailable();
@@ -32,8 +34,6 @@ export function createUpdateController({ context, stateApi, assemble, request, s
             const turn = stateApi.beginUpdate(target);
             run.turn = turn;
             if (turn.rolledBack) {
-                delete target.message.extra?.[RECEIPT_KEY];
-                delete target.message.swipe_info?.[target.swipeId]?.extra?.[RECEIPT_KEY];
                 run.saveFailed = true;
                 await saveUpdate(ctx, target, run.abort.signal);
                 run.saveFailed = false;
@@ -45,6 +45,7 @@ export function createUpdateController({ context, stateApi, assemble, request, s
             let task = run.task;
             for (let attempt = 0; attempt < 2; attempt++) {
                 run.abort.signal.throwIfAborted(); turn.assertCurrent(); assertAvailable();
+                delete run.input; delete run.result;
                 change(run, attempt ? 'correcting' : 'requesting');
                 let errors, reply;
                 try {
@@ -60,12 +61,6 @@ export function createUpdateController({ context, stateApi, assemble, request, s
                 if (attempt === 1) throw new Error(errors.join('\n'));
                 task = correctionTask(run.task, reply ?? { state: run.input }, errors);
             }
-            const receipt = { v: 1, at: Date.now(), body: fingerprint(run.body), source: config.source,
-                changes: run.result.changes, corrections: run.result.corrections };
-            target.message.extra ||= {};
-            target.message.extra[RECEIPT_KEY] = receipt;
-            const swipe = target.message.swipe_info?.[target.swipeId];
-            if (swipe) { swipe.extra ||= {}; swipe.extra[RECEIPT_KEY] = structuredClone(receipt); }
             change(run, 'saving');
             try { await saveUpdate(ctx, target, run.abort.signal); }
             catch (error) { run.saveFailed = true; throw new Error(`${COPY.failedSave}\n${error.message}`); }
@@ -82,6 +77,9 @@ export function createUpdateController({ context, stateApi, assemble, request, s
             } catch (error) {
                 change(run, 'failed', `${COPY.failedSave}\n${error.message}`);
             } finally {
+                if (current(run)) run.history = prefixDigests(readRecords(ctx.chat)).at(-1);
+                // Requests and rollback closures are needed only while updating.
+                delete run.task; delete run.turn;
                 if (active === run) active = null;
                 changed();
             }
@@ -96,11 +94,16 @@ export function createUpdateController({ context, stateApi, assemble, request, s
     function status() {
         if (last && current(last)) return { phase: last.phase, error: last.error, result: last.result, input: last.input,
             busy: active === last, saveFailed: last.saveFailed };
+        last = null;
         let target;
         try { target = latestReply(context()); } catch { return { phase: 'ready' }; }
-        const receipt = target.message.extra?.[RECEIPT_KEY];
-        return receipt?.body === fingerprint(target.message.mes)
-            ? { phase: receipt.changes.length ? 'success' : 'noop', result: receipt } : { phase: hasBodyUpdate(target.message) ? 'body' : 'ready' };
+        return { phase: hasUpdateRecord(target) ? 'recorded' : hasBodyUpdate(target.message) ? 'body' : 'ready' };
     }
-    return { update, cancel, retrySave, status, dispose: cancel };
+    function result() {
+        const value = status();
+        if (value.result) return { ...value, batches: [presentResult(value.result, value.input)] };
+        if (value.phase !== 'recorded') return { ...value, batches: [] };
+        return { ...value, batches: readUpdateResult(context(), latestReply(context())) };
+    }
+    return { update, cancel, invalidate, retrySave, status, result, dispose: invalidate };
 }

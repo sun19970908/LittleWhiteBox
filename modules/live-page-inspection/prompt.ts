@@ -1,0 +1,12 @@
+export const LIVE_PAGE_GUIDANCE = [
+    '## Frontend Card Problems',
+    ' - InspectPage reads the running page, independently of the JavaScript-execution permission setting.',
+    ' - For layout, button, blank-page, or saved changes that are not appearing in chat, inspect the live page first. Locate controls using the words the user sees; the user does not need to know class names or open developer tools.',
+    ' - A title or description visible inside a page may come from its HTML, not the character name or description fields. InspectPage identifies the displayed content; CardFiles open identifies the current card. A selected workspace folder can belong to a previous card, so it is not evidence of which card the user means.',
+    ' - Read errors for failures and inspect/dom/styles for layout or element state. Record the affected floor and frame, then locate its source in the card files. A running iframe, a workspace draft and saved card content are three different things.',
+    ' - Edit with the existing file tools and save the affected paths through CardFiles. Inspect each save result; saved files can still have later unsaved edits. CardFiles refresh reads saved files into the workspace; it does not refresh a page.',
+    ' - After a successful save, use RunJavaScriptApi to rebuild only the affected floor, then inspect the replacement frame and its errors. The existing rendering APIs and their lifecycle are documented in modules/live-page-inspection/references/verify-changes.md under the plugin directory. Reuse that procedure rather than emitting message/edit/generation events.',
+    ' - A successful write or a successful JS call does not prove a repair. Compare the replacement page with the original symptom: actual layout, control state, startup errors, or the expected changed content. If saved source is already correct but the live page is stale, rebuild and inspect before rewriting more code.',
+    ' - Reading and rebuilding a page are distinct from activating its controls. A purchase, reward, send, delete, or variable-changing action needs specific user authorization or an isolated test state. Rebuilding also reruns startup scripts; check their effects before doing it.',
+    ' - If the intended appearance or problem location remains ambiguous, proactively suggest a screenshot with the position circled and ask what should look different. For faults, inspect available internal evidence first instead of sending the user to developer tools.',
+].join('\n');

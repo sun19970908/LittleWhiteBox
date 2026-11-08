@@ -5,6 +5,7 @@ import { COPY } from './copy.js';
 import { captureContext } from '../shared/context-capture.js';
 import { buildUpdateTask } from './preset.js';
 import { getStateInputSchema } from '../state2/json-input.js';
+import { exposeUpdateRules } from './world-info.js';
 
 import { passageText } from '../shared/passage.js';
 export { passageText } from '../shared/passage.js';
@@ -37,6 +38,6 @@ export async function collectMaterial(ctx, target, settings, signal) {
     // Reserve our handoff, current values and tool schema before the host fills
     // the remaining context budget with history. No second message-count cutoff.
     const reservation = buildUpdateTask(settings.preset, material, getStateInputSchema());
-    material.context = await captureContext(ctx, target, reservation, passageText, signal);
+    material.context = await captureContext(ctx, target, reservation, passageText, signal, () => exposeUpdateRules(ctx));
     return material;
 }

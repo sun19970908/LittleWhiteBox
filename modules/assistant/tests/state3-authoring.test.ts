@@ -21,7 +21,7 @@ import type { checkDraft as DraftChecker } from '../../variables/state3/definiti
 
 interface JsRequest { code: string; purpose?: string; expectedOutput?: string; apiPaths?: string[]; manifest: ReturnType<typeof withExtensionJsApiManifest>; st?: object }
 const analyze = analyzeRequest as unknown as (input: JsRequest) => { requestKind: string };
-const run = runRequest as unknown as (input: JsRequest) => Promise<{ ok: boolean; requestKind: string; output: unknown; execution: { unavailableApis: string[] } }>;
+const run = runRequest as unknown as (input: JsRequest) => Promise<{ ok: boolean; requestKind: string; output: unknown; execution: { errorCode: string } }>;
 
 async function loadDraftChecker(): Promise<typeof DraftChecker> {
     const authoring = fileURLToPath(new URL('../../variables/state3/definition/authoring.ts', import.meta.url));
@@ -58,7 +58,7 @@ test('V3 assistant surface preserves read/effect classification and excludes pri
     const result = await run({ code: 'return await st.state3.apply([]);', purpose: 'Commit', expectedOutput: 'Result', apiPaths: ['st.state3.apply'], manifest, st: { state3: api } });
     assert.equal(result.ok, true); assert.equal(writes, 1);
     const denied = await run({ code: 'return st.state3.secret();', purpose: 'Inspect', expectedOutput: 'Unavailable', manifest, st: { state3: api } });
-    assert.equal(denied.ok, false); assert.ok(denied.execution.unavailableApis.includes('st.state3.secret'));
+    assert.equal(denied.ok, false); assert.equal(denied.execution.errorCode, 'jsapi_execution_failed');
 });
 
 test('V3 authoring uses its definition while V2 keeps its task routing', () => {

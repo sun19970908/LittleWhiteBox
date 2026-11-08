@@ -29,9 +29,10 @@ import { initVariablesPanel, cleanupVariablesPanel } from "./modules/variables/v
 import { initStreamingGeneration } from "./modules/streaming-generation.js";
 import { initVariablesCore as initLegacyVariablesCore, cleanupVariablesCore as cleanupLegacyVariablesCore } from "./modules/variables/variables-core.js";
 import { initState3, cleanupState3, openState3, syncState3Mode } from './modules/variables/state3/index.js';
+import { initContextCapture, cleanupContextCapture } from './modules/variables/shared/context-capture.js';
 
-function initVariablesCore() { initLegacyVariablesCore(); initState3(); }
-function cleanupVariablesCore() { cleanupState3(); cleanupLegacyVariablesCore(); }
+function initVariablesCore() { initContextCapture(); initLegacyVariablesCore(); initState3(); }
+function cleanupVariablesCore() { cleanupState3(); cleanupLegacyVariablesCore(); cleanupContextCapture(); }
 import { openVariableSettings } from './modules/variables/updater/host.js';
 import { initControlAudio } from "./modules/control-audio.js";
 import {

@@ -1,6 +1,7 @@
 import viewCss from './view.css?inline';
 import { COPY } from './copy.js';
 import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
+import { renderUpdateResult } from './result-view.js';
 
 const element = (tag, text, className) => {
     const node = document.createElement(tag);
@@ -38,19 +39,6 @@ export function createUpdaterView(api) {
         node.value = value; node.addEventListener('change', () => change(node.value)); return node;
     };
     const row = (...nodes) => { const node = element('div', null, 'xb-variable-row'); node.append(...nodes); return node; };
-    function renderResult(value, root) {
-        root.replaceChildren();
-        if (value.error) root.append(element('p', value.error));
-        const result = value.result || value;
-        for (const change of result.changes || []) {
-            const previous = change.oldValue === undefined ? COPY.initialValue : JSON.stringify(change.oldValue);
-            root.append(element('p', `${change.path}：${previous} → ${JSON.stringify(change.newValue)}`));
-        }
-        if (result.errors?.length) root.append(element('pre', result.errors.map(error => error.message).join('\n')));
-        if (result.corrections?.length) root.append(element('pre', JSON.stringify(result.corrections, null, 2)));
-        if (result.variables) root.append(element('pre', JSON.stringify(result.variables, null, 2)));
-        if (!root.childNodes.length) root.append(element('p', COPY.phases[value.phase] || COPY.phases.noop));
-    }
     function renderUpdate() {
         const controls = row(field(COPY.mode, select(COPY.modes, settings.mode, value => { settings.mode = value; })),
             field(COPY.source, select(COPY.sources, settings.source, value => { settings.source = value; })));
@@ -73,7 +61,7 @@ export function createUpdaterView(api) {
         nav.append(button(COPY.assistant, async () => { await api.openAssistant(); dialog.close(); }));
         try {
             if (page === 'update') renderUpdate();
-            else renderResult(api.status(), main);
+            else renderUpdateResult(api.result(), main);
         } catch (error) { main.append(element('p', error.message)); }
     }
     function open(nextPage = 'update') {
@@ -87,7 +75,7 @@ export function createUpdaterView(api) {
         if (!message || mode === 'off') return;
         const controls = element('div', null, 'xb-variable-controls');
         const label = element('span', COPY.phases[status.phase]); label.setAttribute('role', 'status');
-        controls.append(button(status.busy ? COPY.cancel : status.saveFailed ? COPY.saveChat : status.phase === 'success' ? COPY.retry : COPY.update,
+        controls.append(button(status.busy ? COPY.cancel : status.saveFailed ? COPY.saveChat : ['success', 'recorded'].includes(status.phase) ? COPY.retry : COPY.update,
             status.busy ? api.cancel : status.saveFailed ? api.retrySave : api.update), label,
         button(COPY.details, () => open('result')));
         if (status.phase === 'saving') controls.querySelector('button').disabled = true;

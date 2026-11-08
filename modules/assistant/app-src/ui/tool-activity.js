@@ -16,7 +16,7 @@ function parseRecord(text) {
 export function toolOutcome(result, toolName = result?.toolName) {
     if (!result) return { status: 'unconfirmed', note: '' };
     if (result.error === 'tool_timeout' || result.error === 'tool_aborted') {
-        if (isWebTool(toolName)) {
+        if (isWebTool(toolName) || toolName === TOOL_NAMES.INSPECT_PAGE) {
             return { status: result.error === 'tool_aborted' ? 'stopped' : 'failed', note: shortText(result.message) };
         }
         if (toolName === TOOL_NAMES.GREP) {
@@ -24,10 +24,13 @@ export function toolOutcome(result, toolName = result?.toolName) {
                 ? { status: 'failed', note: ACTIVITY_COPY.searchTimeout }
                 : { status: 'stopped', note: '' };
         }
-        return { status: 'unconfirmed', note: '' };
+        return { status: 'unconfirmed', note: toolName === TOOL_NAMES.RUN_JAVASCRIPT_API ? shortText(result.message) : '' };
     }
     if (result.skipped === true || result.approved === false) return { status: 'skipped', note: '' };
-    if (result.execution?.isAborted === true) return { status: 'stopped', note: shortText(result.execution.abortReason) };
+    if (result.execution?.isAborted === true) return {
+        status: toolName === TOOL_NAMES.RUN_JAVASCRIPT_API ? 'unconfirmed' : 'stopped',
+        note: shortText(result.execution.abortReason),
+    };
     if (toolName === TOOL_NAMES.WEB_FETCH && result.ok === false && (result.results?.length > 0 || result.status === 'partial')) {
         return { status: 'partial', note: shortText(result.message) };
     }
