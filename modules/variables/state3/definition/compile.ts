@@ -31,6 +31,7 @@ function checkExpression(expression: Expression, definition: Definition) {
 export function compileDefinition(input: unknown): Compiled {
     assertJson(input);
     const bundle = clone(input) as unknown as Bundle, { definition, functions } = bundle;
+    if (Object.keys(bundle).some(key => !['definition', 'functions'].includes(key))) {reject('definition-shape');}
     if (!definition || !functions || typeof functions !== 'object' || Array.isArray(functions)) {reject('definition-shape');}
     if (!validateDefinition(definition)) {reject('definition-schema', { errors: clone(validateDefinition.errors) });}
     unique([...definition.rules, ...definition.actions, ...definition.constraints, ...(definition.triggers || [])]);

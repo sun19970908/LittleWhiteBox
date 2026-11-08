@@ -1132,9 +1132,7 @@ test('automatic manager blocks before provider or task tools when the delegate m
             presets: {
                 主剧情: {
                     provider: 'sillytavern-claude',
-                    modelConfigs: {
-                        'sillytavern-claude': { model: 'main-story-model' },
-                    },
+                    model: 'main-story-model',
                 },
             },
         },

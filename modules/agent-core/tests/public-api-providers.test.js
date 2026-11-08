@@ -242,9 +242,9 @@ test('public main sessions replay caller-owned JSON history through every provid
             const hostClient = createHostChatCompletionsClient({ requestHeadersProvider: () => ({}),
                 fetch: (url, options) => fetch(new URL(url, service.baseUrl), options) });
             const settings = agentCore.normalizeAgentSettings({ currentPresetName: 'fixture-main', presets: {
-                'fixture-main': { provider, modelConfigs: { [provider]: { model: 'fixture-model', apiKey: 'offline-fixture',
+                'fixture-main': { provider, model: 'fixture-model', apiKey: 'offline-fixture',
                     baseUrl: service.baseUrl, toolMode: 'native', maxTokens: 177, temperature: 0.37,
-                    sampling: { topP: { enabled: true, value: 0.83 } } } } },
+                    sampling: { topP: { enabled: true, value: 0.83 } } },
             } });
             let settingsReads = 0;
             const { api } = createPublicAgentApi({ isEnabled: () => true,
@@ -255,7 +255,7 @@ test('public main sessions replay caller-owned JSON history through every provid
             const session = await api.openSession({ api: 'main' });
             t.after(() => session.dispose());
             // An open session owns a provider-config snapshot, not a mutable settings reference.
-            Object.assign(settings.presets['fixture-main'].modelConfigs[provider], { model: 'changed-fixture', temperature: 1.2, maxTokens: 1 });
+            Object.assign(settings.presets['fixture-main'], { model: 'changed-fixture', temperature: 1.2, maxTokens: 1 });
             const messages = clone([system, user]);
             const progress = [];
             for (let round = 0; round < 3; round++) {

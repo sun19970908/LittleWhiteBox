@@ -1,13 +1,16 @@
 import { compileDefinition } from '../definition/compile.js';
-import { clone, changes } from '../engine/data.js';
-import { initialize, settle } from '../engine/settle.js';
+import { clone } from '../engine/data.js';
+import { difference } from '../engine/difference.js';
+import { displayChanges } from '../engine/delta-view.js';
+import { settle } from '../engine/settle.js';
+import { variableRoots } from './variables.js';
 import { reject } from '../engine/diagnostics.js';
-import { checkpoint, digest, makeReceipt, restore, rewind } from './history.js';
-import type { Bundle, History, HostAdapter, Receipt, Result, RunOptions, Snapshot, Success, SwipeRecord } from '../types.js';
+import { checkpoint, digest, makeReceipt, rebase, rewind } from './history.js';
+import type { History, HostAdapter, Json, JsonObject, Receipt, Result, RunOptions, Snapshot, Success, SwipeRecord } from '../types.js';
 
 interface StageOptions extends RunOptions { index?: number; replaceSource?: string }
-interface ApplyOptions extends StageOptions { preview?: boolean; source?: string; bundle?: Bundle }
-const success = (state: History['state']): Success => ({ ok: true, state, changes: [], provenance: [], actions: [], diagnostics: [] });
+interface ApplyOptions extends StageOptions { preview?: boolean; source?: string }
+const success = (state: Json): Success => ({ ok: true, state, changes: [], provenance: [], actions: [], diagnostics: [] });
 
 export function createSettlementService<S extends Snapshot>(adapter: HostAdapter<S>) {
     const assertCurrent = (snapshot: S) => { if (!adapter.isCurrent(snapshot)) {reject('stale-target');} };
@@ -16,7 +19,7 @@ export function createSettlementService<S extends Snapshot>(adapter: HostAdapter
         // Validation and publication are synchronous. Only persistence may wait;
         // another selection must be able to restore this state while it waits.
         history.revision++;
-        const save = adapter.publish(snapshot, { history, records });
+        const save = adapter.publish(snapshot, { state: result.state, history, records });
         let persistence: Success['persistence'];
         try { await save(); }
         catch (error) { persistence = { code: 'save-unconfirmed', message: error instanceof Error ? error.message : String(error) }; }
@@ -29,6 +32,7 @@ export function createSettlementService<S extends Snapshot>(adapter: HostAdapter
     }
     async function stage({ index, replaceSource, signal }: StageOptions = {}) {
         const snapshot = adapter.capture(index), history = snapshot.history;
+        const compiled = compileDefinition(adapter.bundle());
         if (!history) {reject('not-enabled');}
         const records = clone(snapshot.records), target = records[snapshot.index];
         if (!target) {reject('target-missing');}
@@ -36,29 +40,29 @@ export function createSettlementService<S extends Snapshot>(adapter: HostAdapter
         const insertion = replaceSource ? target.entries.findIndex(replaces) : -1;
         const position = insertion < 0 ? target.entries.length : insertion;
         const suffix = [...target.entries.slice(position), ...records.slice(snapshot.index + 1).flatMap(record => record.entries)];
-        const start = rewind(history, suffix);
+        const start = rewind(history, snapshot.state, suffix);
         assertCurrent(snapshot);
         let consumed = false;
         return {
-            ok: true as const, snapshot: clone(start), bundle: clone(history.bundle), target: snapshot.target,
+            ok: true as const, snapshot: clone(start), bundle: clone(compiled.bundle), roots: clone(history.roots), target: snapshot.target,
             assertCurrent: () => assertCurrent(snapshot),
-            async run(input: unknown, { preview = true, source = 'api', bundle, signal: runSignal }: ApplyOptions = {}): Promise<Result> {
+            async run(input: unknown, { preview = true, source = 'api', signal: runSignal }: ApplyOptions = {}): Promise<Result> {
                 if (consumed) {reject('stage-consumed');}
                 assertCurrent(snapshot);
-                const compiled = compileDefinition(bundle || history.bundle);
                 const result = await settle(compiled, start, input, { signal: runSignal || signal });
                 if (!result.ok) {return result;}
+                if (Object.keys(result.state as JsonObject).some(root => !history.roots.includes(root))) {reject('unowned-root');}
                 const receipt = makeReceipt({ before: start, result, source, revision: history.revision + 1 });
                 const next = clone(records);
                 const retained = target.entries.slice(position).filter(entry => !replaces(entry));
                 next[snapshot.index].entries = [...target.entries.slice(0, position), receipt, ...retained];
-                const state = restore(result.state, [...retained, ...next.slice(snapshot.index + 1).flatMap(record => record.entries)]);
-                const updated: History = { ...clone(history), state, bundle: clone(compiled.bundle), version: digest(compiled.bundle) };
+                const state = rebase(result.state, [...retained, ...next.slice(snapshot.index + 1).flatMap(record => record.entries)]);
+                const updated: History = { ...clone(history), version: digest(compiled.bundle), checkpoints: snapshot.index === records.length - 1 && !suffix.length ? clone(history.checkpoints) : [] };
                 assertCurrent(snapshot); (runSignal || signal)?.throwIfAborted();
                 if (preview) {return { ...result, committed: false };}
                 consumed = true;
                 // A point is the saved end state, not the earlier insertion point.
-                if (snapshot.index === records.length - 1) {checkpoint(updated, snapshot.index, updated.revision + 1);}
+                if (snapshot.index === records.length - 1) {checkpoint(updated, state, snapshot.index, updated.revision + 1);}
                 return publish(snapshot, updated, next, { ...result, state, version: updated.version, receipt }, true);
             },
         };
@@ -68,16 +72,23 @@ export function createSettlementService<S extends Snapshot>(adapter: HostAdapter
         async inspect() {
             const snapshot = adapter.capture();
             if (!snapshot.history) {return { ok: false as const, diagnostics: [{ code: 'not-enabled' }] };}
-            return { ...success(clone(snapshot.history.state)), version: snapshot.history.version, bundle: clone(snapshot.history.bundle),
+            const bundle = adapter.bundle();
+            return { ...success(clone(snapshot.state)), version: digest(bundle), bundle: clone(bundle),
                 receipt: snapshot.records[snapshot.index]?.entries.at(-1) };
         },
-        async enable(bundle: Bundle, { signal }: RunOptions = {}): Promise<Result> {
+        async enable({ signal }: RunOptions = {}): Promise<Result> {
             const snapshot = adapter.capture();
             if (snapshot.history) {reject('already-enabled');}
-            const compiled = compileDefinition(bundle), result = await initialize(compiled, { signal });
+            const compiled = compileDefinition(adapter.bundle());
+            const existing = snapshot.state as JsonObject;
+            const start = { ...clone(compiled.definition.initial), ...Object.fromEntries(variableRoots(compiled.definition)
+                .filter(root => Object.hasOwn(existing, root)).map(root => [root, clone(existing[root])])) };
+            const result = await settle(compiled, start, [], { signal });
             if (!result.ok) {return result;}
             signal?.throwIfAborted();
-            const history: History = { format: 2, bundle: clone(compiled.bundle), version: digest(compiled.bundle), state: clone(result.state), revision: 0, checkpoints: [] };
+            const roots = variableRoots(compiled.definition);
+            if (Object.keys(result.state as JsonObject).some(root => !roots.includes(root))) {reject('unowned-root');}
+            const history: History = { format: 2, roots, version: digest(compiled.bundle), revision: 0, checkpoints: [] };
             return publish(snapshot, history, snapshot.records, { ...result, version: history.version }, false);
         },
         async apply(input: unknown, options: ApplyOptions = {}) {
@@ -93,17 +104,20 @@ export function createSettlementService<S extends Snapshot>(adapter: HostAdapter
             if (!history || !records[snapshot.index]?.entries.length) {reject('nothing-to-undo');}
             const target = records[snapshot.index], later = records.slice(snapshot.index + 1).flatMap(record => record.entries);
             const removed = all ? target.entries.splice(0) : target.entries.splice(-1);
-            const state = restore(rewind(history, [...removed, ...later]), later);
+            const state = rebase(rewind(history, snapshot.state, [...removed, ...later]), later);
             signal?.throwIfAborted();
-            return publish(snapshot, { ...clone(history), state, checkpoints: [] }, records,
-                { ...success(state), changes: changes(history.state, state), version: history.version }, true);
+            return publish(snapshot, { ...clone(history), checkpoints: [] }, records,
+                { ...success(state), changes: displayChanges(difference(snapshot.state, state)), version: history.version }, true);
         },
         async restoreSelection(previous: Receipt[], next: Receipt[] = []): Promise<Result | undefined> {
             const snapshot = adapter.capture(), history = snapshot.history;
             if (!history || (!previous.length && !next.length)) {return;}
-            const state = restore(rewind(history, previous), next);
-            return publish(snapshot, { ...clone(history), state, checkpoints: [] }, snapshot.records,
-                { ...success(state), changes: changes(history.state, state), version: history.version }, true);
+            const entries = clone(next);
+            const state = rebase(rewind(history, snapshot.state, previous), entries);
+            const rebased = new Map(entries.map(entry => [entry.id, entry]));
+            const records = snapshot.records.map(record => ({ entries: record.entries.map(entry => rebased.get(entry.id) || entry) }));
+            return publish(snapshot, { ...clone(history), checkpoints: [] }, records,
+                { ...success(state), changes: displayChanges(difference(snapshot.state, state)), version: history.version }, true);
         },
     };
 }

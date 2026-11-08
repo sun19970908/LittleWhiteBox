@@ -48,7 +48,7 @@ test('K1/K4/K5: conversion, purchase and first reward are atomic and recoverable
     assert.equal(getAt(result.state, ['claimed']), true);
     assert.equal(result.provenance.some(item => item.source.id === 'gift'), true);
     const first = host.saved();
-    accepted(await host.service.undo()); assert.deepEqual(host.saved().history!.state, initial.history!.state);
+    accepted(await host.service.undo()); assert.deepEqual(host.saved().state, initial.state);
     host.load(first); assert.deepEqual(accepted(await host.service.inspect()).state, result.state);
     const rejected = await host.service.apply([{ action: 'buy', params: { quantity: 1 } }, { action: 'buy', params: { quantity: 2 } }]);
     assert.equal(rejected.ok, false); assert.deepEqual(host.saved(), first);

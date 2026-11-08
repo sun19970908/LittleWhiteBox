@@ -80,7 +80,7 @@ export function variableExtensionWrite(card: { name: string; avatar: string }, b
     return { avatar: card.avatar, data: { extensions: { [CARD_EXTENSION]: JSON.stringify(assertBundle(bundle)) } } };
 }
 
-// Unreleased object-form drafts are decoded at this card boundary only.
+// Saved card leaves are JSON text; workspace projections also accept a parsed bundle.
 export function decodeBundle(stored: unknown): Bundle {
     return assertBundle(typeof stored === 'string' ? JSON.parse(stored) : stored);
 }

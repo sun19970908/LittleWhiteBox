@@ -42,7 +42,6 @@ import {
     AGENT_SETTINGS_CONFIG_VERSION,
     DEFAULT_PRESET_NAME,
     buildDefaultPreset,
-    cloneDefaultModelConfigs,
     normalizeJsApiPermission,
     normalizePermissionMode,
     normalizeAssistantSettings,
@@ -263,11 +262,12 @@ function buildRuntimeConfig() {
     const settings = getAssistantSettings();
     const currentPreset = settings.presets?.[settings.currentPresetName] || buildDefaultPreset();
     return {
+        ...currentPreset,
+        configVersion: CONFIG_VERSION,
         updatedAt: Number(settings.updatedAt) || 0,
         provider: currentPreset.provider || 'openai-compatible',
         workspaceFileName: settings.workspaceFileName || DEFAULT_WORKSPACE_FILE,
         jsApiPermission: normalizeJsApiPermission(settings.jsApiPermission),
-        modelConfigs: currentPreset.modelConfigs || cloneDefaultModelConfigs(),
         permissionMode: normalizePermissionMode(currentPreset.permissionMode),
         currentPresetName: settings.currentPresetName || DEFAULT_PRESET_NAME,
         delegatePresetName: settings.delegatePresetName || settings.currentPresetName || DEFAULT_PRESET_NAME,
@@ -3113,6 +3113,10 @@ async function runJavaScriptApi(args = {}, options = {}) {
 
 async function executeToolCall(name, args, options = {}) {
     switch (name) {
+        case TOOL_NAMES.READ_LOGS: {
+            const { readLogs } = await import('../debug-panel/log-tool.js');
+            return readLogs();
+        }
         case TOOL_NAMES.INSPECT_PAGE: {
             const { runLivePageInspection } = await import('../live-page-inspection/service.ts');
             return runLivePageInspection(args);

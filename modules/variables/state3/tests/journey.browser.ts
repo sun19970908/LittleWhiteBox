@@ -134,8 +134,8 @@ export async function verifySavingSelections(api: State3Api) {
         pending = api.apply([{ op: 'set', path: ['hero', 'health'], value: 20 }]);
         await bounded(entered);
         await bounded(choose(alternate)); requireValue(await health() === 80, 'K10: restored before save returns');
-        const macro = JSON.parse(getContext().substituteParams('{{lwb3_character}}')) as { sections: { values: { path: string[]; value: number }[] }[] };
-        requireValue(macro.sections[0].values.find(field => field.path.at(-1) === 'health')?.value === 80, 'K10: RP macro follows selection before saving');
+        const variables = getContext().chatMetadata.variables as Record<string, string>;
+        requireValue(JSON.parse(variables.hero).health === 80, 'K10: native variables follow selection before saving');
         await bounded(choose(0)); requireValue(await health() === 20, 'K10: restored original during same save');
         await bounded(choose(alternate)); requireValue(await health() === 80, 'K10: third selection not dropped');
         release(); accepted(await pending);

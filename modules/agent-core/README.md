@@ -35,6 +35,12 @@ createPlanLedger({ plansTable });
 
 不要让 `agent-core` 默认绑定某个 App 的数据库。
 
+## 预设与渠道
+
+共享 Agent 预设由 `config.js` 定义、`settings-repository.js` 存储；每个命名预设只有一份全字段（渠道、模型、URL、Key、采样、思考、工具模式及 Vertex 专属选项）。主配置与分身配置仍独立。切换渠道只修改 `provider`，不替换模型、不填入渠道默认值、不清除当前渠道不使用的字段。表单草稿只在当前页面内存中，保存仍走既有保存回执；协议适配器只投影当前请求需要的参数，不回写预设。不支持的组合在实际请求时明确报错，不擅自改值。
+
+持久化格式 v2 不含 `modelConfigs`。读取旧设置时，`settings-migration.js` 在仓库入口按冻结的 v1 规则转换：每个预设保留原来选中渠道的完整配置，Vertex 专属选项保留在同一预设的 `vertex` 字段；不同预设的名称和选择不变。旧数据不会进入日常表单和运行时读写，下一次保存只写当前格式。删除预设沿用原删除入口；移除 Vertex 时仅清理 `vertex` 字段与注册，不删除共享的 URL、Key、模型。
+
 ## API Key 与免密反代
 
 共享主配置与分身配置的 API Key 均可留空。空值、空白或未提供的 Key 表示不提供模型密码；填写 Key 时按所选 Provider 鉴权。设置和请求共用 CORE 的鉴权规则，各 App 不再以空 Key 判断模型未配置。
@@ -61,7 +67,7 @@ Claude 和 Google 的模型列表鉴权与生成鉴权分开：预设中的 `mod
 
 流式工具请求默认开启 `streamFunctionCallArguments`；中转不透传此字段时可关闭，仍接受完整 `functionCall.args`。按 [Vertex 分片协议](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#streaming_function_call_arguments)处理 `partialArgs` 的路径、类型、字符串续片和两层 `willContinue`，同名调用保持独立。只有参数完整才返回可执行工具；签名和真实调用 ID 保留，无 ID 不伪造供应商 ID。当前会话及保存后重放都使用完整调用，不回传参数碎片。
 
-`vertex-config.js` 定义连接配置与端点，`google-vertex.js` 拥有 Vertex 请求规则，`vertex-transport.js` 发送原生 JSON / SSE 并保留供应商错误，`vertex-stream.js` 只组装当前响应，`vertex-auth.js` 只负责认证；消息构造、图片和工具回放复用 `GoogleAdapter`。工具声明使用 `parametersJsonSchema` 保留 JSON Schema，不套用旧 SDK 的字段投影。访问令牌与签名密钥只在当前 Adapter 内存按需续期，没有持久缓存、后台刷新或自动重试。JSON 的 `token_uri` 不作为目的地，OAuth 固定发送至 Google 官方端点。配置沿用用户预设，删除渠道时清除该预设的 `google-vertex` 项并移除注册即可；不新增数据库。
+`vertex-config.js` 定义连接配置与端点，`google-vertex.js` 拥有 Vertex 请求规则，`vertex-transport.js` 发送原生 JSON / SSE 并保留供应商错误，`vertex-stream.js` 只组装当前响应，`vertex-auth.js` 只负责认证；消息构造、图片和工具回放复用 `GoogleAdapter`。工具声明使用 `parametersJsonSchema` 保留 JSON Schema，不套用旧 SDK 的字段投影。访问令牌与签名密钥只在当前 Adapter 内存按需续期，没有持久缓存、后台刷新或自动重试。JSON 的 `token_uri` 不作为目的地，OAuth 固定发送至 Google 官方端点。配置归属及删除路径遵循上面的预设规则，不新增数据库。
 
 模型发现失败明确报错，不替换内置列表。4 Argon 的 `CONTINUATION` 长解码结束状态按未完成返回，不自动发起续段或扩大用户预算；本渠道不提供 Interactions / Live API。官方认证说明：[服务账号 OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)、[Vertex API Key](https://cloud.google.com/vertex-ai/generative-ai/docs/start/api-keys)。
 
@@ -70,6 +76,8 @@ Claude 和 Google 的模型列表鉴权与生成鉴权分开：预设中的 `mod
 直连 Anthropic Messages 适配器对共享模型识别规则确认的 Claude 家族，统一在最后一个工具定义、系统提示块、最后一个可缓存的对话内容块上发送 `cache_control: { type: 'ephemeral' }`，使用供应商默认的 5 分钟缓存。DeepSeek 等其他 Anthropic 兼容模型及无法识别的模型别名保持原请求，不根据接口形状猜测缓存能力。思考块和签名不改动，输入历史不携带新增的断点状态；断点每次按最终请求构造，不存本地缓存、不增加重试、不改提示内容。
 
 缓存标记可在 `requestInspection.request.body` 中检查。流式与非流式结果都保留供应商原始 `usage`，各消费者的控制台统一输出 `[AgentCore][AnthropicUsage]`：`cache_creation_input_tokens` 是写入，`cache_read_input_tokens` 是命中读取，`input_tokens` 是不含缓存的输入。缺失字段保持缺失，不伪装成零或命中；日志不包含提示词、回复正文或密钥。
+
+OpenAI 兼容适配器对同一规则识别为 Claude 的模型（含 `anthropic/claude-*` 这类中转名），在系统消息和最后一条非 assistant 消息的末个文本块上发送同样的 `cache_control`，字符串内容转成单个文本块；这是 OpenRouter 等中转转发给 Anthropic 的格式。Claude 的前缀顺序是工具、系统、消息，系统断点同时覆盖工具定义。末尾的 assistant 预填每轮变化，不设断点。其他模型的请求不变；GPT、DeepSeek 等由服务端按相同前缀自动缓存。
 
 发送标记不等于命中或省钱：重复前缀、模型最低长度与缓存有效期均须满足，首次缓存写入可能比普通输入贵。以 [Anthropic 缓存文档](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 和供应商返回的实际用量为准，不根据本地分词估算账单。
 

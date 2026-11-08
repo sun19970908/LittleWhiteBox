@@ -117,11 +117,11 @@ for (const layout of ['list', 'select']) {
                 if (!ok) {
                     assert.deepEqual(Object.keys(persisted.presets), ['A', 'B']);
                     assert.equal(persisted.currentPresetName, 'A');
-                    assert.equal(persisted.presets.A.modelConfigs['openai-compatible'].model, 'draft-during-save');
+                    assert.equal(persisted.presets.A.model, 'draft-during-save');
                 } else if (operation === 'rename') {
                     assert.deepEqual(Object.keys(persisted.presets), ['Renamed', 'B']);
                     assert.equal(persisted.delegatePresetName, 'Renamed');
-                    assert.equal(persisted.presets.Renamed.modelConfigs['openai-compatible'].model, 'draft-during-save');
+                    assert.equal(persisted.presets.Renamed.model, 'draft-during-save');
                 } else if (operation === 'delete') {
                     assert.deepEqual(Object.keys(persisted.presets), ['B']);
                     assert.equal(persisted.currentPresetName, 'B');
@@ -129,8 +129,8 @@ for (const layout of ['list', 'select']) {
                 } else {
                     assert.deepEqual(Object.keys(persisted.presets), ['A', 'Renamed', 'B']);
                     assert.equal(persisted.currentPresetName, 'Renamed');
-                    assert.equal(h.saves[0].presets.Renamed.modelConfigs['openai-compatible'].model, 'draft-before-save');
-                    assert.equal(persisted.presets.Renamed.modelConfigs['openai-compatible'].model, 'draft-during-save');
+                    assert.equal(h.saves[0].presets.Renamed.model, 'draft-before-save');
+                    assert.equal(persisted.presets.Renamed.model, 'draft-during-save');
                 }
             });
         }
@@ -173,7 +173,7 @@ for (const [failure, saveRename] of [
         h.save();
         assert.deepEqual(Object.keys(h.saves[1].presets), ['A', 'B']);
         assert.equal(h.saves[1].currentPresetName, 'A');
-        assert.equal(h.saves[1].presets.A.modelConfigs['openai-compatible'].model, 'unsaved-model');
+        assert.equal(h.saves[1].presets.A.model, 'unsaved-model');
     });
 }
 
@@ -189,7 +189,7 @@ test('rename failure preserves edits made while persistence was pending', async 
     assert.equal(h.state.configDraft.delegatePresetName, 'A');
     h.save();
     assert.deepEqual(Object.keys(h.saves[1].presets), ['A', 'B']);
-    assert.equal(h.saves[1].presets.A.modelConfigs['openai-compatible'].model, 'edited-during-save');
+    assert.equal(h.saves[1].presets.A.model, 'edited-during-save');
 });
 
 test('successful rename keeps the new name on the next save', async t => {

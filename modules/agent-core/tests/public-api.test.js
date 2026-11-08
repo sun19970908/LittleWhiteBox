@@ -11,12 +11,10 @@ import { WEB_RESPONSE_BYTES } from '../web/http.js';
 function settings(overrides = {}) {
     return normalizeAgentSettings({
         currentPresetName: 'main',
-        presets: { main: { provider: 'openai-compatible', modelConfigs: { 'openai-compatible': {
-            model: 'fixture-main', apiKey: '', temperature: 0.37, maxTokens: 4321,
-            toolMode: 'native', reasoning: { mode: 'off', output: 'hide' },
-        } } } },
+        presets: { main: { provider: 'openai-compatible', model: 'fixture-main', apiKey: '', temperature: 0.37, maxTokens: 4321,
+            toolMode: 'native', reasoning: { mode: 'off', output: 'hide' } } },
         delegateConfigured: true,
-        delegateConfig: { provider: 'google', modelConfigs: { google: { model: 'gemini-2.5-pro', apiKey: 'delegate-secret-fixture' } } },
+        delegateConfig: { provider: 'google', model: 'gemini-2.5-pro', apiKey: 'delegate-secret-fixture' },
         tavilyApiKey: 'tavily-secret-fixture', exaApiKey: 'exa-secret-fixture',
         ...overrides,
     });
@@ -84,8 +82,8 @@ test('sessions snapshot shared settings once, resolve explicit roles and lazily 
     const session = await h.api.openSession();
     assert.equal(h.settingsReads(), 1);
     assert.equal(h.coreLoads(), 0);
-    saved.presets.main.modelConfigs['openai-compatible'].model = 'changed-after-open';
-    saved.presets.main.modelConfigs['openai-compatible'].reasoning.output = 'show';
+    saved.presets.main.model = 'changed-after-open';
+    saved.presets.main.reasoning.output = 'show';
     await session.chat(input());
     await session.chat(input());
     assert.equal(h.settingsReads(), 1);
@@ -119,7 +117,7 @@ test('delegateConfigured must be exactly true; explicit delegate never silently 
 
 test('inherited sendTemperature false suppresses temperature and caller model settings are rejected', async () => {
     const saved = settings();
-    saved.presets.main.modelConfigs['openai-compatible'].sendTemperature = false;
+    saved.presets.main.sendTemperature = false;
     const h = harness({ settings: saved });
     const session = await h.api.openSession();
     await session.chat(input());
@@ -391,7 +389,7 @@ test('session lifetime signals close sessions and request signal listeners are r
 
 test('public errors retain useful diagnostics/status but only expose code/message/status and scrub every configured key', async () => {
     const saved = settings();
-    saved.presets.main.modelConfigs['openai-compatible'].apiKey = 'selected-secret-fixture';
+    saved.presets.main.apiKey = 'selected-secret-fixture';
     const raw = Object.assign(new Error('Quota exceeded for selected-secret-fixture, delegate-secret-fixture, tavily-secret-fixture and exa-secret-fixture; request fixture-123'), {
         code: 'provider_quota', status: 429, cause: { config: saved }, config: saved, requestInspection: { config: saved },
     });

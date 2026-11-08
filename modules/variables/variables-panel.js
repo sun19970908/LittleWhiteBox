@@ -1,5 +1,6 @@
 import { extension_settings, getContext, saveMetadataDebounced } from "../../../../../extensions.js";
 import { saveSettingsDebounced, chat_metadata } from "../../../../../../script.js";
+import { ownsVariable, readOwnedVariable, writeOwnedVariable } from './state3/runtime/variables.js';
 import { getLocalVariable, setLocalVariable, getGlobalVariable, setGlobalVariable } from "../../../../../variables.js";
 import { extensionFolderPath } from "../../core/constants.js";
 import { createModuleEvents, event_types } from "../../core/event-manager.js";
@@ -120,7 +121,8 @@ const EMBEDDED_HTML = `
 `;
 
 const VT = {
-  character: { getter: getLocalVariable, setter: setLocalVariable, storage: ()=> chat_metadata?.variables || (chat_metadata.variables = {}), save: saveMetadataDebounced },
+  character: { getter: name => ownsVariable(chat_metadata, name) ? readOwnedVariable(chat_metadata, name) : getLocalVariable(name),
+    setter: (name, value) => { if (ownsVariable(chat_metadata, name)) { writeOwnedVariable(chat_metadata, name, value); saveMetadataDebounced(); } else { setLocalVariable(name, value); } }, storage: ()=> chat_metadata?.variables || (chat_metadata.variables = {}), save: saveMetadataDebounced },
   global:    { getter: getGlobalVariable, setter: setGlobalVariable, storage: ()=> extension_settings.variables?.global || ((extension_settings.variables = { global: {} }).global), save: saveSettingsDebounced },
 };
 
@@ -133,6 +135,7 @@ const getRulesTable = () => {
     const ctx = getContext();
     const mode = extension_settings?.[EXT_ID]?.variablesMode || '1.0';
     const meta = ctx?.chatMetadata || {};
+    if (mode === '3.0') return {};
     return mode === '2.0'
       ? (meta[LWB_RULES_V2_KEY] || {})
       : (meta[LWB_RULES_V1_KEY] || {});
@@ -230,10 +233,6 @@ class VariablesPanel {
   removeContainer(){ this.state.container?.remove(); this.state.container=null; }
 
   open(){
-    if(extension_settings?.[EXT_ID]?.variablesMode === '3.0') {
-      void import('./state3/index.js').then(module => module.openState3()).catch(error => toastr.error(error.message));
-      return;
-    }
     if(!this.state.isEnabled) return toastr.warning('请先启用变量面板');
     this.createContainer(); this.bindEvents(); this.state.isOpen=true; this.state.container.show();
     this.state.rulesChecksum = JSON.stringify(getRulesTable()||{});
@@ -353,8 +352,9 @@ class VariablesPanel {
     else root.forEach(([k,v])=> c.append(this.createVariableItem(t,k,v,0,[k])));
   }
 
-  createVariableItem(t,k,v,l=0,fullPath=[]){
-    const parsed=this.parseValue(v), hasChildren=typeof parsed==='object' && parsed!==null;
+  createVariableItem(t,k,v,l=0,fullPath=[],typed=false){
+    typed ||= t==='character' && ownsVariable(chat_metadata,String(fullPath[0]));
+    const parsed=typed && l>0 ? v : this.parseValue(v), hasChildren=typeof parsed==='object' && parsed!==null;
     const disp = l===0? this.formatTopLevelValue(v) : this.formatValue(v);
     const ruleNode=getRuleNodeByPath(fullPath);
     return $(`<div class="vm-item ${l>0?'vm-tree-level-var':''}" data-key="${this.escape(k)}" data-type="${t||''}" ${l>0?`data-level="${l}"`:''} data-path="${this.escape(pathKey(fullPath))}">
@@ -363,7 +363,7 @@ class VariablesPanel {
         <div class="vm-tree-value">${disp}</div>
         <div class="vm-item-controls">${this.createButtons()}</div>
       </div>
-      ${hasChildren?`<div class="vm-item-content">${this.renderChildren(parsed,l+1,fullPath)}</div>`:''}
+      ${hasChildren?`<div class="vm-item-content">${this.renderChildren(parsed,l+1,fullPath,typed)}</div>`:''}
     </div>`);
   }
 
@@ -394,7 +394,7 @@ class VariablesPanel {
     return inf;
   }
 
-  renderChildren(obj,level,parentPath){ return Object.entries(obj).map(([k,v])=> this.createVariableItem(null,k,v,level,[...(parentPath||[]),Array.isArray(obj) ? Number(k) : k])[0].outerHTML).join(''); }
+  renderChildren(obj,level,parentPath,typed=false){ return Object.entries(obj).map(([k,v])=> this.createVariableItem(null,k,v,level,[...(parentPath||[]),Array.isArray(obj) ? Number(k) : k],typed)[0].outerHTML).join(''); }
 
   handleTouch(e){
     if($(e.target).closest('.vm-item-controls').length) return;
@@ -425,7 +425,7 @@ class VariablesPanel {
     const formatted=this.formatPath(t,path); let cmd='';
     if(longPress){
       if(t==='character'){
-        cmd = level===0 ? `{{getvar::${path[0]}}}` : `{{xbgetvar::${formatted}}}`;
+        cmd = level===0 && !ownsVariable(chat_metadata,path[0]) ? `{{getvar::${path[0]}}}` : `{{xbgetvar::${formatted}}}`;
       }else{
         cmd = `{{getglobalvar::${path[0]}}}`;
         if(level>0) toastr.info('全局变量宏暂不支持子路径，已复制顶级变量');
@@ -441,7 +441,7 @@ class VariablesPanel {
       setTimeout(()=>{
         inf.find('.inline-name').val(path[path.length-1]);
         const ta=inf.find('.inline-value');
-        ta.val(this.valueToEditorText(v)); this.autoResizeTextarea(ta);
+        ta.val(this.valueToEditorText(v,type==='character' && ownsVariable(chat_metadata,path[0]))); this.autoResizeTextarea(ta);
       },50);
     }else if(action==='addChild'){
       inf.find('.inline-name').attr('placeholder',`为 "${path.join('.')}" 添加子变量名称`);
@@ -470,7 +470,8 @@ class VariablesPanel {
       const value= typeof rawValue==='string'? rawValue.trim() : String(rawValue ?? '').trim();
       const type=form.data('type');
       if(!name) return form.find('.inline-name').focus(), toastr.error('请输入变量名称');
-      const val=this.editorTextToValue(value), {action,path}=this.state.formState;
+      const {action,path}=this.state.formState;
+      const val=this.editorTextToValue(value,type==='character' && ownsVariable(chat_metadata,path[0]));
       this.withPreservedExpansion(type,()=>{
         if(action==='addChild') {
           this.setValueByPath(type,[...path,name],val);
@@ -514,7 +515,7 @@ class VariablesPanel {
       const n= typeof rawN==='string' ? rawN.trim() : String(rawN ?? '').trim();
       const v= typeof rawV==='string' ? rawV.trim() : String(rawV ?? '').trim();
       if(!n) return toastr.error('请输入变量名称');
-      const val=this.editorTextToValue(v);
+      const val=this.editorTextToValue(v,t==='character' && ownsVariable(chat_metadata,n));
       this.withPreservedExpansion(t,()=> {
         this.vt(t).setter(n,val);
       });
@@ -523,21 +524,23 @@ class VariablesPanel {
     finally{ this.savingInProgress=false; }
   }
 
-  getValueByPath(t,p){ if(p.length===1) return this.vt(t).getter(p[0]); let v=this.parseValue(this.vt(t).getter(p[0])); p.slice(1).forEach(k=> v=v?.[k]); return v; }
+  rootValue(t,key){ const value=this.vt(t).getter(key); return t==='character' && ownsVariable(chat_metadata,key) ? value : this.parseValue(value); }
+
+  getValueByPath(t,p){ if(p.length===1) return this.vt(t).getter(p[0]); let v=this.rootValue(t,p[0]); p.slice(1).forEach(k=> v=v?.[k]); return v; }
 
   setValueByPath(t,p,v){
     if(p.length===1){
       this.vt(t).setter(p[0], v);
       return;
     }
-    let root=this.parseValue(this.vt(t).getter(p[0])); if(typeof root!=='object'||root===null) root={};
+    let root=this.rootValue(t,p[0]); if(typeof root!=='object'||root===null) root={};
     let cur=root; p.slice(1,-1).forEach(k=>{ if(typeof cur[k]!=='object'||cur[k]===null) cur[k]={}; cur=cur[k]; });
     cur[p[p.length-1]]=v; this.vt(t).setter(p[0], root);
   }
 
   deleteByPathSilently(t,p){
     if(p.length===1){ delete this.store(t)[p[0]]; this.vt(t).save?.(); return; }
-    let root=this.parseValue(this.vt(t).getter(p[0])); if(typeof root!=='object'||root===null) return;
+    let root=this.rootValue(t,p[0]); if(typeof root!=='object'||root===null) return;
     let cur=root; p.slice(1,-1).forEach(k=>{ if(typeof cur[k]!=='object'||cur[k]===null) cur[k]={}; cur=cur[k]; });
     delete cur[p[p.length-1]]; this.vt(t).setter(p[0], root);
   }
@@ -545,7 +548,7 @@ class VariablesPanel {
   formatPath(t,path){
     if(!Array.isArray(path)||!path.length) return '';
     if(extension_settings?.[EXT_ID]?.variablesMode === '2.0'){
-      let current=this.parseValue(this.vt(t).getter(path[0]));
+      let current=this.rootValue(t,path[0]);
       const parts=[String(path[0])];
       for(let i=1;i<path.length;i++){
         const key=Array.isArray(current) && /^(0|[1-9]\d*)$/.test(String(path[i])) ? Number(path[i]) : String(path[i]);
@@ -553,7 +556,7 @@ class VariablesPanel {
       }
       return formatPath(parts);
     }
-    let out=String(path[0]), cur=this.parseValue(this.vt(t).getter(path[0]));
+    let out=String(path[0]), cur=this.rootValue(t,path[0]);
     for(let i=1;i<path.length;i++){
       const k=String(path[i]), isNum=/^\d+$/.test(k);
       if(Array.isArray(cur) && isNum){ out+=`[${Number(k)}]`; cur=cur?.[Number(k)]; }
@@ -566,8 +569,8 @@ class VariablesPanel {
   getItemPath(i){ const p=[]; let c=i; while(c.length&&c.hasClass('vm-item')){ const k=c.data('key'); if(k!==undefined) p.unshift(String(k)); if(!c.attr('data-level')) break; c=c.parent().closest('.vm-item'); } return p; }
 
   parseValue(v){ try{ return typeof v==='string'? JSON.parse(v) : v; }catch{ return v; } }
-  valueToEditorText(v){ return (v&&typeof v==='object') ? JSON.stringify(v,null,2) : String(v??''); }
-  editorTextToValue(v){ if(typeof v!=='string') return v; const s=v.trim(); return (s.startsWith('{')||s.startsWith('[')) ? JSON.parse(s) : v; }
+  valueToEditorText(v,typed=false){ return typed || (v&&typeof v==='object') ? JSON.stringify(v,null,2) : String(v??''); }
+  editorTextToValue(v,typed=false){ if(typeof v!=='string') return v; if(typed) return this.parseValue(v); const s=v.trim(); return (s.startsWith('{')||s.startsWith('[')) ? JSON.parse(s) : v; }
 
   formatTopLevelValue(v){ const p=this.parseValue(v); if(typeof p==='object'&&p!==null){ const c=Array.isArray(p)? p.length : Object.keys(p).length; return `<span class="vm-object-count">[${c} items]</span>`; } return this.formatValue(p); }
   formatValue(v){ if(v==null) return `<span class="vm-null-value">${v}</span>`; const e=this.escape(String(v)); return `<span class="vm-formatted-value">${e.length>50? e.substring(0,50)+'...' : e}</span>`; }
@@ -602,7 +605,7 @@ class VariablesPanel {
   }
 
   exportVariables(t){
-    const v=this.store(t), b=new Blob([JSON.stringify(v,null,2)],{type:'application/json'}), a=document.createElement('a');
+    const v=Object.fromEntries(Object.entries(this.store(t)).map(([key,value])=>[key,t==='character' && ownsVariable(chat_metadata,key) ? readOwnedVariable(chat_metadata,key) : value])), b=new Blob([JSON.stringify(v,null,2)],{type:'application/json'}), a=document.createElement('a');
     a.href=URL.createObjectURL(b); a.download=`${t}-variables-${new Date().toISOString().split('T')[0]}.json`; a.click();
     toastr.success('变量已导出');
   }

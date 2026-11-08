@@ -46,9 +46,7 @@ for (const ending of ['length', undefined]) {
             const run = runSharedManagerToolLoop({
                 sessionId: session.id, caller: 'chat',
                 agentConfig: { delegateConfigured: true, delegateConfig: {
-                    provider: 'openai-compatible', modelConfigs: { 'openai-compatible': {
-                        apiKey: 'offline-fixture', model: 'fixture', baseUrl: `http://127.0.0.1:${address.port}/v1`, toolMode: 'native',
-                    } },
+                    provider: 'openai-compatible', apiKey: 'offline-fixture', model: 'fixture', baseUrl: `http://127.0.0.1:${address.port}/v1`, toolMode: 'native',
                 } },
                 messages: [{ role: 'user', content: '记下线索。' }],
                 beforeWriteGuard: () => { writeChecks++; },

@@ -262,20 +262,17 @@ export const SUMMARY_SYSTEM_PROMPT = [
 // 权限模式提示词
 // ============================================================
 export function buildPermissionModePrompt(permissionMode = 'default', jsApiPermission = 'deny') {
-    const slashPermissionLine = permissionMode === 'full'
-        ? 'Current slash-command control mode: full permission.'
-        : 'Current slash-command control mode: default permission.';
-    const slashGuidanceLine = permissionMode === 'full'
-        ? 'You may execute RunSlashCommand directly. Do not waste that trust. Think carefully before execution, and for irreversible data modifications, obtain explicit user consent first.'
-        : 'You are not fully trusted to execute RunSlashCommand without care. Think carefully before execution, and for irreversible data modifications, obtain explicit user consent first.';
+    const executionPermissionLine = permissionMode === 'full'
+        ? 'Execution permission: full. RunSlashCommand and an enabled RunJavaScriptApi execute without per-call confirmation. Proceed with the requested work rather than asking the user to approve each tool call again.'
+        : 'Execution permission: default. RunSlashCommand requests confirmation. An enabled RunJavaScriptApi requests confirmation for state-changing or unresolved operations; recognized reads run directly.';
     const jsApiLine = jsApiPermission === 'deny'
         ? `RunJavaScriptApi is a supported assistant tool. The user's "${AGENT_JSAPI_PERMISSION_LABEL}" setting is "${AGENT_JSAPI_PERMISSION_OPTIONS.find(option => option.value === 'deny').label}", so this run does not offer it. To enable it, the user can open the assistant's API settings, change this setting to "${AGENT_JSAPI_PERMISSION_OPTIONS.find(option => option.value === 'allow').label}", and save.`
-        : '';
+        : 'RunJavaScriptApi is enabled.';
 
     return [
         '# Permission Mode',
-        slashPermissionLine,
-        slashGuidanceLine,
+        executionPermissionLine,
         jsApiLine,
+        'Keep execution within the requested task. Obtain explicit consent for unrelated or irreversible changes that the user has not already authorized.',
     ].filter(Boolean).join('\n');
 }

@@ -15,15 +15,13 @@ import {
     resetDrawAgentRuntimeForTests as resetPureDrawAgentRuntimeForTests,
 } from './draw-agent-runtime.js';
 
-const AGENT_SETTINGS_FILE_KEY = 'settings';
-
 let agentCoreModulePromise = null;
 let agentSettingsReaderPromise = null;
 let requestHeadersProviderPromise = null;
 
 async function loadDefaultAgentSettingsReader() {
-    agentSettingsReaderPromise ||= import('../../../core/server-storage.js')
-        .then((storageModule) => () => storageModule.AssistantStorage.get(AGENT_SETTINGS_FILE_KEY, null))
+    agentSettingsReaderPromise ||= import('../../agent-core/settings-repository.js')
+        .then((repository) => repository.readSharedAgentSettings)
         .catch((error) => {
             agentSettingsReaderPromise = null;
             throw error;

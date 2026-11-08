@@ -8,7 +8,7 @@ import { compileDefinition } from './definition/compile.js';
 import { initialize, settle } from './engine/settle.js';
 import { diagnostic, reject } from './engine/diagnostics.js';
 import { receiptResult } from './runtime/history.js';
-import { openDraft, saveDraft, checkDraft, saveCardDraft, readCardBundle } from './definition/authoring.js';
+import { openDraft, saveDraft, checkDraft, saveCardDraft, exportRules, prepareRuleImport, importRules } from './definition/authoring.js';
 import { createState3Page } from './ui/settings.js';
 import { notifyError } from './ui/notifications.js';
 import { CHAT_KEY, CARD_EXTENSION } from './definition/format.js';
@@ -16,7 +16,7 @@ import { createState3Macros } from './model/macros.js';
 import { createState3Updater } from './model/updater.js';
 import { readSettings, saveSettings, state3Selected, selectState3 } from './runtime/settings.js';
 export { state3Selected } from './runtime/settings.js';
-import type { Result, Success } from './types.js';
+import type { Result } from './types.js';
 import type { State3Api } from './runtime/api.js';
 
 let runtime: { page: ReturnType<typeof createState3Page>; modeChanged(): void; dispose(): void } | undefined;
@@ -26,6 +26,7 @@ export function initState3() {
     const events = createModuleEvents('variables3'), macros = createState3Macros();
     let lastResult: Result | undefined, page: ReturnType<typeof createState3Page> | undefined;
     let resultMessage: ChatMessage | undefined;
+    let swipeRecovery: MutationObserver | undefined;
     let pendingGeneration: { chat: ChatMessage[]; message?: ChatMessage } | undefined;
     let lifecycle = new AbortController(), selectedMode = state3Selected();
     const adapter = createHostAdapter();
@@ -42,12 +43,12 @@ export function initState3() {
     async function syncProjection() {
         if (!state3Selected() || inGroup(getContext())) { macros.clear(); return; }
         try {
+            const epoch = lifecycle;
+            macros.clear();
             const result = await service.inspect();
+            if (epoch !== lifecycle) {return;}
             if (!result.ok) { macros.clear(); return; }
-            const receipt = result.receipt;
-            const confirmed: Success | undefined = receipt ? receiptResult(result.state, receipt) : undefined;
-            macros.set({ compiled: compileDefinition(result.bundle), state: result.state, result: confirmed });
-            if (!lastResult && confirmed) { lastResult = confirmed; resultMessage = getContext().chat[adapter.capture().index]; refresh(); }
+            macros.set(compileDefinition(result.bundle));
         } catch (error) {
             if (['chat-missing', 'character-missing'].includes(diagnostic(error).code)) { macros.clear(); return; }
             throw error;
@@ -65,7 +66,7 @@ export function initState3() {
         }
         return result;
     };
-    const updater = createState3Updater({ service, adapter, macros, available, changed: () => refresh() });
+    const updater = createState3Updater({ service, adapter, available, changed: () => refresh() });
     const api: State3Api = {
         stage(options) { available(); return service.stage(options); },
         apply(input, options) { available(); return retain(service.apply(input, options), options?.index); },
@@ -74,22 +75,11 @@ export function initState3() {
         inspect: () => service.inspect(),
         async enable(options) {
             if (isGenerating()) {reject('commit-busy');}
-            const snapshot = adapter.capture(), epoch = lifecycle;
+            const epoch = lifecycle;
             return retain((async () => {
-                const bundle = await readCardBundle(options?.signal);
-                if (!adapter.isCurrent(snapshot)) {reject('stale-target');}
-                const result = await service.enable(bundle, options);
+                const result = await service.enable(options);
                 if (result.ok && result.committed && epoch === lifecycle) { selectState3(); selectedMode = true; }
                 return result;
-            })());
-        },
-        async upgrade({ preview = false, signal } = {}) {
-            available();
-            const snapshot = adapter.capture();
-            return retain((async () => {
-                const bundle = await readCardBundle(signal);
-                if (!adapter.isCurrent(snapshot)) {reject('stale-target');}
-                return service[preview ? 'preview' : 'apply']([], { bundle, signal, source: 'rules' });
             })());
         },
         async tryDefinition(bundle, input = [], { state, signal } = {}) {
@@ -100,7 +90,9 @@ export function initState3() {
                 return initial.ok ? settle(compiled, initial.state, input, { signal }) : initial;
             } catch (error) { return { ok: false, diagnostics: [diagnostic(error)] }; }
         },
-        openDraft, saveDraft, checkDraft, saveCardDraft,
+        openDraft, saveDraft, checkDraft, exportRules, prepareRuleImport,
+        async saveCardDraft(draft) { const result = await saveCardDraft(draft); await report(syncProjection()); return result; },
+        async importRules(prepared, options) { const result = await importRules(prepared, options); await syncProjection(); return result; },
         lastResult: () => lastResult,
         async retrySave() {
             const epoch = lifecycle, result = lastResult;
@@ -122,7 +114,7 @@ export function initState3() {
             const snapshot = adapter.capture();
             const results = snapshot.records.flatMap((record, index) => {
                 const receipt = record.entries.at(-1);
-                return receipt && snapshot.history ? [{ index, result: receiptResult(snapshot.history.state, receipt) as Result }] : [];
+                return receipt && snapshot.history ? [{ index, result: receiptResult(snapshot.state, receipt) as Result }] : [];
             });
             const resultIndex = resultMessage ? getContext().chat.indexOf(resultMessage) : snapshot.index;
             if (lastResult && resultIndex >= 0) {
@@ -134,36 +126,69 @@ export function initState3() {
         catch (error) { if (!['chat-missing', 'character-missing'].includes(diagnostic(error).code)) {throw error;} }
     }
     function changed() {
-        pendingGeneration = undefined; lifecycle.abort(); lifecycle = new AbortController();
+        clearSwipeRecovery(); pendingGeneration = undefined; lifecycle.abort(); lifecycle = new AbortController();
         updater.cancel(); macros.clear(); lastResult = undefined; resultMessage = undefined; adapter.remember();
         page?.targetChanged(); refresh(); observeBackgroundTask(report(syncProjection()), { source: import.meta.url, operation: 'projection' });
     }
     function modeChanged() { if (state3Selected() !== selectedMode) { selectedMode = state3Selected(); changed(); } else {refresh();} }
+    function invalidateResult() {
+        lifecycle.abort(); lifecycle = new AbortController();
+        updater.cancel(); lastResult = undefined; resultMessage = undefined;
+        page?.targetChanged();
+    }
+    function clearSwipeRecovery() { swipeRecovery?.disconnect(); swipeRecovery = undefined; }
+    function watchSwipeRecovery(index: number) {
+        clearSwipeRecovery();
+        if (!state3Selected()) {return;}
+        const ctx = getContext(), message = ctx.chat[index];
+        if (!message?.swipes || message.swipe_id !== message.swipes.length) {return;}
+        const pendingSwipe = message.swipe_id;
+        swipeRecovery = new MutationObserver(() => {
+            if (getContext().chat !== ctx.chat) {clearSwipeRecovery(); return;}
+            if (message.swipe_id === message.swipes!.length) {return;}
+            clearSwipeRecovery();
+            if (message.swipe_id === pendingSwipe) {refresh(); return;}
+            pendingGeneration = undefined;
+            observeBackgroundTask(report(restoreSelection('swipe', ctx.chat.indexOf(message))), { source: import.meta.url, operation: 'swipe-recovery' });
+        });
+        const chat = document.getElementById('chat'), floor = chat?.querySelector(`.mes[mesid="${index}"]`);
+        if (chat) {swipeRecovery.observe(chat, { childList: true });}
+        if (floor) {swipeRecovery.observe(floor, { attributes: true, attributeFilter: ['swipeid'] });}
+    }
     async function restoreSelection(kind: 'delete' | 'swipe', index?: number) {
         const change = adapter.selectionChange(kind, index);
         if (!state3Selected()) {return;}
+        invalidateResult();
         if (change.previous.length || change.next.length) {
-            lifecycle.abort(); lifecycle = new AbortController(); updater.cancel(); lastResult = undefined;
             // Restore before yielding, but never hold the native swipe event on
             // disk I/O. retain owns save failures and ignores obsolete selections.
             observeBackgroundTask(report(retain((async () => {
-                const result = await service.restoreSelection(change.previous, change.next);
-                if (!result) {reject('nothing-to-undo');}
-                return result;
-            })())), { source: import.meta.url, operation: 'selection-save' });
+                const restored = await service.restoreSelection(change.previous, change.next);
+                if (!restored) {reject('nothing-to-undo');}
+                if (!restored.ok) {return restored;}
+                const snapshot = adapter.capture(index);
+                const receipt = snapshot.records[snapshot.index]?.entries.at(-1);
+                return { ...(receipt ? receiptResult(snapshot.state, receipt) : { ...restored, changes: [] }), saved: restored.saved, persistence: restored.persistence };
+            })(), index)), { source: import.meta.url, operation: 'selection-save' });
             await syncProjection();
         }
         refresh();
     }
     events.on(event_types.CHAT_CHANGED, changed);
-    events.on(event_types.MESSAGE_DELETED, () => report(restoreSelection('delete')));
-    events.on(event_types.MESSAGE_SWIPED, (index: number) => report(restoreSelection('swipe', Number(index))));
+    events.on(event_types.MESSAGE_DELETED, () => { clearSwipeRecovery(); return report(restoreSelection('delete')); });
+    events.on(event_types.MESSAGE_SWIPED, (index: number) => {
+        const restoring = report(restoreSelection('swipe', Number(index)));
+        watchSwipeRecovery(Number(index));
+        return restoring;
+    });
+    events.on(event_types.MESSAGE_EDITED, () => { clearSwipeRecovery(); invalidateResult(); refresh(); });
     // The host emits MESSAGE_SWIPED after deleting the selected swipe; that event owns restoration.
     events.on(event_types.SETTINGS_UPDATED, modeChanged);
     events.on(event_types.CHARACTER_MESSAGE_RENDERED, refresh);
     events.on(event_types.GENERATION_STARTED, (type: string, _options: unknown, dryRun: boolean) => {
-        if (dryRun || !state3Selected() || !['normal', 'regenerate', 'swipe', 'continue', undefined, ''].includes(type)) {return;}
-        updater.cancel(); adapter.remember(); pendingGeneration = { chat: getContext().chat };
+        if (dryRun) {return syncProjection();}
+        if (!state3Selected() || !['normal', 'regenerate', 'swipe', 'continue', undefined, ''].includes(type)) {return;}
+        invalidateResult(); adapter.remember(); pendingGeneration = { chat: getContext().chat };
         return syncProjection();
     });
     events.on(event_types.MESSAGE_RECEIVED, (index: number) => {
@@ -195,7 +220,7 @@ export function initState3() {
         if (ctx.characters?.[ctx.characterId]?.data?.extensions?.[CARD_EXTENSION]) {await api.enable({ signal: lifecycle.signal });}
     });
     window.LWB_StateV3 = api;
-    runtime = { page, modeChanged, dispose() { lifecycle.abort(); topology.disconnect(); updater.cancel(); macros.dispose(); events.cleanup(); page?.dispose(); delete window.LWB_StateV3; } };
+    runtime = { page, modeChanged, dispose() { lifecycle.abort(); clearSwipeRecovery(); topology.disconnect(); updater.cancel(); macros.dispose(); events.cleanup(); page?.dispose(); delete window.LWB_StateV3; } };
     refresh();
     if (state3Selected()) {observeBackgroundTask(report(syncProjection()), { source: import.meta.url, operation: 'projection' });}
 }

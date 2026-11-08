@@ -36,9 +36,7 @@ const backendStatus = { ready: true, runtimeHostAbi: 1, version: '3.0.0', capabi
 ] };
 
 async function preparedFor(provider, sampling = {}) {
-    const providerConfig = resolveActiveProviderConfig({ provider, modelConfigs: {
-        [provider]: { model: 'offline-model', baseUrl: 'https://model.invalid', apiKey: 'offline-fixture', sampling },
-    } });
+    const providerConfig = resolveActiveProviderConfig({ provider, model: 'offline-model', baseUrl: 'https://model.invalid', apiKey: 'offline-fixture', sampling });
     assert.equal(providerConfig.provider, provider);
     assert.equal(providerConfig.model, 'offline-model');
     return prepareScenePlannerInput({

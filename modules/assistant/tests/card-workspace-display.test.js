@@ -4,6 +4,7 @@ import { parseHTML } from 'linkedom';
 import { rootFor, displayCardWorkspacePath, displayCardWorkspaceName } from '../../card-workspace/paths.js';
 import { buildWorkspaceTree, collectDirectoryExpansionKeys } from '../app-src/workspace/local-workspace-tree.js';
 import { renderWorkspace } from '../app-src/workspace/local-workspace-ui.js';
+import { cardFiles, locateFile } from '../../card-workspace/files.js';
 
 // Acceptance: readable card names must still select/save the original file
 // (wrong-target writes / lost work). Literal workspace names stay literal;
@@ -15,6 +16,36 @@ const source = {
     directories: [`cards/${encodeURIComponent('空卡.png')}/`],
     files: paths.map(path => ({ path, relativePath: path.slice(6), name: 'system_prompt.md', content: 'draft', originalContent: '' })),
 };
+
+// Acceptance: grouping/renaming tasks must never merge same-name tasks or
+// redirect a settings/body edit to another task (wrong-target writes).
+test('named task groups preserve both files and distinct IDs after rename and filtering', () => {
+    const tasks = [
+        { id: 'id/a%', name: '日常', commands: '/echo first', interval: 2 },
+        { id: 'id-b', name: '日常', commands: '/echo second', interval: 3 },
+    ];
+    const files = cardFiles('卡.png', { extensions: { 'xiaobaix-tasks': { tasks } } }, [])
+        .map(file => ({ ...file, relativePath: file.path.slice(6), name: file.path.split('/').at(-1), originalContent: file.content }));
+    const fixture = { sourceId: 'workspace', label: 'local', rootPath: 'local/', files };
+    const getGroups = tree => tree.nodes[0].children[0].children.find(node => node.path.endsWith('/tasks/')).children;
+    const initial = buildWorkspaceTree([fixture], { searchQuery: '日常' });
+    const groups = getGroups(initial);
+    assert.equal(groups.length, 2);
+    assert.notEqual(groups[0].key, groups[1].key);
+    for (const group of groups) {
+        const targets = group.children.map(node => locateFile(node.path));
+        assert.equal(targets.length, 2);
+        assert.equal(targets[0].id, targets[1].id);
+        assert.notEqual(targets[0].settings, targets[1].settings);
+        assert.ok(group.children.every(node => files.includes(node.file)));
+    }
+    const settings = files.find(file => locateFile(file.path)?.id === tasks[0].id && locateFile(file.path)?.settings);
+    settings.content = JSON.stringify({ ...JSON.parse(settings.content), name: '重命名' });
+    const renamed = buildWorkspaceTree([fixture], { searchQuery: '重命名' });
+    assert.deepEqual(renamed.visiblePaths.map(path => locateFile(path).id), [tasks[0].id, tasks[0].id]);
+    assert.equal(getGroups(renamed)[0].key, groups.find(group => locateFile(group.children[0].path).id === tasks[0].id).key);
+    assert.deepEqual(tasks.map(task => task.commands), ['/echo first', '/echo second']);
+});
 
 test('card display/search preserves raw keys, paths and files without decoding unrelated names', () => {
     for (const [index, name] of ['作者测试.png', 'Alice Smith.png', 'Alice.png', 'literal%20.png', 'a/b.png'].entries()) {
@@ -67,4 +98,13 @@ test('rendered card selections and save actions keep encoded targets', t => {
     selectedButton.click();
     container.querySelector('[data-action="save-file"]').click();
     assert.deepEqual(calls, [['directory', rootFor('作者测试.png')], ['file', paths[0]], ['save', paths[0]]]);
+    renderWorkspace(container, {
+        workspaceTree: tree,
+        selectedMatch: { source, file: source.files[1] },
+        workspaceState: { selectedFilePath: paths[1], viewerMode: 'original', treeExpandedKeys: [...collectDirectoryExpansionKeys(tree.nodes)] },
+        showSaveButton: true, canSaveFile: () => true, hasOriginalSnapshot: () => true,
+        onSaveFile: path => calls.push(['save-next', path]),
+    });
+    container.querySelector('[data-action="save-file"]').click();
+    assert.deepEqual(calls.at(-1), ['save-next', paths[1]]);
 });

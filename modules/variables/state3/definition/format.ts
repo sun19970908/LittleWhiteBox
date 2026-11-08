@@ -13,8 +13,8 @@ export const definitionSchema = {
     type: 'object', additionalProperties: false,
     required: ['format', 'name', 'schema', 'initial', 'access', 'rules', 'actions', 'constraints', 'functions', 'views'],
     properties: {
-        format: { const: FORMAT }, name: description, schema: { type: 'object' }, initial: {},
-        access: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'write', 'description'], properties: { path, write: { type: 'array', uniqueItems: true, items: { type: 'string' } }, description } } },
+        format: { const: FORMAT }, name: description, schema: { type: 'object' }, initial: { type: 'object' },
+        access: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'write', 'description'], properties: { path, write: { type: 'array', uniqueItems: true, items: { type: 'string' } }, description, update: description } } },
         rules: { type: 'array', items: named({ kind: { enum: ['derive', 'correct'] }, path, value: expression, description }) },
         actions: { type: 'array', items: named({ parameters: { type: 'object' }, description, requires: expression, effects: { type: 'array', minItems: 1, items: effect }, conversions: { type: 'array', items: effect } }) },
         triggers: { type: 'array', items: {

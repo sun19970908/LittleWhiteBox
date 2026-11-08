@@ -4,8 +4,8 @@ import type { CardFile } from '../definition/card-files.js';
 
 // The assistant's read/effect classification and runtime surface share this registry.
 const METHODS = Object.freeze({
-    tryDefinition: 'read', checkDraft: 'read', inspect: 'read', preview: 'read', previewRequest: 'read', lastResult: 'read', settings: 'read',
-    openDraft: 'write', saveDraft: 'write', saveCardDraft: 'write', enable: 'write', upgrade: 'write', apply: 'write', undo: 'write',
+    exportRules: 'read', prepareRuleImport: 'read', importRules: 'write', tryDefinition: 'read', checkDraft: 'read', inspect: 'read', preview: 'read', previewRequest: 'read', lastResult: 'read', settings: 'read',
+    openDraft: 'write', saveDraft: 'write', saveCardDraft: 'write', enable: 'write', apply: 'write', undo: 'write',
     saveSettings: 'write', retrySave: 'write',
 });
 interface Manifest {

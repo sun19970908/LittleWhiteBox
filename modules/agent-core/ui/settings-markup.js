@@ -2,7 +2,7 @@ import { buildWebSettingsMarkup } from './web-settings.js';
 import { buildSamplingSettingsMarkup } from './sampling-settings.js';
 import { buildVertexSettingsMarkup } from './vertex-settings.js';
 import { PROVIDER_OPTIONS } from '../provider-resolution.js';
-import { AGENT_JSAPI_PERMISSION_LABEL } from '../config.js';
+import { AGENT_JSAPI_PERMISSION_LABEL, AGENT_PERMISSION_MODE_LABEL } from '../config.js';
 function escapeHtml(text = '') {
     return String(text || '')
         .replace(/&/g, '&amp;')
@@ -159,12 +159,12 @@ export function buildAgentSettingsPanelMarkup(options = {}) {
     const delegateActive = normalizedPage === 'delegate';
     const assistantPermissionMarkup = showAssistantPermissions ? `
             <label>
-                <span>斜杠命令权限</span>
-                <select id="xb-assistant-permission-mode"></select>
-            </label>
-            <label>
                 <span>${escapeHtml(AGENT_JSAPI_PERMISSION_LABEL)}</span>
                 <select id="xb-assistant-jsapi-permission"></select>
+            </label>
+            <label>
+                <span>${escapeHtml(AGENT_PERMISSION_MODE_LABEL)}</span>
+                <select id="xb-assistant-permission-mode"></select>
             </label>` : '';
     const tabsMarkup = showDelegateSettings ? `
             <div class="xb-assistant-config-tabs" role="tablist" aria-label="API 配置分页">

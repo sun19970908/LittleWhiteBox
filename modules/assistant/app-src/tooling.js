@@ -6,6 +6,7 @@ import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
 import { LOOKUP_SCOPES, LOOKUP_SCOPE_PROJECT, LOOKUP_SCOPE_LOCAL } from '../shared/lookup-scope.js';
 import { INSPECT_PAGE_TOOL } from '../../live-page-inspection/tool-contract.ts';
 import { COPY as INSPECTION_COPY } from '../../live-page-inspection/contract.ts';
+import { READ_LOGS_TOOL, LOG_TOOL_COPY } from '../../debug-panel/log-tool-contract.js';
 
 function lookupScopeParameter(pathParameter = 'path') {
     return {
@@ -21,6 +22,7 @@ const LOOKUP_PATH_DESCRIPTION = 'Optional directory or exact file path. Project 
 // 工具名称常量
 // ============================================================
 export const TOOL_NAMES = {
+    READ_LOGS: READ_LOGS_TOOL.function.name,
     INSPECT_PAGE: INSPECT_PAGE_TOOL.function.name,
     CARD_FILES: CARD_TOOL.function.name,
     LS: 'LS',
@@ -57,6 +59,7 @@ export const TOOL_NAMES = {
 // 工具定义
 // ============================================================
 export const TOOL_DEFINITIONS = [
+    withPagedToolResult(READ_LOGS_TOOL),
     INSPECT_PAGE_TOOL,
     CARD_TOOL,
     {
@@ -272,7 +275,7 @@ export const TOOL_DEFINITIONS = [
                 'Use this when STscript or slash commands do not provide the needed entry point and you need to inspect, read, or operate on public frontend objects and state such as chatMetadata, saveMetadata, or public extension exports.',
                 'Code runs as an async function with normal JavaScript syntax and top-level await. Injected `ctx` and `getContext()` expose the documented context; `st` contains public script / extensions / slash namespaces, `st.state3` (ReadSkill builtin-state3), and `st.iframeRenderer` (modules/live-page-inspection/references/verify-changes.md). The API reference lists available entry points; nested data is read from the live instance.',
                 'The script itself returns the result; a return inside a callback only returns to that callback. Use return null when there is no data to return.',
-                'The tool classifies the code automatically as inspect, read, effect, or unknown; state-changing and unresolved operations go through user confirmation.',
+                'The tool classifies the code automatically as inspect, read, effect, or unknown. The Permission Mode section describes whether confirmation is required.',
                 'Returns ok, output, execution diagnostics, and any truncation flags. usedApis and calledApis describe references found in the code, not an execution trace. Return a focused result rather than an entire chat or metadata tree.',
                 'Cancellation stops waiting and checks for cancellation as the script resumes. Already-started saves or network requests are not undone. After a cancellation or execution error, inspect the affected state before retrying a modification.',
             ].join('\n'),
@@ -637,6 +640,8 @@ function truncateInlineText(value = '', limit = 220) {
 
 export function describeToolCall(name, args = {}) {
     switch (name) {
+        case TOOL_NAMES.READ_LOGS:
+            return LOG_TOOL_COPY.label;
         case TOOL_NAMES.INSPECT_PAGE:
             return INSPECTION_COPY.label;
         case TOOL_NAMES.CARD_FILES:
@@ -911,9 +916,13 @@ export function formatToolResultDisplay(message) {
         };
     }
 
-    if ((isWebTool(message.toolName) || message.toolName === TOOL_NAMES.TOOL_RESULT_READ)
+    if ((isWebTool(message.toolName) || message.toolName === TOOL_NAMES.READ_LOGS || message.toolName === TOOL_NAMES.TOOL_RESULT_READ)
         && parsed.data?.reference && typeof parsed.data.text === 'string') {
         return { summary: ACTIVITY_COPY.resultPage(parsed.data.offset, parsed.data.totalChars), details: parsed.data.text };
+    }
+
+    if (message.toolName === TOOL_NAMES.READ_LOGS && parsed.ok === true && Array.isArray(parsed.logs)) {
+        return { summary: LOG_TOOL_COPY.result, details: JSON.stringify(parsed, null, 2) };
     }
 
     if (message.toolName === TOOL_NAMES.WEB_FETCH) {

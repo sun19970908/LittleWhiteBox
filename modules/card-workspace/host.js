@@ -12,6 +12,7 @@ import { variableCardHost } from '../variables/state3/definition/card-host.js';
 
 const variableFiles = variableCardHost({ readCharacter, assertCard, request, publishCharacter, unconfirmed: COPY.unconfirmed });
 export const refreshVariableFiles = variableFiles.refresh;
+export const replaceVariableBundle = variableFiles.replace;
 
 export function currentCard() {
     const ctx = getContext(), card = ctx.characters[ctx.characterId];

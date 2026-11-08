@@ -42,7 +42,7 @@ for (const [operation, editing] of [
         window.prompt = () => 'C';
         window.confirm = () => true;
         let stored = { currentPresetName: 'A', presets: {
-            A: { provider: 'openai-compatible', modelConfigs: { 'openai-compatible': { model: 'saved' } } },
+            A: { provider: 'openai-compatible', model: 'saved' },
             B: {},
         } };
         let loads = 0;

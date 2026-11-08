@@ -2,12 +2,61 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
-import { transform } from 'esbuild';
+import { build, transform } from 'esbuild';
+import { builtinModules, createRequire } from 'node:module';
+import vm from 'node:vm';
+import { optionalRuntimeDependencies } from './optional-dependencies.mjs';
 import { root } from './browser-entries.mjs';
 import { publishBuild } from './publish.mjs';
 import { compareBuild } from './artifacts.mjs';
 import os from 'node:os';
 import { parseHTML } from 'linkedom';
+
+// Contract: optional log coloring must not become a host dependency or disable
+// logging; genuinely required imports still fail. Failure cost: unloadable release.
+test('optional log coloring is independent of installed packages while required dependencies remain required', async t => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lwb-optional-'));
+    t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+    for (const name of ['debug', 'ms']) {
+        fs.cpSync(path.join(root, 'node_modules', name), path.join(directory, 'node_modules', name), { recursive: true });
+    }
+    const bundle = contents => build({
+        stdin: { contents, resolveDir: directory }, absWorkingDir: directory,
+        bundle: true, platform: 'node', format: 'cjs', write: false, metafile: true,
+        plugins: [optionalRuntimeDependencies], logLevel: 'silent',
+    });
+    const builtins = new Set(builtinModules.flatMap(name => [name, `node:${name}`]));
+    let withoutColor;
+    for (const installed of [false, true]) {
+        if (installed) {
+            const optional = path.join(directory, 'node_modules/supports-color');
+            fs.mkdirSync(optional);
+            fs.writeFileSync(path.join(optional, 'index.js'), 'module.exports = { stderr: { level: 3 } };');
+        }
+        const result = await bundle(`
+            const debug = require('debug');
+            debug.enable('bundle-check');
+            const log = debug('bundle-check'), calls = [];
+            log.log = (...args) => calls.push(args);
+            log('value %d', 42);
+            module.exports = calls;
+        `);
+        assert.deepEqual(Object.values(result.metafile.outputs).flatMap(output => output.imports)
+            .filter(item => item.external && !builtins.has(item.path)), []);
+        assert.equal(Object.keys(result.metafile.inputs).some(file => file.includes('node_modules/supports-color')), false);
+        const source = result.outputFiles[0].text;
+        if (installed) { assert.equal(source, withoutColor); } else { withoutColor = source; }
+        const module = { exports: {} };
+        vm.runInNewContext(source, { module, exports: module.exports, require: createRequire(import.meta.url), process, console });
+        assert.equal(module.exports.length, 1);
+        assert.ok(module.exports[0].includes(42));
+        if (!installed) {
+            for (const name of ['supports-color', 'lwb-required-dependency']) {
+                await assert.rejects(bundle(`module.exports = require(${JSON.stringify(name)});`));
+            }
+        }
+    }
+});
 
 test('total artifact comparison rejects stale, missing and obsolete outputs without changing installed files', t => {
     const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'lwb-compare-'));

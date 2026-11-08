@@ -1,5 +1,8 @@
 import { CARD_EXTENSION } from './format.js';
 import { decodeBundle, locateVariableFile, prepareVariableWrite, projectVariableFiles, variableExtensionWrite, type CardFile } from './card-files.js';
+import { compileDefinition } from './compile.js';
+import { reject } from '../engine/diagnostics.js';
+import type { Bundle } from '../types.js';
 import { digest } from './digest.js';
 import { readFiles, storeFiles, observeTree } from '../../../card-workspace/workspace.js';
 
@@ -21,6 +24,16 @@ export function variableCardHost(host: Host) {
     };
     return {
         read,
+        async replace(avatar: string, bundle: Bundle, previous: string, signal?: AbortSignal) {
+            const compiled = compileDefinition(bundle);
+            const card = await host.readCharacter(avatar, signal);
+            if (digest(card.data.extensions?.[CARD_EXTENSION] ?? null) !== previous) {reject('rules-conflict');}
+            host.assertCard(avatar);
+            await host.request('/api/characters/merge-attributes', variableExtensionWrite(card, compiled.bundle), signal);
+            const saved = await host.readCharacter(avatar, signal);
+            if (digest(decodeBundle(saved.data.extensions?.[CARD_EXTENSION])) !== digest(compiled.bundle)) {throw new Error(host.unconfirmed);}
+            host.publishCharacter(saved);
+        },
         async save(target: Target, file: CardFile, signal?: AbortSignal, companions: { file: CardFile }[] = []) {
             const files = [file, ...companions.map(item => item.file)];
             const card = await host.readCharacter(target.avatar, signal);

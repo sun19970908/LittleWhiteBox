@@ -28,7 +28,7 @@ const SETTINGS = {
     presets: {
         主预设: {
             provider: 'openai-compatible',
-            modelConfigs: { 'openai-compatible': { baseUrl: 'https://main.example/v1', model: 'm', apiKey: 'k', toolMode: 'native' } },
+            baseUrl: 'https://main.example/v1', model: 'm', apiKey: 'k', toolMode: 'native',
         },
     },
 };

@@ -1,7 +1,7 @@
-import type { Result, RunOptions } from '../types.js';
+import type { Bundle, Result, RunOptions } from '../types.js';
 export interface Draft { root: string; avatar: string; name: string; files: CardFile[] }
 import { runCardFiles } from '../../../card-workspace/service.js';
-import { currentCard, readCharacter } from '../../../card-workspace/host.js';
+import { currentCard, readCharacter, replaceVariableBundle } from '../../../card-workspace/host.js';
 import { readFiles } from '../../../card-workspace/workspace.js';
 import { workspaceRepository } from '../../../assistant/shared/workspace-repository.js';
 import { upsertLocalSourceFile } from '../../../assistant/shared/local-workspace-kernel.js';
@@ -9,6 +9,7 @@ import { buildWorkspacePreconditions } from '../../../assistant/shared/workspace
 import { INTERNAL_WORKSPACE_TOOL_NAMES } from '../../../assistant/shared/workspace-protocol.js';
 import { CARD_EXTENSION, DEFINITION_FILE } from './format.js';
 import { variableBundleFromFiles, decodeBundle, type CardFile } from './card-files.js';
+import { digest } from './digest.js';
 import { compileDefinition } from './compile.js';
 import { initialize, settle } from '../engine/settle.js';
 import { diagnostic, reject } from '../engine/diagnostics.js';
@@ -65,4 +66,22 @@ export async function readCardBundle(signal?: AbortSignal) {
     const bundle = card.data.extensions?.[CARD_EXTENSION];
     if (!bundle) {reject('definition-missing');}
     return decodeBundle(bundle);
+}
+
+export async function exportRules({ signal }: RunOptions = {}): Promise<Bundle> {
+    return compileDefinition(await readCardBundle(signal)).bundle;
+}
+export async function prepareRuleImport(text: string, { signal }: RunOptions = {}) {
+    const bundle = compileDefinition(JSON.parse(text)).bundle;
+    const avatar = currentCard().avatar;
+    const card = await readCharacter(avatar, signal);
+    if (currentCard().avatar !== avatar) {reject('stale-target');}
+    return { bundle, avatar, previous: digest(card.data.extensions?.[CARD_EXTENSION] ?? null) };
+}
+export async function importRules(prepared: Awaited<ReturnType<typeof prepareRuleImport>>, { signal }: RunOptions = {}) {
+    if (currentCard().avatar !== prepared.avatar) {reject('stale-target');}
+    await replaceVariableBundle(prepared.avatar, prepared.bundle, prepared.previous, signal);
+    // Existing workspace/editor drafts remain drafts. Their card baseline detects
+    // this replacement on save; importing a rule pack never discards author edits.
+    return { ok: true as const };
 }

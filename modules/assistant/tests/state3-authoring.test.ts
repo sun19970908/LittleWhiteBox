@@ -25,7 +25,7 @@ const run = runRequest as unknown as (input: JsRequest) => Promise<{ ok: boolean
 
 async function loadDraftChecker(): Promise<typeof DraftChecker> {
     const authoring = fileURLToPath(new URL('../../variables/state3/definition/authoring.ts', import.meta.url));
-    const pure = new Set(['./format.js', './card-files.js', './compile.js', '../engine/settle.js', '../engine/diagnostics.js']);
+    const pure = new Set(['./digest.js', './format.js', './card-files.js', './compile.js', '../engine/settle.js', '../engine/diagnostics.js']);
     const output = await build({
         stdin: { contents: 'export {checkDraft} from ' + JSON.stringify(authoring) + ';', resolveDir: path.dirname(authoring) },
         bundle: true, write: false, format: 'esm', platform: 'node', logLevel: 'silent',
@@ -37,7 +37,7 @@ async function loadDraftChecker(): Promise<typeof DraftChecker> {
                     : { path: args.path, namespace: 'host-stub' };
             });
             builder.onLoad({ filter: /.*/, namespace: 'host-stub' }, () => ({ contents:
-                'export const runCardFiles=undefined,currentCard=undefined,readCharacter=undefined,readFiles=undefined,workspaceRepository=undefined,upsertLocalSourceFile=undefined,buildWorkspacePreconditions=undefined,INTERNAL_WORKSPACE_TOOL_NAMES=undefined;' }));
+                'export const runCardFiles=undefined,currentCard=undefined,readCharacter=undefined,replaceVariableBundle=undefined,readFiles=undefined,workspaceRepository=undefined,upsertLocalSourceFile=undefined,buildWorkspacePreconditions=undefined,INTERNAL_WORKSPACE_TOOL_NAMES=undefined;' }));
         } }],
     });
     // eslint-disable-next-line no-unsanitized/method -- Execute compiled local production code, never model input.
@@ -52,7 +52,7 @@ test('V3 assistant surface preserves read/effect classification and excludes pri
     for (const name of ['inspect', 'preview', 'previewRequest', 'tryDefinition', 'checkDraft', 'settings']) {
         assert.equal(analyze({ code: 'return await st.state3.' + name + '();', manifest }).requestKind, 'read');
     }
-    for (const name of ['apply', 'undo', 'enable', 'upgrade', 'openDraft', 'saveDraft', 'saveCardDraft']) {
+    for (const name of ['apply', 'undo', 'enable', 'importRules', 'openDraft', 'saveDraft', 'saveCardDraft']) {
         assert.equal(analyze({ code: 'return await st.state3.' + name + '();', apiPaths: ['st.state3.' + name], manifest }).requestKind, 'effect');
     }
     const result = await run({ code: 'return await st.state3.apply([]);', purpose: 'Commit', expectedOutput: 'Result', apiPaths: ['st.state3.apply'], manifest, st: { state3: api } });

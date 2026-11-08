@@ -11,7 +11,7 @@ test('the shipped Agent entry supports caller-owned replay and host invalidation
     const core = await import(entry.href);
     const settings = core.normalizeAgentSettings({
         provider: 'google',
-        modelConfigs: { google: { model: 'fixture', apiKey: '', maxTokens: 512 } },
+        model: 'fixture', apiKey: '', maxTokens: 512,
     });
     let enabled = true;
     let loads = 0;

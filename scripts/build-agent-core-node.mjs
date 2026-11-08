@@ -1,6 +1,7 @@
 import { build } from 'esbuild';
 import { outputRoot } from './build/output-root.mjs';
 import { stagedInputs } from './build/staged-inputs.mjs';
+import { optionalRuntimeDependencies } from './build/optional-dependencies.mjs';
 import { builtinModules } from 'node:module';
 import { signRuntime } from './build/runtime-signing.mjs';
 import {
@@ -28,20 +29,6 @@ const licensesPath = resolve(outputDirectory, 'THIRD_PARTY_LICENSES.txt');
 const nodeModulesRoot = resolve(projectRoot, 'node_modules');
 const packageLockPath = resolve(projectRoot, 'package-lock.json');
 const builtins = new Set(builtinModules.flatMap(name => [name, `node:${name}`]));
-
-const optionalNativeDependencyPlugin = {
-    name: 'optional-native-dependency-stubs',
-    setup(context) {
-        context.onResolve({ filter: /^(bufferutil|utf-8-validate)$/ }, args => ({
-            path: args.path,
-            namespace: 'optional-native-dependency',
-        }));
-        context.onLoad({ filter: /.*/, namespace: 'optional-native-dependency' }, args => ({
-            contents: `throw new Error(${JSON.stringify(`${args.path} is not bundled`)});`,
-            loader: 'js',
-        }));
-    },
-};
 
 function normalizeLicense(value) {
     if (typeof value === 'string' && value.trim()) return value.trim();
@@ -216,7 +203,7 @@ async function buildNodeBundle({ entryPoint, outfile, banner, plugins = [] }) {
         // Escape literal newlines instead of emitting templates with trailing spaces.
         supported: { 'template-literal': false },
         packages: 'bundle',
-        plugins: [stagedInputs, optionalNativeDependencyPlugin, ...plugins],
+        plugins: [stagedInputs, optionalRuntimeDependencies, ...plugins],
         legalComments: 'eof',
         metafile: true,
         minify: true,

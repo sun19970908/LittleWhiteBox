@@ -172,8 +172,8 @@ test('current Vertex controls are alias-independent and do not send unsupported 
 
 test('relay URL, credentials, flags and opaque model discovery survive main/delegate/text presets', async t => {
     const config = { ...relay, vertex: { authMode: 'relay', streamFunctionCallArguments: false } };
-    const saved = normalizeAgentConfig({ presets: { main: { provider: config.provider, modelConfigs: { [config.provider]: config } } },
-        currentPresetName: 'main', delegateConfig: { provider: config.provider, modelConfigs: { [config.provider]: { ...config, baseUrl: 'https://delegate.invalid' } } } });
+    const saved = normalizeAgentConfig({ presets: { main: config },
+        currentPresetName: 'main', delegateConfig: { ...config, baseUrl: 'https://delegate.invalid' } });
     const restored = normalizeAgentConfig(JSON.parse(JSON.stringify(saved)));
     assert.equal(resolveActiveProviderConfig(restored).baseUrl, relay.baseUrl);
     assert.equal(resolveActiveProviderConfig(restored).vertex.streamFunctionCallArguments, false);

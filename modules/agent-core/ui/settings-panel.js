@@ -3,12 +3,13 @@ export { pullModelsForProvider } from '../model-list.js';
 import {
     AGENT_JSAPI_PERMISSION_OPTIONS,
     AGENT_PERMISSION_MODE_OPTIONS,
+    AGENT_SETTINGS_CONFIG_VERSION,
     DEFAULT_PRESET_NAME,
     buildDefaultPreset,
     normalizeAgentConfig,
     normalizeJsApiPermission,
     normalizeMaxTokens,
-    normalizeModelConfigs,
+    normalizeAgentPreset,
     normalizePermissionMode,
     normalizePresetName,
 } from '../config.js';
@@ -27,13 +28,14 @@ import {
 } from '../reasoning-capabilities.js';
 import {
     normalizeReasoningConfig,
+    REASONING_MODE_OPTIONS,
 } from '../reasoning-config.js';
 import { WEB_PROVIDERS, normalizeWebSettings } from '../web/settings.js';
 import { bindWebSettingsGuide, readWebSettingsForm, syncWebSettingsForm } from './web-settings.js';
 import { getModelListAuthOptions, normalizeModelListAuth, supportsModelListAuth } from '../model-list-auth.js';
 import { SAMPLING_PARAMETERS, normalizeSampling } from '../sampling.js';
 import { readSamplingForm, syncSamplingForm, bindSamplingSettings, validateSamplingForm } from './sampling-settings.js';
-import { normalizeVertexConfig, vertexConfigFields, vertexRuntimeFields, VERTEX_PROVIDER } from '../vertex-config.js';
+import { normalizeVertexConfig, vertexRuntimeFields, VERTEX_PROVIDER } from '../vertex-config.js';
 import { readVertexSettings, syncVertexSettings, bindVertexSettings } from './vertex-settings.js';
 
 function refillSelect(select, options, placeholderLabel = '') {
@@ -53,6 +55,13 @@ function refillSelect(select, options, placeholderLabel = '') {
     });
 }
 
+function syncSelectValue(select, options, value) {
+    const choices = options.some(option => option.value === value)
+        ? options : [...options, { value, label: value }];
+    refillSelect(select, choices);
+    select.value = value;
+}
+
 // iOS（TT WKWebView）键盘弹起时改写表单并重渲染，会把页面滚出顶部且手势滚不回来；
 // 点「拉取模型」时先主动收起键盘（等价于用户手动收键盘的自救），渲染后再 clamp 滚动兜底。
 function collapseKeyboardBeforeRerender() {
@@ -69,33 +78,13 @@ function clampWindowScrollAfterRender() {
     if (current > max) window.scrollTo(0, max);
 }
 
-function buildReasoningDraftFields(provider = '', providerConfig = {}) {
+function buildReasoningDraftFields(providerConfig = {}) {
     const reasoning = normalizeReasoningConfig(providerConfig.reasoning);
-    const capability = resolveReasoningCapability({
-        provider,
-        baseUrl: providerConfig.baseUrl,
-        model: providerConfig.model,
-    });
-    const fields = {
+    return {
         reasoningMode: reasoning.mode,
-        reasoningEffort: '',
-        reasoningBudgetTokens: undefined,
+        reasoningEffort: reasoning.effort || '',
+        reasoningBudgetTokens: reasoning.budgetTokens,
     };
-    if (capability.intensity.kind === 'effort') {
-        fields.reasoningEffort = capability.intensity.values.includes(reasoning.effort)
-            ? reasoning.effort
-            : capability.intensity.defaultValue;
-    } else if (capability.intensity.kind === 'budget') {
-        const budgetTokens = reasoning.budgetTokens;
-        const validAuto = capability.intensity.allowAuto && budgetTokens === -1;
-        const validRange = Number.isInteger(budgetTokens)
-            && budgetTokens >= capability.intensity.min
-            && budgetTokens <= capability.intensity.max;
-        fields.reasoningBudgetTokens = validAuto || validRange
-            ? budgetTokens
-            : capability.intensity.defaultValue;
-    }
-    return fields;
 }
 
 function normalizeReasoningDraft(source = {}) {
@@ -227,18 +216,16 @@ export function createAgentSettingsPanel(deps = {}) {
         const normalizedPresetName = resolveExistingPresetName(presetName, DEFAULT_PRESET_NAME);
         const sourcePreset = preset && typeof preset === 'object' ? preset : buildDefaultPreset();
         const delegateProvider = sourcePreset.provider || 'openai-compatible';
-        const delegateModelConfigs = normalizeModelConfigs(sourcePreset.modelConfigs || {});
-        const delegateProviderConfig = delegateModelConfigs[delegateProvider] || {};
-        const reasoningFields = buildReasoningDraftFields(delegateProvider, delegateProviderConfig);
+        const delegateProviderConfig = normalizeAgentPreset(sourcePreset);
+        const reasoningFields = buildReasoningDraftFields(delegateProviderConfig);
         return {
             delegatePresetName: normalizedPresetName,
             delegateProvider,
-            delegateModelConfigs,
             delegateBaseUrl: String(delegateProviderConfig.baseUrl || ''),
             delegateModel: String(delegateProviderConfig.model || ''),
             delegateApiKey: String(delegateProviderConfig.apiKey || ''),
             delegateVertex: normalizeVertexConfig(delegateProviderConfig.vertex),
-            delegateModelListAuth: normalizeModelListAuth(delegateProviderConfig.modelListAuth, delegateProvider),
+            delegateModelListAuth: delegateProviderConfig.modelListAuth,
             delegateTemperature: normalizeTemperature(delegateProviderConfig.temperature, 1),
             delegateMaxTokens: normalizeMaxTokens(delegateProviderConfig.maxTokens),
             delegateSendTemperature: shouldSendTemperature(delegateProviderConfig),
@@ -250,16 +237,15 @@ export function createAgentSettingsPanel(deps = {}) {
         };
     }
 
-    function buildProviderDraftFields(provider = 'openai-compatible', modelConfigs = {}) {
-        const normalizedConfigs = normalizeModelConfigs(modelConfigs || {});
-        const providerConfig = normalizedConfigs[provider] || {};
-        const reasoningFields = buildReasoningDraftFields(provider, providerConfig);
+    function buildProviderDraftFields(preset = {}) {
+        const providerConfig = normalizeAgentPreset(preset);
+        const reasoningFields = buildReasoningDraftFields(providerConfig);
         return {
             baseUrl: String(providerConfig.baseUrl || ''),
             model: String(providerConfig.model || ''),
             apiKey: String(providerConfig.apiKey || ''),
             vertex: normalizeVertexConfig(providerConfig.vertex),
-            modelListAuth: normalizeModelListAuth(providerConfig.modelListAuth, provider),
+            modelListAuth: providerConfig.modelListAuth,
             temperature: normalizeTemperature(providerConfig.temperature, 1),
             maxTokens: normalizeMaxTokens(providerConfig.maxTokens),
             sendTemperature: shouldSendTemperature(providerConfig),
@@ -269,33 +255,11 @@ export function createAgentSettingsPanel(deps = {}) {
         };
     }
 
-    function buildDelegateProviderDraftFields(provider = 'openai-compatible', modelConfigs = {}) {
-        const normalizedConfigs = normalizeModelConfigs(modelConfigs || {});
-        const providerConfig = normalizedConfigs[provider] || {};
-        const reasoningFields = buildReasoningDraftFields(provider, providerConfig);
-        return {
-            delegateBaseUrl: String(providerConfig.baseUrl || ''),
-            delegateModel: String(providerConfig.model || ''),
-            delegateApiKey: String(providerConfig.apiKey || ''),
-            delegateVertex: normalizeVertexConfig(providerConfig.vertex),
-            delegateModelListAuth: normalizeModelListAuth(providerConfig.modelListAuth, provider),
-            delegateTemperature: normalizeTemperature(providerConfig.temperature, 1),
-            delegateMaxTokens: normalizeMaxTokens(providerConfig.maxTokens),
-            delegateSendTemperature: shouldSendTemperature(providerConfig),
-            delegateReasoningMode: reasoningFields.reasoningMode,
-            delegateReasoningEffort: reasoningFields.reasoningEffort,
-            delegateReasoningBudgetTokens: reasoningFields.reasoningBudgetTokens,
-            delegateToolMode: providerConfig.toolMode || 'native',
-            delegateSampling: normalizeSampling(providerConfig.sampling),
-        };
-    }
-
     function buildDraftFromPreset(presetName, preset, sourceConfig = state.config) {
         const normalizedPresetName = normalizePresetName(presetName || DEFAULT_PRESET_NAME);
         const sourcePreset = preset && typeof preset === 'object' ? preset : buildDefaultPreset();
         const provider = sourcePreset.provider || 'openai-compatible';
-        const modelConfigs = normalizeModelConfigs(sourcePreset.modelConfigs || {});
-        const providerDraftFields = buildProviderDraftFields(provider, modelConfigs);
+        const providerDraftFields = buildProviderDraftFields(sourcePreset);
         const delegatePresetName = resolveExistingPresetName(sourceConfig?.delegatePresetName, normalizedPresetName);
         const delegateSource = sourceConfig?.delegateConfig && typeof sourceConfig.delegateConfig === 'object'
             ? sourceConfig.delegateConfig
@@ -305,7 +269,6 @@ export function createAgentSettingsPanel(deps = {}) {
             currentPresetName: normalizedPresetName,
             presetDraftName: normalizedPresetName,
             provider,
-            modelConfigs,
             ...providerDraftFields,
             ...normalizeWebSettings(sourceConfig),
             permissionMode: normalizePermissionMode(sourcePreset.permissionMode),
@@ -342,7 +305,7 @@ export function createAgentSettingsPanel(deps = {}) {
             ?? '';
         const reasoning = normalizeReasoningDraft({
             mode: root.querySelector('#xb-assistant-reasoning-mode')?.value || draft.reasoningMode,
-            effort: root.querySelector('#xb-assistant-reasoning-effort')?.value || draft.reasoningEffort,
+            effort: root.querySelector('#xb-assistant-reasoning-effort')?.value ?? draft.reasoningEffort,
             budgetTokens: root.querySelector('#xb-assistant-reasoning-budget')?.value
                 ?? draft.reasoningBudgetTokens,
         });
@@ -350,7 +313,7 @@ export function createAgentSettingsPanel(deps = {}) {
             mode: root.querySelector('#xb-assistant-delegate-reasoning-mode')?.value
                 || draft.delegateReasoningMode,
             effort: root.querySelector('#xb-assistant-delegate-reasoning-effort')?.value
-                || draft.delegateReasoningEffort,
+                ?? draft.delegateReasoningEffort,
             budgetTokens: root.querySelector('#xb-assistant-delegate-reasoning-budget')?.value
                 ?? draft.delegateReasoningBudgetTokens,
         });
@@ -358,58 +321,33 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl,
             model,
             apiKey: root.querySelector('#xb-assistant-api-key')?.value.trim() || '',
-            ...vertexConfigFields(provider, readVertexSettings(root, draft.vertex)),
-            ...(supportsModelListAuth(provider) ? { modelListAuth: normalizeModelListAuth(
-                root.querySelector('#xb-assistant-model-list-auth')?.value ?? draft.modelListAuth,
-                provider,
-            ) } : {}),
+            vertex: readVertexSettings(root, draft.vertex),
+            modelListAuth: root.querySelector('#xb-assistant-model-list-auth')?.value ?? draft.modelListAuth,
             temperature: normalizeTemperature(root.querySelector('#xb-assistant-temperature')?.value, draft.temperature ?? 1),
             maxTokens: normalizeMaxTokens(root.querySelector('#xb-assistant-max-tokens')?.value, draft.maxTokens),
             sendTemperature: root.querySelector('#xb-assistant-send-temperature')?.checked ?? Boolean(draft.sendTemperature ?? true),
             reasoning,
-            toolMode: isToolModeProvider(provider)
-                ? (root.querySelector('#xb-assistant-tool-mode')?.value || draft.toolMode || 'native')
-                : undefined,
+            toolMode: root.querySelector('#xb-assistant-tool-mode')?.value || draft.toolMode,
             sampling: readSamplingForm(root, provider, draft.sampling),
         };
         const delegateProviderConfig = {
             baseUrl: delegateBaseUrl,
             model: delegateModel,
             apiKey: root.querySelector('#xb-assistant-delegate-api-key')?.value.trim() ?? draft.delegateApiKey ?? '',
-            ...vertexConfigFields(delegateProvider, readVertexSettings(root, draft.delegateVertex, 'delegate')),
-            ...(supportsModelListAuth(delegateProvider) ? { modelListAuth: normalizeModelListAuth(
-                root.querySelector('#xb-assistant-delegate-model-list-auth')?.value ?? draft.delegateModelListAuth,
-                delegateProvider,
-            ) } : {}),
+            vertex: readVertexSettings(root, draft.delegateVertex, 'delegate'),
+            modelListAuth: root.querySelector('#xb-assistant-delegate-model-list-auth')?.value ?? draft.delegateModelListAuth,
             temperature: normalizeTemperature(root.querySelector('#xb-assistant-delegate-temperature')?.value, draft.delegateTemperature ?? 1),
             maxTokens: normalizeMaxTokens(root.querySelector('#xb-assistant-delegate-max-tokens')?.value, draft.delegateMaxTokens),
             sendTemperature: root.querySelector('#xb-assistant-delegate-send-temperature')?.checked ?? Boolean(draft.delegateSendTemperature ?? true),
             reasoning: delegateReasoning,
-            toolMode: isToolModeProvider(delegateProvider)
-                ? (root.querySelector('#xb-assistant-delegate-tool-mode')?.value || draft.delegateToolMode || 'native')
-                : undefined,
+            toolMode: root.querySelector('#xb-assistant-delegate-tool-mode')?.value || draft.delegateToolMode,
             sampling: readSamplingForm(root, delegateProvider, draft.delegateSampling, 'delegate'),
-        };
-        const modelConfigs = {
-            ...normalizeModelConfigs(draft.modelConfigs || {}),
-            [provider]: {
-                ...(normalizeModelConfigs(draft.modelConfigs || {})[provider] || {}),
-                ...providerConfig,
-            },
-        };
-        const delegateModelConfigs = {
-            ...normalizeModelConfigs(draft.delegateModelConfigs || {}),
-            [delegateProvider]: {
-                ...(normalizeModelConfigs(draft.delegateModelConfigs || {})[delegateProvider] || {}),
-                ...delegateProviderConfig,
-            },
         };
         return {
             ...draft,
             currentPresetName: draft.currentPresetName,
             presetDraftName: normalizePresetName(root.querySelector('#xb-assistant-preset-name')?.value),
             provider,
-            modelConfigs,
             baseUrl: providerConfig.baseUrl,
             model: providerConfig.model,
             apiKey: providerConfig.apiKey,
@@ -428,7 +366,6 @@ export function createAgentSettingsPanel(deps = {}) {
             jsApiPermission: normalizeJsApiPermission(root.querySelector('#xb-assistant-jsapi-permission')?.value || draft.jsApiPermission),
             delegatePresetName: resolveExistingPresetName(root.querySelector('#xb-assistant-delegate-preset-select')?.value || draft.delegatePresetName, draft.currentPresetName),
             delegateProvider,
-            delegateModelConfigs,
             delegateBaseUrl: delegateProviderConfig.baseUrl,
             delegateModel: delegateProviderConfig.model,
             delegateApiKey: delegateProviderConfig.apiKey,
@@ -456,8 +393,8 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: String(draft.baseUrl || ''),
             model: String(draft.model || ''),
             apiKey: String(draft.apiKey || ''),
-            ...vertexConfigFields(draft.provider, draft.vertex),
-            ...(supportsModelListAuth(draft.provider) ? { modelListAuth: normalizeModelListAuth(draft.modelListAuth, draft.provider) } : {}),
+            vertex: normalizeVertexConfig(draft.vertex),
+            modelListAuth: draft.modelListAuth,
             temperature: normalizeTemperature(draft.temperature, 1),
             maxTokens: normalizeMaxTokens(draft.maxTokens),
             sendTemperature: Boolean(draft.sendTemperature ?? true),
@@ -466,9 +403,7 @@ export function createAgentSettingsPanel(deps = {}) {
                 effort: draft.reasoningEffort,
                 budgetTokens: draft.reasoningBudgetTokens,
             }),
-            toolMode: isToolModeProvider(draft.provider)
-                ? (draft.toolMode || 'native')
-                : undefined,
+            toolMode: draft.toolMode,
             sampling: normalizeSampling(draft.sampling),
         };
     }
@@ -478,8 +413,8 @@ export function createAgentSettingsPanel(deps = {}) {
             baseUrl: String(draft.delegateBaseUrl || ''),
             model: String(draft.delegateModel || ''),
             apiKey: String(draft.delegateApiKey || ''),
-            ...vertexConfigFields(draft.delegateProvider, draft.delegateVertex),
-            ...(supportsModelListAuth(draft.delegateProvider) ? { modelListAuth: normalizeModelListAuth(draft.delegateModelListAuth, draft.delegateProvider) } : {}),
+            vertex: normalizeVertexConfig(draft.delegateVertex),
+            modelListAuth: draft.delegateModelListAuth,
             temperature: normalizeTemperature(draft.delegateTemperature, 1),
             maxTokens: normalizeMaxTokens(draft.delegateMaxTokens),
             sendTemperature: Boolean(draft.delegateSendTemperature ?? true),
@@ -488,25 +423,16 @@ export function createAgentSettingsPanel(deps = {}) {
                 effort: draft.delegateReasoningEffort,
                 budgetTokens: draft.delegateReasoningBudgetTokens,
             }),
-            toolMode: isToolModeProvider(draft.delegateProvider)
-                ? (draft.delegateToolMode || 'native')
-                : undefined,
+            toolMode: draft.delegateToolMode,
             sampling: normalizeSampling(draft.delegateSampling),
         };
     }
 
     function buildDelegateConfigFromDraft(draft = ensureConfigDraft()) {
         const provider = draft.delegateProvider || 'openai-compatible';
-        const modelConfigs = normalizeModelConfigs(draft.delegateModelConfigs || {});
         return {
             provider,
-            modelConfigs: {
-                ...modelConfigs,
-                [provider]: {
-                    ...(modelConfigs[provider] || {}),
-                    ...buildDelegateProviderConfigFromDraft(draft),
-                },
-            },
+            ...buildDelegateProviderConfigFromDraft(draft),
         };
     }
 
@@ -564,36 +490,6 @@ export function createAgentSettingsPanel(deps = {}) {
                 budgetTokens: draft.delegateReasoningBudgetTokens,
             }),
         };
-    }
-
-    function getConfigReasoningErrors(config = {}) {
-        const errors = [];
-        Object.entries(config.presets || {}).forEach(([name, preset]) => {
-            const provider = preset?.provider || 'openai-compatible';
-            const providerConfig = preset?.modelConfigs?.[provider] || {};
-            const runtime = resolveRuntimeReasoning({
-                provider,
-                baseUrl: providerConfig.baseUrl,
-                model: providerConfig.model,
-                maxTokens: normalizeMaxTokens(providerConfig.maxTokens),
-            }, providerConfig.reasoning);
-            if (runtime.valid === false) {
-                errors.push(`预设“${name}”：${runtime.error}`);
-            }
-        });
-
-        const delegateProvider = config.delegateConfig?.provider || 'openai-compatible';
-        const delegateProviderConfig = config.delegateConfig?.modelConfigs?.[delegateProvider] || {};
-        const delegateRuntime = resolveRuntimeReasoning({
-            provider: delegateProvider,
-            baseUrl: delegateProviderConfig.baseUrl,
-            model: delegateProviderConfig.model,
-            maxTokens: normalizeMaxTokens(delegateProviderConfig.maxTokens),
-        }, delegateProviderConfig.reasoning);
-        if (delegateRuntime.valid === false) {
-            errors.push(`分身模型：${delegateRuntime.error}`);
-        }
-        return errors;
     }
 
     function getActiveProviderConfig(options = {}) {
@@ -670,7 +566,7 @@ export function createAgentSettingsPanel(deps = {}) {
                 : draft.reasoningBudgetTokens,
         };
         const capability = resolveReasoningCapability({ provider, baseUrl, model });
-        const fields = buildReasoningDraftFields(provider, {
+        const fields = buildReasoningDraftFields({
             baseUrl,
             model,
             reasoning: source,
@@ -695,19 +591,20 @@ export function createAgentSettingsPanel(deps = {}) {
                 || `能力配置：${capability.profileId}`;
         }
         if (effortSelect) {
-            refillSelect(effortSelect, getReasoningEffortOptions(capability));
-            effortSelect.value = effort;
+            syncSelectValue(effortSelect, [
+                { value: '', label: REASONING_MODE_OPTIONS[0].label }, ...getReasoningEffortOptions(capability),
+            ], effort);
         }
         if (effortWrap) {
             effortWrap.style.display = mode === 'on'
                 && capability.intensity.kind === 'effort' ? '' : 'none';
         }
-        if (budgetInput && capability.intensity.kind === 'budget') {
-            budgetInput.min = capability.intensity.allowAuto
-                ? '-1'
-                : String(capability.intensity.min);
-            budgetInput.max = String(capability.intensity.max);
-            budgetInput.value = String(budgetTokens);
+        if (budgetInput) {
+            budgetInput.value = budgetTokens === undefined ? '' : String(budgetTokens);
+            if (capability.intensity.kind === 'budget') {
+                budgetInput.min = capability.intensity.allowAuto ? '-1' : String(capability.intensity.min);
+                budgetInput.max = String(capability.intensity.max);
+            }
         }
         if (budgetWrap) {
             budgetWrap.style.display = mode === 'on'
@@ -737,8 +634,7 @@ export function createAgentSettingsPanel(deps = {}) {
         const select = root.querySelector(`${prefix}-model-list-auth`);
         if (wrap) wrap.style.display = supportsModelListAuth(provider) ? '' : 'none';
         if (select) {
-            refillSelect(select, getModelListAuthOptions(provider));
-            select.value = normalizeModelListAuth(value, provider);
+            syncSelectValue(select, getModelListAuthOptions(provider), value);
         }
     }
 
@@ -1105,6 +1001,7 @@ export function createAgentSettingsPanel(deps = {}) {
 
     function buildConfigSavePayload(config) {
         return {
+            configVersion: AGENT_SETTINGS_CONFIG_VERSION,
             workspaceFileName: config?.workspaceFileName || '',
             jsApiPermission: normalizeJsApiPermission(config?.jsApiPermission),
             ...normalizeWebSettings(config),
@@ -1118,11 +1015,6 @@ export function createAgentSettingsPanel(deps = {}) {
 
     function validateAndSaveConfig(nextConfig, options = {}) {
         const normalizedConfig = normalizeAgentConfig(nextConfig);
-        const reasoningErrors = getConfigReasoningErrors(normalizedConfig);
-        if (reasoningErrors.length) {
-            showToast?.(reasoningErrors[0]);
-            return false;
-        }
 
         commitPanelConfig(normalizedConfig, { saved: true });
         const presetName = normalizePresetName(
@@ -1142,18 +1034,11 @@ export function createAgentSettingsPanel(deps = {}) {
     function presetFromDraft(draft) {
         const currentPresetName = draft.currentPresetName;
         const currentPreset = (state.config?.presets || {})[currentPresetName] || buildDefaultPreset();
-        const draftModelConfigs = normalizeModelConfigs(draft.modelConfigs || currentPreset.modelConfigs || {});
         return {
             ...currentPreset,
             provider: draft.provider,
             permissionMode: normalizePermissionMode(draft.permissionMode),
-            modelConfigs: {
-                ...draftModelConfigs,
-                [draft.provider]: {
-                    ...(draftModelConfigs[draft.provider] || {}),
-                    ...buildProviderConfigFromDraft(draft),
-                },
-            },
+            ...buildProviderConfigFromDraft(draft),
         };
     }
 
@@ -1176,18 +1061,9 @@ export function createAgentSettingsPanel(deps = {}) {
         // Compare form values, not whether a default was explicitly stored.
         // This projection never changes the persisted configuration.
         for (const preset of [...Object.values(payload.presets), payload.delegateConfig]) {
-            for (const [provider, modelConfig] of Object.entries(preset.modelConfigs)) {
-                const reasoning = buildReasoningDraftFields(provider, modelConfig);
-                modelConfig.reasoning = normalizeReasoningConfig({
-                    mode: reasoning.reasoningMode,
-                    effort: reasoning.reasoningEffort,
-                    budgetTokens: reasoning.reasoningBudgetTokens,
-                });
-                modelConfig.temperature = normalizeTemperature(modelConfig.temperature, 1);
-                modelConfig.sampling = Object.fromEntries(SAMPLING_PARAMETERS.map(parameter => [
-                    parameter.key, modelConfig.sampling[parameter.key] || { enabled: false, value: parameter.value },
-                ]));
-            }
+            preset.sampling = Object.fromEntries(SAMPLING_PARAMETERS.map(parameter => [
+                parameter.key, preset.sampling[parameter.key] || { enabled: false, value: parameter.value },
+            ]));
         }
         return JSON.stringify(payload);
     }
@@ -1229,8 +1105,6 @@ export function createAgentSettingsPanel(deps = {}) {
         }
         if (rejectExistingPresetName(nextPresetName)) return;
         const nextPreset = presetFromDraft(draft);
-        const reasoningErrors = getConfigReasoningErrors(normalizeAgentConfig({ presets: { [nextPresetName]: nextPreset } }));
-        if (reasoningErrors.length) { showToast?.(reasoningErrors[0]); return; }
         commitPresetChange(root, {
             transform: presets => insertRecordAfter(presets, draft.currentPresetName, nextPresetName, nextPreset),
             selectName: nextPresetName,
@@ -1288,7 +1162,6 @@ export function createAgentSettingsPanel(deps = {}) {
             state.configDraft = {
                 ...draft,
                 provider: nextProvider,
-                ...buildProviderDraftFields(nextProvider, draft.modelConfigs),
             };
             requestConfigFormSync();
             render?.();
@@ -1359,7 +1232,6 @@ export function createAgentSettingsPanel(deps = {}) {
             state.configDraft = {
                 ...draft,
                 delegateProvider: nextProvider,
-                ...buildDelegateProviderDraftFields(nextProvider, draft.delegateModelConfigs),
             };
             requestConfigFormSync();
             render?.();

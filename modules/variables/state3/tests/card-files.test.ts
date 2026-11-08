@@ -9,6 +9,8 @@ import { storeFiles as writeFiles, readFiles as rawFiles, observeTree } from '..
 import { cardFiles, locateFile } from '../../../card-workspace/files.js';
 import { CARD_EXTENSION, DEFINITION_FILE, FUNCTION_DIRECTORY } from '../definition/format.js';
 import { projectVariableFiles, variableBundleFromFiles, prepareVariableWrite, variableExtensionWrite, type CardFile } from '../definition/card-files.js';
+import { variableCardHost } from '../definition/card-host.js';
+import { equipmentExample } from '../definition/example.js';
 import { digest } from '../definition/digest.js';
 
 const readFiles = async (): Promise<CardFile[]> => await rawFiles() as CardFile[];
@@ -82,4 +84,32 @@ test('whole-package refresh cannot overwrite a concurrently created function and
             removePaths: [root + FUNCTION_DIRECTORY + 'old.js', root + FUNCTION_DIRECTORY + 'new.js'] });
         assert.deepEqual(variableBundleFromFiles(root, await readFiles()), next);
     } finally { await db.delete(); }
+});
+
+test('K15: verified full-package replacement removes functions, preserves other card data and rejects stale/invalid imports', async () => {
+    const previous = equipmentExample(), next = equipmentExample();
+    previous.definition.functions.old = { reads: [], description: 'old function' }; previous.functions.old = '() => 1';
+    let card = { avatar: 'isolated.png', name: 'isolated', data: { extensions: { [CARD_EXTENSION]: JSON.stringify(previous), other: { keep: true } }, description: 'keep prose' } };
+    let writes = 0, published = 0;
+    const host = variableCardHost({
+        readCharacter: async () => structuredClone(card), assertCard(avatar) { assert.equal(avatar, card.avatar); },
+        async request(_url, input) {
+            const update = input as ReturnType<typeof variableExtensionWrite>;
+            writes++;
+            assert.deepEqual(Object.keys(update.data.extensions), [CARD_EXTENSION]);
+            card.data.extensions[CARD_EXTENSION] = update.data.extensions[CARD_EXTENSION];
+        },
+        publishCharacter(saved) { published++; card = saved as typeof card; }, unconfirmed: 'not saved',
+    });
+    const baseline = digest(card.data.extensions[CARD_EXTENSION]);
+    const invalid = structuredClone(next); invalid.functions.extra = '() => 2';
+    await assert.rejects(host.replace(card.avatar, invalid, baseline));
+    assert.equal(writes, 0);
+    await host.replace(card.avatar, next, baseline);
+    assert.deepEqual(JSON.parse(card.data.extensions[CARD_EXTENSION]), next);
+    assert.deepEqual(card.data.extensions.other, { keep: true });
+    assert.equal(card.data.description, 'keep prose');
+    assert.equal(published, 1);
+    await assert.rejects(host.replace(card.avatar, previous, baseline), { code: 'rules-conflict' });
+    assert.equal(writes, 1);
 });

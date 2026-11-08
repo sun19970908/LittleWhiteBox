@@ -8,7 +8,7 @@ const unequip = [{ action: 'unequip', params: {} }];
 
 test('K10: pending persistence cannot block successive swipe or tail restoration', async () => {
     const host = fixture(); accepted(await host.service.enable(equipmentExample()));
-    const initial = host.saved().history!.state, gate = host.holdNextSave();
+    const initial = host.saved().state, gate = host.holdNextSave();
     const pending = host.service.apply([{ op: 'set', path: ['hero', 'health'], value: 20 }]);
     await gate.started;
     const entries = host.saved().records[0].entries;
@@ -33,10 +33,10 @@ test('K4/K5/K6: preview and rejected batch leave storage untouched; confirmed ef
     const reopened = fixture(); reopened.load(branch);
     assert.deepEqual(accepted(await reopened.service.inspect()).state, committed.state);
     accepted(await reopened.service.undo());
-    assert.deepEqual(accepted(await reopened.service.inspect()).state, original.history!.state);
-    const broken = host.saved(); broken.history!.bundle.definition.actions = [];
+    assert.deepEqual(accepted(await reopened.service.inspect()).state, original.state);
+    const broken = host.saved(); broken.card.definition.actions = [];
     reopened.load(broken); accepted(await reopened.service.undo());
-    assert.deepEqual(accepted(await reopened.service.inspect()).state, original.history!.state);
+    assert.deepEqual(accepted(await reopened.service.inspect()).state, original.state);
 });
 
 test('K5: current state survives missing middle records; selection restoration never executes actions', async () => {
@@ -87,7 +87,7 @@ test('K5/storage: array element changes are bounded; insert/delete/mixed changes
         const change = difference(before, next);
         assert.deepEqual(applyDifference(before, change), next);
         assert.deepEqual(applyDifference(next, change, true), before);
-        assert.deepEqual(restore(next, [{ id: 'stored', revision: 1, source: 'api', changes: change, actions: [] }], true), before);
+        assert.deepEqual(restore(next, [{ id: 'stored', revision: 1, source: 'api', delta: change, actions: [] }], true), before);
     }
 });
 
@@ -101,7 +101,7 @@ test('K5: long chats retain two periodic checkpoints and restore a tail without 
     const data = host.saved(), history = data.history!, point = history.checkpoints.at(-1)!;
     assert.equal(history.checkpoints.length, 2);
     const suffix = data.records.flatMap(record => record.entries).filter(entry => entry.revision > point.revision);
-    assert.deepEqual(rewind(history, suffix), point.state);
-    assert.deepEqual(rewind(history, suffix), restore(history.state, suffix, true));
+    assert.deepEqual(rewind(history, data.state, suffix), point.state);
+    assert.deepEqual(rewind(history, data.state, suffix), restore(data.state, suffix, true));
     assert.ok(data.records.every(record => record.entries.every(entry => !Object.hasOwn(entry, 'state'))));
 });

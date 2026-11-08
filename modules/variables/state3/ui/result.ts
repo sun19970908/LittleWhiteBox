@@ -22,10 +22,11 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
     }
     root.append(element('p', result.committed ? result.saved ? `${COPY.success} · ${COPY.saved}` : COPY.unconfirmed : COPY.previewed));
     for (const error of result.diagnostics) {root.append(element('p', errorText(error)));}
-    for (const change of result.changes || []) {
+    const shown = result.changes;
+    for (const change of shown) {
         const line = element('div', undefined, 'lwb-state3-change');
-        line.append(element('strong', change.path.join(' → ') + (change.index === undefined ? '' : ` [${change.index}]`)),
-            element('div', `${JSON.stringify(change.before) ?? '—'} → ${change.removed ? '—' : JSON.stringify(change.after)}`));
+        line.append(element('strong', change.path.join(' → ')),
+            element('div', change.before === undefined ? `${COPY.added} ＋ ${JSON.stringify(change.after)}` : change.removed ? `${COPY.removed} － ${JSON.stringify(change.before)}` : `${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`));
         const origins = (result.provenance || []).filter(item => JSON.stringify(item.path) === JSON.stringify(change.path));
         for (const origin of origins) {
             const rule = [...(definition?.rules || []), ...(definition?.actions || []), ...(definition?.triggers || [])].find(item => item.id === origin.source.id);
@@ -33,5 +34,12 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
         }
         root.append(line);
     }
-    if (!result.changes?.length) {root.append(element('p', COPY.empty));}
+    for (const annotation of result.annotations || []) {
+        const section = element('details'); section.open = true;
+        section.append(element('summary', `${COPY.annotation} · ${annotation.index + 1} · ${annotation.action || annotation.path?.join(' → ') || ''}`));
+        const fields = element('dl');
+        for (const [key, value] of annotation.fields) {fields.append(element('dt', key), element('dd', typeof value === 'string' ? value : JSON.stringify(value, null, 2)));}
+        section.append(fields); root.append(section);
+    }
+    if (!shown.length) {root.append(element('p', COPY.empty));}
 }

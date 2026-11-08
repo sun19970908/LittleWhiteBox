@@ -1,4 +1,5 @@
 import { displayCardWorkspaceName, displayCardWorkspacePath } from '../../../card-workspace/paths.js';
+import { describeCardWorkspaceFiles } from '../../../card-workspace/display.js';
 
 export function buildWorkspaceTree(localSources = [], options = {}) {
     const selectedSourceId = String(options.selectedSourceId || 'all').trim() || 'all';
@@ -13,6 +14,7 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
     const rootNodes = [];
     const visiblePaths = [];
     const visibleNodePaths = [];
+    const cardDisplay = describeCardWorkspaceFiles(localSources.flatMap(source => source.files));
 
     visibleSources.forEach((source) => {
         const rootPath = String(source.rootPath || `local/${source.label}/`);
@@ -64,19 +66,29 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
             ensureDirectoryNode(normalizedDirectoryPath);
         });
 
+        const itemGroups = new Map();
         source.files.forEach((file) => {
+            const display = cardDisplay.get(file.path);
             const modified = isModifiedFile(file);
             if (modifiedOnly && !modified) return;
-            const searchText = `${source.label}/${file.relativePath}\n${displayCardWorkspacePath(file.path)}`.toLowerCase();
+            const searchText = `${source.label}/${file.relativePath}\n${displayCardWorkspacePath(file.path)}\n${display?.name || ''}`.toLowerCase();
             if (searchQuery && !searchText.includes(searchQuery)) return;
 
             const segments = file.relativePath.split('/').filter(Boolean);
-            const parent = ensureDirectoryNode(segments.slice(0, -1).join('/'));
+            let parent = ensureDirectoryNode(segments.slice(0, -1).join('/'));
+            if (display) {
+                if (!itemGroups.has(display.groupKey)) {
+                    const group = { key: display.groupKey, type: 'group', label: display.name, children: [], modified: false };
+                    itemGroups.set(display.groupKey, group);
+                    parent.children.push(group);
+                }
+                parent = itemGroups.get(display.groupKey);
+            }
 
             parent.children.push({
                 key: `file:${file.path}`,
                 type: 'file',
-                label: displayCardWorkspaceName(file.path, file.name),
+                label: display?.label || displayCardWorkspaceName(file.path, file.name),
                 sourceId: source.sourceId,
                 path: file.path,
                 modified,
@@ -91,14 +103,14 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
             let nodeModified = false;
             node.children = node.children
                 .map((child) => {
-                    if (child.type === 'dir') {
+                    if (child.type !== 'file') {
                         child.modified = markModifiedDirs(child);
                     }
                     nodeModified = nodeModified || !!child.modified;
                     return child;
                 })
                 .sort((left, right) => {
-                    if (left.type !== right.type) return left.type === 'dir' ? -1 : 1;
+                    if ((left.type === 'file') !== (right.type === 'file')) return left.type === 'file' ? 1 : -1;
                     return String(left.label || '').localeCompare(String(right.label || ''), 'zh-CN');
                 });
             return nodeModified;
@@ -122,7 +134,7 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
 
 export function collectDirectoryExpansionKeys(nodes = [], result = new Set()) {
     nodes.forEach((node) => {
-        if (node.type === 'dir') {
+        if (node.type !== 'file') {
             result.add(node.key);
             collectDirectoryExpansionKeys(node.children || [], result);
         }

@@ -123,9 +123,9 @@ test('token expiry refreshes and OAuth failure is not retried or echoed', async 
 });
 
 test('Vertex configuration survives main/delegate persistence without crossing providers', () => {
-    const saved = normalizeAgentConfig({ currentPresetName: 'main', presets: { main: { provider: 'google-vertex', modelConfigs: {
-        'google-vertex': standard, google: { model: 'separate', apiKey: 'separate-key' },
-    } } }, delegateConfig: { provider: 'google-vertex', modelConfigs: { 'google-vertex': express } } });
+    const saved = normalizeAgentConfig({ currentPresetName: 'main', presets: {
+        main: standard, separate: { provider: 'google', model: 'separate', apiKey: 'separate-key' },
+    }, delegateConfig: express });
     const restored = normalizeAgentConfig(JSON.parse(JSON.stringify(saved)));
     const main = resolveActiveProviderConfig(restored);
     const delegate = resolveActiveProviderConfig(restored, { role: 'delegate' });
@@ -133,7 +133,7 @@ test('Vertex configuration survives main/delegate persistence without crossing p
     assert.equal(main.apiKey, ''); assert.equal(main.baseUrl, '');
     assert.equal(delegate.vertex.authMode, 'api-key'); assert.equal(delegate.apiKey, express.apiKey);
     assert.equal(delegate.vertex.serviceAccountJson, '');
-    assert.equal(restored.presets.main.modelConfigs.google.apiKey, 'separate-key');
+    assert.equal(restored.presets.separate.apiKey, 'separate-key');
     const safe = JSON.stringify(redactRequestSecrets({ main, delegate, private_key: account.private_key, assertion: 'jwt' }));
     for (const secret of [account.private_key, 'express-fixture', 'unused-key', 'jwt']) assert.equal(safe.includes(secret), false);
 });

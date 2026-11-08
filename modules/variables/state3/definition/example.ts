@@ -23,8 +23,10 @@ export function equipmentExample(): Bundle {
             initial: { hero: { baseHealth: 60, health: 80, maxHealth: 100, amulet: true, condition: '受伤' } },
             access: [
                 { path: ['hero', 'baseHealth'], write: [], description: '角色基础生命上限。' },
-                { path: ['hero', 'health'], write: ['direct'], description: '依正文中的受伤与治疗改变生命。不能低于零；超过上限时由规则截断。' },
-                { path: ['hero', 'amulet'], write: ['unequip', 'equip'], description: '护符装备槽，通过装备或卸下动作改变。' },
+                { path: ['hero', 'health'], write: ['direct'], description: '角色当前生命。', update: '依正文中的受伤与治疗改变生命。不能低于零；超过上限时由规则截断。' },
+                { path: ['hero', 'amulet'], write: ['unequip', 'equip'], description: '护符装备槽，true 表示已佩戴。', update: '正文明确装备或卸下护符时提交对应动作。' },
+                { path: ['hero', 'maxHealth'], write: [], description: '角色当前生命上限。' },
+                { path: ['hero', 'condition'], write: [], description: '角色当前伤势概况。' },
             ],
             rules: [
                 { id: 'health-limit', kind: 'derive', path: ['hero', 'maxHealth'], value: op('add', get('hero', 'baseHealth'), op('if', get('hero', 'amulet'), literal(40), literal(0))), description: '佩戴护符时生命上限增加40。' },

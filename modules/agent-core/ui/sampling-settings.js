@@ -33,6 +33,7 @@ export function readSamplingForm(root, provider, previous, scope = 'main') {
         // Keep the draft while a number is being edited; saving reports native input validity.
         const value = input.value !== '' && input.validity?.valid !== false
             ? Number(input.value) : sampling[parameter.key]?.value ?? parameter.value;
+        if (!Object.hasOwn(sampling, parameter.key) && !toggle.checked && value === parameter.value) continue;
         sampling[parameter.key] = { enabled: toggle.checked, value };
     }
     return sampling;

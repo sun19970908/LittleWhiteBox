@@ -122,8 +122,6 @@ export function createState3Page(api: State3Api) {
             return;
         }
         const definition = status.bundle.definition;
-        const state = element('details'), stateContent = element('pre', JSON.stringify(status.state, null, 2));
-        state.append(element('summary', COPY.state), stateContent); main.append(state);
         const output = element('section', undefined, 'lwb-state3-result');
         const present = (result: Result) => {
             showResult(output, result, definition);
@@ -135,7 +133,6 @@ export function createState3Page(api: State3Api) {
         };
         main.append(row(button(COPY.update, async () => {
             const result = await api.update(); present(result);
-            const current = await api.inspect(); if (current.ok) {stateContent.textContent = JSON.stringify(current.state, null, 2);}
         })), output);
         const last = api.lastResult(); if (last) {present(last);}
         const settings = element('details'); settings.append(element('summary', COPY.updateSettings));
@@ -156,15 +153,12 @@ export function createState3Page(api: State3Api) {
             const run = (preview: boolean): Action => async signal => {
                 const result = await api[preview ? 'preview' : 'apply']([{ action: selector.value, params: parameters.read() }], { signal });
                 present(result);
-                if (result.ok && result.committed) {stateContent.textContent = JSON.stringify(result.state, null, 2);}
             };
             actions.append(selector, parameterRoot, row(button(COPY.preview, run(true)), button(COPY.commit, run(false))));
         }
         actions.append(button(COPY.undo, async signal => { const result = await api.undo({ signal }); await render(); const node = element('section'); main.append(node); showResult(node, result, definition); }));
         main.append(actions);
         const manage = element('details'); manage.append(element('summary', COPY.savedRules), row(
-            button(COPY.previewUpgrade, async signal => showResult(output, await api.upgrade({ preview: true, signal }), definition)),
-            button(COPY.upgrade, async signal => { const result = await api.upgrade({ signal }); await render(); const node = element('section'); main.append(node); showResult(node, result); }),
             button(COPY.previewRequest, async signal => { const preview = element('pre', JSON.stringify(await api.previewRequest({ signal }), null, 2)); manage.append(preview); }),
         )); main.append(manage);
     }
@@ -175,6 +169,28 @@ export function createState3Page(api: State3Api) {
         }
         nav.append(button(COPY.assistant, async () => { await api.openAssistant(); dialog.close(); }));
         if (page === 'author') {await renderAuthor();} else {await renderPlay();}
+        const picker = element('input'); picker.type = 'file'; picker.accept = '.json,application/json'; picker.hidden = true;
+        const importButton = button(COPY.importRules, () => picker.click());
+        picker.addEventListener('change', () => {
+            const file = picker.files?.[0]; picker.value = ''; if (!file) {return;}
+            observeBackgroundTask(act(async signal => {
+                const prepared = await api.prepareRuleImport(await file.text(), { signal });
+                signal.throwIfAborted();
+                if (!globalThis.confirm(COPY.importConfirm)) {return;}
+                await api.importRules(prepared, { signal });
+                if (page === 'play') {await render();}
+                notice.textContent = COPY.importedRules;
+            }, importButton), { source: import.meta.url, operation: 'importRules' });
+        });
+        const transfer = element('details'); transfer.append(element('summary', COPY.ruleFiles), row(importButton,
+            button(COPY.exportRules, async signal => {
+                const bundle = await api.exportRules({ signal });
+                const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }));
+                const link = element('a'); link.href = url; link.download = 'variables-3.0.json'; link.click();
+                setTimeout(() => URL.revokeObjectURL(url), 0);
+                notice.textContent = COPY.exportedRules;
+            })), picker);
+        main.append(transfer);
     }
     header.append(element('h2', COPY.title), button(COPY.close, () => dialog.close()));
     dialog.addEventListener('close', cancel); dialog.addEventListener('cancel', cancel);

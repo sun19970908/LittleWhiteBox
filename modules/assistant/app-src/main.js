@@ -44,7 +44,6 @@ import { createLocalSourcesManager } from './workspace/local-sources.js';
 import { buildWorkspaceTree } from './workspace/local-workspace-tree.js';
 import { WORKSPACE_COPY } from './workspace/workspace-copy.js';
 import {
-    destroyWorkspaceEditorCache,
     renderWorkspace as renderWorkspaceUi,
 } from './workspace/local-workspace-ui.js';
 import { injectAssistantStyles } from './styles.js';
@@ -694,10 +693,6 @@ function renderWorkspacePanel(container, options = {}) {
 function renderWorkspacePanelWhenOpen(container, options = {}) {
     if (!container) return;
     if (!state.isWorkspaceOpen) {
-        if (container.childNodes.length || container.__xbWorkspaceEditorCache) {
-            destroyWorkspaceEditorCache(container);
-            container.replaceChildren();
-        }
         return;
     }
     renderWorkspacePanel(container, options);
@@ -1681,12 +1676,8 @@ function bindEvents(root) {
 
     root.querySelector('#xb-assistant-sidebar-toggle')?.addEventListener('click', () => {
         state.sidebarCollapsed = !state.sidebarCollapsed;
-        render();
-    });
-
-    root.querySelector('#xb-assistant-mobile-settings')?.addEventListener('click', () => {
-        state.sidebarCollapsed = !state.sidebarCollapsed;
-        render();
+        if (!state.sidebarCollapsed && state.isWorkspaceOpen && window.matchMedia('(max-width: 900px)').matches) closeWorkspace();
+        else render();
     });
 
     root.querySelector('#xb-assistant-mobile-close')?.addEventListener('click', () => {
@@ -1694,6 +1685,7 @@ function bindEvents(root) {
     });
 
     root.querySelector('#xb-assistant-open-workspace')?.addEventListener('click', () => {
+        if (!state.isWorkspaceOpen && window.matchMedia('(max-width: 900px)').matches) state.sidebarCollapsed = true;
         toggleWorkspacePanel();
     });
 

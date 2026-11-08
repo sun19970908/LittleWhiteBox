@@ -2,6 +2,8 @@ import type { Compiled, Json, JsonObject, Result, RunOptions, EvaluationContext,
 import { changes, clone, contains, overlaps, assertJson, pathOf, setAt, equal } from './data.js';
 import { evaluate } from './expressions.js';
 import { reject, diagnostic } from './diagnostics.js';
+import { difference } from './difference.js';
+import { displayChanges } from './delta-view.js';
 import { digest } from '../definition/digest.js';
 
 // A runaway, non-repeating trigger chain must also return control to the player.
@@ -144,7 +146,12 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
             if (await evaluate(constraint.test, context) !== true) {reject('constraint', { rule: constraint.id });}
         }
         signal?.throwIfAborted();
-        return { ok: true, state, changes: changes(before, state), provenance, actions, diagnostics: [] };
+        const annotations = input.flatMap((operation, index) => {
+            const fields = Object.entries(operation).filter(([name]) => !(operation.action
+                ? ['action', 'params'] : ['op', 'path', 'value']).includes(name));
+            return fields.length ? [{ index, ...(operation.action ? { action: String(operation.action) } : { path: pathOf(operation.path) }), fields }] : [];
+        });
+        return { ok: true, state, changes: displayChanges(difference(before, state)), provenance, actions, diagnostics: [], ...(annotations.length ? { annotations } : {}) };
     } catch (error) {
         const detail = diagnostic(error);
         return { ok: false, diagnostics: [signal?.aborted ? { code: 'cancelled' } : { ...detail,

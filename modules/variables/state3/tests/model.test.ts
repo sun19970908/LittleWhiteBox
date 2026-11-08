@@ -4,7 +4,7 @@ import Ajv from 'ajv';
 import { compileDefinition } from '../definition/compile.js';
 import { equipmentExample } from '../definition/example.js';
 import { initialize, settle } from '../engine/settle.js';
-import { buildRoleplayView, buildUpdateView } from '../model/views.js';
+import { buildDescriptionView, buildUpdateView } from '../model/views.js';
 import { getInputSchema, getTools, SUBMIT_TOOL } from '../model/tools.js';
 import { buildUpdateTask, correctionMessages } from '../model/prompts.js';
 import { accepted } from './fixture.js';
@@ -34,16 +34,17 @@ test('K9: V5 supplies three ordered exchanges; correction retains the actual pro
     assert.equal((messages[1] as AgentToolResult).tool_call_id, call.id);
 });
 
-test('K2/K9: generated paths exclude derived and action-only fields; confirmed RP results use scoped values', async () => {
+test('K2/K9: generated paths exclude derived and action-only fields; RP descriptions exclude values and updater instructions', async () => {
     const compiled = compileDefinition(equipmentExample());
     const validate = new Ajv({ strict: false }).compile(getInputSchema(compiled));
     assert.equal(validate([{ op: 'set', path: ['hero', 'health'], value: 50, reason: 'healed', old: 40 }]), true);
     for (const path of [['hero'], ['hero', 'maxHealth'], ['hero', 'amulet']]) {assert.equal(validate([{ op: 'set', path, value: 1 }]), false);}
-    const start = accepted(await initialize(compiled)), result = accepted(await settle(compiled, start.state, [{ action: 'unequip', params: {} }]));
-    assert.equal(Object.hasOwn(buildRoleplayView(compiled, start.state, { result }), 'result'), false);
-    const view = buildRoleplayView(compiled, result.state, { sections: ['equipment'], result: { ...result, committed: true } });
-    assert.equal(view.result?.committed, true);
-    assert.equal(Object.hasOwn(view, 'state'), false);
+    const view = buildDescriptionView(compiled, ['equipment']);
+    assert.deepEqual(view.fields, [{ path: ['hero', 'amulet'], description: compiled.definition.access[2].description }]);
+    for (const key of ['state', 'values', 'rules', 'actions', 'constraints', 'result']) {assert.equal(Object.hasOwn(view, key), false);}
+    assert.equal(Object.hasOwn(view.sections[0], 'values'), false);
+    const guide = buildUpdateView(compiled, accepted(await initialize(compiled)).state);
+    assert.equal(guide.fields.find(field => field.path.join('.') === 'hero.health')?.update, compiled.definition.access[1].update);
     assert.equal(new Ajv({ strict: false }).compile(getTools(compiled)[0].function.parameters)({ state: [] }), true);
 });
 

@@ -1,36 +1,44 @@
-import type { Compiled, Json, Success } from '../types.js';
-export interface MacroSnapshot { compiled: Compiled; state: Json; result?: Success }
+import { getContext } from '../../../../../../../extensions.js';
+import type { Compiled } from '../types.js';
 import * as hostMacros from '../../../../../../../macros.js';
+import { buildDescriptionView } from './views.js';
 const { MacrosParser } = hostMacros as unknown as { MacrosParser: {
     registerMacro(name: string, value: () => string, description: string): void;
     unregisterMacro(name: string): void;
 } };
-import { buildRoleplayView } from './views.js';
 
-// Macros are synchronous host callbacks; only settled snapshots enter this
-// run-local projection. Capture overlays never touch chat metadata.
 export function createState3Macros() {
-    let current: MacroSnapshot | undefined;
     const names = new Set<string>();
-    function replace(snapshot?: MacroSnapshot) {
-        for (const name of names) {MacrosParser.unregisterMacro(name);}
-        names.clear(); current = snapshot;
-        if (!snapshot) {return;}
-        for (const [section, view] of Object.entries(snapshot.compiled.definition.views)) {
-            const name = `lwb3_${section}`; names.add(name);
-            MacrosParser.registerMacro(name, () => JSON.stringify(buildRoleplayView(snapshot.compiled, snapshot.state, { sections: [section] })), view.description);
-        }
-        names.add('lwb3_result');
-        MacrosParser.registerMacro('lwb3_result', () => JSON.stringify(buildRoleplayView(snapshot.compiled, snapshot.state,
-            { sections: [], result: snapshot.result })), '已确认的最近一次变量结算');
+    let unregister: (name: string) => void = name => MacrosParser.unregisterMacro(name);
+    function clear() {
+        for (const name of names) {unregister(name);}
+        names.clear();
     }
     return {
-        set: replace,
-        expose(snapshot: MacroSnapshot) {
-            const previous = current;
-            replace(snapshot);
-            return () => { if (current === snapshot) {replace(previous);} };
+        set(compiled: Compiled) {
+            clear();
+            const ctx = getContext() as unknown as { powerUserSettings?: { experimental_macro_engine?: boolean }; macros?: {
+                register(name: string, options: { unnamedArgs: { name: string; optional: boolean }[]; handler(ctx: { args: string[] }): string; description: string }): void;
+                registry: { unregisterMacro(name: string): void };
+            } };
+            // ST 1.18 optional macro engine accepts arguments; ST 1.14 uses literal registered keys.
+            if (ctx.powerUserSettings?.experimental_macro_engine && ctx.macros) {
+                const registry = ctx.macros;
+                unregister = name => registry.registry.unregisterMacro(name);
+                names.add('xbvardesc');
+                registry.register('xbvardesc', { unnamedArgs: [{ name: 'section', optional: true }],
+                    description: compiled.definition.name,
+                    handler: ({ args }) => JSON.stringify(buildDescriptionView(compiled, args[0] ? [args[0]] : undefined)) });
+                return;
+            }
+            unregister = name => MacrosParser.unregisterMacro(name);
+            const register = (name: string, sections?: string[]) => {
+                names.add(name);
+                MacrosParser.registerMacro(name, () => JSON.stringify(buildDescriptionView(compiled, sections)), compiled.definition.name);
+            };
+            register('xbvardesc');
+            for (const section of Object.keys(compiled.definition.views)) {register(`xbvardesc::${section}`, [section]);}
         },
-        clear: () => replace(undefined), dispose: () => replace(undefined),
+        clear, dispose: clear,
     };
 }

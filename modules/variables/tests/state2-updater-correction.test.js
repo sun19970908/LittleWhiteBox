@@ -20,6 +20,7 @@ test.before(async () => {
     for (const name of ['copy.js', 'world-info.js', 'preset.js', 'transport.js', 'correction.js', 'result.js', 'result-diff.js', 'history-result.js', 'legacy-result.js']) {
         writeFileSync(path.join(h.tempDir, name), readFileSync(path.resolve('modules/variables/updater', name), 'utf8')
             .replaceAll("'../state2/", "'./")
+            .replace("'../shared/array-alignment.js'", JSON.stringify(pathToFileURL(path.resolve('modules/variables/shared/array-alignment.js')).href))
             .replace("'../shared/context-copy.js'", "'./context-copy.js'"));
     }
     writeFileSync(path.join(h.tempDir, 'context-copy.js'), readFileSync('modules/variables/shared/context-copy.ts', 'utf8'));

@@ -28,8 +28,8 @@ function normalizeJsApiRequestKind(value) {
     return ['inspect', 'read', 'effect', 'unknown'].includes(value) ? value : 'unknown';
 }
 
-function shouldRequireJsApiApproval(requestKind = 'unknown') {
-    return ['effect', 'unknown'].includes(normalizeJsApiRequestKind(requestKind));
+function shouldRequireJsApiApproval(requestKind = 'unknown', permissionMode = 'default') {
+    return permissionMode !== 'full' && ['effect', 'unknown'].includes(normalizeJsApiRequestKind(requestKind));
 }
 
 function buildJsApiAnalysisFallback(error) {
@@ -461,6 +461,7 @@ export function createAssistantRuntime(deps) {
         const isJsApiRun = toolCall.name === TOOL_NAMES.RUN_JAVASCRIPT_API;
         const trackToolErrors = options.trackToolErrors !== false;
         let jsApiAnalysis = null;
+        let jsApiApproved = false;
         let toolResult = null;
 
         try {
@@ -500,7 +501,7 @@ export function createAssistantRuntime(deps) {
                     && !jsApiAnalysis.analysisError
                     && Array.isArray(jsApiAnalysis.validationErrors)
                     && jsApiAnalysis.validationErrors.length > 0
-                ) && shouldRequireJsApiApproval(jsApiAnalysis?.requestKind || 'unknown');
+                ) && shouldRequireJsApiApproval(jsApiAnalysis?.requestKind || 'unknown', state.config?.permissionMode);
 
                 if (jsApiNeedsApproval) {
                     state.progressLabel = '确认中';
@@ -509,6 +510,7 @@ export function createAssistantRuntime(deps) {
                         runId: run.id,
                         signal: run.controller.signal,
                     });
+                    jsApiApproved = approved;
                     if (!approved) {
                         toolResult = buildJsApiApprovalResult(
                             parsedArguments,
@@ -573,6 +575,10 @@ export function createAssistantRuntime(deps) {
                         signal: run.controller.signal,
                         onDispatched: () => advanceToolActivity(toolCall, run, 'running'),
                     }));
+                    if (toolCall.name === TOOL_NAMES.READ_LOGS) {
+                        run.controller.signal.throwIfAborted();
+                        toolResult = options.webResults.project(toolResult);
+                    }
                 }
             }
 
@@ -584,12 +590,8 @@ export function createAssistantRuntime(deps) {
             }
 
             if (
-                isJsApiRun
+                jsApiApproved
                 && toolResult?.ok !== false
-                && jsApiAnalysis
-                && Array.isArray(jsApiAnalysis.validationErrors)
-                && jsApiAnalysis.validationErrors.length === 0
-                && shouldRequireJsApiApproval(jsApiAnalysis.requestKind || 'unknown')
             ) {
                 toolResult = {
                     ...toolResult,

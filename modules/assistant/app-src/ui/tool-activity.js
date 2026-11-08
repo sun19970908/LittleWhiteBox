@@ -16,7 +16,7 @@ function parseRecord(text) {
 export function toolOutcome(result, toolName = result?.toolName) {
     if (!result) return { status: 'unconfirmed', note: '' };
     if (result.error === 'tool_timeout' || result.error === 'tool_aborted') {
-        if (isWebTool(toolName) || toolName === TOOL_NAMES.INSPECT_PAGE) {
+        if (isWebTool(toolName) || toolName === TOOL_NAMES.INSPECT_PAGE || toolName === TOOL_NAMES.READ_LOGS) {
             return { status: result.error === 'tool_aborted' ? 'stopped' : 'failed', note: shortText(result.message) };
         }
         if (toolName === TOOL_NAMES.GREP) {

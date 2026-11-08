@@ -32,8 +32,8 @@ for (const [provider, toolMode] of [['openai-compatible', 'native'], ['openai-co
                 } }] } : {}) }, finish_reason: toolMode === 'native' ? 'tool_calls' : 'stop' }] };
             return new Response(JSON.stringify(body), { headers: { 'Content-Type': 'application/json' } });
         });
-        const config = { provider, modelConfigs: { [provider]: { model: 'offline-model', apiKey: 'offline-fixture',
-            baseUrl: 'https://offline.invalid', toolMode, maxTokens: 256 } } };
+        const config = { provider, model: 'offline-model', apiKey: 'offline-fixture',
+            baseUrl: 'https://offline.invalid', toolMode, maxTokens: 256 };
         const settings = agentCore.normalizeAgentSettings({ currentPresetName: 'offline', presets: { offline: config },
             delegateConfigured: true, delegateConfig: config });
         const { api } = createPublicAgentApi({ isEnabled: () => true, loadSettings: () => settings, loadCore: () => agentCore });

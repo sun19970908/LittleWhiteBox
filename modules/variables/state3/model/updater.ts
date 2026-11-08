@@ -1,8 +1,8 @@
 import type { PublicAgentSession, AgentChatResult } from '../../../agent-core/public-api.js';
 import type { Result, RunOptions } from '../types.js';
 import type { SettlementService } from '../runtime/service.js';
-import type { createState3Macros } from './macros.js';
 import { state3Context as getContext, type createHostAdapter } from '../runtime/host.js';
+import { exposeVariableReads } from '../../var-commands.js';
 import { captureContext } from '../../shared/context-capture.js';
 import { passageText } from '../../shared/passage.js';
 import { compileDefinition } from '../definition/compile.js';
@@ -20,7 +20,7 @@ export function parseSubmission(response: AgentChatResult): unknown[] {
     return args.state;
 }
 
-export function createState3Updater({ service, adapter, macros, available, changed }: { service: SettlementService; adapter: ReturnType<typeof createHostAdapter>; macros: ReturnType<typeof createState3Macros>; available(): void; changed?(): void }) {
+export function createState3Updater({ service, adapter, available, changed }: { service: SettlementService; adapter: ReturnType<typeof createHostAdapter>; available(): void; changed?(): void }) {
     let controller: AbortController | undefined, phase = 'ready';
     const setPhase = (value: string) => { phase = value; changed?.(); };
     const cancel = () => { controller?.abort(); };
@@ -37,7 +37,7 @@ export function createState3Updater({ service, adapter, macros, available, chang
         const reservation = buildUpdateTask(compiled, staged.snapshot, { target: staged.target, messages: [] });
         const context = await captureContext(ctx, { ...staged.target, message }, reservation,
             (text: string) => passageText(text).replace(/<state3>[\s\S]*?<\/state3>/g, ''), signal,
-            () => macros.expose({ compiled, state: staged.snapshot }));
+            () => exposeVariableReads(staged.snapshot, staged.roots));
         staged.assertCurrent();
         if (!adapter.isCurrent(snapshot)) {reject('stale-target');}
         return { ok: true, staged, task: buildUpdateTask(compiled, staged.snapshot, context) };
