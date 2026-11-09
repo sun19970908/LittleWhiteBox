@@ -117,13 +117,11 @@ test('V3 assistant draft paths convert without touching draft content or variabl
     const input = [{ op: 'set', path: ['literal%20'], value: 1 }];
     const api = state3JsApiNamespace({ openDraft: async () => draft,
         checkDraft: (received, operations) => { assert.deepEqual(received, draft); assert.strictEqual(operations, input); return { ok: true }; },
-        saveDraft: (received, files) => { assert.deepEqual(received, draft); assert.deepEqual(files, draft.files); return draft; },
         saveCardDraft: received => { assert.deepEqual(received, draft); return { ok: true, results: [{ path: file, saved: true }] }; },
     });
     const opened = await api.openDraft();
     assert.equal(opened.root, 'local/cards/作者测试.png/');
     assert.equal(opened.files[0].content, draft.files[0].content);
     assert.equal((await api.checkDraft(opened, input)).ok, true);
-    assert.deepEqual(await api.saveDraft(opened, opened.files), opened);
     assert.equal((await api.saveCardDraft(opened)).results[0].path, readable(file));
 });

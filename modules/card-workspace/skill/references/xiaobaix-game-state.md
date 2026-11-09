@@ -116,7 +116,7 @@ await initGreeting();
 
 插件只在 2.0 独立更新及其上下文预览中，临时启用本次已加载世界书里匹配前缀的关闭条目副本。原件保持关闭；普通聊天、其他后台请求和 3.0 不作这项处理。条目的其他触发条件、位置、角色、排序、宏及预算处理仍由酒馆执行；常用更新规则不设置概率或互斥组。只读取当前聊天关联并由宿主加载的世界书，不搜索未关联的书。
 
-当前状态条目只解释字段的意义；“只在本段发生变化时修改”“如何填写”“提交 reason”等属于更新规则条目。两类条目各自完整，不跨条目拆开闭标签。分开之后，无需再对剧情模型补写“无需更新执行”；它收到的是状态资料，不是更新任务。具体字段取决于卡，不套用示例里的世界、人物或时局分类。
+当前状态条目只解释字段的意义；“只在本段发生变化时修改”“如何填写”“提交 reason”等属于更新规则条目。无需更新执行；它收到的是状态资料，不是更新任务。具体字段“无需更新执行”；它收到的是状态资料，不是更新任务。具体字段取决于卡，不套用示例里的世界、人物或时局分类。
 
 ### 取值宏
 
@@ -131,7 +131,7 @@ await initGreeting();
 
 展开时机：
 
-- 小白X在提示词组装完成时展开这三种宏，包括 `dryRun` 组装。写作预设在后台更新变量时会用 `dryRun` 组装请求，此时宏同样展开成当前值。`dryRun` 不收集、不执行 `<varevent>`。
+- 小白X在提示词组装完成时展开这三种宏，包括 `dryRun` 组装。独立变量更新器用 `dryRun` 组装请求，此时宏同样展开成当前值。`dryRun` 不收集、不执行 `<varevent>`。
 - 模型看不到状态时，核对本次请求中宏展开后的内容，而不是只看世界书里有没有写宏。
 
 字段含义写在当前状态条目。更新规则写改动时机和填写要求，不复述当前值，也不写提交格式（格式由通道决定：预设工具通道由工具 schema 约束，正文通道在规则外另写 `<state>` 写法）。每条规则以模型提交时要写的**完整路径**开头，按名字新增的成员用 `<人名>` 这类占位，模型不必把嵌套层级换算成路径。
@@ -226,7 +226,7 @@ JSON 当前值里的数组没有下标注释；需要按名字修改的集合，
 
 ### 用户选择正文提交时
 
-正文 `<state>` 的写法（加减带 `+`/`-`，赋负数加括号 `(-5)`，路径写到最底层）见插件 README 第二节。隐藏正则放进卡内正则（`regex/`），同时设置 `markdownOnly` 与 `promptOnly`，只改显示和发出的提示词：
+正文 `<state>` 的写法（加减带 `+`/`-`，赋负数加括号 `(-5)`，路径写到最底层）见插件 `modules/variables/state2/README.md` 的「二、剧情中：让 AI 在回复里改变量」。隐藏正则放进卡内正则（`regex/`），同时设置 `markdownOnly` 与 `promptOnly`，只改显示和发出的提示词：
 
 ```json
 {
@@ -256,17 +256,20 @@ function readState(root) {
 swipe、删楼引起的回滚没有覆盖全部情况的“状态已变化”事件（见下文 `stateAtomsGenerated`）。显示当前值的界面每 0.5 秒比较一次状态字符串，变了才重绘。最新一楼的 iframe 也要这样做：它在生成结束时渲染，同一条回复里的状态可能在它打开之后才写入，后续删楼、切 swipe 也不会重建它。iframe 用自己的 `setInterval`，随 iframe 一起销毁，不往父页面挂定时器。
 
 ```js
+// 楼层 iframe 内
 let last = '';
-const timer = setInterval(() => {
-  const raw = SillyTavern.getContext().variables.local.get('西厢');
+const timer = window.setInterval(() => {
+  const raw = window.parent.SillyTavern.getContext().variables.local.get('西厢');
   const key = typeof raw === 'string' ? raw : JSON.stringify(raw);
   if (key !== last) { last = key; render(); }
 }, 500);
-onCleanup(() => clearInterval(timer));
+window.addEventListener('pagehide', () => window.clearInterval(timer));
 ```
 
+完整的 iframe 面板见[状态面板示例](<examples/state2-direct/panel.html.txt>)。循环任务里写法相同，但直接用 `SillyTavern`，并把清理放进 `onCleanup`。
+
 <a id="state-atoms"></a>
-**要知道“这一回合改了什么”时，在任务里订阅变化通知。** 轮询只看得到结果，分不清是新提交还是回滚。插件每次真实写入（正文 `<state>`、`applyText`、`apply`、预设的 `beginTurn().commit()`）和切 swipe 重算后，在父页面 `document` 上触发 jQuery 事件 `xiaobaix:variables:stateAtomsGenerated`，参数 `{ messageId, atoms }`，每个 atom 带路径、`oldValue`、`newValue`（插件 `variables-core.js` 1871、2517）。删楼、删 swipe 后插件只重算，不发这个通知（`variables-core.js` 2537–2546）。所以：
+**要知道“这一回合改了什么”时，在任务里订阅变化通知。** 轮询只看得到结果，分不清是新提交还是回滚。插件每次真实写入（正文 `<state>`、`applyText`、`apply`、预设的 `beginTurn().commit()`）和切 swipe 重算后，在父页面 `document` 上触发 jQuery 事件 `xiaobaix:variables:stateAtomsGenerated`，参数 `{ messageId, atoms }`，每个 atom 带路径、`oldValue`、`newValue`。删楼、删 swipe 后插件只重算，不发这个通知。所以：
 
 - 动画、音效、提示这类“只在发生变化时做一次”的效果，订阅它；界面显示的当前值仍靠轮询。
 - 只在循环任务里订阅，用带卡专属命名空间的 `$(document).on('xiaobaix:variables:stateAtomsGenerated.我的卡', …)`，`onCleanup` 里 `off` 掉。楼层 iframe 不往父页面挂监听（[能力参考 3.3](<xiaobaix-capabilities.md>)）。

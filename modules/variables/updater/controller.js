@@ -40,7 +40,7 @@ export function createUpdateController({ context, stateApi, assemble, request, s
             }
             const config = settings();
             run.abort.signal.throwIfAborted(); turn.assertCurrent();
-            run.task = await assemble(ctx, target, config, run.abort.signal);
+            run.task = await assemble(ctx, target, run.abort.signal);
             run.abort.signal.throwIfAborted(); turn.assertCurrent();
             let task = run.task;
             for (let attempt = 0; attempt < 2; attempt++) {

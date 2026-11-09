@@ -1,12 +1,8 @@
-import type { Compiled, Definition, Json, Path } from '../types.js';
+import type { Compiled, Definition, Json } from '../types.js';
 import { reject } from '../engine/diagnostics.js';
-import { clone, getAt, overlaps } from '../engine/data.js';
+import { clone, overlaps } from '../engine/data.js';
 import { getWritableFields } from './tools.js';
 
-const valueAt = (state: Json, path: Path) => {
-    const value = getAt(state, path);
-    return { path: clone(path), present: value !== undefined, ...(value === undefined ? {} : { value: clone(value) }) };
-};
 const authoredRules = (definition: Definition) => definition.rules.map(({ id, kind, path, description }) => ({ id, kind, path: clone(path), description }));
 const authoredConstraints = (definition: Definition) => definition.constraints.map(({ id, description }) => ({ id, description }));
 
@@ -22,14 +18,13 @@ export function buildDescriptionView(compiled: Compiled, sections = Object.keys(
 }
 
 export function buildUpdateView(compiled: Compiled, state: Json) {
-    const definition = compiled.definition, { fields, diagnostics } = getWritableFields(compiled);
+    const definition = compiled.definition, fields = getWritableFields(compiled);
     return { name: definition.name, state: clone(state), schema: clone(definition.schema),
-        writable: fields.map(({ path, descriptions, schema, removable }) => ({ ...valueAt(state, path), descriptions, schema, removable })),
+        writable: fields.map(({ path, descriptions, removable }) => ({ path: clone(path), descriptions, removable })),
         actions: definition.actions.map(({ id, description, parameters }) => ({ id, description, parameters: clone(parameters) })),
-        fields: definition.access.map(({ path, write, description, update }) => ({ ...valueAt(state, path), write: clone(write), description, ...(update ? { update } : {}) })),
+        fields: definition.access.map(({ path, write, description, update }) => ({ path: clone(path), write: clone(write), description, ...(update ? { update } : {}) })),
         triggers: (definition.triggers || []).map(({ id, description, timing }) => ({ id, description, timing: timing || 'batch' })),
         rules: authoredRules(definition), constraints: authoredConstraints(definition),
         functions: Object.entries(definition.functions).map(([id, fn]) => ({ id, description: fn.description })),
-        diagnostics,
     };
 }

@@ -1,11 +1,10 @@
 import { readableCardWorkspacePath, storedCardWorkspacePath } from '../../../card-workspace/paths.js';
 import type { Draft } from '../definition/authoring.js';
-import type { CardFile } from '../definition/card-files.js';
 
 // The assistant's read/effect classification and runtime surface share this registry.
 const METHODS = Object.freeze({
-    exportRules: 'read', prepareRuleImport: 'read', importRules: 'write', tryDefinition: 'read', checkDraft: 'read', inspect: 'read', preview: 'read', previewRequest: 'read', lastResult: 'read', settings: 'read',
-    openDraft: 'write', saveDraft: 'write', saveCardDraft: 'write', enable: 'write', apply: 'write', undo: 'write',
+    exportRules: 'read', prepareRuleImport: 'read', importRules: 'write', tryDefinition: 'read', checkDraft: 'read', inspect: 'read', preview: 'read', previewRequest: 'read', settings: 'read',
+    openDraft: 'write', saveCardDraft: 'write', enable: 'write', apply: 'write', undo: 'write',
     saveSettings: 'write', retrySave: 'write',
 });
 interface Manifest {
@@ -39,15 +38,12 @@ function mapDraftPaths(draft: Draft & { paths?: string[] }, map: (path: string) 
 // Only the assistant namespace presents readable workspace paths. Settlement
 // inputs, variable paths and the public LWB_StateV3 API are unchanged.
 function callAuthoringApi(name: string, call: (...args: unknown[]) => unknown, args: unknown[]) {
-    if (['checkDraft', 'saveDraft', 'saveCardDraft'].includes(name)) {
+    if (['checkDraft', 'saveCardDraft'].includes(name)) {
         args = [...args];
         args[0] = mapDraftPaths(args[0] as Draft, storedCardWorkspacePath);
-        if (name === 'saveDraft') {
-            args[1] = (args[1] as CardFile[]).map(file => ({ ...file, path: storedCardWorkspacePath(file.path) }));
-        }
     }
     const result = call(...args);
-    if (name === 'openDraft' || name === 'saveDraft') {
+    if (name === 'openDraft') {
         return Promise.resolve(result).then(draft => mapDraftPaths(draft as Draft, readableCardWorkspacePath));
     }
     if (name === 'saveCardDraft') {

@@ -1,19 +1,20 @@
 import { extension_settings } from '../../../../../../extensions.js';
 import { saveSettingsDebounced } from '../../../../../../../script.js';
-import { defaultSettings, upgradeV1Settings, validateSettings } from './settings-format.js';
+import { COPY } from './copy.js';
 
-export function initializeSettings() {
-    const saved = extension_settings.LittleWhiteBox?.variableUpdater;
-    if (saved && saved.version !== 2) saveSettings(upgradeV1Settings(saved));
-    // Earlier v2 saved a task-level switch. Drop it at the load boundary only.
-    else if (saved && Object.hasOwn(saved, 'toolChoice')) saveSettings(saved);
+const DEFAULTS = Object.freeze({ mode: 'manual', source: 'main' });
+
+function validate(value) {
+    if (!Object.hasOwn(COPY.modes, value?.mode) || !Object.hasOwn(COPY.sources, value?.source)) throw new Error(COPY.settingsInvalid);
+    return { mode: value.mode, source: value.source };
 }
 
 export function readSettings() {
-    return structuredClone(extension_settings.LittleWhiteBox?.variableUpdater ?? defaultSettings());
+    const { mode, source } = extension_settings.LittleWhiteBox?.variableUpdater ?? DEFAULTS;
+    return { mode, source };
 }
 
 export function saveSettings(value) {
-    extension_settings.LittleWhiteBox.variableUpdater = validateSettings(value);
+    extension_settings.LittleWhiteBox.variableUpdater = validate(value);
     saveSettingsDebounced();
 }

@@ -1,5 +1,5 @@
 import { contains, overlaps } from '../engine/data.js';
-import type { Compiled, JsonObject, Path, Schema } from '../types.js';
+import type { Compiled, JsonObject, Path } from '../types.js';
 import type { AgentToolDefinition } from '../../../agent-core/public-api.js';
 
 export const SUBMIT_TOOL = 'write';
@@ -13,7 +13,7 @@ function direct(compiled: Compiled, path: Path): boolean {
         && !blockedPaths(compiled).some(blocked => overlaps(blocked, path));
 }
 
-/** A finite tool projection; full recursive/conditional schemas stay in the writing guide and final validator. */
+/** A finite tool projection of action parameters; the full schema stays in the writing guide and final validator. */
 function inline(raw: unknown, root: unknown, seen = new Set<string>()): unknown {
     if (Array.isArray(raw)) {return raw.map(value => inline(value, root, seen));}
     if (!object(raw)) {return raw;}
@@ -30,7 +30,7 @@ function inline(raw: unknown, root: unknown, seen = new Set<string>()): unknown 
     return Object.fromEntries(Object.entries(raw).filter(([key]) => !['$id', '$schema', '$defs', 'definitions'].includes(key))
         .map(([key, value]) => [key, inline(value, root, seen)]));
 }
-export interface WritableField { path: Path; schema: Schema; removable: boolean; descriptions: string[] }
+export interface WritableField { path: Path; removable: boolean; descriptions: string[] }
 function finitePaths(raw: unknown, path: Path): Path[] | undefined {
     if (!object(raw) || raw.$ref || ['allOf', 'anyOf', 'oneOf', 'if', 'patternProperties'].some(key => key in raw)) {return undefined;}
     if (raw.type === 'array' || !raw.type) {return undefined;}
@@ -44,16 +44,15 @@ function finitePaths(raw: unknown, path: Path): Path[] | undefined {
     }
     return paths;
 }
-export function getWritableFields(compiled: Compiled): { fields: WritableField[]; diagnostics: [] } {
+export function getWritableFields(compiled: Compiled): WritableField[] {
     const fields: WritableField[] = [];
     const visit = (raw: unknown, path: Path, required: boolean) => {
-        if (path.length && direct(compiled, path)) {fields.push({ path, schema: (inline(raw, compiled.definition.schema) ?? {}) as Schema,
-            removable: !required, descriptions: compiled.definition.access.filter(entry => contains(entry.path, path)).map(entry => entry.description) });}
+        if (path.length && direct(compiled, path)) {fields.push({ path, removable: !required, descriptions: compiled.definition.access.filter(entry => contains(entry.path, path)).map(entry => entry.description) });}
         if (!object(raw) || !object(raw.properties)) {return;}
         for (const [key, schema] of Object.entries(raw.properties)) {visit(schema, [...path, key], Array.isArray(raw.required) && raw.required.includes(key));}
     };
     visit(compiled.definition.schema, [], true);
-    return { fields, diagnostics: [] };
+    return fields;
 }
 export function getInputSchema(compiled: Compiled): JsonObject {
     const operations: JsonObject[] = [];
@@ -86,7 +85,7 @@ export function getInputSchema(compiled: Compiled): JsonObject {
 }
 export function getTools(compiled: Compiled): AgentToolDefinition[] {
     return [{ type: 'function', function: { name: SUBMIT_TOOL,
-        description: 'Submit one ordered batch of changes and actions for the marked passage. The result reports confirmed changes or diagnostics; failure applies none of the batch. An empty state array records that this passage causes no changes.',
+        description: 'Submit one ordered batch of changes and actions caused by the marked passage. The platform validates and saves them to that passage, then ends this request without a tool-result turn. A rejected batch applies none of its items and returns its diagnostics for one corrected submission. An empty state array records that this passage causes no changes.',
         parameters: { type: 'object', required: ['state'], additionalProperties: false, properties: { state: getInputSchema(compiled) } },
     } }];
 }

@@ -1,4 +1,5 @@
 import type { PublicAgentSession, AgentChatResult } from '../../../agent-core/public-api.js';
+import { correctionTask } from '../../updater/correction.js';
 import type { Result, RunOptions } from '../types.js';
 import type { SettlementService } from '../runtime/service.js';
 import { state3Context as getContext, type createHostAdapter } from '../runtime/host.js';
@@ -6,7 +7,7 @@ import { exposeVariableReads } from '../../var-commands.js';
 import { captureContext } from '../../shared/context-capture.js';
 import { passageText } from '../../shared/passage.js';
 import { compileDefinition } from '../definition/compile.js';
-import { buildUpdateTask, correctionMessages } from './prompts.js';
+import { buildUpdateTask } from './prompts.js';
 import { SUBMIT_TOOL } from './tools.js';
 import { readSettings } from '../runtime/settings.js';
 import { reject, diagnostic } from '../engine/diagnostics.js';
@@ -74,8 +75,9 @@ export function createState3Updater({ service, adapter, available, changed }: { 
                         setPhase(result.ok ? result.saved ? 'success' : 'unsaved' : 'failed');
                         return result;
                     }
-                    if (attempt || response.truncated || response.completion !== 'complete') { setPhase('failed'); return preview; }
-                    task = { ...task, messages: [...task.messages, ...correctionMessages(response, preview.diagnostics, session.toolResult)] };
+                    if (attempt) { setPhase('failed'); return preview; }
+                    const submission = { text: response.text, toolCalls: response.toolCalls, completion: response.completion, truncated: response.truncated };
+                    task = correctionTask(prepared.task, submission, preview.diagnostics, 'state');
                 }
                 return { ok: false, diagnostics: [{ code: 'model-submission' }] };
             } catch (error) {

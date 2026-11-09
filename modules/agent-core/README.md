@@ -43,7 +43,7 @@ createPlanLedger({ plansTable });
 
 ## API Key 与免密反代
 
-共享主配置与分身配置的 API Key 均可留空。空值、空白或未提供的 Key 表示不提供模型密码；填写 Key 时按所选 Provider 鉴权。设置和请求共用 CORE 的鉴权规则，各 App 不再以空 Key 判断模型未配置。
+共享主配置与分身配置的 API Key 均可留空。空值、空白或未提供的 Key 表示不提供模型密码；填写 Key 时按所选 Provider 鉴权。设置和请求共用 CORE 的鉴权规则；模型是否已配置不取决于 Key 是否为空。
 
 OpenAI 兼容、Responses、Anthropic 的免密请求不发送认证头；Google 受当前 SDK 约束发送空 `x-goog-api-key`。SDK 内部适配不保存占位密钥，也不把占位值或 Node 环境凭据发给反代。模型拉取和实际请求均保留供应商鉴权错误，不切换身份重试。
 
@@ -67,7 +67,7 @@ Claude 和 Google 的模型列表鉴权与生成鉴权分开：预设中的 `mod
 
 流式工具请求默认开启 `streamFunctionCallArguments`；中转不透传此字段时可关闭，仍接受完整 `functionCall.args`。按 [Vertex 分片协议](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#streaming_function_call_arguments)处理 `partialArgs` 的路径、类型、字符串续片和两层 `willContinue`，同名调用保持独立。只有参数完整才返回可执行工具；签名和真实调用 ID 保留，无 ID 不伪造供应商 ID。当前会话及保存后重放都使用完整调用，不回传参数碎片。
 
-`vertex-config.js` 定义连接配置与端点，`google-vertex.js` 拥有 Vertex 请求规则，`vertex-transport.js` 发送原生 JSON / SSE 并保留供应商错误，`vertex-stream.js` 只组装当前响应，`vertex-auth.js` 只负责认证；消息构造、图片和工具回放复用 `GoogleAdapter`。工具声明使用 `parametersJsonSchema` 保留 JSON Schema，不套用旧 SDK 的字段投影。访问令牌与签名密钥只在当前 Adapter 内存按需续期，没有持久缓存、后台刷新或自动重试。JSON 的 `token_uri` 不作为目的地，OAuth 固定发送至 Google 官方端点。配置归属及删除路径遵循上面的预设规则，不新增数据库。
+`vertex-config.js` 定义连接配置与端点，`google-vertex.js` 拥有 Vertex 请求规则，`vertex-transport.js` 发送原生 JSON / SSE 并保留供应商错误，`vertex-stream.js` 只组装当前响应，`vertex-auth.js` 只负责认证；消息构造、图片和工具回放复用 `GoogleAdapter`。工具声明使用 `parametersJsonSchema` 原样传递 JSON Schema。访问令牌与签名密钥只在当前 Adapter 内存中按需续期。JSON 的 `token_uri` 不作为目的地，OAuth 固定发送至 Google 官方端点。配置归属及删除路径遵循上面的预设规则，不新增数据库。
 
 模型发现失败明确报错，不替换内置列表。4 Argon 的 `CONTINUATION` 长解码结束状态按未完成返回，不自动发起续段或扩大用户预算；本渠道不提供 Interactions / Live API。官方认证说明：[服务账号 OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)、[Vertex API Key](https://cloud.google.com/vertex-ai/generative-ai/docs/start/api-keys)。
 

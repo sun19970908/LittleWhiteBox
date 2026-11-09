@@ -12,7 +12,7 @@ function lookupScopeParameter(pathParameter = 'path') {
     return {
         type: 'string',
         enum: LOOKUP_SCOPES,
-        description: `File source: ${LOOKUP_SCOPE_PROJECT} = project source code (default); ${LOOKUP_SCOPE_LOCAL} = session workspace. The directory or file path goes in ${pathParameter}, not scope.`,
+        description: `File source: ${LOOKUP_SCOPE_PROJECT} = project source code (default); ${LOOKUP_SCOPE_LOCAL} = the assistant workspace. The directory or file path goes in ${pathParameter}, not scope.`,
     };
 }
 
@@ -145,7 +145,6 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.READ,
             description: [
                 'Read a text file or directory using the current instance\'s live contents.',
-                'For some explicit public file paths, direct live reads may still work even if the path is not in the index.',
                 'Returns numbered lines for files and plain entry names for directories; large reads include continuation hints.',
                 'Use `tail` only when you need the last N lines of a file; otherwise omit it entirely.',
             ].join('\n'),
@@ -172,7 +171,6 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.WRITE,
             description: [
                 'Write a `local/` text file. Use for new files or whole-file rewrites.',
-                'Can only write `local/` paths and never writes back to the user\'s original disk files.',
                 'Can directly create a new `local/...` file path, including `local/file.txt` or `local/<root>/file.txt`.',
             ].join('\n'),
             parameters: {
@@ -213,7 +211,6 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.DELETE,
             description: [
                 'Delete a `local/` file or directory.',
-                'Can only delete `local/` paths and never deletes the user\'s original disk files.',
                 'Supports deleting a single file or a directory with all files under it.',
             ].join('\n'),
             parameters: {
@@ -232,7 +229,6 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.MOVE,
             description: [
                 'Move or rename a `local/` file or directory.',
-                'Can only operate on `local/` paths and never moves the user\'s original disk files.',
                 'Supports renaming files, moving files, and moving whole directories; existing destinations require explicit overwrite permission.',
             ].join('\n'),
             parameters: {

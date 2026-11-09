@@ -41,7 +41,7 @@
 
 ### 2.1 卡里怎么放
 
-角色任务保存在 `data.extensions['xiaobaix-tasks'].tasks`（数组）。在助手工作区编辑 `tasks/<id>.json` 设置及配对的 `.js` 完整命令；CardFiles 写回时合并进角色任务，不需要另做导入文件。下面是卡内存储格式，工作区设置文件只写其中单个任务的设置，ID 由文件名确定，commands 由配对脚本提供。
+角色任务保存在 `data.extensions['xiaobaix-tasks'].tasks`（数组）。在助手工作区编辑 `tasks/<id>.json` 设置及配对的 `.js` 完整命令；CardFiles 写回时合并进角色任务，不需要另做导入文件。下面是卡内存储格式，工作区设置文件只写其中单个任务的设置，ID 由文件名确定，commands 由配对脚本提供。CardFiles 新建任务时，设置文件省略的字段取 `interval: 1`、`floorType: "all"`、`triggerTiming: "chat_changed"`、`disabled: false`；要别的时机就在设置文件里写明。
 
 ```json
 {
@@ -69,8 +69,8 @@
 | --- | --- | --- |
 | `name` | 字符串 | 同时用作运行身份、冷却键、按钮文字和 `/xbqte` 查找名。不要与常见全局任务同名：`/xbqte` 和按钮按“全局 → 角色 → 预设”顺序找第一个同名任务 |
 | `commands` | 斜杠命令文本和/或 `<<taskjs>>…<</taskjs>>` 块 | 见 2.3 |
-| `triggerTiming` | 见 2.2 | 缺省按 `after_ai` |
-| `interval` | **数字**，0–99999 | 卡内任务不经过补全：缺少 `interval` 的任务永远不会被消息时机触发；写成字符串 `"3"` 时 `only_this_floor` 永不匹配 |
+| `triggerTiming` | 见 2.2 | 卡内存储缺少此字段时调度按 `after_ai` |
+| `interval` | **数字**，0–99999 | 卡内存储缺少 `interval` 的任务永远不会被消息时机触发；写成字符串 `"3"` 时 `only_this_floor` 永不匹配 |
 | `floorType` | `all` / `user` / `llm` | 缺省 `all` |
 | `disabled` | 布尔 | `true` 时不调度 |
 | `buttonActivated` | 布尔 | `true` 时在输入框上方的快速回复栏显示按钮，点击等于 `/xbqte 名称`；`false` 隐藏快捷按钮，不影响自动调度 |
@@ -78,9 +78,9 @@
 | `x` | 对象 | 保留已有扩展设置；新建角色任务可用 `{}`，`x.presetStart` 只对预设任务有意义 |
 | `createdAt` | ISO 时间 | 仅记录 |
 
-其他字段（`script`、`trigger`、`enabled`、`buttonName`、`character_tasks` 等）插件不读，不要写，否则只会增大卡体积。
+表外字段插件不读，只会增大卡体积。
 
-素材装载、页面样式、开局变量初始化等后台任务用 `buttonActivated: false`。只有玩家主动点击后有明确用途与反馈的动作才开启按钮。`chat_changed` 配 `interval: 0` 仍会自动运行；任务编辑器显示的“手动触发”不能代替实际调度契约。核验位置：插件 `modules/scheduled-tasks/scheduled-tasks.js` 的 `tasksToExecute` 过滤（1394–1409）与 `getActivatedTasks`（1791），2026-11-03 本机版本；更新后复查相应分支。
+素材装载、页面样式、开局变量初始化等后台任务用 `buttonActivated: false`。只有玩家主动点击后有明确用途与反馈的动作才开启按钮。`chat_changed` 配 `interval: 0` 仍会自动运行；任务编辑器显示的“手动触发”不能代替实际调度契约。核验位置：插件 `modules/scheduled-tasks/scheduled-tasks.js` 的 `tasksToExecute` 过滤与 `getActivatedTasks`。
 
 单独导入任务文件时，`type` 决定导入位置（`global` / `character` / `preset`），导入是追加，不替换同名任务。导入角色任务前要先打开该角色。
 
@@ -215,12 +215,12 @@ await STscript('/echo 当前共 ' + c.chat.length + ' 条消息');
 - `streaming: { enabled, onChunk(chunk, accumulated) }`：流式回调；
 - `preset`：临时使用某个聊天补全预设；`api: { overrides: { provider, model, temperature, maxTokens, … } }`：默认继承当前连接，覆盖列出的接口参数。
 
-只支持聊天补全（Chat Completion）类 API。失败时 Promise 会 reject：`error.message` 是原因，`error.code` 是错误码（如 `API_ERROR`、`CANCELLED`、`INVALID_OPTIONS`），`error.details` 是附加信息。旧版小白X在这里只给出 `[object Object]`，原因要看浏览器控制台。
+只支持聊天补全（Chat Completion）类 API。失败时 Promise 会 reject：`error.message` 是原因，`error.code` 是错误码（如 `API_ERROR`、`CANCELLED`、`INVALID_OPTIONS`），`error.details` 是附加信息。
 
 iframe 还会收到这些消息（`window.addEventListener('message', …)`）：
 
 - 向父页面发送 `{ type: 'iframe-ready' }` 或 `{ type: 'request-context' }`，会收到 `{ type: 'st-context', chatId, characterId, characterName, userName, userPersona, userAvatar, msgIndex, swipeId, totalSwipes, totalMessages, isGroupChat, groupId }`。`msgIndex` 是本 iframe 所在楼层。
-- 之后会收到广播 `{ source: 'xiaobaix-host', type: 'st-event', event, payload }`，`event` 为 `message_sent`、`message_received`、`message_edited`、`message_swiped`、`message_deleted`、`chat_id_changed`、`chat_created`、`chat_deleted`、`group_chat_deleted`（`bridges/context-bridge.js` 234–250）。所在楼层被 swipe、编辑时本 iframe 会被重建，这些事件主要对其他楼层的 iframe 有用。
+- 之后会收到 `{ source: 'xiaobaix-host', type: 'st-event', event, payload }`。`message_sent`、`message_received`、`message_edited`、`message_swiped`、`message_deleted`、`chat_id_changed`、`chat_created` 广播给当前所有楼层 iframe；`chat_deleted`、`group_chat_deleted` 只排队交给下一个发出 `iframe-ready` 的 iframe（插件 `bridges/context-bridge.js`）。所在楼层被 swipe、编辑时本 iframe 会被重建，这些事件主要对其他楼层的 iframe 有用。
 
 完整的读取、按钮写入和失败反馈见[变量 2.0 面板](<examples/state2-direct/panel.html.txt>)及[装配说明](<xiaobaix-game-state.md#direct-state-example>)。
 
@@ -308,7 +308,7 @@ iframe 拿得到，有四种办法，按推荐顺序：
 - **按请求重演**：每条消息在各自的 swipe 上记录做过的操作。删消息、切 swipe 时，按保留下来的请求重新计算。重新打开同一聊天只载入保存状态并扫描受管范围，不重新执行请求；新建聊天从该聊天的初始化开始。
 - **编辑与删除状态块**：编辑任意楼层的 `<state>` 都会从该楼起重新计算后续楼层；继续生成（continue）只执行新增的块；把消息里的 `<state>` 全部删光会**保留**该楼已生效的记录（方便清理正文，不等于撤销），删掉其中一部分块则会按剩余块重算。
 - **守卫 ≠ 记账**：`/xbsetvar`、`/xbaddvar`、`/xbpushvar`、`/xbdelvar` 在变量核心开启时经过守卫校验，但直接改本地变量，**不进变量 2.0 的楼层请求记录**，重算时会被覆盖。受管根变量一律走上面三个变量 2.0 入口；原生 `variables.local.set`、`/setvar` 只用于带卡前缀的普通界面变量。
-- **变量 1.0（旧默认）**：AI 输出 `<plot-log>`（`set`/`push`/`bump`/`del`）。新卡需要结构模板、范围约束或前端结构化调用时，用变量 2.0。
+- **变量 1.0（默认模式）**：AI 输出 `<plot-log>`（`set`/`push`/`bump`/`del`）。新卡需要结构模板、范围约束或前端结构化调用时，用变量 2.0。
 
 <a id="varevent"></a>
 ### 5.3 条件规则与动作：`<varevent>`
@@ -375,9 +375,9 @@ display: "她把你当作轻薄之人。"
 <a id="draw-contract"></a>
 ### 6.1 绘图请求的实际契约
 
-先读插件 `docs/media-api.html`（字段表、三家 `params` 表、错误码、保存结果）和类型声明 `modules/draw/shared/public-api.d.ts`。以下是这两份之外、2026-11-04 本机版本源码里核实的补充；插件更新后复查。
+先读插件 `docs/media-api.html`（字段表、三家 `params` 表、错误码、保存结果）和类型声明 `modules/draw/shared/public-api.d.ts`。以下是这两份之外、在插件源码里核实的补充。
 
-- `xiaobaixDraw.getStatus()` 同步返回 `{ provider, enabled, ready }`。`ready` 只表示总开关开着、选了服务、该服务的画图模块已加载（插件 `plugin-entry.js` 438–446），不检查 API 地址、密钥、模型有没有填，这些缺了要到 `generate` 才报 `not_configured`。用它决定显不显示画图按钮；一次点击要先花一次聊天请求构图时，`ready` 只能挡住没开、没选的情况，画图这步仍要处理 `not_configured`，并把已花掉的构图结果留住（例如显示出来、允许重画时复用），不要直接丢弃。
+- `xiaobaixDraw.getStatus()` 同步返回 `{ provider, enabled, ready }`。`ready` 只表示总开关开着、选了服务、该服务的画图模块已加载（插件 `plugin-entry.js`），不检查 API 地址、密钥、模型有没有填，这些缺了要到 `generate` 才报 `not_configured`。用它决定显不显示画图按钮；一次点击要先花一次聊天请求构图时，`ready` 只能挡住没开、没选的情况，画图这步仍要处理 `not_configured`，并把已花掉的构图结果留住（例如显示出来、允许重画时复用），不要直接丢弃。
 - 请求顶层或 `params` 里多出任何键都抛 `unsupported_field`；`params` 的值类型须与该供应商默认值一致（`public-api.js` 的 `validateDrawParams`）。
 - `characterPrompts` 每项只含 `{ prompt, uc, center }`，`center` 两轴在 0–1。NovelAI V4/V4.5 有任一角色不在 0.5/0.5 时按坐标分区；V5、SD、ComfyUI 把各角色 `prompt` 接到总提示词后面。各角色 `uc` 在所有供应商都并进总负面（`compiler.js` 80，`sd-draw.js` 902），排除词写一次就够。
 - 返回的 `Blob` 带真实图片 MIME（`shared/image-collection.js` 的 `imageBlob`）。

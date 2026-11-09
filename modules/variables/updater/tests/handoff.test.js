@@ -3,7 +3,7 @@ import test from 'node:test';
 import * as agentCore from '../../../agent-core/browser-entry.js';
 import { createPublicAgentApi } from '../../../agent-core/public-api.js';
 import { scanAssistantText, decodeTextToolCalls } from '../../../agent-core/adapters/text-tool-protocol.js';
-import { buildUpdateTask, defaultPreset, HANDOFF } from '../preset.js';
+import { APPROVAL, buildUpdateTask, HANDOFF } from '../handoff.js';
 import { parseSubmission } from '../transport.js';
 import { getStateInputSchema } from '../../state2/json-input.js';
 
@@ -40,7 +40,7 @@ for (const [provider, toolMode] of [['openai-compatible', 'native'], ['openai-co
         for (const source of ['main', 'delegate']) {
             const session = await api.openSession({ api: source });
             try {
-                const task = buildUpdateTask(defaultPreset(), material, getStateInputSchema());
+                const task = buildUpdateTask(material, getStateInputSchema());
                 assert.equal(task.toolChoice, 'auto');
                 const before = structuredClone(task);
                 const response = await session.chat(task);
@@ -56,7 +56,7 @@ for (const [provider, toolMode] of [['openai-compatible', 'native'], ['openai-co
                     assert.deepEqual(calls.map(part => part.functionCall.name), names);
                     assert.ok(calls.every(part => part.thoughtSignature === 'skip_thought_signature_validator'));
                     assert.deepEqual(sent.contents.flatMap(message => message.parts).filter(part => part.functionResponse)
-                        .map(part => part.functionResponse.response), [material.context, material.state, { approval: defaultPreset().approval }]);
+                        .map(part => part.functionResponse.response), [material.context, material.state, { approval: APPROVAL }]);
                 } else if (provider === 'openai-responses') {
                     assert.equal(response.finishReason, 'completed');
                     const calls = sent.input.filter(item => item.type === 'function_call');

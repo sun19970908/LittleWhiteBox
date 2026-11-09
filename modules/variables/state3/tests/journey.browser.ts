@@ -397,7 +397,7 @@ export async function verifyUpdaterRecovery(api: State3Api) {
         }; } };
         const corrected = accepted(await api.update());
         requireValue(requests.length === 2 && JSON.stringify(corrected.state) === JSON.stringify(before), 'K9: one correction, rejected candidate unchanged');
-        requireValue(requests[1].messages.some(item => item.role === 'tool' && item.content.includes('derived-write')), 'K9: exact rejection sent to correction');
+        requireValue(requests[1].messages.at(-1)?.role === 'user' && String(requests[1].messages.at(-1)?.content).includes('derived-write'), 'K9: exact rejection sent to correction');
         const correctedRequests = requests.map(({ signal: _signal, ...task }) => structuredClone(task));
         requests.length = 0;
         api.saveSettings({ ...settings, mode: 'auto' });

@@ -4,19 +4,17 @@ import { createModuleEvents, event_types } from '../../../core/event-manager.js'
 import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
 import { getStateInputSchema } from '../state2/json-input.js';
 import { COPY } from './copy.js';
-import { initializeSettings, readSettings, saveSettings } from './settings.js';
+import { readSettings, saveSettings } from './settings.js';
 import { latestReply, collectMaterial, hasBodyUpdate } from './context.js';
-import { buildUpdateTask } from './preset.js';
+import { buildUpdateTask } from './handoff.js';
 import { requestUpdate } from './transport.js';
 import { createUpdateController } from './controller.js';
 import { createUpdaterView } from './view.js';
-import { removeLegacyResults } from './legacy-result.js';
 
 let runtime;
 
 export function initVariableUpdater(stateApi) {
     if (runtime) return;
-    initializeSettings();
     const events = createModuleEvents('variableUpdater');
     let pendingGeneration, frame, swipeRecovery;
     const enabled = () => extension_settings.LittleWhiteBox?.variablesCore?.enabled && extension_settings.LittleWhiteBox?.variablesMode === '2.0';
@@ -24,9 +22,9 @@ export function initVariableUpdater(stateApi) {
         if (!enabled()) throw new Error(COPY.enable);
         if (isGenerating()) throw new Error(COPY.busy);
     }
-    async function assemble(ctx, target, settings, signal) {
-        const material = await collectMaterial(ctx, target, settings, signal);
-        return buildUpdateTask(settings.preset, material, getStateInputSchema());
+    async function assemble(ctx, target, signal) {
+        const material = await collectMaterial(ctx, target, signal);
+        return buildUpdateTask(material, getStateInputSchema());
     }
     function clearSwipeRecovery() { swipeRecovery?.disconnect(); swipeRecovery = null; }
     function watchSwipeRecovery(id) {
@@ -60,9 +58,9 @@ export function initVariableUpdater(stateApi) {
         settings: readSettings, assertAvailable, changed: refresh });
     const api = {
         settings: readSettings, saveSettings(value) { saveSettings(value); if (value.mode === 'off') controller.cancel(); refresh(); },
-        async preview(settings) {
+        async preview() {
             const ctx = getContext(), target = latestReply(ctx), turn = stateApi.observeTurn(target);
-            const task = await assemble(ctx, target, settings);
+            const task = await assemble(ctx, target);
             turn.assertCurrent(); return task;
         },
         async openAssistant() {
@@ -73,11 +71,9 @@ export function initVariableUpdater(stateApi) {
     };
     const view = createUpdaterView(api);
     const cancelled = () => { pendingGeneration = null; controller.invalidate(); refresh(); };
-    async function loadChat() {
+    function loadChat() {
         clearSwipeRecovery();
         cancelled();
-        const ctx = getContext();
-        if (removeLegacyResults(ctx.chat)) await ctx.saveChat();
     }
     events.on(event_types.GENERATION_STARTED, (type, _options, dryRun) => {
         if (dryRun || !['normal', 'regenerate', 'swipe', 'continue', undefined, ''].includes(type)) return;
@@ -118,7 +114,7 @@ export function initVariableUpdater(stateApi) {
         },
         dispose() { events.cleanup(); clearSwipeRecovery(); controller.dispose(); cancelAnimationFrame(frame); view.dispose(); },
     };
-    observeBackgroundTask(loadChat(), { source: import.meta.url, operation: 'retireLegacyResults' });
+    loadChat();
 }
 
 export function openVariableSettings(page) {

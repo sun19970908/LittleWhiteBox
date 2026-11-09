@@ -19,11 +19,11 @@ CardFiles refresh replaces workspace files with saved content. It does not reloa
 RunJavaScriptApi exposes these existing APIs:
 
 - ctx.updateMessageBlock(messageId, message, {rerenderMessage: true}) re-renders that message using the current host formatting and regex settings. Pass the existing ctx.chat[messageId] unchanged.
-- st.iframeRenderer.processMessageById(messageId, forceFinal = true) processes that floor's rendered HTML code blocks with the LittleWhiteBox renderer. Call it after updateMessageBlock. In a managed TauriTavern surface the host owns iframe recreation during updateMessageBlock; this entry leaves that ownership intact.
+- st.iframeRenderer.processMessageById(messageId, forceFinal = true) processes that floor's rendered HTML code blocks with the LittleWhiteBox renderer. Call it after updateMessageBlock. Under TauriTavern, updateMessageBlock already recreates the iframes and this call leaves them as they are.
 
 Both calls concern the selected floor's display. They neither save chat text nor execute task scripts. They do recreate the page, so the page's own initialization scripts run again. Read those scripts first if reinitialization could send requests, change variables, or grant rewards; use an isolated chat or ask for authorization for those effects.
 
-Do not manufacture MESSAGE_UPDATED, MESSAGE_EDITED or generation events to make a page refresh: other listeners may settle variables or run scheduled tasks. Do not reload the whole chat for a single-floor repair.
+These two calls are the refresh path. MESSAGE_UPDATED, MESSAGE_EDITED and generation events have other listeners that settle variables or run scheduled tasks, and reloading the whole chat reruns every floor.
 
 When JS execution is disabled, InspectPage still works. Explain that writeback has completed but live rebuilding is pending, and point to the assistant's JavaScript API permission setting rather than claiming that the repair is verified.
 

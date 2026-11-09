@@ -17,7 +17,7 @@ const task = { systemPrompt: 'state task', messages: [{ role: 'user', content: '
 
 test.before(async () => {
     h = await createHarness();
-    for (const name of ['copy.js', 'world-info.js', 'preset.js', 'transport.js', 'correction.js', 'result.js', 'result-diff.js', 'history-result.js', 'legacy-result.js']) {
+    for (const name of ['copy.js', 'world-info.js', 'handoff.js', 'transport.js', 'correction.js', 'result.js', 'result-diff.js', 'history-result.js']) {
         writeFileSync(path.join(h.tempDir, name), readFileSync(path.resolve('modules/variables/updater', name), 'utf8')
             .replaceAll("'../state2/", "'./")
             .replace("'../shared/array-alignment.js'", JSON.stringify(pathToFileURL(path.resolve('modules/variables/shared/array-alignment.js')).href))
@@ -110,16 +110,11 @@ test('network, saving, cancellation and stale state never trigger an extra model
 
 test('rollback save failure never calls the model; retry saves the revoked state without restoring its receipt', async () => {
     api.beginUpdate({ floor: 1, swipeId: 0 }).commit(input(-20));
-    ctx().chat[1].extra.LittleWhiteBox_variableUpdate = { changes: [{}] };
-    // Retired receipts are removed at chat load, before the controller runs.
-    const { removeLegacyResults } = await import('../updater/legacy-result.js');
-    removeLegacyResults(ctx().chat);
     const { sent } = setup([response(input(-5))]);
     ctx().saveChat = () => { throw new Error('save failed'); };
     await controller.update();
     assert.equal(sent.length, 0);
     assert.equal(readStoredValue(ctx(), '角色').金币, 100);
-    assert.equal(ctx().chat[1].extra.LittleWhiteBox_variableUpdate, undefined);
     assert.equal(controller.status().saveFailed, true);
     ctx().saveChat = function () { this.saveCount++; };
     await controller.retrySave();

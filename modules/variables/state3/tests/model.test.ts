@@ -5,13 +5,15 @@ import { compileDefinition } from '../definition/compile.js';
 import { equipmentExample } from '../definition/example.js';
 import { initialize, settle } from '../engine/settle.js';
 import { buildDescriptionView, buildUpdateView } from '../model/views.js';
-import { getInputSchema, getTools, SUBMIT_TOOL } from '../model/tools.js';
-import { buildUpdateTask, correctionMessages } from '../model/prompts.js';
+import { getInputSchema, getTools } from '../model/tools.js';
+import { buildUpdateTask } from '../model/prompts.js';
+import { correctionTask } from '../../updater/correction.js';
 import { accepted } from './fixture.js';
-import type { AgentChatResult, AgentToolCall, AgentToolResult } from '../../../agent-core/public-api.js';
+import * as agentCore from '../../../agent-core/browser-entry.js';
+import { createPublicAgentApi } from '../../../agent-core/public-api.js';
 import type { Json } from '../types.js';
 
-test('K9: V5 supplies three ordered exchanges; correction retains the actual provider reply and tool results', async () => {
+test('K9: V5 supplies three ordered exchanges; correction appends the rejected response and diagnostics to the same task', async () => {
     const compiled = compileDefinition(equipmentExample()), start = accepted(await initialize(compiled));
     const context = { target: { floor: 2, swipeId: 0 }, messages: [{ role: 'assistant', content: 'Completed passage.' }] };
     const task = buildUpdateTask(compiled, start.state, context);
@@ -20,18 +22,36 @@ test('K9: V5 supplies three ordered exchanges; correction retains the actual pro
     assert.deepEqual(JSON.parse(String(exchanges[0].content)), context);
     assert.deepEqual(JSON.parse(String(exchanges[1].content)), buildUpdateView(compiled, start.state));
     assert.equal(task.toolChoice, 'auto'); assert.equal(task.tools![0].function.name, 'write');
-    const call: AgentToolCall = { id: 'local', providerId: 'remote', name: SUBMIT_TOOL, arguments: '{"state":[]}' };
-    const response: Pick<AgentChatResult, 'toolCalls' | 'reply'> = { toolCalls: [call], reply: { role: 'assistant', content: '',
-        providerPayload: { openaiCompatibleMessage: { reasoning_content: 'provider replay' } },
-        tool_calls: [{ id: call.id, type: 'function', function: { name: call.name, arguments: call.arguments } }] } };
-    const received: unknown[] = [];
-    const messages = correctionMessages(response, [{ code: 'action-precondition' }], (original, result) => {
-        received.push({ original, result });
-        return { role: 'tool', toolName: original.name, tool_call_id: original.id, content: JSON.stringify(result) };
+    const submission = { text: '', toolCalls: [{ id: 'local', name: 'write', arguments: '{"state":[]}' }], completion: 'complete', truncated: false };
+    const corrected = correctionTask(task, submission, [{ code: 'action-precondition' }], 'state');
+    assert.deepEqual(corrected.messages.slice(0, -1), task.messages);
+    const appended = corrected.messages.at(-1)!;
+    assert.equal(appended.role, 'user');
+    assert.deepEqual(JSON.parse(String(appended.content).slice(String(appended.content).indexOf('\n\n') + 2)), { submission, errors: [{ code: 'action-precondition' }] });
+});
+
+// DeepSeek thinking with tools rejects replayed calls without reasoning; the Agent layer
+// derives it from each platform-supplied call's text, so V5 must be sendable with thinking.
+test('K9: V5 exchanges are sendable to DeepSeek with provider-default thinking', async t => {
+    const compiled = compileDefinition(equipmentExample()), start = accepted(await initialize(compiled));
+    const task = buildUpdateTask(compiled, start.state, { target: { floor: 2, swipeId: 0 }, messages: [] });
+    const bodies: { messages: { tool_calls?: unknown[], reasoning_content?: string }[] }[] = [];
+    t.mock.method(globalThis, 'fetch', async (input: RequestInfo, init?: RequestInit) => {
+        const request = new Request(input, init);
+        assert.equal(new URL(request.url).hostname, 'offline.invalid');
+        bodies.push(await request.json());
+        return Response.json({ choices: [{ finish_reason: 'stop', message: { role: 'assistant', content: 'done' } }] });
     });
-    assert.deepEqual(messages[0], response.reply);
-    assert.equal(received.length, 1);
-    assert.equal((messages[1] as AgentToolResult).tool_call_id, call.id);
+    const settings = agentCore.normalizeAgentSettings({ currentPresetName: 'offline', presets: { offline: {
+        provider: 'openai-compatible', model: 'deepseek-v4-flash', apiKey: 'offline-fixture', baseUrl: 'https://offline.invalid',
+        toolMode: 'native', maxTokens: 64, reasoning: { mode: 'inherit' } } } });
+    const { api } = createPublicAgentApi({ isEnabled: () => true, loadSettings: () => settings, loadCore: async () => agentCore });
+    const session = await api.openSession();
+    await session.chat(task);
+    session.dispose();
+    const replayed = bodies[0].messages.filter(message => message.tool_calls);
+    assert.equal(replayed.length, 3);
+    for (const message of replayed) {assert.ok(message.reasoning_content?.trim());}
 });
 
 test('K2/K9: generated paths exclude derived and action-only fields; RP descriptions exclude values and updater instructions', async () => {

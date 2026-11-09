@@ -20,7 +20,7 @@ export const COPY = {
     result: '结算结果', empty: '没有状态变化', success: '结算成功', previewed: '试算成功，未改变聊天',
     failed: '本次未生效', saved: '已保存', unconfirmed: '结果已生效，但未确认保存。请重试保存，不要重复执行动作。', retrySave: '重试保存',
     refreshing: '正在读取…', newFunction: '新建函数', functionName: '函数名（字母、数字、下划线或短横线）',
-    phases: { ready: '', preparing: '正在读取资料', requesting: '正在更新', correcting: '正在纠正提交', saving: '正在保存', success: '已更新', unsaved: '尚未保存', failed: '更新失败', cancelled: '已取消' } as Record<string, string>,
+    phases: { ready: '', preparing: '正在读取资料', requesting: '正在更新', correcting: '正在重试', saving: '正在保存', success: '已更新', unsaved: '尚未保存', failed: '更新失败', cancelled: '已取消' } as Record<string, string>,
     reasons: { input: '直接修改', action: '动作', derive: '关联计算', correct: '按规则修正', trigger: '状态触发' },
     errors: {
         'not-enabled': '当前聊天尚未启用规则。', 'already-enabled': '当前聊天已启用 3.0。',

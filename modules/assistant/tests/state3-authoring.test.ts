@@ -52,7 +52,7 @@ test('V3 assistant surface preserves read/effect classification and excludes pri
     for (const name of ['inspect', 'preview', 'previewRequest', 'tryDefinition', 'checkDraft', 'settings']) {
         assert.equal(analyze({ code: 'return await st.state3.' + name + '();', manifest }).requestKind, 'read');
     }
-    for (const name of ['apply', 'undo', 'enable', 'importRules', 'openDraft', 'saveDraft', 'saveCardDraft']) {
+    for (const name of ['apply', 'undo', 'enable', 'importRules', 'openDraft', 'saveCardDraft']) {
         assert.equal(analyze({ code: 'return await st.state3.' + name + '();', apiPaths: ['st.state3.' + name], manifest }).requestKind, 'effect');
     }
     const result = await run({ code: 'return await st.state3.apply([]);', purpose: 'Commit', expectedOutput: 'Result', apiPaths: ['st.state3.apply'], manifest, st: { state3: api } });

@@ -27,9 +27,9 @@ export const COPY = Object.freeze({
     },
     invalid: '模型没有返回一次完整的 write 变量提交，本次提交未应用', stale: '聊天、回复或变量已变化，本次结果未应用',
     noVariables: '这段聊天还没有受管变量，请先初始化变量卡',
-    phases: { ready: '尚未更新', recorded: '已有变量记录', body: '正文已更新变量', preparing: '读取资料…', requesting: '更新中…', correcting: '正在修正提交（1/1）…', saving: '保存中…', success: '已更新', noop: '无需修改', failed: '更新失败', cancelled: '已取消' },
+    phases: { ready: '尚未更新', recorded: '已有变量记录', body: '正文已更新变量', preparing: '读取资料…', requesting: '更新中…', correcting: '正在重试…', saving: '保存中…', success: '已更新', noop: '无需修改', failed: '更新失败', cancelled: '已取消' },
     result: { added: '新增', removed: '删除', unchanged: '无变量变化', annotations: 'AI 附带说明', corrected: '执行时调整', requested: '提交值', applied: '实际值' },
-    presetInvalid: '不是有效的变量更新预设',
+    settingsInvalid: '变量更新设置无效',
     failedSave: '变量状态保存失败，请重试保存，不要重复更新',
     saveUnconfirmed: '未能确认这次变量更新已保存到酒馆', initialValue: '初始值',
 });

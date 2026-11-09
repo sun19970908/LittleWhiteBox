@@ -49,7 +49,7 @@ export function createUpdaterView(api) {
         }
         const preview = element('details'), content = element('pre'); preview.append(element('summary', COPY.preview), content);
         const actions = row(button(COPY.save, () => { api.saveSettings(settings); notice.textContent = COPY.saved; }, true),
-            button(COPY.preview, async () => { content.textContent = JSON.stringify(await api.preview(settings), null, 2); preview.hidden = false; preview.open = true; }));
+            button(COPY.preview, async () => { content.textContent = JSON.stringify(await api.preview(), null, 2); preview.hidden = false; preview.open = true; }));
         preview.hidden = true;
         main.append(controls, actions, help, preview);
     }

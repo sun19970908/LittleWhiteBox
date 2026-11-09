@@ -14,10 +14,10 @@ test('updater host preserves regeneration through its own deletion, but cancels 
         'MESSAGE_SWIPED', 'MESSAGE_UPDATED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'SETTINGS_UPDATED'].map(key => [key, key]));
     const sandbox = { extension_settings: { LittleWhiteBox: { variablesCore: { enabled: true }, variablesMode: '2.0' } },
         getContext: () => ctx, isGenerating: () => false, createModuleEvents: () => ({ on: (key, fn) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
-        initializeSettings() {}, requestUpdate() {}, readSettings: () => ({ mode: 'auto' }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
+        requestUpdate() {}, readSettings: () => ({ mode: 'auto' }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
         createUpdateController: () => ({ update: async () => { updates++; }, cancel() {}, invalidate() {}, dispose() { disposed++; }, status: () => ({}) }),
         createUpdaterView: () => ({ refresh() {}, mountControls() {}, dispose() {} }),
-        cancelAnimationFrame() {}, requestAnimationFrame: () => 1, observeBackgroundTask() {}, removeLegacyResults: () => false, COPY: {},
+        cancelAnimationFrame() {}, requestAnimationFrame: () => 1, observeBackgroundTask() {}, COPY: {},
     };
     runInNewContext(source + '\nglobalThis.host = { initVariableUpdater, notifyVariableReplyReady, cleanupVariableUpdater };', sandbox);
     sandbox.host.initVariableUpdater({});
@@ -48,7 +48,7 @@ test('S1: pending swipe recovery follows native DOM restoration without settling
         'MESSAGE_SWIPED', 'MESSAGE_SWIPE_DELETED', 'MESSAGE_UPDATED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'SETTINGS_UPDATED'].map(key => [key, key]));
     const sandbox = { extension_settings: { LittleWhiteBox: { variablesCore: { enabled: true }, variablesMode: '2.0' } },
         getContext: () => ctx, isGenerating: () => false, createModuleEvents: () => ({ on: (key, fn) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
-        initializeSettings() {}, requestUpdate() {}, readSettings: () => ({ mode }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
+        requestUpdate() {}, readSettings: () => ({ mode }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
         createUpdateController: () => ({ update: async () => { updates++; }, cancel() {}, invalidate() {}, dispose() {}, status: () => ({}) }),
         createUpdaterView: () => ({ refresh() {}, mountControls() { mounts++; }, dispose() {} }),
         document: { getElementById: () => chatNode, querySelectorAll: () => [] },
@@ -58,7 +58,7 @@ test('S1: pending swipe recovery follows native DOM restoration without settling
             disconnect() { observers.delete(this); }
         },
         cancelAnimationFrame: id => frames.delete(id), requestAnimationFrame: fn => { frames.set(++sequence, fn); return sequence; },
-        observeBackgroundTask() {}, removeLegacyResults: () => false, COPY: {},
+        observeBackgroundTask() {}, COPY: {},
     };
     const resetChat = () => { ctx = { chat: [{ mes: 'older', swipe_id: 0, swipes: ['older'] }, { mes: 'last' }], saveChat: async () => { saves++; } }; };
     const emit = (name, ...args) => handlers.get(name)?.(...args);

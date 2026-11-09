@@ -3,7 +3,7 @@ import { ownedRoots, readRecord, readRecords } from '../state2/records.js';
 import { decodeStoredVariable, getRootFromPath } from '../state2/executor.js';
 import { COPY } from './copy.js';
 import { captureContext } from '../shared/context-capture.js';
-import { buildUpdateTask } from './preset.js';
+import { buildUpdateTask } from './handoff.js';
 import { getStateInputSchema } from '../state2/json-input.js';
 import { exposeUpdateRules } from './world-info.js';
 
@@ -30,14 +30,14 @@ export function stateMaterial(ctx) {
     constraints: Object.fromEntries(Object.entries(rules).filter(([path]) => roots.has(getRootFromPath(path)))) };
 }
 
-export async function collectMaterial(ctx, target, settings, signal) {
+export async function collectMaterial(ctx, target, signal) {
     const state = stateMaterial(ctx);
     if (!Object.keys(state.values).length) throw new Error(COPY.noVariables);
     const material = { context: { target: { floor: target.floor, swipeId: target.swipeId }, messages: [] },
         state };
     // Reserve our handoff, current values and tool schema before the host fills
     // the remaining context budget with history. No second message-count cutoff.
-    const reservation = buildUpdateTask(settings.preset, material, getStateInputSchema());
+    const reservation = buildUpdateTask(material, getStateInputSchema());
     material.context = await captureContext(ctx, target, reservation, passageText, signal, () => exposeUpdateRules(ctx));
     return material;
 }

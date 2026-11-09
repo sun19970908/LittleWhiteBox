@@ -4,7 +4,6 @@ import { parseHTML } from 'linkedom';
 import { resultDifference } from '../result-diff.js';
 import { presentResult } from '../result.js';
 import { renderUpdateResult } from '../result-view.js';
-import { removeLegacyResults } from '../legacy-result.js';
 
 test('R1: results isolate actual additions, removals and nested edits without unchanged container copies', () => {
     const old = Array.from({ length: 1000 }, (_, index) => `item-${index}`);
@@ -48,14 +47,4 @@ test('R2: custom fields are matched by operation index, distinct from real value
         assert.ok(notes[0].textContent.includes('999'));
         assert.ok(notes[2].textContent.includes('无需改动'));
     } finally { delete globalThis.document; }
-});
-
-test('R3: retirement removes only prototype result records, across all swipes, and is idempotent', () => {
-    const key = 'LittleWhiteBox_variableUpdate';
-    const chat = [{ extra: { [key]: { oldValue: [1, 2] }, LittleWhiteBox_state2: { ops: [1] }, other: 'keep' },
-        swipe_info: [{ extra: { [key]: {}, other: 2 } }, { extra: { [key]: {}, other: 3 } }] }];
-    const expected = structuredClone(chat); delete expected[0].extra[key]; expected[0].swipe_info.forEach(swipe => delete swipe.extra[key]);
-    assert.equal(removeLegacyResults(chat), true);
-    assert.deepEqual(chat, expected);
-    assert.equal(removeLegacyResults(chat), false);
 });

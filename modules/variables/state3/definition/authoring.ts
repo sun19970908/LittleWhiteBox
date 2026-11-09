@@ -1,4 +1,4 @@
-import type { Bundle, Result, RunOptions } from '../types.js';
+import type { Bundle, Json, Result, RunOptions } from '../types.js';
 export interface Draft { root: string; avatar: string; name: string; files: CardFile[] }
 import { runCardFiles } from '../../../card-workspace/service.js';
 import { currentCard, readCharacter, replaceVariableBundle } from '../../../card-workspace/host.js';
@@ -47,9 +47,10 @@ export async function saveDraft(draft: Draft, updates: CardFile[]) {
 }
 
 export function draftBundle(draft: Draft) { return variableBundleFromFiles(draft.root, draft.files); }
-export async function checkDraft(draft: Draft, input: unknown = [], { signal }: RunOptions = {}): Promise<Result> {
+export async function checkDraft(draft: Draft, input: unknown = [], { signal, state }: RunOptions & { state?: Json } = {}): Promise<Result> {
     try {
         const compiled = compileDefinition(draftBundle(draft));
+        if (state !== undefined) {return settle(compiled, state, input, { signal });}
         const initial = await initialize(compiled, { signal });
         if (!initial.ok) {return initial;}
         return settle(compiled, initial.state, input, { signal });

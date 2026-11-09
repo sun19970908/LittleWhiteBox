@@ -1,5 +1,5 @@
 import { COPY } from './copy.js';
-import { HANDOFF } from './preset.js';
+import { HANDOFF } from './handoff.js';
 
 export class SubmissionError extends Error {
     constructor() { super(COPY.invalid); }

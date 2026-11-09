@@ -25,3 +25,11 @@ DOM 和样式结果按需读取，不缓存完整页面副本。长结果返回 
 文件工具和 CardFiles 负责修改与保存；现有 RunJavaScriptApi 先调用酒馆 updateMessageBlock，再调用渲染器 processMessageById，只重建目标楼层显示。渲染入口在 modules/iframe-renderer/assistant-api.ts 注册，宿主执行与助手审批共用 modules/assistant/shared/extension-jsapi-manifest.ts；不增加修改或刷新工具，也不广播消息事件。托管宿主仍由宿主负责重建。
 
 具体操作与副作用边界见 references/verify-changes.md。成功回执不表示页面已加载，须用 InspectPage 读取替换后的页面确认。截图用于澄清视觉意图，不替代已有的内部故障证据。
+
+## 必须守住的约束
+
+- 检查只读：按可见文字或选择器定位元素、读取状态，不点击按钮、不改表单、不执行页面脚本。
+- 捕获保留页面原有行为：不吞原异常，不把被拒绝的 Promise 标为已处理。
+- 页面和元素标识只属于一个文档；被替换的文档不能用旧标识读到新页面。
+- 关闭 JS 执行权限时，InspectPage 仍可用；重建楼层属于有副作用的 RunJavaScriptApi 调用。
+- 重建只替换指定楼层的显示：不改正文、不保存聊天、不广播消息事件。

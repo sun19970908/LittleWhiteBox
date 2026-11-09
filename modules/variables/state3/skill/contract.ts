@@ -8,7 +8,7 @@ export const STATE3_SKILL = Object.freeze({
 });
 
 export function state3SkillContent(body: string, pluginPath: string) {
-    return `${body.trim()}\n\n## Instance source paths\nPlugin source root: ${pluginPath}/\nSkill directory: ${pluginPath}/modules/variables/state3/skill/\nRead these paths with project scope; edit card files under the local root returned by CardFiles open.\n`;
+    return `${body.trim()}\n\n## Instance source paths\nPlugin source root: ${pluginPath}/\nSkill directory: ${pluginPath}/modules/variables/state3/skill/\nRead these paths with project scope. Relative links resolve from the skill directory. Edit card files under the local root returned by CardFiles open.\n`;
 }
 
 export function cardWorkspaceRequest(card: { paths: string[]; root: string; name: string }, { variables = false, version, variablesMode }: { variables?: boolean; version?: string; variablesMode?: string } = {}) {
