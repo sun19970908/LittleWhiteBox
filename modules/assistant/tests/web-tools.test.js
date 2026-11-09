@@ -20,7 +20,8 @@ const done = { text: 'Verified.', toolCalls: [] };
 function runtimeHarness(t, { config = settings('tavily'), delegateConfig = settings('exa'), steps, delegateSteps = [], session = false, jsApiEnabled = false }) {
     t.mock.method(console, 'info', () => {});
     const run = { id: 'web-test', controller: new AbortController(), toolRequestIds: new Set(), workspaceBaseline: [] };
-    const state = { activeRun: run, messages: [{ role: 'user', content: 'Read the public reference.' }], archivedTurnCount: 0 };
+    const state = { activeRun: run, messages: [{ role: 'user', content: 'Read the public reference.' }], archivedTurnCount: 0,
+        archivedSkillIds: delegateSteps.length ? ['builtin-planning'] : [] };
     const requests = [], saved = [];
     let requestId = 0;
     const queues = { main: [...steps], delegate: [...delegateSteps] };
@@ -31,7 +32,7 @@ function runtimeHarness(t, { config = settings('tavily'), delegateConfig = setti
         formatToolResultDisplay, normalizeAttachments: () => [], normalizeThoughtBlocks: () => [],
         buildUserContentParts: message => message.content,
         getActiveProviderConfig: () => config, getDelegateProviderConfig: () => delegateConfig,
-        getToolDefinitions: ({ role }) => getAssistantToolDefinitions({ providerConfig: role === 'delegate' ? delegateConfig : config, jsApiEnabled }),
+        getToolDefinitions: ({ role, skillIds }) => getAssistantToolDefinitions({ providerConfig: role === 'delegate' ? delegateConfig : config, jsApiEnabled, role, skillIds }),
         isJsApiEnabled: () => jsApiEnabled,
         SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000,
         MAX_TOOL_ROUNDS: 6, REQUEST_TIMEOUT_MS: 1000,

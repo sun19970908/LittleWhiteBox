@@ -1,6 +1,7 @@
 import { resetMessageWindow } from '../../../agent-core/ui/message-windowing.js';
 import db, { metaTable, messagesTable, plansTable, sessionsTable } from './session-db.js';
 import { describePersistenceError } from '../../shared/persistence-error.js';
+import { loadedSkillIds } from '../../shared/skill-tools.js';
 
 const LEGACY_SESSION_ID = 'default';
 const CURRENT_SESSION_META_KEY = 'currentSessionId';
@@ -145,6 +146,7 @@ export function createSessionStore(deps) {
         return {
             sessionId,
             historySummary: String(state.historySummary || ''),
+            archivedSkillIds: loadedSkillIds([], state.archivedSkillIds),
             messages: activeMessages,
         };
     }
@@ -155,6 +157,7 @@ export function createSessionStore(deps) {
                 id: snapshot.sessionId,
                 updatedAt: Date.now(),
                 historySummary: snapshot.historySummary,
+                archivedSkillIds: snapshot.archivedSkillIds,
             });
             await messagesTable.where('sessionId').equals(snapshot.sessionId).delete();
             if (snapshot.messages.length) {
@@ -199,6 +202,7 @@ export function createSessionStore(deps) {
                     state.assistantSessionId = nextSessionId;
                     state.messages = [];
                     state.historySummary = '';
+                    state.archivedSkillIds = [];
                     state.archivedTurnCount = 0;
                     resetMessageWindow(state);
                     return {
@@ -226,6 +230,7 @@ export function createSessionStore(deps) {
             normalizeAttachments, normalizeThoughtBlocks, createRequestId,
         })).filter(Boolean);
         state.historySummary = String(session?.historySummary || '');
+        state.archivedSkillIds = loadedSkillIds([], session?.archivedSkillIds);
         state.archivedTurnCount = 0;
         resetMessageWindow(state);
         state.sidebarCollapsed = true;

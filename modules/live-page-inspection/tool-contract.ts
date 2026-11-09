@@ -1,9 +1,24 @@
 import { ACTIONS, PAGE_CHARS, LOG_BUDGET_CHARS, LOG_LIMIT } from './contract';
 
+import { CARD_FILES } from '../card-workspace/assistant-contract.js';
+
+export const INSPECT_PAGE = 'InspectPage';
+
+export const LIVE_PAGE_SKILL = Object.freeze({
+    id: 'builtin-live-page', title: '前端卡排查',
+    summary: 'Diagnose and repair a frontend card running in the chat: inspect the live page, trace the symptom to card files, save, rebuild the floor and verify the replacement.',
+    path: 'modules/live-page-inspection/skill/SKILL.md',
+    tools: [INSPECT_PAGE, CARD_FILES],
+});
+
+export function livePageSkillContent(body: string, pluginPath: string) {
+    return `${body.trim()}\n\n## Instance source paths\nSkill directory: ${pluginPath}/modules/live-page-inspection/skill/\nRead these paths with project scope. Relative links resolve from the skill directory.\n`;
+}
+
 export const INSPECT_PAGE_TOOL = {
     type: 'function',
     function: {
-        name: 'InspectPage',
+        name: INSPECT_PAGE,
         description: [
             'Read the running frontend-card iframes in the current chat, without executing code or changing the page.',
             'Use for layout problems, unresponsive controls, blank pages and page errors. File tools read the card source; this tool reads what the page actually rendered.',

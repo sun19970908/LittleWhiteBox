@@ -22,7 +22,8 @@ function harness(t, { mode, enabled, role = 'main', approve = true, nextMode }) 
     t.mock.method(console, 'info', () => {});
     t.mock.method(globalThis, 'fetch', async () => Response.json(manifest));
     const run = { id: 'permissions', controller: new AbortController(), toolRequestIds: new Set(), workspaceBaseline: [] };
-    const state = { config: { permissionMode: mode }, activeRun: run, messages: [{ role: 'user', content: 'Inspect the isolated fixture.' }], archivedTurnCount: 0 };
+    const state = { config: { permissionMode: mode }, activeRun: run, messages: [{ role: 'user', content: 'Inspect the isolated fixture.' }], archivedTurnCount: 0,
+        archivedSkillIds: role === 'delegate' ? ['builtin-planning'] : [] };
     const approvals = [], dispatched = [], requests = [], pendingApprovals = new Map(), pendingToolCalls = new Map();
     const ctx = { chatMetadata: { count: 0 } };
     const queues = { main: role === 'main' ? operations() : [tool(TOOL_NAMES.DELEGATE_RUN, { task: 'Inspect fixture' }), done],
@@ -43,7 +44,7 @@ function harness(t, { mode, enabled, role = 'main', approve = true, nextMode }) 
         buildSlashApprovalResult: (_command, approved) => ({ ok: approved, approved, skipped: !approved }),
         buildJsApiApprovalResult: (_args, approved) => ({ ok: approved, approved, skipped: !approved }),
         getActiveProviderConfig: () => ({ provider: 'openai-compatible' }), getDelegateProviderConfig: () => ({ provider: 'openai-compatible' }),
-        getToolDefinitions: () => getAssistantToolDefinitions({ jsApiEnabled: enabled }), isJsApiEnabled: () => enabled,
+        getToolDefinitions: options => getAssistantToolDefinitions({ ...options, jsApiEnabled: enabled }), isJsApiEnabled: () => enabled,
         SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000, MAX_TOOL_ROUNDS: 10, REQUEST_TIMEOUT_MS: 1000,
         isAbortError: error => error.name === 'AbortError',
         createAdapter: config => {

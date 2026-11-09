@@ -1,4 +1,5 @@
 import { contains, overlaps } from '../engine/data.js';
+import { DIRECT_INPUTS } from '../engine/input.js';
 import type { Compiled, JsonObject, Path } from '../types.js';
 import type { AgentToolDefinition } from '../../../agent-core/public-api.js';
 
@@ -68,9 +69,9 @@ export function getInputSchema(compiled: Compiled): JsonObject {
         // same final settlement permissions, without blocking the whole card.
         const path: JsonObject = { type: 'array', items: { type: 'string' }, minItems: Math.max(1, access.path.length),
             ...(candidates ? { enum: candidates } : { description: `Field-name segments within ${JSON.stringify(access.path)}. ${access.description}` }) };
-        for (const op of ['set', 'remove']) {
-            operations.push({ type: 'object', required: op === 'set' ? ['op', 'path', 'value'] : ['op', 'path'],
-                properties: { op: { const: op }, path, ...(op === 'set' ? { value: {} } : {}),
+        for (const [op, input] of Object.entries(DIRECT_INPUTS)) {
+            operations.push({ type: 'object', description: input.description, required: ['op', 'path', ...Object.keys(input.parameters)],
+                properties: { op: { const: op }, path, ...input.parameters,
                     reason: { type: 'string' }, old: {} }, additionalProperties: true });
         }
     }

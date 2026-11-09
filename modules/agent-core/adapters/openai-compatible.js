@@ -101,11 +101,17 @@ function normalizeToolCallsForReplay(toolCalls = [], fallbackPrefix = 'openai-to
         .filter(Boolean);
 }
 
+const THOUGHT_SIGNATURE_ID_MARKER = '__thought__';
+
 function hasThoughtSignatureMatching(value, predicate) {
     if (Array.isArray(value)) {
         return value.some((item) => hasThoughtSignatureMatching(item, predicate));
     }
     if (!isPlainObject(value)) return false;
+    // Some relays carry the signature only in the ID; keep both its bytes and
+    // the complete parallel batch opaque, just like an explicit signature field.
+    const signedIdOffset = typeof value.id === 'string' ? value.id.indexOf(THOUGHT_SIGNATURE_ID_MARKER) : -1;
+    if (signedIdOffset >= 0 && predicate(value.id.slice(signedIdOffset + THOUGHT_SIGNATURE_ID_MARKER.length))) return true;
     return Object.entries(value).some(([key, nestedValue]) => {
         const normalizedKey = String(key || '').replace(/[_-]/g, '').toLowerCase();
         if (normalizedKey === 'thoughtsignature') return predicate(nestedValue);
@@ -428,7 +434,11 @@ function signUnsignedGeminiToolCalls(message, model = '') {
             ...toolCall,
             extra_content: {
                 ...toolCall.extra_content,
-                google: { ...toolCall.extra_content?.google, thought_signature: GOOGLE_UNSIGNED_CALL_SIGNATURE },
+                // Google OpenAI-compatible uses snake_case; Gemini relay conversions also use camelCase.
+                // Both carry the same marker. Real signed batches never pass through this projection.
+                google: { ...toolCall.extra_content?.google,
+                    thought_signature: GOOGLE_UNSIGNED_CALL_SIGNATURE,
+                    thoughtSignature: GOOGLE_UNSIGNED_CALL_SIGNATURE },
             },
         })),
     };

@@ -9,7 +9,7 @@ import { storeFiles as writeFiles, readFiles as rawFiles, observeTree } from '..
 import { cardFiles, locateFile } from '../../../card-workspace/files.js';
 import { CARD_EXTENSION, DEFINITION_FILE, FUNCTION_DIRECTORY } from '../definition/format.js';
 import { projectVariableFiles, variableBundleFromFiles, prepareVariableWrite, variableExtensionWrite, type CardFile } from '../definition/card-files.js';
-import { variableCardHost } from '../definition/card-host.js';
+import { variableCardHost, onRulesSaved } from '../definition/card-host.js';
 import { equipmentExample } from '../definition/example.js';
 import { digest } from '../definition/digest.js';
 
@@ -90,7 +90,8 @@ test('K15: verified full-package replacement removes functions, preserves other 
     const previous = equipmentExample(), next = equipmentExample();
     previous.definition.functions.old = { reads: [], description: 'old function' }; previous.functions.old = '() => 1';
     let card = { avatar: 'isolated.png', name: 'isolated', data: { extensions: { [CARD_EXTENSION]: JSON.stringify(previous), other: { keep: true } }, description: 'keep prose' } };
-    let writes = 0, published = 0;
+    let writes = 0, published = 0, refreshed = 0;
+    const stop = onRulesSaved(async () => { refreshed++; });
     const host = variableCardHost({
         readCharacter: async () => structuredClone(card), assertCard(avatar) { assert.equal(avatar, card.avatar); },
         async request(_url, input) {
@@ -110,6 +111,8 @@ test('K15: verified full-package replacement removes functions, preserves other 
     assert.deepEqual(card.data.extensions.other, { keep: true });
     assert.equal(card.data.description, 'keep prose');
     assert.equal(published, 1);
+    assert.equal(refreshed, 1);
+    stop();
     await assert.rejects(host.replace(card.avatar, previous, baseline), { code: 'rules-conflict' });
     assert.equal(writes, 1);
 });

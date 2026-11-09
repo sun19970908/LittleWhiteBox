@@ -1,6 +1,7 @@
 import { resetMessageWindow } from '../../../agent-core/ui/message-windowing.js';
 import { recentTurnArchiveCounts, hasChatAnswer } from '../../../agent-core/runtime/recent-turns.js';
 import { ACTIVITY_COPY } from '../ui/activity-copy.js';
+import { loadedSkillIds } from '../../shared/skill-tools.js';
 
 export function splitMessagesIntoTurns(messages = []) {
     const turns = [];
@@ -118,6 +119,7 @@ export function createHistoryCompactionController(deps) {
         const turns = splitMessagesIntoTurns(state.messages);
         const archivedCount = Math.min(state.archivedTurnCount, turns.length);
         if (archivedCount <= 0) return false;
+        state.archivedSkillIds = loadedSkillIds(turns.slice(0, archivedCount).flat(), state.archivedSkillIds);
         state.messages = turns.slice(archivedCount).flat();
         state.archivedTurnCount = 0;
         resetMessageWindow(state);

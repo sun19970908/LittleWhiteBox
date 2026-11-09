@@ -20,6 +20,7 @@ import { createHistoryCompactionController, splitMessagesIntoTurns } from './run
 import { createStreamingMessageController } from './runtime/streaming-messages.js';
 import { settleAssistantRunFailure } from './runtime/run-failure.js';
 import { callReadableWorkspaceTool } from '../shared/workspace-tool-paths.js';
+import { filterSkillTools, isSkillTool, loadedSkillIds } from '../shared/skill-tools.js';
 
 const JSAPI_MANIFEST_URL = pluginAsset('modules/assistant/st-jsapi-manifest.json');
 let jsApiManifestPromise = null;
@@ -120,10 +121,12 @@ export function createAssistantRuntime(deps) {
     }
 
     function resolveToolDefinitions(options = {}) {
-        if (typeof getToolDefinitions === 'function') {
-            return getToolDefinitions(options);
-        }
-        return TOOL_DEFINITIONS;
+        const role = options.role === 'delegate' ? 'delegate' : 'main';
+        const skillIds = loadedSkillIds(options.messages || (role === 'main' ? state.messages : []), role === 'main' ? state.archivedSkillIds : []);
+        const definitions = typeof getToolDefinitions === 'function'
+            ? getToolDefinitions({ ...options, role, skillIds })
+            : TOOL_DEFINITIONS;
+        return filterSkillTools(definitions, skillIds, { role });
     }
 
     function isJsApiToolEnabled() {
@@ -148,6 +151,7 @@ export function createAssistantRuntime(deps) {
 
     function resetCompactionState() {
         state.historySummary = '';
+        state.archivedSkillIds = [];
         state.archivedTurnCount = 0;
         state.contextStats = {
             usedTokens: 0,
@@ -437,14 +441,15 @@ export function createAssistantRuntime(deps) {
             getActiveProviderConfig,
             getDelegateProviderConfig,
             getSystemPrompt: resolveSystemPrompt,
-            resolveToolDefinitions: () => resolveToolDefinitions({ role: 'delegate' }),
+            resolveToolDefinitions: ({ messages } = {}) => resolveToolDefinitions({ role: 'delegate', messages }),
             safeJsonParse,
             isAbortError,
             TOOL_NAMES,
-            executeToolCall: async (toolCall, parsedArguments, run) => await executeAssistantToolCall(toolCall, parsedArguments, run, {
+            executeToolCall: async (toolCall, parsedArguments, run, context = {}) => await executeAssistantToolCall(toolCall, parsedArguments, run, {
                 allowDelegate: false,
                 trackToolErrors: false,
                 role: 'delegate',
+                messages: context.messages,
                 webResults,
             }),
         });
@@ -465,6 +470,13 @@ export function createAssistantRuntime(deps) {
         let toolResult = null;
 
         try {
+            if (isSkillTool(toolCall.name)) {
+                const available = options.allowedToolNames || new Set(resolveToolDefinitions(options).map(definition => definition.function.name));
+                if (!available.has(toolCall.name)) {
+                    return { ok: false, error: 'skill_tool_not_available', toolName: toolCall.name };
+                }
+            }
+
             if (toolCall.name === TOOL_NAMES.RUN_SLASH_COMMAND && shouldRequireSlashCommandApproval(slashCommand)) {
                 state.progressLabel = '确认中';
                 advanceToolActivity(toolCall, run, 'approval');
@@ -641,6 +653,7 @@ export function createAssistantRuntime(deps) {
         let pendingFinalAnswerReminderText = '';
         let sawToolExecution = false;
         let finalAnswerReminderSent = false;
+        let previousToolSignature = '';
         const providerMessageOptions = {
             userContextSnapshotText: String(run?.userContextSnapshotText || '').trim(),
             finalAnswerReminderText: '',
@@ -674,11 +687,14 @@ export function createAssistantRuntime(deps) {
                 scheduleStreamRender();
             };
 
+            const requestTools = resolveToolDefinitions({ role: 'main' });
+            const allowedToolNames = new Set(requestTools.map(definition => definition.function.name));
+            const toolSignature = JSON.stringify([...allowedToolNames].sort());
             let result;
             try {
                 const requestTask = {
                     systemPrompt: resolveSystemPrompt(),
-                    tools: resolveToolDefinitions({ role: 'main' }),
+                    tools: requestTools,
                     toolChoice: 'auto',
                     temperature: providerConfig.temperature,
                     maxTokens: providerConfig.maxTokens,
@@ -692,8 +708,10 @@ export function createAssistantRuntime(deps) {
                     ...providerMessageOptions,
                     finalAnswerReminderText: pendingFinalAnswerReminderText || providerMessageOptions.finalAnswerReminderText,
                 });
-                // A session must restart from the compacted replay when old turns were removed.
-                const continueSession = adapter?.supportsSessionToolLoop && historyBeforeBudget === state.messages;
+                // Provider sessions retain their initial tools, so both history and tools must still match.
+                const continueSession = adapter?.supportsSessionToolLoop
+                    && historyBeforeBudget === state.messages
+                    && previousToolSignature === toolSignature;
                 if (Array.isArray(pendingToolResponses) && pendingToolResponses.length && continueSession) {
                     requestTask.toolResponses = pendingToolResponses;
                 } else if (pendingFinalAnswerReminderText && continueSession) {
@@ -719,6 +737,7 @@ export function createAssistantRuntime(deps) {
                     messageCount: Array.isArray(requestTask.messages) ? requestTask.messages.length : 0,
                 });
                 result = await adapter.chat(requestTask);
+                previousToolSignature = toolSignature;
                 console.info('[Assistant][ModelRequest] round:result', {
                     round: rounds,
                     provider: String(providerConfig?.provider || ''),
@@ -777,7 +796,7 @@ export function createAssistantRuntime(deps) {
                     const parsedArguments = safeJsonParse(toolCall.arguments, {});
                     state.progressLabel = '工具中';
                     advanceToolActivity(toolCall, run, 'preparing');
-                    const toolResult = await executeAssistantToolCall(toolCall, parsedArguments, run, { webResults });
+                    const toolResult = await executeAssistantToolCall(toolCall, parsedArguments, run, { webResults, allowedToolNames });
                     pushMessage(buildToolResultMessage({
                         toolCallId: toolCall.id,
                         toolName: toolCall.name,

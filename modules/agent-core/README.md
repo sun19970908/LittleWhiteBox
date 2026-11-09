@@ -71,6 +71,12 @@ Claude 和 Google 的模型列表鉴权与生成鉴权分开：预设中的 `mod
 
 模型发现失败明确报错，不替换内置列表。4 Argon 的 `CONTINUATION` 长解码结束状态按未完成返回，不自动发起续段或扩大用户预算；本渠道不提供 Interactions / Live API。官方认证说明：[服务账号 OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)、[Vertex API Key](https://cloud.google.com/vertex-ai/generative-ai/docs/start/api-keys)。
 
+## Gemini 的 OpenAI 兼容工具历史
+
+共享 OpenAI 兼容适配器为识别为 Gemini 的模型，在整批历史工具调用都没有签名时添加 Google 的占位标记。`extra_content.google` 同时携带官方兼容接口使用的 `thought_signature` 和部分中转使用的 `thoughtSignature`，两者引用同一标记。此处理由直连和酒馆托管 OpenAI 路径共用，变量更新与绘图规划无需各自补字段。它不修改模型选择、请求协议或用户历史，不增加重试。
+
+模型返回的真实签名按不透明回执保存：支持签名字段和 LiteLLM `id` 中的 `__thought__` 后缀。签名保护整批并行调用，只有首项带签名时，其余项仍原样保留；回放优先使用原始调用的编号、参数字节及签名，调用方重建的字段不能覆盖它们。签名缺损或参数不完整按既有工具回放校验处理。Google／Vertex 原生协议不套用 OpenAI 字段投影，模型别名无法识别为 Gemini 时也不猜测能力。
+
 ## 原生 Anthropic 提示缓存
 
 直连 Anthropic Messages 适配器对共享模型识别规则确认的 Claude 家族，统一在最后一个工具定义、系统提示块、最后一个可缓存的对话内容块上发送 `cache_control: { type: 'ephemeral' }`，使用供应商默认的 5 分钟缓存。DeepSeek 等其他 Anthropic 兼容模型及无法识别的模型别名保持原请求，不根据接口形状猜测缓存能力。思考块和签名不改动，输入历史不携带新增的断点状态；断点每次按最终请求构造，不存本地缓存、不增加重试、不改提示内容。

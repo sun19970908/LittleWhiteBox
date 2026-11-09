@@ -31,7 +31,7 @@
 | 循环任务 | “启用循环任务” |
 | 楼层 iframe 渲染 | “渲染”开关（默认开）；可选“渲染楼层”数限制、Blob 渲染 |
 | 角色模板 | 模板编辑器开关（默认开）；TauriTavern 托管界面下不可用 |
-| `<plot-log>` / `<state>` 变量解析 | 变量核心（默认开）。`<state>` 需要把“变量模式”手动切到 2.0，默认是 1.0（`<plot-log>`） |
+| 变量卡 | 变量核心（默认开），并把“变量模式”切到卡所用的 3.0 或 2.0 |
 
 卡内任务随卡加载，**没有“允许运行”确认**。用户控制它的方式是“启用循环任务”和单个任务的启停。
 
@@ -222,13 +222,13 @@ iframe 还会收到这些消息（`window.addEventListener('message', …)`）�
 - 向父页面发送 `{ type: 'iframe-ready' }` 或 `{ type: 'request-context' }`，会收到 `{ type: 'st-context', chatId, characterId, characterName, userName, userPersona, userAvatar, msgIndex, swipeId, totalSwipes, totalMessages, isGroupChat, groupId }`。`msgIndex` 是本 iframe 所在楼层。
 - 之后会收到 `{ source: 'xiaobaix-host', type: 'st-event', event, payload }`。`message_sent`、`message_received`、`message_edited`、`message_swiped`、`message_deleted`、`chat_id_changed`、`chat_created` 广播给当前所有楼层 iframe；`chat_deleted`、`group_chat_deleted` 只排队交给下一个发出 `iframe-ready` 的 iframe（插件 `bridges/context-bridge.js`）。所在楼层被 swipe、编辑时本 iframe 会被重建，这些事件主要对其他楼层的 iframe 有用。
 
-完整的读取、按钮写入和失败反馈见[变量 2.0 面板](<examples/state2-direct/panel.html.txt>)及[装配说明](<xiaobaix-game-state.md#direct-state-example>)。
+受管玩法状态的读取、按钮写入和失败反馈由所用变量版本的技能说明（ReadSkill builtin-state3 或 builtin-state2）。
 
 ### 3.3 iframe 需要酒馆的数据或函数时
 
 iframe 拿得到，有四种办法，按推荐顺序：
 
-1. **有对应斜杠命令的，用 `STscript`。** 普通变量读写（`/getvar` `/setvar` `/xbgetvar` `/xbsetvar`）、发送消息（`/send` `/trigger`）、生成（`/gen` `/xbgen`）、执行快速回复和任务（`/run` `/xbqte`）都走这条。受管玩法状态的写入使用第 5 节的变量 2.0 入口，不能以普通变量命令代替记账。
+1. **有对应斜杠命令的，用 `STscript`。** 普通变量读写（`/getvar` `/setvar` `/xbgetvar` `/xbsetvar`）、发送消息（`/send` `/trigger`）、生成（`/gen` `/xbgen`）、执行快速回复和任务（`/run` `/xbqte`）都走这条。受管玩法状态的写入使用所用变量版本的入口（见第 5 节），不能以普通变量命令代替记账。
 2. **只需要只读快照的，用 `iframe-ready` / `request-context` 拿 `st-context`。**
 3. **复杂逻辑交给循环任务。** 任务在酒馆页面里挂一个卡专用的接口（例如 `window.MyCardApi`），iframe 用 `parent.MyCardApi.xxx()` 调用，或用 `STscript('/xbqte 任务名')` 触发任务。这样酒馆事件订阅和长期状态都由任务管理和清理，iframe 只负责显示和按钮。
 4. **直接访问父页面。** 楼层 iframe 没有 `sandbox` 属性，且与酒馆页面同源，所以 `parent.SillyTavern.getContext()`、`parent.document` 都能用。适合一次性读取或调用；**不要从 iframe 往父页面注册长期监听、定时器或 DOM**：iframe 在 swipe、编辑、切聊天时被销毁，这些注册不会自动撤销，会重复叠加并持有已销毁页面的引用。
@@ -264,7 +264,7 @@ iframe 拿得到，有四种办法，按推荐顺序：
 
 **大块共享数据也放这里。** 头像、底图这类 base64 图片和地点表，写进正则替换的代码块就会每楼一份，聊天越长页面越重。由任务把数据挂在卡专用接口上（例如 `window.MyCard.map`），iframe 每次用时从 `parent` 取。任务没跑起来（循环任务关着、接口还没挂上）时，iframe 读不到也不能报错：取值包在 `try` 里，取不到就不显示这块，或显示文字版，其余内容照常。验收时把接口删掉再刷新一次 iframe，确认只少了那一块。
 
-只需直接读写受管状态时，用宿主的变量 2.0 公开接口即可，见[直接调用示例](<xiaobaix-game-state.md#direct-state-example>)，不需要另建一套桥。
+只需直接读写受管状态时，用所用变量版本的宿主公开接口即可（见第 5 节），不需要另建一套桥。
 
 任务主动推送给 iframe 时，向 `document.querySelectorAll('.mes iframe.xiaobaix-iframe')` 的 `contentWindow.postMessage(...)` 发送，并带上卡自己的 `source` 字段，iframe 端按 `source` 过滤。
 
@@ -276,42 +276,12 @@ iframe 拿得到，有四种办法，按推荐顺序：
 | 类型 | 存什么 | 怎么写 | 删楼、切 swipe 时 |
 | --- | --- | --- | --- |
 | **普通界面变量** | 面板展开、当前标签页、CG 槽开关、立绘档位等**纯展示状态** | `variables.local.set(key, JSON.stringify(val))` 保存，`variables.local.get(key)` 读取后解码 或 `/getvar` `/setvar`，键名带卡专属前缀 | 原样保留，不参与楼层回滚 |
-| **变量 2.0 受管状态** | 生命值、金钱、时间、好感、外出剩余次数、抽卡保底、已解锁里程碑等**影响玩法或剧情事实的状态** | 正文 `<state>`、`LWB_StateV2.applyText()`、`LWB_StateV2.apply()` | 按每楼记录的请求重算恢复 |
+| **受管玩法状态** | 生命值、金钱、时间、好感、外出剩余次数、抽卡保底、已解锁里程碑等**影响玩法或剧情事实的状态** | 变量 3.0 见 ReadSkill builtin-state3；变量 2.0 见 ReadSkill builtin-state2 | 由所选变量版本恢复 |
 
 酒馆读取本地变量时会把数字样式的字符串和 `true`/`false` 转成数字，未定义返回空字符串。用 `variables.local` 存普通界面变量时，存 `JSON.stringify(值)`，读出后再 `JSON.parse`。
 
-### 5.1 变量 2.0 的三个写入入口
-
-变量的用途、取值宏的选择（`xbgetvar` / `xbgetvar_yaml` / `xbgetvar_yaml_idx`）与变化量通道见[变量指南](<xiaobaix-game-state.md>)。本节列写入入口的契约。
-
-变量 2.0 开启后，以下入口共用同一套操作与 `$schema`/`$range` 守卫（完整语法与契约见插件 `modules/variables/state2/README.md`）。另有供预设使用的 `beginTurn({ floor, swipeId }).commit({ ops })`，用于工具调用提交本楼变化量，重写时只撤销本楼上一次这样的提交；卡一般不直接调用。
-
-1. **正文 `<state>`**：AI 回复或玩家消息里的 `<state>…</state>`。支持文本写法（`路径: 值`、`路径: (负数)`、`路径: +5`）或 JSON 写法（以 `{` 开头，格式同 `apply`）。插件不会自动把标签从显示和提示词中去掉；卡选用这条通道时需配正则隐藏（`markdownOnly: true` 且 `promptOnly: true`）。
-2. **`await LWB_StateV2.applyText(text, { floor, silent })`**：用文本写法直接执行一段 `<state>`。
-   - **角色任务初始化受管根变量（声明 `$schema`、约束并写入完整初始数据）用它**。模板里有的固定字段，初始数据必须写全（空集合也要写 `{}` 或 `[]`），缺一个字段整份根变量都不会写入。
-   - 返回 `{ atoms, errors, skipped }`，`errors` 为空数组表示全部成功。
-   - 作为独立调用条目追加到目标楼层（默认当前最后一楼），**不会覆盖**该楼的正文记录或其他调用记录。
-   - 同一楼已经执行过完全相同的文本会跳过（`skipped: true`）。
-3. **`LWB_StateV2.apply({ ops })`**：结构化 JSON 写入，适合前端按钮、结算脚本和工具调用，不需要往聊天里发消息。
-   - `ops` 是操作数组；各操作的字段见下方说明。
-   - **只能修改已通过文本入口初始化过的受管根变量**，不能新建根变量，也不能声明 `$schema`。
-   - 同步执行并立即返回 `{ status, changes, corrections, errors, warnings }`（`status` 为 `'success' | 'partial' | 'noop' | 'failed'`）。
-   - 每次调用都会执行，记在调用时的最后一条消息上。**已经通过 `apply()` 改过的操作，不要再写进消息正文**，否则会执行两次。
-   - 格式错误时整批不执行，修好可整批重发；`status === 'partial'` 时成功项已生效，只修正并重发失败项，不要整批重发；`warnings` 是提交后的附带通知问题，不要因此重试。
-
-初始化、读取、检查回执、重读与界面刷新见[直接调用完整示例](<xiaobaix-game-state.md#direct-state-example>)。示例代码只维护在配套源文件里，本节提供入口契约。
-
-在任务中使用 `window.LWB_StateV2`；同源楼层 iframe 使用 `window.parent.LWB_StateV2`。`apply()` 的动作字段按操作填写：`set/push/remove` 用 `value`，`inc` 用 `delta`，`del` 只需路径。`changes` 是实际变化，`corrections` 是规则修正；界面最终值来自重新读取当前变量，而非把请求量直接加到旧画面上。批操作不是事务，不能用“有一个回执”代替检查各项结果。
-
-### 5.2 恢复规则与守卫边界
-
-- **按请求重演**：每条消息在各自的 swipe 上记录做过的操作。删消息、切 swipe 时，按保留下来的请求重新计算。重新打开同一聊天只载入保存状态并扫描受管范围，不重新执行请求；新建聊天从该聊天的初始化开始。
-- **编辑与删除状态块**：编辑任意楼层的 `<state>` 都会从该楼起重新计算后续楼层；继续生成（continue）只执行新增的块；把消息里的 `<state>` 全部删光会**保留**该楼已生效的记录（方便清理正文，不等于撤销），删掉其中一部分块则会按剩余块重算。
-- **守卫 ≠ 记账**：`/xbsetvar`、`/xbaddvar`、`/xbpushvar`、`/xbdelvar` 在变量核心开启时经过守卫校验，但直接改本地变量，**不进变量 2.0 的楼层请求记录**，重算时会被覆盖。受管根变量一律走上面三个变量 2.0 入口；原生 `variables.local.set`、`/setvar` 只用于带卡前缀的普通界面变量。
-- **变量 1.0（默认模式）**：AI 输出 `<plot-log>`（`set`/`push`/`bump`/`del`）。新卡需要结构模板、范围约束或前端结构化调用时，用变量 2.0。
-
 <a id="varevent"></a>
-### 5.3 条件规则与动作：`<varevent>`
+### 5.1 条件规则与动作：`<varevent>`
 
 `<varevent>` 是条件规则编辑器读写的文本格式，用条件选择模型资料和要执行的动作。制卡时写在世界书条目的正文里，通过 CardFiles 保存该条目的 `.md` 文件；作者也能在条件规则编辑器里继续修改。制作时怎样从玩法选用它，见[主技能的变量流程](<../SKILL.md#变量>)。
 
@@ -341,13 +311,13 @@ display: "她把你当作轻薄之人。"
 **写法。**
 - 事件头 `[event.名字]`，下面是 `condition:`、`display:`、`js_execute:` 三种行，各占一行开头。
 - `display` 用双引号包住时可以跨行，内容里的 `"` 写成 `\"`；不加引号时一直读到下一个事件头或键行。
-- `var(\`路径\`)` 读本地变量，支持变量 2.0 的点号路径；`val(\`文字\`)` 是常量。`>` `>=` `<` `<=` 比较中，变量不存在或为 null 时不成立；数字字符串按数值比较，否则按字符串比较。相等、组合用 JavaScript 的 `==`、`&&`、`||`、`!`。
+- `var(\`路径\`)` 读本地变量，支持点号路径，变量 2.0 和 3.0 的受管值都能这样读；`val(\`文字\`)` 是常量。`>` `>=` `<` `<=` 比较中，变量不存在或为 null 时不成立；数字字符串按数值比较，否则按字符串比较。相等、组合用 JavaScript 的 `==`、`&&`、`||`、`!`。
 - 一个条目里可以放多个 `<varevent>`，各自独立选择，例如“心意”看好感、“身体”看情动加好感。
 - `display` 里的 `{{user}}` 等酒馆宏照常展开。
 
-**时机。** 正式生成在最终请求组装时选一次：选中的 `display` 进入提示词，本轮成功后执行同一事件的 `js_execute`，不在回复后重新按变化后的值选档。失败、取消、切聊天不执行；预览和后台辅助请求不执行脚本。`dryRun` 组装会展开取值宏，但不收集 `<varevent>` 的待执行事件。这是随剧情生成判定的规则，不是变量一变就立即运行的监听器；独立更新刚改出的值用于下一次正式生成的判定。回合后修改世界书也不会改写已经发出的本轮请求。
+**时机。** 正式生成在最终请求组装时选一次：选中的 `display` 进入提示词，本轮成功后执行同一事件的 `js_execute`，不在回复后重新按变化后的值选档。失败、取消、切聊天不执行。预览、2.0 与 3.0 独立更新使用的 `dryRun` 组装也会选择 `display` 并展开取值宏，条件与宏读取同一份本次状态；不收集待执行事件，也不执行脚本。后台辅助请求同样只展开内容。这是随请求组装判定的规则，不是变量一变就立即运行的监听器；回合后改值或修改世界书不会改写已经发出的请求。
 
-**组织动作。** 同一块只选一个事件；可同时发生的独立规则各用一块。同一事件有多个动作时，在它的 `js_execute` 中按实际顺序编排。脚本可用 `ctx`、`getVar`、`setVar`、`STscript`；`setVar` 是普通本地变量写入，受管玩法状态应使用第 5.1 节的变量 2.0 接口并检查回执。调用存在并不保证成功，也不表示外部副作用能随删楼或 swipe 撤销。
+**组织动作。** 同一块只选一个事件；可同时发生的独立规则各用一块。同一事件有多个动作时，在它的 `js_execute` 中按实际顺序编排。脚本可用 `ctx`、`getVar`、`setVar`、`STscript`；`setVar` 是普通本地变量写入；受管玩法状态的改变走所用变量版本的入口并检查回执，变量 3.0 的状态后果写在定义的规则与触发里。调用存在并不保证成功，也不表示外部副作用能随删楼或 swipe 撤销。
 
 **持续与一次性。** 条件持续成立，就可能每次正式生成都选中；单轮脚本只执行一次不等于整个故事只触发一次。一次性解锁或奖励在受管状态中保存完成标记，条件同时检查尚未完成，动作成功后记录完成；失败不标成已完成。内容选择、发奖、解锁各自的重复策略应按玩法明确，而不是只写一个阈值条件。
 
@@ -414,21 +384,18 @@ display: "她把你当作轻薄之人。"
 - `/xbaudio play=on mode=loop|once volume=1-10 网址`：播放网络音频，切换聊天时重置。
 
 <a id="internal-docs"></a>
-## 9. 查内部文档（变量、画图、斜杠命令、酒馆 API）
+## 9. 查内部文档（画图、斜杠命令、酒馆 API）
 
 写循环任务或 HTML 时，以小白X内部文档为主要查阅依据。本节只列导航，不重复抄命令表或参数表。
 
 以下路径相对于目标酒馆的 LittleWhiteBox 插件目录，不是角色卡工程目录：
 
 ```text
-modules/variables/state2/README.md
-modules/variables/state2/json-tool-design.md
 docs/media-api.html
 modules/assistant/references/stscript-reference.md
 modules/assistant/references/sillytavern-javascript-api-reference.md
 ```
 
-- **变量 2.0 语法与接口**：读前两份。查 `$schema`、约束、`applyText()` / `apply()` 的输入与回执、数组批处理和楼层恢复规则。
 - **画图与语音接口**：读 `docs/media-api.html`。含直接可用的楼层 HTML 画图/语音组件、取消与 `Blob` URL 释放、错误码及三家画图服务的参数表。
 - **斜杠命令**：读 `stscript-reference.md`。按命令名查“命令索引”和“命令详细定义”，拼接命令前查“转义与引号规则”，通过 `STscript()` 调用。
 - **酒馆 JavaScript API**：读 `sillytavern-javascript-api-reference.md`。按函数名或数据查签名、用途及源码位置；任务里用 `SillyTavern.getContext()` 取得 `ctx`，HTML 里的调用位置按第 3 节选择。文档中的 `st.*` 是模块命名空间，不是任务或 HTML 默认注入的全局对象。
@@ -442,4 +409,4 @@ modules/assistant/references/sillytavern-javascript-api-reference.md
 - [ ] 切到别的角色、进入群聊或关闭聊天后，界面随任务停止而消失（`onCleanup` 撤销了全部自建内容）。
 - [ ] 需要每楼只结算一次的逻辑，自己处理了 swipe 与重新生成。
 - [ ] 楼层 iframe 只做本楼显示和按需调用，没有往父页面注册长期监听。
-- [ ] 纯展示状态存在带卡前缀的当前聊天本地变量；影响玩法或剧情的数值走变量 2.0，没有写 `localStorage`。
+- [ ] 纯展示状态存在带卡前缀的当前聊天本地变量；影响玩法或剧情的数值走变量 3.0 或 2.0，没有写 `localStorage`。

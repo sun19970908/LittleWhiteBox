@@ -16,6 +16,14 @@ interface Host {
     unconfirmed: string;
 }
 
+/** Runs after every confirmed rule writeback, before the save resolves. */
+const savedListeners = new Set<() => Promise<unknown>>();
+export function onRulesSaved(listener: () => Promise<unknown>) {
+    savedListeners.add(listener);
+    return () => { savedListeners.delete(listener); };
+}
+const rulesSaved = () => Promise.all([...savedListeners].map(listener => listener()));
+
 /** The host supplies I/O; the owned bundle and writeback protocol belong to 3.0. */
 export function variableCardHost(host: Host) {
     const read = async (target: Target, signal?: AbortSignal) => {
@@ -32,7 +40,7 @@ export function variableCardHost(host: Host) {
             await host.request('/api/characters/merge-attributes', variableExtensionWrite(card, compiled.bundle), signal);
             const saved = await host.readCharacter(avatar, signal);
             if (digest(decodeBundle(saved.data.extensions?.[CARD_EXTENSION])) !== digest(compiled.bundle)) {throw new Error(host.unconfirmed);}
-            host.publishCharacter(saved);
+            host.publishCharacter(saved); await rulesSaved();
         },
         async save(target: Target, file: CardFile, signal?: AbortSignal, companions: { file: CardFile }[] = []) {
             const files = [file, ...companions.map(item => item.file)];
@@ -43,7 +51,7 @@ export function variableCardHost(host: Host) {
                 await host.request('/api/characters/merge-attributes', variableExtensionWrite(card, bundle), signal);
                 const saved = await host.readCharacter(target.avatar, signal);
                 if (digest(decodeBundle(saved.data.extensions?.[CARD_EXTENSION])) !== digest(bundle)) {throw new Error(host.unconfirmed);}
-                host.publishCharacter(saved);
+                host.publishCharacter(saved); await rulesSaved();
             }
             const projected = projectVariableFiles(target.root, bundle);
             return { unchanged, originalGroupHash: digest(bundle), contents: files.map(item => projected.find(candidate => candidate.path === item.path)!.content) };

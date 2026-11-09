@@ -13,9 +13,12 @@ import { isTrustedIframeEvent, postToIframe } from "../../core/iframe-messaging.
 import { AssistantStorage } from "../../core/server-storage.js";
 import { createAssistantHostWindow } from "./assistant-host-window.js";
 import { TOOL_NAMES } from "./app-src/tooling.js";
+import { BUILTIN_SKILLS, skillCatalogLine } from './shared/skill-tools.js';
 import { CARD_SKILL, cardSkillContent } from '../card-workspace/assistant-contract.js';
 import { readableCardWorkspacePath, readableCardWorkspaceRelativePath } from '../card-workspace/paths.js';
 import { STATE3_SKILL, state3SkillContent, cardWorkspaceRequest } from '../variables/state3/skill/contract.js';
+import { STATE2_SKILL, state2SkillContent } from '../variables/state2/skill/contract.js';
+import { LIVE_PAGE_SKILL, livePageSkillContent } from '../live-page-inspection/tool-contract.ts';
 import { state3JsApiNamespace } from '../variables/state3/skill/public-api.js';
 import { withAssistantJsApiManifest } from './shared/extension-jsapi-manifest.ts';
 import { iframeRendererJsApiNamespace } from '../iframe-renderer/assistant-api.ts';
@@ -108,7 +111,6 @@ const EMPTY_SKILLS_CATALOG = Object.freeze({
     version: 1,
     skills: [],
 });
-const BUILTIN_SKILLS = [CARD_SKILL, STATE3_SKILL];
 const MAX_SKILL_PROMPT_ITEMS = 20;
 const MAX_READ_FILE_BYTES = 100 * 1024;
 const MAX_JSAPI_RETURN_CHARS = 50 * 1024;
@@ -322,9 +324,6 @@ async function buildAssistantRuntimePayload(signal) {
             version: getLocalSourcesToolRuntime().getWorkspaceState().version,
         },
         ...skillsRuntime,
-        skillsPromptSummary: [skillsRuntime.skillsPromptSummary,
-            ...BUILTIN_SKILLS.map(skill => `- ${skill.title} | ${skill.summary} | ReadSkill id: ${skill.id}`),
-        ].filter(Boolean).join('\n'),
     };
 }
 
@@ -2131,7 +2130,7 @@ async function readSkillsCatalogTool(_args = {}, options = {}) {
         total: result.catalog.skills.length + builtins.length,
         enabledCount: result.catalog.skills.filter((item) => item.enabled !== false).length + builtins.length,
         skills,
-        summaryText: [result.summaryText, ...builtins.map(skill => `${skill.title} | ${skill.summary} | ReadSkill id: ${skill.id}`)].filter(Boolean).join('\n'),
+        summaryText: [result.summaryText, ...builtins.map(skillCatalogLine)].filter(Boolean).join('\n'),
         content: JSON.stringify({ ...result.catalog, skills }, null, 2),
     };
 }
@@ -2142,8 +2141,8 @@ async function readSkillTool(args = {}, options = {}) {
     if (builtin) {
         const filename = `${extensionFolderPath}/${builtin.path}`;
         const body = await readTextFile(filename, options);
-        const render = builtin.id === CARD_SKILL.id ? cardSkillContent : state3SkillContent;
-        return { ok: true, ...builtin, filename, content: render(body, extensionFolderPath), builtin: true };
+        const render = { [CARD_SKILL.id]: cardSkillContent, [STATE3_SKILL.id]: state3SkillContent, [STATE2_SKILL.id]: state2SkillContent, [LIVE_PAGE_SKILL.id]: livePageSkillContent }[builtin.id];
+        return { ok: true, ...builtin, filename, content: render ? render(body, extensionFolderPath) : body.trim(), builtin: true };
     }
     const byFilename = normalizeSkillFileName(args.filename || '');
     if (!byId && !byFilename) {
@@ -2741,7 +2740,7 @@ async function readSkillsRuntimeData(options = {}) {
     if (!catalogResult.ok) {
         return {
             skillsCatalog: normalizeSkillsCatalog(EMPTY_SKILLS_CATALOG),
-            skillsPromptSummary: '',
+            skillsPromptSummary: BUILTIN_SKILLS.map(skillCatalogLine).join('\n'),
             skillsCatalogError: catalogResult.message,
             skillFiles: [],
         };
@@ -2836,7 +2835,7 @@ async function readSkillsRuntimeData(options = {}) {
 
     return {
         skillsCatalog: catalogResult.catalog,
-        skillsPromptSummary: catalogResult.summaryText,
+        skillsPromptSummary: [catalogResult.summaryText, ...BUILTIN_SKILLS.map(skillCatalogLine)].filter(Boolean).join('\n'),
         skillsCatalogError: '',
         skillFiles,
     };

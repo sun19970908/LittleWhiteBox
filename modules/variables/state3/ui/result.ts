@@ -1,5 +1,5 @@
 import type { Result, Definition } from '../types.js';
-import { COPY, errorText } from './copy.js';
+import { COPY, errorText, restorationLabel, restorationText } from './copy.js';
 
 export const element = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
     const node = document.createElement(tag);
@@ -9,7 +9,8 @@ export const element = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: st
 };
 export function showResult(root: HTMLElement, result: Result, definition?: Definition) {
     root.replaceChildren();
-    root.append(element('h3', COPY.result));
+    const restorationWarning = result.ok && Boolean(result.restoration?.length);
+    if (!restorationWarning) {root.append(element('h3', COPY.result));}
     if (!result.ok) {
         root.append(element('p', COPY.failed));
         for (const error of result.diagnostics || []) {
@@ -20,7 +21,17 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
         }
         return;
     }
-    root.append(element('p', result.committed ? result.saved ? `${COPY.success} · ${COPY.saved}` : COPY.unconfirmed : COPY.previewed));
+    if (!restorationWarning || !result.saved) {
+        root.append(element('p', result.committed ? result.saved ? `${result.restoration ? restorationLabel(result) : COPY.success} · ${COPY.saved}` : COPY.unconfirmed : COPY.previewed));
+    }
+    if (result.restoration?.length) {
+        const warning = element('div'); warning.setAttribute('role', 'alert');
+        for (const issue of result.restoration) {
+            warning.append(element('p', restorationText(issue)));
+        }
+        if (result.restoration.some(issue => ['constraint', 'state-schema'].includes(issue.code))) {warning.append(element('p', COPY.conflictHelp));}
+        root.append(warning);
+    }
     for (const error of result.diagnostics) {root.append(element('p', errorText(error)));}
     const shown = result.changes;
     for (const change of shown) {

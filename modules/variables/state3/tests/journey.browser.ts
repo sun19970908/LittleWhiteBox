@@ -256,34 +256,16 @@ export async function verifyStorage(api: State3Api, size = 10000, turns = 160) {
         heap: (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory?.usedJSHeapSize };
 }
 
-/** Exercise real host events, including a continuation which reuses the same message timestamp. */
-export async function verifyBodyAndPersistence(api: State3Api) {
+/** Exercise host persistence and rejection of stale candidates without provider requests. */
+export async function verifyPersistence(api: State3Api) {
     const host = await loadHost(), ctx = getContext();
     api.saveSettings({ ...api.settings(), mode: 'manual' });
     const add = (mes: string) => {
         const message: ChatMessage = { name: ctx.characters[ctx.characterId].name, send_date: String(Date.now()), mes, is_user: false, extra: {} };
         ctx.chat.push(message); host.addOneMessage(message); return message;
     };
-    const generate = async (type: string, message: ChatMessage, text: string) => {
-        const previous = api.lastResult();
-        await host.eventSource.emit(host.event_types.GENERATION_STARTED, type, {}, false);
-        message.mes = text;
-        await host.eventSource.emit(host.event_types.MESSAGE_RECEIVED, ctx.chat.indexOf(message));
-        await host.eventSource.emit(host.event_types.GENERATION_ENDED);
-        const deadline = performance.now() + 8000;
-        while (api.lastResult() === previous && performance.now() < deadline) {await new Promise(resolve => setTimeout(resolve, 50));}
-        const result = api.lastResult();
-        if (!result || result === previous) {throw new Error('K1: generation did not settle');}
-        return result;
-    };
-    const message = add('正文测试');
-    const before = accepted(await api.inspect()).state;
-    const failed = await generate('normal', message, '<state3>[{"op":"set","path":["hero","health"],"value":25}]</state3>\n<state3>[{"op":"set","path":["hero","maxHealth"],"value":999}]</state3>');
-    requireValue(!failed.ok && JSON.stringify(accepted(await api.inspect()).state) === JSON.stringify(before), 'K1/K4: multiple body blocks are atomic');
-    const first = accepted(await generate('continue', message, '<state3>[{"action":"unequip","params":{},"reason":"摘下护符","old":true}]</state3>\n<state3>[{"op":"set","path":["hero","health"],"value":25}]</state3>'));
-    const second = accepted(await generate('continue', message, '<state3>[{"action":"unequip","params":{}}]</state3>\n<state3>[{"op":"set","path":["hero","health"],"value":35}]</state3>'));
-    const entries = (message.swipe_info?.[message.swipe_id || 0]?.extra?.['lwb-state3'] || message.extra?.['lwb-state3']) as { entries: object[] };
-    requireValue(entries.entries.length === 1, 'K1: continued passage replaces the old body submission');
+    add('取下护符');
+    accepted(await api.apply([{ action: 'unequip', params: {} }]));
     const nativeFetch = globalThis.fetch;
     let rejectedSaves = 0;
     try {
@@ -307,7 +289,7 @@ export async function verifyBodyAndPersistence(api: State3Api) {
     let chatRejected = false;
     try {await otherChat.run([], { preview: false });} catch (error) {chatRejected = (error as { code: string }).code === 'stale-target';}
     requireValue(chatRejected, 'K7: switched chat rejects old async candidate');
-    return { first: first.state, continued: second.state, rejectedSaves, revisionRejected, chatRejected };
+    return { rejectedSaves, revisionRejected, chatRejected };
 }
 
 /** One real update call, retaining its actual protocol exchanges for semantic review. */

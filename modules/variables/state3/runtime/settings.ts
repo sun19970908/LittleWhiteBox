@@ -6,7 +6,12 @@ export interface UpdaterSettings { mode: 'off' | 'manual' | 'auto'; source: 'mai
 interface Preferences { variablesMode?: string; state3Updater?: UpdaterSettings }
 const preferences = () => (extension_settings as typeof extension_settings & { LittleWhiteBox: Preferences }).LittleWhiteBox;
 export const state3Selected = () => preferences()?.variablesMode === '3.0';
-export function selectState3() { preferences().variablesMode = '3.0'; saveSettingsDebounced(); }
+export function selectState3() {
+    preferences().variablesMode = '3.0';
+    const selector = document.getElementById('xiaobaix_variables_mode') as HTMLSelectElement | null;
+    if (selector) {selector.value = preferences().variablesMode!;}
+    saveSettingsDebounced();
+}
 export function readSettings(): UpdaterSettings {
     return structuredClone(preferences()?.state3Updater || { mode: 'manual', source: 'main' });
 }

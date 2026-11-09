@@ -1,5 +1,5 @@
 import { diagnostic } from '../engine/diagnostics.js';
-import type { Diagnostic } from '../types.js';
+import type { Diagnostic, Json, Path, Success } from '../types.js';
 export const COPY = {
     title: '变量 3.0', author: '制作规则', play: '当前聊天', close: '关闭', assistant: '交给小白助手',
     draftHelp: '草稿可以不完整。先保存草稿，再检查规则；保存到角色卡不会改变当前聊天。',
@@ -19,6 +19,13 @@ export const COPY = {
     added: '新增', removed: '删除', annotation: '提交说明',
     result: '结算结果', empty: '没有状态变化', success: '结算成功', previewed: '试算成功，未改变聊天',
     failed: '本次未生效', saved: '已保存', unconfirmed: '结果已生效，但未确认保存。请重试保存，不要重复执行动作。', retrySave: '重试保存',
+    restored: '已恢复变量', restoredConflict: '已恢复，但有规则冲突', restoredUnchecked: '已恢复，但规则检查失败',
+    conflictHelp: '请切回原回复，或在后续剧情中解决这个冲突，否则变量更新会继续报错。',
+    constraintConflict: (description: string) => `当前状态违反作者规则：“${description}”。`,
+    schemaConflict: '当前状态不符合作者定义的字段格式。',
+    ruleCheckFailed: (rule?: string) => `无法检查${rule ? `作者规则：“${rule}”` : '卡上的规则'}。变量已恢复，请检查规则定义。`,
+    currentFields: (fields: string[]) => `当前：${fields.join('；')}。`,
+    missingValue: '不存在',
     refreshing: '正在读取…', newFunction: '新建函数', functionName: '函数名（字母、数字、下划线或短横线）',
     phases: { ready: '', preparing: '正在读取资料', requesting: '正在更新', correcting: '正在重试', saving: '正在保存', success: '已更新', unsaved: '尚未保存', failed: '更新失败', cancelled: '已取消' } as Record<string, string>,
     reasons: { input: '直接修改', action: '动作', derive: '关联计算', correct: '按规则修正', trigger: '状态触发' },
@@ -31,6 +38,9 @@ export const COPY = {
         'trigger-cycle': '触发规则无法收敛，本次没有生效。',
         'notification-failed': '结果已生效，但通知其他功能时出错。',
         'input-shape': '提交格式不正确，请按卡提供的字段或动作提交。',
+        'input-number': '增量必须是有限数字，不能填写文字或空值。',
+        'increment-target': '只能对已经存在的数字加减，请先初始化该字段。',
+        'increment-overflow': '加减后的数值过大，无法保存。',
         'path': '路径需要由字段名组成的数组。', 'json': '提交中有不能保存的值。',
         'missing-parent': '要写入的父对象不存在，请先创建它。', 'array-index': '数组位置不合法。',
         'function_exception': '自定义函数执行失败。', 'target-missing': '找不到要更新的回复。',
@@ -38,7 +48,7 @@ export const COPY = {
         'state-schema': '结算后的状态不符合定义。', 'constraint': '结算未通过规则检查。',
         'action-precondition': '动作的前提不成立。', 'action-parameters': '动作参数不符合要求。', 'action-missing': '找不到这个动作。',
         'permission': '此字段不允许通过当前方式修改。', 'derived-write': '此字段由规则计算，不能直接修改。',
-        'stale-target': '聊天、回复或起点已变化，请重新试算。', 'cancelled': '已取消，状态未改变。',
+        'stale-target': '聊天、回复、变量或卡上规则已变化，请重新更新。', 'cancelled': '已取消，状态未改变。',
         'save-unconfirmed': '无法确认聊天已经保存。', 'draft-conflict': '草稿已被其他编辑修改，请重新打开后合并。',
         'dependency-cycle': '规则存在循环依赖。',
         'rule-write-conflict': '多条关联规则同时负责同一字段。', 'correction-unstable': '修正规则不能得到稳定结果。',
@@ -46,11 +56,22 @@ export const COPY = {
         'function_timeout': '函数计算超时，本次未生效。', 'function_aborted': '函数计算已取消。',
         'nothing-to-undo': '此回复没有可撤销的提交。', 'chat-missing': '请先打开聊天。', 'character-missing': '请先选择角色卡。',
         'commit-busy': '正在处理上一笔结果，请稍候。', 'stage-consumed': '这次结果已经提交，请重新试算。',
-        'body-owner': '此回复包含正文结算块，已由正文入口负责；删除该块后才能改用独立更新。',
         'agent-unavailable': '请先启用并配置小白助手的 Agent API。', 'model-submission': '模型没有提交一次完整的变量修改，本次未生效。',
         'async-schema': '结构校验应是同步规则；领域自定义计算请使用规则函数。',
     },
 };
+export function restorationLabel(result: Success): string {
+    if (!result.restoration?.length) {return COPY.restored;}
+    return result.restoration.some(issue => ['constraint', 'state-schema'].includes(issue.code)) ? COPY.restoredConflict : COPY.restoredUnchecked;
+}
+export function restorationText(issue: Diagnostic): string {
+    if (['constraint', 'state-schema'].includes(issue.code)) {
+        const fields = issue.fields as { path: Path; value?: Json }[] | undefined;
+        return (issue.code === 'constraint' ? COPY.constraintConflict(String(issue.description || issue.rule)) : COPY.schemaConflict) + (fields?.length
+            ? COPY.currentFields(fields.map(field => `${field.path.join(' → ')}为${field.value === undefined ? COPY.missingValue : typeof field.value === 'string' ? `“${field.value}”` : JSON.stringify(field.value)}`)) : '');
+    }
+    return COPY.ruleCheckFailed(issue.description ? String(issue.description) : issue.rule);
+}
 export function errorText(error: unknown): string {
     const detail = error && typeof error === 'object' && 'code' in error ? error as Diagnostic : diagnostic(error);
     const label = (COPY.errors as Record<string, string>)[detail.code] || detail.message || detail.code || COPY.failed;

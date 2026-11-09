@@ -89,14 +89,17 @@ test('operation diagnostics identify the actual field, path and valid choices', 
     });
 });
 
-test('the skill worldbook example executes annotations without persisting them', () => {
-    seed('西厢: {"人物":{"红娘":{"好感":50}},"时局":{"地点":"法堂"},"大事记":[]}');
-    const text = readFileSync(new URL('../../card-workspace/skill/references/xiaobaix-game-state.md', import.meta.url), 'utf8');
-    const examples = [...text.matchAll(/```json\n([\s\S]*?)\n```/g)].map(match => JSON.parse(match[1]));
+test('the skill initializer and worldbook example execute without persisting annotations', () => {
+    const text = readFileSync(new URL('../state2/skill/references/xiaobaix-game-state.md', import.meta.url), 'utf8');
+    const initial = text.match(/```text\r?\n(<state>[\s\S]*?<\/state>)\r?\n```/)[1];
+    assert.deepEqual(api.applyText(initial, { floor: 0 }).errors, []);
+    assert.equal(read('西厢').营救.计划已定, false);
+    assert.equal(set('西厢.人物.红娘', { 在场: true, 好感: 50, 心思: '' }).status, 'success');
+    const examples = [...text.matchAll(/```json\r?\n([\s\S]*?)\r?\n```/g)].map(match => JSON.parse(match[1]));
     const example = examples.find(value => value.state?.ops);
     const result = api.beginUpdate({ floor: 1, swipeId: 0 }).commit(example.state);
     assert.equal(result.errors.length, 0);
     assert.equal(read('西厢').人物.红娘.好感, 55);
-    assert.equal(read('西厢').大事记.length, 1);
-    assert.ok(ctx().chat[1].extra[key].entries[0].ops.every(op => !Object.hasOwn(op, 'reason') && !Object.hasOwn(op, 'old')));
+    assert.equal(read('西厢').营救.计划已定, true);
+    assert.ok(ctx().chat[1].extra[key].entries.flatMap(entry => entry.ops).every(op => !Object.hasOwn(op, 'reason') && !Object.hasOwn(op, 'old')));
 });

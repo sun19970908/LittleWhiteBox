@@ -23,6 +23,14 @@ Saving any variable-definition/function file through CardFiles save writes that 
 
 Draft text can be incomplete. Saved card rules are the sole definition used by subsequent updates, previews and descriptions. Saving rules leaves current chat values unchanged and executes no action. Check results and card-save receipts are separate evidence.
 
+## How to design gameplay state
+
+Gameplay comes before fields. For each mechanic, write out four things: the condition, its consequence, which state values change, and whether it can happen again. Fields follow from that list: a condition reads them, a consequence writes them, and a repeatable or one-time result needs its own record.
+
+For example, "the first summit grants a relic" becomes: condition — the player reaches the summit; consequence — the relic is added; changes — inventory and a claimed flag; repeat — once, so the claimed flag is part of the condition.
+
+Variables hold what later rules and choices depend on: completion flags, counts, stages, deadlines, resources and relationships. The plot summary module records what happened in the story, so a variable that retells events duplicates it. Text variables suit short current facts, such as a location or a mood.
+
 ## How to express a rule
 
 Definition format is `1`. JSON Schema describes structure; explicit conversions happen in action parameter conversions. Schema checks validate values as submitted: they insert no defaults, delete no unknown fields and coerce nothing.
@@ -35,34 +43,38 @@ An action declares its parameter schema, parameter conversions, precondition and
 
 Use `triggers` for state-dependent consequences such as a first reward, a threshold event or an unlocked stage. Each trigger has `id`, `description`, `when`, `effects`, and optional `timing`. The default `batch` observes the completed batch; `action` observes each action after associated calculations. Conditions are evaluated in definition order, with associated calculations after each changed effect. The same trigger can run again until stable. Put one-time claim flags in ordinary state and change them with the reward. A cycle or an unbounded chain rejects the whole batch and reports the involved rules.
 
-Ordinary input is an array of `{op:"set",path,value}`, `{op:"remove",path}` or `{action,params}` objects. Group related changes into one array. A failed batch publishes nothing.
+Ordinary input is an array of `{op:"set",path,value}`, `{op:"remove",path}`, `{op:"inc",path,delta}` or `{action,params}` objects. Group related changes into one array. A failed batch publishes nothing.
 
-Each input object may contain `reason`, one sentence citing the passage that supports this change, and `old`, its previous value for the reader. These annotations are shown beside the latest live result with their operation number; they do not execute, do not validate the previous value, and are discarded when the chat, swipe or message changes. For example, an equipment removal is `{ "action": "unequip", "params": {}, "reason": "The passage says the character takes off the amulet." }`.
+`inc` adds a signed numeric `delta` to the existing number at `path` when that item executes, including earlier edits and action effects in the batch. Negative deltas subtract; zero and fractional deltas are valid. The field, delta and result must be finite numbers. Initialize ordinary counters in `initial`; create a new optional field with an allowed `set` or action before incrementing it. `inc` uses the same `direct` permissions as `set`; derived and action-only fields remain owned by their rules and actions. Calculations, corrections and triggers keep their existing settlement timing, and the final schema decides whether the resulting field must be an integer. No rounding or step limit is added by the operation.
+
+For example, a separate sale already completed outside a card action can submit `{ "op": "inc", "path": ["hero", "coins"], "delta": 5, "reason": "Sold an item elsewhere." }`. When this card's `sell` action already grants those coins, submit that action instead of also submitting its income. A reward trigger supplies its own reward after its condition becomes true. A separate event may still justify another increment to the same field.
+
+Each input object carries `reason`, one sentence citing the passage that supports this change, and may carry `old`, its previous value for the reader. Players read `reason` to see why a number moved, and changes made by rules and triggers show the rule that made them. These annotations are shown beside the latest live result with their operation number; they do not execute, do not validate the previous value, and are discarded when the chat, swipe or message changes. A batch without them is still accepted. For example, an equipment removal is `{ "action": "unequip", "params": {}, "reason": "The passage says the character takes off the amulet." }`.
 
 ## What the two models receive
 
-The ordinary RP model writes the story. In normally enabled worldbook entries, use `{{xbgetvar::hero.health}}` to read a specific current value and `{{xbvardesc::character}}` to describe the fields selected by that view. `{{xbvardesc}}` supplies all view descriptions. Description macros contain section descriptions and field meanings, not current values. Use worldbook conditions and activation to select the needed subpaths and groups. A character-after constant entry is sufficient for always-visible values and meanings.
+The ordinary RP model writes the story. In normally enabled worldbook entries, use `{{xbgetvar::hero.health}}` to read a specific current value and `{{xbvardesc::character}}` to describe that view. `{{xbvardesc}}` supplies all views. View names come from this card's `views`. A description lists the section descriptions, the meanings of the selected fields, and the descriptions of rules, actions, triggers and constraints that read or change those fields; it contains no current values. Use worldbook conditions and activation to select the needed subpaths and groups. A character-after constant entry is sufficient for always-visible values and meanings.
 
 The independent update model receives SillyTavern's assembled context, including activated worldbook entries, with the target passage marked. It also receives the starting state, structure, writable fields, actions, rule and trigger descriptions generated from the definition, and submits one batch.
 
 Put each instruction where its reader needs it:
 
-- `access[].description` and view descriptions: field meaning, read by both models.
-- `access[].update`: when and how the update model changes that field, read only by the update model.
-- Action, rule, trigger and constraint descriptions: read by the update model, which receives each action's id, description and parameters, each rule's id, kind, output path and description, each trigger's id, description and timing, and each constraint's description. Expressions, requirements, effects and tests stay with the engine, so any judgement the update model needs belongs in a description.
+- `access[].description`, view descriptions, and rule, action, trigger and constraint descriptions: how the world works, read by both models. Write them as facts of the world, such as "Wearing the amulet raises maximum health by 40." or "A healing spell restores 10 health."
+- `access[].update`: when the passage calls for a change and which field or action to submit, read only by the update model. For example, "Submit heal when the passage casts a healing spell."
+- The update model receives each action's id, description and parameters, each rule's id, kind, output path and description, each trigger's id, description and timing, and each constraint's description. Expressions, requirements, effects and tests stay with the engine, so any judgement a model needs belongs in a description.
 - Worldbook prose: story context for both models.
 
-Keeping maintenance instructions out of the RP context keeps the RP model from narrating them as story tasks. Macros expand before the host applies its worldbook budget; after enabling an isolated chat, `previewRequest()` returns the exact update request. A story behaviour that changes managed state needs a corresponding allowed field or action before the card can offer it to players.
+The RP model narrates with the same rules the settlement applies, while submission instructions stay out of its context, so it does not narrate them as story tasks. Saving rules refreshes the description macros of an enabled chat. Macros expand before the host applies its worldbook budget; after enabling an isolated chat, `previewRequest()` returns the exact update request. A story behaviour that changes managed state needs a corresponding allowed field or action before the card can offer it to players.
 
-Players normally update through the reply's update button or automatic post-reply updates. Only when the user requests story-body submission should the RP model emit `<state3>[...]</state3>`; multiple blocks in one reply form one atomic batch, and that reply is then updated only from its body.
+Players update through the reply's update button or automatic post-reply updates. Both use the independent update model; custom interfaces can submit through the state API.
 
 ## From a design to a playable card
 
-1. Read the current card files and ask only for missing gameplay choices. Describe what players see and which story events cause state changes.
-2. Make the definition: structure and initial state, direct inputs, action-owned fields, calculated fields, cross-field constraints and conditional consequences. Use pure functions where expressions would obscure the design.
+1. Read the current card files and ask only for missing gameplay choices. Describe what players see and list each mechanic as condition, consequence, changed state and repeatability.
+2. Make the definition from that list: structure and initial state, direct inputs, action-owned fields, calculated fields, cross-field constraints and conditional consequences. Use pure functions where expressions would obscure the design.
 3. Connect the RP views through worldbook macros, using the card-files skill for worldbook layout, activation and ordering. A 3.0 definition initializes its own state; a loop task is only needed for actual host automation or a persistent custom UI.
-4. Trial the draft with a successful batch, a forbidden edit and a failed action. Check all linked fields and confirm failure leaves the supplied starting state untouched. Repair errors in the same editable draft.
-5. Save the complete bundle and the changed worldbook files. Report the writeback receipts. With permission, enable an isolated chat and check the update button, visible result, save/reopen and undo before calling the card playable.
+4. Trial the draft against this card's own mechanics, each with `checkDraft` from a state that sets up the case: every consequence when its condition holds and when it does not, a one-time reward claimed twice, a time or count threshold crossed, a change after equipment or a stage switches, and the first action after a rule edit, started from state saved under the earlier rules. Also trial a forbidden edit and a failed action, and confirm failure leaves the supplied starting state untouched. For numeric inputs, mix assignments, increments and actions to verify execution order, and check a missing field, a final type violation and a rule correction. Repair errors in the same editable draft.
+5. Save the complete bundle and the changed worldbook files. Report the writeback receipts. With permission, enable an isolated chat. Description macros follow the enabled chat's saved rules: expand each macro used by the worldbooks once, for example `ctx.substituteParams('{{xbvardesc::character}}')`, and confirm it lists the intended fields; an empty field list means the view name or a view path misses the definition. Play one turn for a key mechanic: the reply's narration and the settled values agree, and the visible result shows each change with its reason. Check the update button, save/reopen and undo before calling the card playable.
 
 ## When a custom function is useful
 
@@ -115,7 +127,7 @@ Write back the definition path with CardFiles save; its function files are inclu
 
 `apply(input,options)` commits through the same settlement used by `preview(input,options)`. A committed result distinguishes `saved:true` from `saved:false`; `retrySave()` retries persistence without executing actions again. `undo({index})` removes the last settlement at that reply; `undo({index,all:true})` removes that reply's whole group when repairing stale text-derived results.
 
-Tail deletion and swipe selection restore the recorded state for that position without running actions, conditions or triggers; later confirmed fields stay with the parent structure they require. Editing, hiding, moving and middle deletion leave variables as they are. When a changed passage needs a different result, the player updates it again; re-updating the current reply replaces its previous body/model submission.
+Tail deletion and swipe selection restore the recorded state for that position without running actions, corrections or triggers; later confirmed fields stay with the parent structure they require. Switching an earlier reply while keeping later settlements also checks the restored state's schema and constraints. Conflicts are shown with the author's rule and current field values; the selection and restored values remain in place. A subsequent update is accepted when its resulting state satisfies the rules. Editing, hiding, moving and middle deletion leave variables as they are. Copied replies carry prose, not executed settlements. When a changed passage needs a different result, the player updates it again; re-updating the current reply replaces its previous model submission.
 
 `settings()` reads updater choices, defaulting to `{mode:'manual', source:'main'}`. `saveSettings({mode,source})` requires both fields. Modes are `off`, `manual`, `auto`; sources are `main`, `delegate`. These are player preferences, separate from the card definition.
 

@@ -1,6 +1,6 @@
 import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 import styleText from './styles.css?inline';
-import { COPY, errorText } from './copy.js';
+import { COPY, errorText, restorationLabel } from './copy.js';
 import { element, showResult } from './result.js';
 import { notifyInfo } from './notifications.js';
 import { DEFINITION_FILE, FUNCTION_DIRECTORY } from '../definition/format.js';
@@ -124,7 +124,7 @@ export function createState3Page(api: State3Api) {
         const definition = status.bundle.definition;
         const output = element('section', undefined, 'lwb-state3-result');
         const present = (result: Result) => {
-            showResult(output, result, definition);
+            showResult(output, result, result.ok && result.version === status.version ? definition : undefined);
             if (result.ok && result.saved === false) {
                 output.append(button(COPY.retrySave, async () => {
                     await api.retrySave(); const saved = api.lastResult(); if (saved) {present(saved);}
@@ -216,8 +216,8 @@ export function createState3Page(api: State3Api) {
                     const group = floor === index ? controls : element('div', undefined, 'lwb-state3-controls');
                     group.dataset.floor = String(floor);
                     const details = element('details'), result = element('section');
-                    details.append(element('summary', last.ok ? last.saved === false ? COPY.phases.unsaved : COPY.success : COPY.failed), result);
-                    if (!last.ok || last.saved === false || expanded.has(String(floor))) {details.open = true;}
+                    details.append(element('summary', last.ok ? last.saved === false ? COPY.phases.unsaved : last.restoration ? restorationLabel(last) : COPY.success : COPY.failed), result);
+                    if (!last.ok || last.saved === false || last.restoration?.length || expanded.has(String(floor))) {details.open = true;}
                     let rendered = false;
                     const reveal = () => {
                         if (details.open && !rendered) {

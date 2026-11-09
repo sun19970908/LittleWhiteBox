@@ -5,6 +5,8 @@ import { reject, diagnostic } from './diagnostics.js';
 import { difference } from './difference.js';
 import { displayChanges } from './delta-view.js';
 import { digest } from '../definition/digest.js';
+import { applyDirectInput, inputFields, validateInput } from './input.js';
+import { validateState } from './validation.js';
 
 // A runaway, non-repeating trigger chain must also return control to the player.
 export const TRIGGER_BUDGET_MS = 2000;
@@ -15,20 +17,6 @@ function authorize(compiled: Compiled, before: Json, after: Json, actor: string)
         if (derived) {reject('derived-write', { path: change.path, rule: derived.id, actor });}
         const access = compiled.definition.access.filter(entry => contains(entry.path, change.path));
         if (!access.length || access.some(entry => !entry.write.includes(actor))) {reject('permission', { path: change.path, actor });}
-    }
-}
-
-function validateInput(input: unknown): asserts input is JsonObject[] {
-    assertJson(input);
-    if (!Array.isArray(input)) {reject('input-shape');}
-    for (const [index, operation] of input.entries()) {
-        if (!operation || typeof operation !== 'object' || Array.isArray(operation)) {reject('input-shape', { operation: index, actual: operation });}
-        if (operation.action) {
-            if (typeof operation.action !== 'string' || !operation.params || typeof operation.params !== 'object' || Array.isArray(operation.params)) {reject('input-shape', { operation: index, action: operation.action });}
-        } else {
-            if (!['set', 'remove'].includes(String(operation.op)) || (operation.op === 'set' && !Object.hasOwn(operation, 'value'))) {reject('input-shape', { operation: index, actual: operation.op, allowed: ['set', 'remove'], path: operation.path });}
-            pathOf(operation.path);
-        }
     }
 }
 
@@ -103,13 +91,14 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
                 if (++rounds % 16 === 0) {await new Promise<void>(resolve => setTimeout(resolve, 0));}
             }
         };
-        let pendingDirect = false;
+        // Stored derived values may predate the current rules; actions read the recalculated state.
+        let pendingDirect = true;
         for (const [index, operation] of input.entries()) {
             operationIndex = index;
             signal?.throwIfAborted();
             if (!operation.action) {
                 const previous = clone(state);
-                setAt(state, pathOf(operation.path), operation.value, operation.op === 'remove');
+                applyDirectInput(state, operation);
                 authorize(compiled, previous, state, 'direct');
                 record(previous, { kind: 'input' });
                 pendingDirect = true;
@@ -140,15 +129,11 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
         context.params = {};
         await stabilize();
         await trigger('batch');
-        if (!compiled.validate(state)) {reject('state-schema', { errors: clone(compiled.validate.errors) });}
-        for (const constraint of compiled.definition.constraints) {
-            ruleId = constraint.id;
-            if (await evaluate(constraint.test, context) !== true) {reject('constraint', { rule: constraint.id });}
-        }
+        const errors = await validateState(compiled, context);
+        if (errors.length) { const { code, ...detail } = errors[0]; reject(code, detail); }
         signal?.throwIfAborted();
         const annotations = input.flatMap((operation, index) => {
-            const fields = Object.entries(operation).filter(([name]) => !(operation.action
-                ? ['action', 'params'] : ['op', 'path', 'value']).includes(name));
+            const fields = Object.entries(operation).filter(([name]) => !inputFields(operation).includes(name));
             return fields.length ? [{ index, ...(operation.action ? { action: String(operation.action) } : { path: pathOf(operation.path) }), fields }] : [];
         });
         return { ok: true, state, changes: displayChanges(difference(before, state)), provenance, actions, diagnostics: [], ...(annotations.length ? { annotations } : {}) };

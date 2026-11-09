@@ -61,7 +61,24 @@ test('K2/K9: generated paths exclude derived and action-only fields; RP descript
     for (const path of [['hero'], ['hero', 'maxHealth'], ['hero', 'amulet']]) {assert.equal(validate([{ op: 'set', path, value: 1 }]), false);}
     const view = buildDescriptionView(compiled, ['equipment']);
     assert.deepEqual(view.fields, [{ path: ['hero', 'amulet'], description: compiled.definition.access[2].description }]);
-    for (const key of ['state', 'values', 'rules', 'actions', 'constraints', 'result']) {assert.equal(Object.hasOwn(view, key), false);}
+    for (const key of ['state', 'values', 'result']) {assert.equal(Object.hasOwn(view, key), false);}
+    assert.ok(view.actions.every(item => typeof item === 'string'));
+    assert.deepEqual(view.rules, [compiled.definition.rules[0].description]);
+    assert.deepEqual(view.constraints, []);
+    assert.deepEqual(buildDescriptionView(compiled, ['character']).constraints, [compiled.definition.constraints[0].description]);
+    const facts = equipmentExample(), get = (...path: string[]) => ({ get: path }), unchanged = { type: 'object', additionalProperties: false, properties: {} };
+    facts.definition.rules = []; facts.definition.constraints = [];
+    facts.definition.access.find(entry => entry.path.join('.') === 'hero.health')!.write.push('heal');
+    facts.definition.actions.push({ id: 'heal', parameters: unchanged, conversions: [], description: 'A healing spell restores 10 health.', requires: { literal: true },
+        effects: [{ path: ['hero', 'health'], value: { op: 'add', args: [get('hero', 'health'), { literal: 10 }] } }] });
+    facts.definition.triggers = [
+        { id: 'amulet-rest', description: 'Resting heals more while wearing the amulet.', when: { literal: false }, effects: [{ path: ['hero', 'health'], value: { op: 'if', args: [get('hero', 'amulet'), { literal: 20 }, { literal: 10 }] } }] },
+        { id: 'earlier-amulet', description: 'Removing the amulet leaves a scar.', when: { literal: false }, effects: [{ path: ['hero', 'health'], value: { op: 'if', args: [{ before: ['hero', 'amulet'] }, { literal: 1 }, { literal: 2 }] } }] },
+    ];
+    const factView = (section: string) => buildDescriptionView(compileDefinition(facts), [section]);
+    assert.ok(factView('character').actions.includes('A healing spell restores 10 health.'));
+    assert.equal(factView('equipment').actions.includes('A healing spell restores 10 health.'), false);
+    assert.deepEqual(factView('equipment').triggers, ['Resting heals more while wearing the amulet.', 'Removing the amulet leaves a scar.']);
     assert.equal(Object.hasOwn(view.sections[0], 'values'), false);
     const guide = buildUpdateView(compiled, accepted(await initialize(compiled)).state);
     assert.equal(guide.fields.find(field => field.path.join('.') === 'hero.health')?.update, compiled.definition.access[1].update);

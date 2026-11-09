@@ -90,6 +90,7 @@ const state = {
     messages: [],
     historySummary: '',
     archivedTurnCount: 0,
+    archivedSkillIds: [],
     contextStats: {
         usedTokens: 0,
         budgetTokens: MAX_CONTEXT_TOKENS,
@@ -1068,7 +1069,7 @@ function isJsApiPermissionEnabled() {
 function getEnabledToolDefinitions(options = {}) {
     const role = options.role === 'delegate' ? 'delegate' : 'main';
     const providerConfig = getActiveProviderConfig(role === 'delegate' ? { role: 'delegate' } : {});
-    return getAssistantToolDefinitions({ providerConfig, jsApiEnabled: isJsApiPermissionEnabled() });
+    return getAssistantToolDefinitions({ providerConfig, jsApiEnabled: isJsApiPermissionEnabled(), role, skillIds: options.skillIds || [] });
 }
 
 const chatUi = createChatUi({

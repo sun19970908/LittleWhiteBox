@@ -1,9 +1,12 @@
 import { CARD_FIELDS, TEXT_FIELDS } from './files.js';
 
+export const CARD_FILES = 'CardFiles';
+
 export const CARD_SKILL = Object.freeze({
     id: 'builtin-card-files', title: '小白X角色卡制作',
     summary: 'Build or edit character cards: organize worldbooks and prompt layers, set constant/keyword activation and insertion order, then add LittleWhiteBox variables, status bars, front ends and loop tasks as needed; write back through CardFiles.',
     path: 'modules/card-workspace/skill/SKILL.md',
+    tools: [CARD_FILES],
 });
 
 // Field names are derived from the same projection used by CardFiles.
@@ -38,7 +41,7 @@ export function cardSkillContent(body, pluginPath) {
 }
 
 export const CARD_TOOL = Object.freeze({ type: 'function', function: {
-    name: 'CardFiles',
+    name: CARD_FILES,
     description: [
         'Open the current character card as workspace files, write selected files back to the card, or reload selected files from the saved card.',
         'Edit the opened files with Read, Write and apply_patch; ReadSkill builtin-card-files describes the file layout.',

@@ -37,6 +37,11 @@ export function exposeVariableReads(values, roots) {
     return () => { if (readProjection === own) readProjection = previous; };
 }
 
+/** A projected root may be absent in the staged state; it must not fall back to saved data. */
+export function projectedVariableRead(root) {
+    return readProjection?.roots.has(root) ? { value: readProjection.values[root] } : undefined;
+}
+
 function getMsgKey(msg) {
     return (typeof msg?.mes === 'string') ? 'mes'
          : (typeof msg?.content === 'string' ? 'content' : null);
@@ -137,8 +142,9 @@ export function lwbResolveVarPath(path) {
 
         const rootName = String(segs[0]);
         const metadata = getContext().chatMetadata;
-        const typed = readProjection?.roots.has(rootName) || ownsVariable(metadata, rootName);
-        const rootRaw = readProjection?.roots.has(rootName) ? readProjection.values[rootName]
+        const projected = projectedVariableRead(rootName);
+        const typed = Boolean(projected) || ownsVariable(metadata, rootName);
+        const rootRaw = projected ? projected.value
             : typed ? readOwnedVariable(metadata, rootName) : getLocalVariable(rootName);
 
         if (segs.length === 1) {

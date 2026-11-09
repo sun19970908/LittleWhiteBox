@@ -3,6 +3,14 @@ import { assertJson, equal, getAt, pathOf } from './data.js';
 import { reject } from './diagnostics.js';
 import { runFunction } from './functions.js';
 
+// All referenced state, including batch-start paths and declared function reads.
+// Dependency ordering below intentionally uses only current-state reads.
+export function references(expression: Expression, definition: Definition): Path[] {
+    const own = [expression.get, expression.before].filter((path): path is Path => Array.isArray(path));
+    const called = expression.call ? definition.functions[expression.call]?.reads || [] : [];
+    return [...own, ...called, ...(expression.args || []).flatMap(item => references(item, definition))];
+}
+
 export function readsOf(expression: Expression, definition: Definition): Path[] {
     if (expression.get) {return [pathOf(expression.get)];}
     if (expression.before) { pathOf(expression.before); return []; }
@@ -20,7 +28,10 @@ export async function evaluate(expression: Expression, context: EvaluationContex
     context.signal?.throwIfAborted();
     if (Object.hasOwn(expression, 'literal')) {return structuredClone(expression.literal);}
     if (expression.get) {return getAt(context.state, expression.get);}
-    if (expression.before) {return getAt(context.before, expression.before);}
+    if (expression.before) {
+        if (context.before === undefined) {reject('before-unavailable');}
+        return getAt(context.before, expression.before);
+    }
     if (expression.param) {return getAt(context.params, expression.param);}
     const args = expression.args || [];
     // Branches are lazy: inactive rules need not read absent optional state.

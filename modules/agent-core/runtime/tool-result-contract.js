@@ -1,7 +1,7 @@
 import { TOOL_RESULT_PAGE_CHARS } from './tool-result-pages.js';
 
 export const TOOL_RESULT_READ = 'ToolResultRead';
-export const PAGED_TOOL_RESULT_DESCRIPTION = `Large results return ok, status and a page in data (reference, text, offset, nextOffset, totalChars). Use ${TOOL_RESULT_READ} with data.reference and data.nextOffset to read more of the same result.`;
+export const PAGED_TOOL_RESULT_DESCRIPTION = `A large result returns its first page in data; ${TOOL_RESULT_READ} reads the rest.`;
 
 /** @returns {{type: 'function', function: {name: string, description: string, parameters: Record<string, unknown>}}} */
 export function getToolResultReadDefinition() {

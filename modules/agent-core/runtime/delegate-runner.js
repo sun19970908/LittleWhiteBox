@@ -215,8 +215,6 @@ export function createDelegateRunner(deps = {}) {
             : getActiveProviderConfig({ role: 'delegate' });
         const adapter = createAdapter(providerConfig);
         const systemPrompt = buildDelegateSystemPrompt(getSystemPrompt());
-        const tools = filterDelegateToolDefinitions(resolveToolDefinitions(), TOOL_NAMES);
-        const allowedToolNames = new Set(tools.map(getToolName).filter(Boolean));
         const messages = [
             { role: 'system', content: systemPrompt },
             { role: 'user', content: buildDelegateUserPrompt(normalizedArgs) },
@@ -228,6 +226,7 @@ export function createDelegateRunner(deps = {}) {
         let finalAnswerReminderSent = false;
         let pendingToolResponses = null;
         let pendingFinalAnswerReminderText = '';
+        let previousToolSignature = '';
         const absorbStreamProgress = () => {};
         emitDelegateProgress(parentRun, {
             type: 'started',
@@ -246,6 +245,10 @@ export function createDelegateRunner(deps = {}) {
                 maxRounds,
                 summary: `第 ${rounds} 轮思考中。`,
             });
+            const tools = filterDelegateToolDefinitions(resolveToolDefinitions({ messages }), TOOL_NAMES);
+            const allowedToolNames = new Set(tools.map(getToolName).filter(Boolean));
+            const toolSignature = JSON.stringify([...allowedToolNames].sort());
+            const continueSession = adapter?.supportsSessionToolLoop && previousToolSignature === toolSignature;
             const requestTask = {
                 systemPrompt,
                 tools,
@@ -258,9 +261,9 @@ export function createDelegateRunner(deps = {}) {
                 onStreamProgress: absorbStreamProgress,
             };
 
-            if (Array.isArray(pendingToolResponses) && pendingToolResponses.length && adapter?.supportsSessionToolLoop) {
+            if (Array.isArray(pendingToolResponses) && pendingToolResponses.length && continueSession) {
                 requestTask.toolResponses = pendingToolResponses;
-            } else if (pendingFinalAnswerReminderText && adapter?.supportsSessionToolLoop) {
+            } else if (pendingFinalAnswerReminderText && continueSession) {
                 requestTask.finalAnswerReminderText = pendingFinalAnswerReminderText;
                 pendingFinalAnswerReminderText = '';
             } else {
@@ -270,6 +273,7 @@ export function createDelegateRunner(deps = {}) {
             let result;
             try {
                 result = await adapter.chat(requestTask);
+                previousToolSignature = toolSignature;
             } catch (error) {
                 if (typeof isAbortError === 'function' && isAbortError(error)) {
                     throw error;
@@ -324,7 +328,7 @@ export function createDelegateRunner(deps = {}) {
                             argsSummary: summarizeToolArguments(parsedArguments),
                             summary: `${toolCall.name} ${summarizeToolArguments(parsedArguments) || ''}`.trim(),
                         });
-                        toolResult = await executeToolCall(toolCall, parsedArguments, parentRun);
+                        toolResult = await executeToolCall(toolCall, parsedArguments, parentRun, { messages });
                     }
                     messages.push({
                         role: 'tool',

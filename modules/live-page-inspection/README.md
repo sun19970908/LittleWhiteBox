@@ -6,7 +6,8 @@
 - dom.ts：实际 DOM、布局、样式和命中测试。不会点击、刷新或执行助手提交的脚本。
 - recorder.ts：页面异常、未处理拒绝、console.error/warn、资源元素加载失败；保留浏览器原来的事件、控制台调用和返回值。
 - instrument.ts：小白X渲染 HTML 时，在 head 最前面同步接入捕获。Blob 缓存复用时不携带特定页面标识。
-- contract.ts：动作、容量、错误及界面表达的唯一来源；tool-contract.ts 和 prompt.ts 是助手接入说明。
+- contract.ts：动作、容量、错误及界面表达的唯一来源；tool-contract.ts 是助手工具与内置技能的注册。
+- skill/：助手按需读取的排查技能 builtin-live-page，及其重建复查参考 references/verify-changes.md。
 
 ## 记录与读取
 
@@ -24,7 +25,7 @@ DOM 和样式结果按需读取，不缓存完整页面副本。长结果返回 
 
 文件工具和 CardFiles 负责修改与保存；现有 RunJavaScriptApi 先调用酒馆 updateMessageBlock，再调用渲染器 processMessageById，只重建目标楼层显示。渲染入口在 modules/iframe-renderer/assistant-api.ts 注册，宿主执行与助手审批共用 modules/assistant/shared/extension-jsapi-manifest.ts；不增加修改或刷新工具，也不广播消息事件。托管宿主仍由宿主负责重建。
 
-具体操作与副作用边界见 references/verify-changes.md。成功回执不表示页面已加载，须用 InspectPage 读取替换后的页面确认。截图用于澄清视觉意图，不替代已有的内部故障证据。
+具体操作与副作用边界见 skill/references/verify-changes.md。成功回执不表示页面已加载，须用 InspectPage 读取替换后的页面确认。截图用于澄清视觉意图，不替代已有的内部故障证据。
 
 ## 必须守住的约束
 

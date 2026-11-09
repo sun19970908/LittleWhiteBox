@@ -27,7 +27,7 @@ export interface Compiled {
     actions: Map<string, Action & { validate: ValidateFunction }>;
     validate: ValidateFunction;
 }
-export type Operation = ({ op: 'set'; path: Path; value: Json } | { op: 'remove'; path: Path } | { action: string; params: JsonObject }) & { [note: string]: unknown };
+export type Operation = ({ op: 'set'; path: Path; value: Json } | { op: 'remove'; path: Path } | { op: 'inc'; path: Path; delta: number } | { action: string; params: JsonObject }) & { [note: string]: unknown };
 export interface Source { kind: 'input' | 'action' | 'derive' | 'correct' | 'trigger'; id?: string }
 export interface Change { path: Path; before?: Json; after?: Json; removed: boolean }
 export interface Diagnostic { code: string; message?: string; path?: unknown; rule?: string; [key: string]: unknown }
@@ -37,11 +37,13 @@ export interface Success {
     actions: { id: string; params?: JsonObject }[]; diagnostics: Diagnostic[];
     committed?: boolean; saved?: boolean; version?: string; receipt?: Receipt;
     persistence?: Diagnostic;
+    /** Live restoration feedback only; never stored in receipts or chat metadata. */
+    restoration?: Diagnostic[];
     annotations?: { index: number; path?: Path; action?: string; fields: [string, unknown][] }[];
 }
 export type Result = Success | Failure;
 export interface RunOptions { signal?: AbortSignal }
-export interface EvaluationContext extends RunOptions { bundle: Bundle; before: Json; state: Json; params: JsonObject }
+export interface EvaluationContext extends RunOptions { bundle: Bundle; before?: Json; state: Json; params: JsonObject }
 export interface Receipt {
     id: string; revision: number; source: string; delta: StoredDelta; actions: { id: string }[];
     applied?: StoredDelta;

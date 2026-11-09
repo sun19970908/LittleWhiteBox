@@ -1,10 +1,26 @@
-import type { Compiled, Definition, Json } from '../types.js';
+import type { Compiled, Definition, Expression, Json, Path } from '../types.js';
 import { reject } from '../engine/diagnostics.js';
 import { clone, overlaps } from '../engine/data.js';
 import { getWritableFields } from './tools.js';
+import { references } from '../engine/expressions.js';
 
 const authoredRules = (definition: Definition) => definition.rules.map(({ id, kind, path, description }) => ({ id, kind, path: clone(path), description }));
 const authoredConstraints = (definition: Definition) => definition.constraints.map(({ id, description }) => ({ id, description }));
+
+// How the world works around the selected fields: the RP model narrates with
+// these facts, while submission instructions stay in the update view.
+function worldFacts(definition: Definition, paths: Path[]) {
+    const touches = (items: Path[]) => items.some(item => paths.some(path => overlaps(path, item)));
+    const effects = (items: { path: Path; value: Expression }[]) => items.flatMap(effect => [effect.path, ...references(effect.value, definition)]);
+    return {
+        rules: definition.rules.filter(rule => touches([rule.path, ...references(rule.value, definition)])).map(({ description }) => description),
+        actions: definition.actions.filter(action => touches([...references(action.requires, definition), ...effects(action.effects), ...effects(action.conversions)]))
+            .map(({ description }) => description),
+        triggers: (definition.triggers || []).filter(trigger => touches([...references(trigger.when, definition), ...effects(trigger.effects)]))
+            .map(({ description }) => description),
+        constraints: definition.constraints.filter(constraint => touches(references(constraint.test, definition))).map(({ description }) => description),
+    };
+}
 
 export function buildDescriptionView(compiled: Compiled, sections = Object.keys(compiled.definition.views)) {
     const definition = compiled.definition;
@@ -14,6 +30,7 @@ export function buildDescriptionView(compiled: Compiled, sections = Object.keys(
         sections: sections.map(id => ({ id, description: definition.views[id].description, paths: clone(definition.views[id].paths) })),
         fields: definition.access.filter(entry => paths.some(path => overlaps(path, entry.path)))
             .map(({ path, description }) => ({ path: clone(path), description })),
+        ...worldFacts(definition, paths),
     };
 }
 

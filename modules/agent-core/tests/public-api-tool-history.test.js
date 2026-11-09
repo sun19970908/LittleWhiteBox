@@ -57,7 +57,8 @@ test('Gemini over OpenAI-compatible signs caller-built calls and keeps real sign
 
     assert.deepEqual(history, original);
     const [built, live] = toolCallMessages(requests[1]);
-    assert.deepEqual(built.tool_calls[0].extra_content, { google: { thought_signature: SKIP } });
+    assert.deepEqual(built.tool_calls[0].extra_content, { google: { thought_signature: SKIP, thoughtSignature: SKIP } });
+    assert.equal(built.tool_calls[0].provider_specific_fields, undefined);
     // A signature covers its whole parallel batch; the unsigned sibling must stay unsigned.
     assert.deepEqual(live.tool_calls.map(item => item.extra_content?.google?.thought_signature), ['model-signature', undefined]);
 });

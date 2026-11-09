@@ -9,6 +9,7 @@ import { state3JsApiNamespace, withExtensionJsApiManifest } from '../../variable
 import { analyzeJavaScriptApiRequest as analyzeRequest, runJavaScriptApi as runRequest } from '../runtime-src/jsapi-runtime.js';
 import { CARD_SKILL } from '../../card-workspace/assistant-contract.js';
 import { STATE3_SKILL, cardWorkspaceRequest } from '../../variables/state3/skill/contract.js';
+import { STATE2_SKILL } from '../../variables/state2/skill/contract.js';
 import { equipmentExample } from '../../variables/state3/definition/example.js';
 import { projectVariableFiles } from '../../variables/state3/definition/card-files.js';
 import { compileDefinition } from '../../variables/state3/definition/compile.js';
@@ -64,7 +65,8 @@ test('V3 assistant surface preserves read/effect classification and excludes pri
 test('V3 authoring uses its definition while V2 keeps its task routing', () => {
     const root = 'local/card-files/example/', card = { root, name: 'Example', paths: [root + 'card.json', root + 'tasks/init.js', root + 'variables/definition.json'] };
     assert.equal(cardWorkspaceRequest(card, { variables: true, version: '3.0' }).skillId, STATE3_SKILL.id);
-    assert.equal(cardWorkspaceRequest(card, { variables: true, version: '2.0' }).skillId, CARD_SKILL.id);
+    assert.equal(cardWorkspaceRequest(card, { variables: true, version: '2.0' }).skillId, STATE2_SKILL.id);
+    assert.equal(cardWorkspaceRequest(card, { variables: false }).skillId, CARD_SKILL.id);
     assert.equal(cardWorkspaceRequest(card, { variables: true, version: '2.0' }).selectedFilePath, root + 'tasks/init.js');
 });
 

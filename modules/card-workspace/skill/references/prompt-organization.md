@@ -32,7 +32,7 @@ These are content categories, not five mandatory entries or a checklist of field
 | The starting situation | Scenario plus the greeting's actual scene | Scenario supplies context; the selected greeting starts the chat history |
 | Setting rules needed to understand most scenes | A compact always-on world foundation | Local details can rely on this foundation being present |
 | A location, supporting character or organization needed only when relevant | A keyword-triggered entry | Its full detail need not consume context in unrelated scenes |
-| Current location, inventory, relationship stage | Current state, projected into the prompt | A static paragraph saying “currently” becomes stale; use [the variable guide](<xiaobaix-game-state.md>) for LittleWhiteBox state |
+| Current location, inventory, relationship stage | Current state, projected into the prompt | A static paragraph saying “currently” becomes stale; use LittleWhiteBox variables (ReadSkill builtin-state3, or builtin-state2 for simple counters) |
 | Required output structure and illustrative dialogue | A concise format rule and `mes_example`, with a greeting consistent with that format | A rule states what must be produced; examples demonstrate it |
 | Instructions for the player to install or enable something | Creator notes or accompanying instructions | Player instructions and model-facing setting facts serve different readers |
 
@@ -126,7 +126,7 @@ An event that must happen only once needs a completion fact in the card's state 
 
 A reply has saved source text, a rendered display and a prompt-facing form. A display-only regex (`markdownOnly`) can hide or decorate a block without removing it from model input; prompt-only processing (`promptOnly`) acts on a different path. An HTML comment or hidden panel is not by itself evidence that the model or keyword scanner cannot see its text. Inspect the relevant transformed input.
 
-Keep formatting instructions, greeting examples and the regex consumer consistent. If a tag changes, check the output rule and the rule that consumes it together. For variable cards, use the chosen submission channel from [the variable guide](<xiaobaix-game-state.md>) rather than adding a second full-state block just to drive a visual status panel. Authoring notes, unresolved research and editing rationale belong in workspace notes, not in text destined for the model.
+Keep formatting instructions, greeting examples and the regex consumer consistent. If a tag changes, check the output rule and the rule that consumes it together. For variable cards, the front end reads current variables directly, rather than relying on a second full-state block in the story text. Authoring notes, unresolved research and editing rationale belong in workspace notes, not in text destined for the model.
 
 ## Budget is separate from reading order
 

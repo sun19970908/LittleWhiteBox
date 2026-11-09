@@ -31,13 +31,10 @@ export function createState3Updater({ service, adapter, available, changed }: { 
         const ctx = getContext(), message = ctx.chat[staged.target.floor];
         if (!message || message.is_user || message.is_system || !message.mes?.trim()) {reject('target-missing');}
         const snapshot = adapter.capture(staged.target.floor);
-        // A body submission owns this reply. Switching to model updates requires
-        // removing that block, so manual and automatic entry points cannot double it.
-        if (/<state3>[\s\S]*?<\/state3>/.test(message.mes)) {reject('body-owner');}
         const compiled = compileDefinition(staged.bundle);
         const reservation = buildUpdateTask(compiled, staged.snapshot, { target: staged.target, messages: [] });
         const context = await captureContext(ctx, { ...staged.target, message }, reservation,
-            (text: string) => passageText(text).replace(/<state3>[\s\S]*?<\/state3>/g, ''), signal,
+            passageText, signal,
             () => exposeVariableReads(staged.snapshot, staged.roots));
         staged.assertCurrent();
         if (!adapter.isCurrent(snapshot)) {reject('stale-target');}

@@ -32,6 +32,7 @@ function selected(message: ChatMessage): Holder | undefined {
 function record(message: ChatMessage): SwipeRecord {
     return (selected(message)?.extra?.[CHAT_KEY] as SwipeRecord | undefined) ?? { entries: [] };
 }
+const holders = (message: ChatMessage) => [message, ...(message.swipe_info || [])];
 export function selectedRecords(chat: ChatMessage[]): SwipeRecord[] { return chat.map(message => clone(record(message))); }
 function latestReply(ctx: Context): number {
     for (let index = ctx.chat.length - 1; index >= 0; index--) {if (!ctx.chat[index].is_user && !ctx.chat[index].is_system) {return index;}}
@@ -44,7 +45,33 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
     let retry: (() => Promise<void>) | undefined;
     let observedChat: ChatMessage[] | undefined;
     let observed: { message: ChatMessage; entries: Receipt[] }[] = [];
+    let receiptChat: ChatMessage[] | undefined;
+    let receiptMetadata: Context['chatMetadata'] | undefined;
+    const owners = new Map<string, ChatMessage>();
+    let knownMessages = new WeakSet<ChatMessage>();
+    function reconcileReceipts() {
+        const { chat, chatMetadata } = state3Context(), opening = receiptChat !== chat || receiptMetadata !== chatMetadata;
+        // The host reuses its chat array on reload; fresh metadata marks the new load.
+        if (opening) { receiptChat = chat; receiptMetadata = chatMetadata; owners.clear(); knownMessages = new WeakSet(); }
+        for (const message of chat) {
+            const added = !opening && !knownMessages.has(message);
+            for (const holder of holders(message)) {
+                const stored = holder.extra?.[CHAT_KEY] as SwipeRecord | undefined;
+                if (!stored) {continue;}
+                // Load boundary for the removed test-line body entry point. Keep its effects
+                // and undo history, but let a new model update replace that submission.
+                if (opening) { for (const entry of stored.entries) {if (entry.source === 'body') {entry.source = 'model';}} }
+                if (added) {
+                    stored.entries = stored.entries.filter(entry => !owners.has(entry.id) || owners.get(entry.id) === message);
+                    if (!stored.entries.length) {delete holder.extra![CHAT_KEY];}
+                }
+                for (const entry of stored.entries) {if (!owners.has(entry.id)) {owners.set(entry.id, message);} }
+            }
+            knownMessages.add(message);
+        }
+    }
     const remember = () => {
+        reconcileReceipts();
         const ctx = state3Context();
         observedChat = ctx.chat;
         observed = ctx.chat.map(message => ({ message, entries: clone(record(message).entries) }));
@@ -52,7 +79,7 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
     const adapter: HostAdapter<HostSnapshot> & {
         remember(): void;
         rememberOrder(): boolean;
-        selectionChange(kind: 'delete' | 'swipe', index?: number): { previous: Receipt[]; next: Receipt[] };
+        selectionChange(kind: 'delete' | 'swipe', index?: number): { previous: Receipt[]; next: Receipt[]; historical: boolean };
         retrySave(): Promise<{ ok: true; saved: true }>;
     } = {
         bundle() {
@@ -62,6 +89,7 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             return decodeBundle(rules);
         },
         capture(index) {
+            reconcileReceipts();
             const ctx = state3Context();
             if (!ctx.chatId || !Array.isArray(ctx.chat)) {reject('chat-missing');}
             if (inGroup(ctx)) {reject('character-missing');}
@@ -122,6 +150,7 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
         remember,
         rememberOrder() {
             const ctx = state3Context();
+            reconcileReceipts();
             if (ctx.chat !== observedChat || ctx.chat.length < observed.length) {return false;}
             if (ctx.chat.length === observed.length && ctx.chat.every((message, index) => observed[index].message === message)) {return false;}
             const prior = new Map(observed.map(item => [item.message, item]));
@@ -133,7 +162,9 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
         },
         selectionChange(kind, index) {
             const ctx = state3Context();
+            reconcileReceipts();
             let previous: Receipt[] = [], next: Receipt[] = [];
+            let historical = false;
             if (ctx.chat === observedChat) {
                 if (kind === 'delete') {
                     // Only a strict suffix deletion restores state. Middle deletions and reordering do nothing.
@@ -146,11 +177,12 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
                         const later = ctx.chat.slice(index + 1);
                         previous = [...old.entries, ...later.flatMap(item => observed.find(prior => prior.message === item)?.entries || [])];
                         next = [...clone(current), ...later.flatMap(item => clone(record(item).entries))];
+                        historical = later.some(item => record(item).entries.length > 0);
                     }
                 }
             }
             remember();
-            return { previous, next };
+            return { previous, next, historical };
         },
         async retrySave() { if (!retry) {reject('nothing-to-save');} await retry(); return { ok: true, saved: true }; },
     };

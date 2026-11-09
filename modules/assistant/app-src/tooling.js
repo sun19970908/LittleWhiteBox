@@ -1,3 +1,5 @@
+import { filterSkillTools } from '../shared/skill-tools.js';
+import { COORDINATION_TOOLS, SKILL_MANAGEMENT_TOOLS } from '../skills/contract.js';
 import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, getWebSearchToolDefinition, getWebFetchToolDefinition, isWebConfigured } from '../../agent-core/web/tools.js';
 import { ACTIVITY_COPY } from './ui/activity-copy.js';
 import { getToolResultReadDefinition, TOOL_RESULT_READ, withPagedToolResult } from '../../agent-core/runtime/tool-result-contract.js';
@@ -12,11 +14,9 @@ function lookupScopeParameter(pathParameter = 'path') {
     return {
         type: 'string',
         enum: LOOKUP_SCOPES,
-        description: `File source: ${LOOKUP_SCOPE_PROJECT} = project source code (default); ${LOOKUP_SCOPE_LOCAL} = the assistant workspace. The directory or file path goes in ${pathParameter}, not scope.`,
+        description: `File source; the path itself goes in ${pathParameter}. ${LOOKUP_SCOPE_PROJECT} (default) = project code, with paths that omit \`public/\`, e.g. \`scripts/extensions/third-party/LittleWhiteBox/index.js\`. ${LOOKUP_SCOPE_LOCAL} = the assistant workspace, with paths that keep the \`local/\` prefix, e.g. \`local/notes.md\`.`,
     };
 }
-
-const LOOKUP_PATH_DESCRIPTION = 'Optional directory or exact file path. Project paths omit `public/`; workspace paths keep the full `local/` prefix.';
 
 // ============================================================
 // 工具名称常量
@@ -42,17 +42,17 @@ export const TOOL_NAMES = {
     WRITE_IDENTITY: 'WriteIdentity',
     READ_WORKLOG: 'ReadWorklog',
     WRITE_WORKLOG: 'WriteWorklog',
-    PLAN_CREATE: 'PlanCreate',
-    PLAN_UPDATE: 'PlanUpdate',
-    PLAN_LIST: 'PlanList',
-    PLAN_GET: 'PlanGet',
-    DELEGATE_RUN: 'DelegateRun',
+    PLAN_CREATE: COORDINATION_TOOLS.PLAN_CREATE,
+    PLAN_UPDATE: COORDINATION_TOOLS.PLAN_UPDATE,
+    PLAN_LIST: COORDINATION_TOOLS.PLAN_LIST,
+    PLAN_GET: COORDINATION_TOOLS.PLAN_GET,
+    DELEGATE_RUN: COORDINATION_TOOLS.DELEGATE_RUN,
     READ_SKILLS_CATALOG: 'ReadSkillsCatalog',
     READ_SKILL: 'ReadSkill',
-    UPDATE_SKILL: 'UpdateSkill',
+    UPDATE_SKILL: SKILL_MANAGEMENT_TOOLS.UPDATE_SKILL,
     SAVE_SKILL_FILE: 'SaveSkillFile',
-    GENERATE_SKILL: 'GenerateSkill',
-    DELETE_SKILL: 'DeleteSkill',
+    GENERATE_SKILL: SKILL_MANAGEMENT_TOOLS.GENERATE_SKILL,
+    DELETE_SKILL: SKILL_MANAGEMENT_TOOLS.DELETE_SKILL,
 };
 
 // ============================================================
@@ -67,17 +67,16 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.LS,
             description: [
-                'List files and directories inside a directory path.',
-                'Returns first-level entries only; does not recurse and does not read file contents.',
-                'Best for directory-level discovery and structural narrowing by path.',
+                'List the first-level files and directories of a directory.',
+                'Returns items, total and nextOffset for the following page; nextOffset is null at the end.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    path: { type: 'string', description: 'Directory path. Project paths omit `public/`; workspace paths keep the full `local/` prefix.' },
+                    path: { type: 'string', description: 'Directory to list.' },
                     scope: lookupScopeParameter(),
-                    offset: { type: 'number', description: 'Optional 1-based entry offset for paging. Default 1.' },
-                    limit: { type: 'number', description: 'Maximum number of first-level entries to return. Default 100, max 300.' },
+                    offset: { type: 'number', description: '1-based entry offset. Default 1.' },
+                    limit: { type: 'number', description: 'Entries per page. Default 100, max 300.' },
                 },
                 required: ['path'],
                 additionalProperties: false,
@@ -89,16 +88,14 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.GLOB,
             description: [
-                'Fast file pattern matching tool for project code and `local/` workspace files.',
-                'Matches file paths only; does not inspect file contents.',
-                'Best for file discovery and path-level narrowing when you know a directory, extension, or naming pattern.',
-                'The optional path filters results to one directory or exact file.',
+                'Find files whose paths match a glob pattern.',
+                'Returns up to 100 matching paths with total; when truncated is true, narrow the pattern or path.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    pattern: { type: 'string', description: 'Glob path pattern without `public/`, for example scripts/extensions/third-party/LittleWhiteBox/modules/**/*.js.' },
-                    path: { type: 'string', description: LOOKUP_PATH_DESCRIPTION },
+                    pattern: { type: 'string', description: 'Glob pattern for file paths, e.g. `scripts/extensions/third-party/LittleWhiteBox/modules/**/*.js`.' },
+                    path: { type: 'string', description: 'Optional directory or exact file that limits the search.' },
                     scope: lookupScopeParameter(),
                 },
                 required: ['pattern'],
@@ -111,28 +108,25 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.GREP,
             description: [
-                'Fast content search tool for project code and `local/` workspace files.',
-                'It first builds a candidate set from the selected file source, then searches the current live contents of those candidate files.',
-                'Uses regex search by default and returns matching files with line-level match details.',
-                'Best for content-level narrowing by keyword, symbol name, error text, or regex before reading files.',
-                'The optional path and include fields filter by directory or exact file and by file pattern, respectively.',
+                'Search current file contents line by line, case-insensitively, by regular expression or literal text.',
+                'Returns items in the chosen outputMode and nextOffset for the following page. searchComplete is false when results were truncated or some files could not be read; totals then cover only the scanned part.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    pattern: { type: 'string', description: 'grep/rg-style search pattern. Treated as regex by default.' },
-                    path: { type: 'string', description: LOOKUP_PATH_DESCRIPTION },
+                    pattern: { type: 'string', description: 'JavaScript regular expression, or literal text when useRegex is false.' },
+                    path: { type: 'string', description: 'Optional directory or exact file that limits the search.' },
                     scope: lookupScopeParameter(),
-                    include: { type: 'string', description: 'Optional file path glob filter, for example **/*.js or modules/assistant/**/*.js.' },
+                    include: { type: 'string', description: 'Optional glob filter for file paths, e.g. `**/*.js`.' },
                     outputMode: {
                         type: 'string',
                         enum: ['content', 'files_with_matches', 'count'],
-                        description: 'Output mode. content returns matched lines and context; files_with_matches returns matching files only; count returns match counts per file. Default is content.',
+                        description: 'content = matching lines with optional context; files_with_matches = matching files; count = match count per file. Default content.',
                     },
-                    limit: { type: 'number', description: 'Maximum number of results to return. Default 100, max 100. Can be used with offset for paging.' },
-                    offset: { type: 'number', description: 'Skip this many results before returning matches. Default 0.' },
-                    contextLines: { type: 'number', description: 'How many context lines to show before and after each match. Default 0, max 5.' },
-                    useRegex: { type: 'boolean', description: 'Whether to treat pattern as a regex. Default true; use false for literal search.' },
+                    limit: { type: 'number', description: 'Results per page. Default 100, max 100.' },
+                    offset: { type: 'number', description: 'Results to skip. Default 0.' },
+                    contextLines: { type: 'number', description: 'Lines shown before and after each match in content mode. Default 0, max 5.' },
+                    useRegex: { type: 'boolean', description: 'Default true; false searches for the literal text.' },
                 },
                 required: ['pattern'],
                 additionalProperties: false,
@@ -144,18 +138,17 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.READ,
             description: [
-                'Read a text file or directory using the current instance\'s live contents.',
-                'Returns numbered lines for files and plain entry names for directories; large reads include continuation hints.',
-                'Use `tail` only when you need the last N lines of a file; otherwise omit it entirely.',
+                'Read the current contents of a text file as numbered lines, or list a directory.',
+                'Returns up to 2000 lines or entries with nextOffset for the following range; nextOffset is null at the end.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'File or directory path. Project paths omit `public/`; workspace paths keep the full `local/` prefix.' },
+                    filePath: { type: 'string', description: 'File or directory to read.' },
                     scope: lookupScopeParameter('filePath'),
-                    offset: { type: 'number', description: 'Optional line offset (1-based). Default 1.' },
-                    limit: { type: 'number', description: 'Optional maximum number of lines or directory entries to return. Default 2000.' },
-                    tail: { type: 'number', description: 'Optional number of final file lines to return. Use by itself; cannot be combined with offset, limit, startLine, or endLine. Omit the field entirely when unused; do not send `tail: 0`.' },
+                    offset: { type: 'number', description: '1-based line or entry offset. Default 1.' },
+                    limit: { type: 'number', description: 'Lines or entries to return. Default 2000, max 2000.' },
+                    tail: { type: 'number', description: 'Return the last N lines of a file, max 2000. Use alone, without offset or limit.' },
                 },
                 required: ['filePath'],
                 additionalProperties: false,
@@ -269,7 +262,7 @@ export const TOOL_DEFINITIONS = [
             description: [
                 'Run JavaScript against the live SillyTavern frontend.',
                 'Use this when STscript or slash commands do not provide the needed entry point and you need to inspect, read, or operate on public frontend objects and state such as chatMetadata, saveMetadata, or public extension exports.',
-                'Code runs as an async function with normal JavaScript syntax and top-level await. Injected `ctx` and `getContext()` expose the documented context; `st` contains public script / extensions / slash namespaces, `st.state3` (ReadSkill builtin-state3), and `st.iframeRenderer` (modules/live-page-inspection/references/verify-changes.md). The API reference lists available entry points; nested data is read from the live instance.',
+                'Code runs as an async function with normal JavaScript syntax and top-level await. Injected `ctx` and `getContext()` expose the documented context; `st` contains public script / extensions / slash namespaces, `st.state3` (ReadSkill builtin-state3), and `st.iframeRenderer` (ReadSkill builtin-live-page). The API reference lists available entry points; nested data is read from the live instance.',
                 'The script itself returns the result; a return inside a callback only returns to that callback. Use return null when there is no data to return.',
                 'The tool classifies the code automatically as inspect, read, effect, or unknown. The Permission Mode section describes whether confirmation is required.',
                 'Returns ok, output, execution diagnostics, and any truncation flags. usedApis and calledApis describe references found in the code, not an execution trace. Return a focused result rather than an entire chat or metadata tree.',
@@ -494,7 +487,7 @@ export const TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.READ_SKILL,
-            description: 'Read the full body of one skill. Prefer id; filename is also allowed. At least one of the two must be provided.',
+            description: 'Read one skill and enable its listed tools for subsequent requests in this conversation. Returns ok, id, content and skill metadata; built-in skills also return builtin and tools. Prefer id; filename is also allowed. Successful reads remain enabled after history summarization and reopening; clearing the conversation resets the selection.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -598,9 +591,10 @@ export function isWebTool(name) {
     return name === TOOL_NAMES.WEB_SEARCH || name === TOOL_NAMES.WEB_FETCH;
 }
 
-export function getAssistantToolDefinitions({ providerConfig = {}, jsApiEnabled = false } = {}) {
+/** @param {{ providerConfig?: object, jsApiEnabled?: boolean, skillIds?: string[], role?: string }} options */
+export function getAssistantToolDefinitions({ providerConfig = {}, jsApiEnabled = false, skillIds = [], role = 'main' } = {}) {
     const webEnabled = isWebConfigured(providerConfig);
-    return TOOL_DEFINITIONS.filter(({ function: { name } }) =>
+    return filterSkillTools(TOOL_DEFINITIONS, skillIds, { role }).filter(({ function: { name } }) =>
         (jsApiEnabled || name !== TOOL_NAMES.RUN_JAVASCRIPT_API) && (webEnabled || !isWebTool(name)));
 }
 

@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { DiagnosticBuffer, diagnosticText, captureDocument } from '../recorder';
 import { LOG_BUDGET_CHARS, LOG_LIMIT } from '../contract';
 import { getAssistantToolDefinitions, TOOL_NAMES } from '../../assistant/app-src/tooling.js';
+import { LIVE_PAGE_SKILL } from '../tool-contract';
 import { toolOutcome } from '../../assistant/app-src/ui/tool-activity.js';
 
 test('diagnostics bound global retained data, disclose loss, and release frame records', () => {
@@ -49,7 +50,7 @@ test('console capture does not call getters, swallow events or replace console r
 });
 
 test('read-only page tool remains offered without JS permission and reports cancellation honestly', () => {
-    const definitions = getAssistantToolDefinitions({ jsApiEnabled: false });
+    const definitions = getAssistantToolDefinitions({ jsApiEnabled: false, skillIds: [LIVE_PAGE_SKILL.id] });
     assert.ok(definitions.some(tool => tool.function.name === TOOL_NAMES.INSPECT_PAGE));
     assert.ok(!definitions.some(tool => tool.function.name === TOOL_NAMES.RUN_JAVASCRIPT_API));
     assert.equal(toolOutcome({ error: 'tool_aborted' }, TOOL_NAMES.INSPECT_PAGE).status, 'stopped');

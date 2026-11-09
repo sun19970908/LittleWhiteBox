@@ -843,7 +843,7 @@ async function setupSettings() {
             { id: 'scheduled_tasks_enabled', key: 'tasks', init: initTasks },
             { id: 'xiaobaix_template_enabled', key: 'templateEditor', init: initTemplateEditor },
             { id: 'xiaobaix_variables_panel_enabled', key: 'variablesPanel', init: initVariablesPanel, cleanup: cleanupVariablesPanel },
-            { id: 'xiaobaix_variables_core_enabled', key: 'variablesCore', init: initVariablesCore },
+            { id: 'xiaobaix_variables_core_enabled', key: 'variablesCore', init: initVariablesCore, cleanup: cleanupVariablesCore },
             { id: 'xiaobaix_story_summary_enabled', key: 'storySummary' },
             { id: 'xiaobaix_story_outline_enabled', key: 'storyOutline' },
             { id: 'xiaobaix_tts_enabled', key: 'tts', init: initTts },

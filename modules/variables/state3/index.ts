@@ -1,5 +1,6 @@
 import { createModuleEvents, event_types } from '../../../core/event-manager.js';
 import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
+import { mergeAbortSignals } from '../../../shared/common/abort-utils.js';
 import { isGenerating } from '../../../shared/common/sillytavern-generation-state.js';
 import { waitForAfterAiReady } from '../../../core/after-ai-gate.js';
 import { createSettlementService } from './runtime/service.js';
@@ -9,6 +10,7 @@ import { initialize, settle } from './engine/settle.js';
 import { diagnostic, reject } from './engine/diagnostics.js';
 import { receiptResult } from './runtime/history.js';
 import { openDraft, saveDraft, checkDraft, saveCardDraft, exportRules, prepareRuleImport, importRules } from './definition/authoring.js';
+import { onRulesSaved } from './definition/card-host.js';
 import { createState3Page } from './ui/settings.js';
 import { notifyError } from './ui/notifications.js';
 import { CHAT_KEY, CARD_EXTENSION } from './definition/format.js';
@@ -16,7 +18,7 @@ import { createState3Macros } from './model/macros.js';
 import { createState3Updater } from './model/updater.js';
 import { readSettings, saveSettings, state3Selected, selectState3 } from './runtime/settings.js';
 export { state3Selected } from './runtime/settings.js';
-import type { Result } from './types.js';
+import type { Result, RunOptions } from './types.js';
 import type { State3Api } from './runtime/api.js';
 
 let runtime: { page: ReturnType<typeof createState3Page>; modeChanged(): void; dispose(): void } | undefined;
@@ -29,6 +31,7 @@ export function initState3() {
     let swipeRecovery: MutationObserver | undefined;
     let pendingGeneration: { chat: ChatMessage[]; message?: ChatMessage } | undefined;
     let lifecycle = new AbortController(), selectedMode = state3Selected();
+    let resultSequence = 0;
     const adapter = createHostAdapter();
     const topology = new MutationObserver(() => { if (adapter.rememberOrder()) {refresh();} });
     const chatElement = document.getElementById('chat');
@@ -39,14 +42,16 @@ export function initState3() {
         observeBackgroundTask(handled, { source: import.meta.url, operation: 'state3' });
         return handled;
     };
-    function available() { if (!state3Selected()) {reject('not-enabled');} if (isGenerating()) {reject('commit-busy');} }
+    function available() { lifecycle.signal.throwIfAborted(); if (!state3Selected()) {reject('not-enabled');} if (isGenerating()) {reject('commit-busy');} }
+    const owned = <T extends RunOptions>(options?: T) => ({ ...options, signal: mergeAbortSignals(lifecycle.signal, options?.signal)! });
     async function syncProjection() {
+        if (lifecycle.signal.aborted) {return;}
         if (!state3Selected() || inGroup(getContext())) { macros.clear(); return; }
         try {
             const epoch = lifecycle;
             macros.clear();
             const result = await service.inspect();
-            if (epoch !== lifecycle) {return;}
+            if (epoch !== lifecycle || epoch.signal.aborted) {return;}
             if (!result.ok) { macros.clear(); return; }
             macros.set(compileDefinition(result.bundle));
         } catch (error) {
@@ -55,30 +60,36 @@ export function initState3() {
         }
     }
     const retain = async (promise: Promise<Result>, index?: number): Promise<Result> => {
-        const epoch = lifecycle;
+        const epoch = lifecycle, sequence = ++resultSequence;
+        const current = () => epoch === lifecycle && !epoch.signal.aborted && sequence === resultSequence;
         const ctx = getContext(), target = index === undefined ? [...ctx.chat].reverse().find(message => !message.is_user && !message.is_system) : ctx.chat[index];
         let result: Result;
         try { result = await promise; }
         catch (error) { result = { ok: false, diagnostics: [diagnostic(error)] }; }
-        if (epoch === lifecycle) {
-            lastResult = result; resultMessage = target; await syncProjection(); refresh();
+        if (current()) {
+            lastResult = result; resultMessage = target; await syncProjection();
+            if (!current()) {return result;}
+            refresh();
             if (result.ok && result.committed) {document.dispatchEvent(new CustomEvent('lwb:state3:committed', { detail: structuredClone(result) }));}
         }
         return result;
     };
+    // Every rule writeback, through CardFiles or this API, refreshes the description macros before it resolves.
+    const stopRulesSaved = onRulesSaved(() => report(syncProjection()));
     const updater = createState3Updater({ service, adapter, available, changed: () => refresh() });
     const api: State3Api = {
-        stage(options) { available(); return service.stage(options); },
-        apply(input, options) { available(); return retain(service.apply(input, options), options?.index); },
-        preview(input, options) { available(); return retain(service.preview(input, options), options?.index); },
-        undo(options) { available(); return retain(service.undo(options), options?.index); },
+        stage(options) { available(); return service.stage(owned(options)); },
+        apply(input, options) { available(); return retain(service.apply(input, owned(options)), options?.index); },
+        preview(input, options) { available(); return retain(service.preview(input, owned(options)), options?.index); },
+        undo(options) { available(); return retain(service.undo(owned(options)), options?.index); },
         inspect: () => service.inspect(),
         async enable(options) {
+            lifecycle.signal.throwIfAborted();
             if (isGenerating()) {reject('commit-busy');}
             const epoch = lifecycle;
             return retain((async () => {
-                const result = await service.enable(options);
-                if (result.ok && result.committed && epoch === lifecycle) { selectState3(); selectedMode = true; }
+                const result = await service.enable(owned(options));
+                if (result.ok && result.committed && epoch === lifecycle && !epoch.signal.aborted) { selectState3(); selectedMode = true; }
                 return result;
             })());
         },
@@ -91,8 +102,7 @@ export function initState3() {
             } catch (error) { return { ok: false, diagnostics: [diagnostic(error)] }; }
         },
         openDraft, saveDraft, checkDraft, exportRules, prepareRuleImport,
-        async saveCardDraft(draft) { const result = await saveCardDraft(draft); await report(syncProjection()); return result; },
-        async importRules(prepared, options) { const result = await importRules(prepared, options); await syncProjection(); return result; },
+        saveCardDraft, importRules,
         lastResult: () => lastResult,
         async retrySave() {
             const epoch = lifecycle, result = lastResult;
@@ -100,7 +110,7 @@ export function initState3() {
             if (epoch === lifecycle && lastResult === result && result?.ok) { lastResult = { ...result, saved: true }; delete lastResult.persistence; }
             refresh(); return saved;
         }, settings: readSettings, saveSettings,
-        update: () => retain(updater.update()), previewRequest: options => updater.previewRequest(options),
+        update: () => retain(updater.update()), previewRequest: options => updater.previewRequest(owned(options)),
         cancel: () => updater.cancel(), updateStatus: () => updater.status(),
         async openAssistant() {
             const { openCardWorkspace } = await import('../../assistant/assistant.js');
@@ -109,6 +119,7 @@ export function initState3() {
     };
     page = createState3Page(api);
     function refresh() {
+        if (lifecycle.signal.aborted) {return;}
         if (!state3Selected() || inGroup(getContext())) { document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove()); return; }
         try {
             const snapshot = adapter.capture();
@@ -163,12 +174,12 @@ export function initState3() {
             // Restore before yielding, but never hold the native swipe event on
             // disk I/O. retain owns save failures and ignores obsolete selections.
             observeBackgroundTask(report(retain((async () => {
-                const restored = await service.restoreSelection(change.previous, change.next);
+                const restored = await service.restoreSelection(change.previous, change.next, { check: change.historical, signal: lifecycle.signal });
                 if (!restored) {reject('nothing-to-undo');}
                 if (!restored.ok) {return restored;}
                 const snapshot = adapter.capture(index);
                 const receipt = snapshot.records[snapshot.index]?.entries.at(-1);
-                return { ...(receipt ? receiptResult(snapshot.state, receipt) : { ...restored, changes: [] }), saved: restored.saved, persistence: restored.persistence };
+                return { ...restored, ...(receipt ? { receipt } : {}) };
             })(), index)), { source: import.meta.url, operation: 'selection-save' });
             await syncProjection();
         }
@@ -204,13 +215,7 @@ export function initState3() {
             const messageId = ctx.chat.indexOf(message);
             if (messageId < 0) {return;}
             pendingGeneration = undefined;
-            const blocks = [...String(message.mes || '').matchAll(/<state3>\s*([\s\S]*?)\s*<\/state3>/g)];
-            if (blocks.length) {
-                await retain((async () => {
-                    const input = blocks.flatMap(match => { const value: unknown = JSON.parse(match[1]); if (!Array.isArray(value)) {reject('input-shape');} return value; });
-                    return service.apply(input, { index: messageId, replaceSource: 'body', source: 'body', signal });
-                })(), messageId);
-            } else if (readSettings().mode === 'auto') {await api.update();}
+            if (readSettings().mode === 'auto') {await api.update();}
             adapter.remember(); refresh();
         })()), { source: import.meta.url, operation: 'afterGeneration' });
     });
@@ -220,7 +225,7 @@ export function initState3() {
         if (ctx.characters?.[ctx.characterId]?.data?.extensions?.[CARD_EXTENSION]) {await api.enable({ signal: lifecycle.signal });}
     });
     window.LWB_StateV3 = api;
-    runtime = { page, modeChanged, dispose() { lifecycle.abort(); clearSwipeRecovery(); topology.disconnect(); updater.cancel(); macros.dispose(); events.cleanup(); page?.dispose(); delete window.LWB_StateV3; } };
+    runtime = { page, modeChanged, dispose() { stopRulesSaved(); lifecycle.abort(); clearSwipeRecovery(); topology.disconnect(); updater.cancel(); macros.dispose(); events.cleanup(); page?.dispose(); delete window.LWB_StateV3; } };
     refresh();
     if (state3Selected()) {observeBackgroundTask(report(syncProjection()), { source: import.meta.url, operation: 'projection' });}
 }
