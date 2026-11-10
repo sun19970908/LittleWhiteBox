@@ -259,7 +259,7 @@ export async function verifyStorage(api: State3Api, size = 10000, turns = 160) {
 /** Exercise host persistence and rejection of stale candidates without provider requests. */
 export async function verifyPersistence(api: State3Api) {
     const host = await loadHost(), ctx = getContext();
-    api.saveSettings({ ...api.settings(), mode: 'manual' });
+    api.saveSettings({ ...api.settings(), auto: false });
     const add = (mes: string) => {
         const message: ChatMessage = { name: ctx.characters[ctx.characterId].name, send_date: String(Date.now()), mes, is_user: false, extra: {} };
         ctx.chat.push(message); host.addOneMessage(message); return message;
@@ -324,7 +324,7 @@ export async function verifyNativeChat(api: State3Api) {
     let rpMessages: AgentChatInput['messages'] = [], rp: AgentChatResult | undefined, forwarded = false;
     const before = accepted(await api.inspect()).state, previous = api.lastResult();
     try {
-        api.saveSettings({ ...settings, mode: 'auto', source: 'main' });
+        api.saveSettings({ ...settings, auto: true, source: 'main' });
         openai.oai_settings.stream_openai = false; openai.oai_settings.openai_max_context = 32768;
         host.setOnlineStatus('acceptance-agent-transport');
         window.xiaobaixAgent = { ...agent, async openSession(options) {
@@ -382,7 +382,7 @@ export async function verifyUpdaterRecovery(api: State3Api) {
         requireValue(requests[1].messages.at(-1)?.role === 'user' && String(requests[1].messages.at(-1)?.content).includes('derived-write'), 'K9: exact rejection sent to correction');
         const correctedRequests = requests.map(({ signal: _signal, ...task }) => structuredClone(task));
         requests.length = 0;
-        api.saveSettings({ ...settings, mode: 'auto' });
+        api.saveSettings({ ...settings, auto: true });
         const autoMessage: ChatMessage = { ...message, extra: {}, mes: '角色依旧休息。' };
         await host.eventSource.emit(host.event_types.GENERATION_STARTED, 'normal', {}, false);
         ctx.chat.push(autoMessage); host.addOneMessage(autoMessage);

@@ -43,7 +43,7 @@ function runtimeHarness(bundle = equipmentExample(), initialMode = '3.0') {
     const h = harness(), pending = new Set<Promise<unknown>>(), handlers = new Map<string, (...args: unknown[]) => unknown>();
     h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);
     const selector = { value: initialMode };
-    const preferences = { LittleWhiteBox: { variablesMode: initialMode, state3Updater: { mode: 'manual', source: 'main' } } };
+    const preferences = { LittleWhiteBox: { variablesMode: initialMode, state3Updater: { auto: false, source: 'main' } } };
     const settings = runInNewContext(source('runtime/settings.ts') + '\n({readSettings,saveSettings,state3Selected,selectState3})', {
         extension_settings: preferences, reject, saveSettingsDebounced() {}, structuredClone,
         document: { getElementById: () => selector },
@@ -171,16 +171,16 @@ test('R7: shutdown during persistence leaves the published result saved without 
     assert.deepEqual(h.late(), { controls: 0, macros: 0 });
 });
 
-// R8: updater mode is not a cancel command; selecting 3.0 must agree with the visible mode selector.
+// R8: turning automatic updates off is not a cancel command; selecting 3.0 must agree with the visible mode selector.
 // Cost: a silently cancelled request or a UI that controls a different engine from the one displayed.
-test('R8: enable synchronizes mode and off does not cancel an already requested update', async () => {
+test('R8: enable synchronizes mode and disabling auto does not cancel an already requested update', async () => {
     const h = runtimeHarness(equipmentExample(), '2.0'); await h.drain(); accepted(await h.api.enable());
     assert.equal(h.selector.value, h.preferences.LittleWhiteBox.variablesMode);
     const updating = h.api.update(); await h.started;
-    h.api.saveSettings({ mode: 'off', source: 'main' });
+    h.api.saveSettings({ auto: false, source: 'main' });
     h.finish({ completion: 'complete', truncated: false, text: '', toolCalls: [{ name: 'write', arguments: '{"state":[{"op":"set","path":["hero","health"],"value":20}]}' }] });
     const result = accepted(await updating); await h.drain();
-    assert.equal(result.committed, true); assert.equal(h.api.settings().mode, 'off');
+    assert.equal(result.committed, true); assert.equal(h.api.settings().auto, false);
     assert.deepEqual(accepted(await h.api.inspect()).state, result.state);
     h.cleanup();
 });
@@ -209,7 +209,7 @@ test('K14/K13: native silent swipe recovery restores values and controls without
         isGenerating: () => false, waitForAfterAiReady: async () => true, createSettlementService,
         ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, receiptResult, CHAT_KEY, CARD_EXTENSION,
         exportRules() {}, prepareRuleImport() {}, importRules() {}, onRulesSaved: () => () => {}, state3Selected: () => true, selectState3() {},
-        readSettings: () => ({ mode, source: 'main' }), saveSettings() {},
+        readSettings: () => ({ auto: mode === 'auto', source: 'main' }), saveSettings() {},
         createState3Macros: () => ({ clear() {}, set() {}, dispose() {} }),
         createState3Updater: () => ({ cancel() {}, status: () => ({ phase: 'ready', busy: false }), async update() {
             updaterCalls++; return { ok: true, state: {}, changes: [], provenance: [], actions: [], diagnostics: [] };

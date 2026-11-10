@@ -6103,7 +6103,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/story-summary-ui.js",
       "relativePath": "modules/story-summary/story-summary-ui.js",
       "extension": ".js",
-      "sizeBytes": 142028
+      "sizeBytes": 142210
     },
     {
       "source": "littlewhitebox",
@@ -6117,7 +6117,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/story-summary/story-summary.html",
       "relativePath": "modules/story-summary/story-summary.html",
       "extension": ".html",
-      "sizeBytes": 70244
+      "sizeBytes": 70038
     },
     {
       "source": "littlewhitebox",
@@ -10114,7 +10114,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/README.md",
       "relativePath": "modules/variables/state3/README.md",
       "extension": ".md",
-      "sizeBytes": 5698
+      "sizeBytes": 16858
     },
     {
       "source": "littlewhitebox",
@@ -10268,7 +10268,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/index.ts",
       "relativePath": "modules/variables/state3/index.ts",
       "extension": ".ts",
-      "sizeBytes": 14883
+      "sizeBytes": 14925
     },
     {
       "source": "littlewhitebox",
@@ -10352,7 +10352,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/runtime/settings.ts",
       "relativePath": "modules/variables/state3/runtime/settings.ts",
       "extension": ".ts",
-      "sizeBytes": 1309
+      "sizeBytes": 1306
     },
     {
       "source": "littlewhitebox",
@@ -10492,14 +10492,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/tests/host.test.ts",
       "relativePath": "modules/variables/state3/tests/host.test.ts",
       "extension": ".ts",
-      "sizeBytes": 28106
+      "sizeBytes": 28148
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/tests/increments.browser.ts",
       "relativePath": "modules/variables/state3/tests/increments.browser.ts",
       "extension": ".ts",
-      "sizeBytes": 8238
+      "sizeBytes": 8230
     },
     {
       "source": "littlewhitebox",
@@ -10513,7 +10513,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/tests/journey.browser.ts",
       "relativePath": "modules/variables/state3/tests/journey.browser.ts",
       "extension": ".ts",
-      "sizeBytes": 33310
+      "sizeBytes": 33303
     },
     {
       "source": "littlewhitebox",
@@ -10576,7 +10576,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/copy.ts",
       "relativePath": "modules/variables/state3/ui/copy.ts",
       "extension": ".ts",
-      "sizeBytes": 13533
+      "sizeBytes": 14707
     },
     {
       "source": "littlewhitebox",
@@ -10597,21 +10597,21 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/result.ts",
       "relativePath": "modules/variables/state3/ui/result.ts",
       "extension": ".ts",
-      "sizeBytes": 7629
+      "sizeBytes": 7727
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/settings.ts",
       "relativePath": "modules/variables/state3/ui/settings.ts",
       "extension": ".ts",
-      "sizeBytes": 18615
+      "sizeBytes": 17734
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/styles.css",
       "relativePath": "modules/variables/state3/ui/styles.css",
       "extension": ".css",
-      "sizeBytes": 4312
+      "sizeBytes": 4579
     },
     {
       "source": "littlewhitebox",
@@ -10751,7 +10751,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/tests/updater-host.test.js",
       "relativePath": "modules/variables/tests/updater-host.test.js",
       "extension": ".js",
-      "sizeBytes": 7124
+      "sizeBytes": 7001
     },
     {
       "source": "littlewhitebox",
@@ -10793,7 +10793,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/updater/copy.js",
       "relativePath": "modules/variables/updater/copy.js",
       "extension": ".js",
-      "sizeBytes": 4235
+      "sizeBytes": 3289
     },
     {
       "source": "littlewhitebox",
@@ -10821,7 +10821,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/updater/host.js",
       "relativePath": "modules/variables/updater/host.js",
       "extension": ".js",
-      "sizeBytes": 6949
+      "sizeBytes": 6760
     },
     {
       "source": "littlewhitebox",
@@ -10856,7 +10856,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/updater/settings.js",
       "relativePath": "modules/variables/updater/settings.js",
       "extension": ".js",
-      "sizeBytes": 766
+      "sizeBytes": 771
     },
     {
       "source": "littlewhitebox",
@@ -10884,14 +10884,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/updater/view.css",
       "relativePath": "modules/variables/updater/view.css",
       "extension": ".css",
-      "sizeBytes": 4398
+      "sizeBytes": 4631
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/updater/view.js",
       "relativePath": "modules/variables/updater/view.js",
       "extension": ".js",
-      "sizeBytes": 5471
+      "sizeBytes": 5470
     },
     {
       "source": "littlewhitebox",
@@ -19340,14 +19340,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/package.json",
       "relativePath": "package.json",
       "extension": ".json",
-      "sizeBytes": 2683
+      "sizeBytes": 2711
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/plugin-entry.js",
       "relativePath": "plugin-entry.js",
       "extension": ".js",
-      "sizeBytes": 58705
+      "sizeBytes": 58912
     },
     {
       "source": "littlewhitebox",

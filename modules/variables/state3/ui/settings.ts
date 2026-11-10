@@ -5,7 +5,6 @@ import { element, resultLabel } from './result.js';
 import { createResultDialog } from './result-dialog.js';
 import { notifyInfo } from './notifications.js';
 import { DEFINITION_FILE, FUNCTION_DIRECTORY } from '../definition/format.js';
-import { equipmentExample } from '../definition/example.js';
 import type { State3Api } from '../runtime/api.js';
 import type { Draft } from '../definition/authoring.js';
 import type { JsonObject, Schema, Result } from '../types.js';
@@ -55,22 +54,19 @@ export function createState3Page(api: State3Api) {
         }
         select.addEventListener('change', () => { selectedFile = select.value; editor.value = working.get(selectedFile) || ''; });
         editor.addEventListener('input', () => working.set(selectedFile, editor.value));
-        choose(); main.append(select, editor);
+        choose();
+        const intro = element('section', undefined, 'lwb-state3-intro');
+        for (const text of COPY.authorHelp) {intro.append(element('p', text));}
+        intro.append(row(button(COPY.assistant, async () => { await api.openAssistant(); dialog.close(); })));
+        main.append(intro, label(COPY.file, select), editor);
         main.append(row(
-            button(COPY.saveDraft, async () => { draft = await api.saveDraft(currentDraftBaseline(), [...working].map(([path, content]) => ({ path, content }))); notice.textContent = COPY.savedDraft; }),
             button(COPY.check, async signal => { resultDialog.showCheck(await api.checkDraft(currentDraft(), [], { signal })); }),
+            button(COPY.saveDraft, async () => { draft = await api.saveDraft(currentDraftBaseline(), [...working].map(([path, content]) => ({ path, content }))); notice.textContent = COPY.savedDraft; }),
             button(COPY.saveCard, async () => {
                 draft = await api.saveDraft(currentDraftBaseline(), [...working].map(([path, content]) => ({ path, content })));
                 const result = await api.saveCardDraft(draft);
                 if (!('ok' in result) || !result.ok) {throw new Error('results' in result ? result.results.filter((item: { saved: boolean }) => !item.saved).map((item: { error: string }) => item.error).join('\n') : COPY.failed);}
                 draft = await api.openDraft(); notice.textContent = COPY.savedCard;
-            }),
-        ));
-        main.append(row(
-            button(COPY.example, () => {
-                if (editor.value.trim() && !globalThis.confirm(COPY.exampleConfirm)) {return;}
-                selectedFile = rootPath + DEFINITION_FILE;
-                working.set(selectedFile, JSON.stringify(equipmentExample().definition, null, 2)); choose();
             }),
             button(COPY.newFunction, () => {
                 const name = globalThis.prompt(COPY.functionName);
@@ -80,6 +76,10 @@ export function createState3Page(api: State3Api) {
                 choose();
             }),
         ));
+        const request = element('pre'); request.hidden = true;
+        main.append(row(button(COPY.previewRequest, async signal => {
+            request.textContent = JSON.stringify(await api.previewRequest({ signal }), null, 2); request.hidden = false;
+        })), request);
     }
     function currentDraftBaseline() { if (!draft) {throw new Error(COPY.notEnabled);} return draft; }
     function parameterEditor(schema: Schema) {
@@ -88,8 +88,8 @@ export function createState3Page(api: State3Api) {
             try { return JSON.parse(input.value); }
             catch { throw new Error(COPY.parameterFormat(name)); }
         };
+        // Schema descriptions are written for the update model; the form shows titles, types and limits only.
         const hints = (target: HTMLElement, property: Record<string, unknown>) => {
-            if (typeof property.description === 'string') {target.append(element('p', property.description, 'lwb-state3-parameter-help'));}
             const object = property.type === 'array' ? property.items : property;
             if (!object || typeof object !== 'object' || !('properties' in object) || !object.properties || typeof object.properties !== 'object') {return;}
             const required = new Set('required' in object && Array.isArray(object.required) ? object.required : []);
@@ -97,7 +97,7 @@ export function createState3Page(api: State3Api) {
             for (const [key, field] of Object.entries(object.properties as Record<string, Record<string, unknown>>)) {
                 const name = field.title ? `${String(field.title)} (${key})` : key;
                 fields.append(element('dt', name), element('dd', [required.has(key) ? COPY.required : COPY.optional,
-                    COPY.parameterTypes[String(field.type)], field.description].filter(Boolean).join(' · ')));
+                    COPY.parameterTypes[String(field.type)]].filter(Boolean).join(' · ')));
             }
             target.append(element('p', property.type === 'array' ? COPY.itemFields : COPY.objectFields, 'lwb-state3-parameter-help'), fields);
         };
@@ -150,47 +150,41 @@ export function createState3Page(api: State3Api) {
         const present = (result: Result) => {
             resultDialog.show(result, result.ok && result.version === status.version ? definition : undefined);
         };
-        main.append(row(button(COPY.update, async () => {
-            const result = await api.update(); present(result);
-        }), button(COPY.result, () => { const last = api.lastResult(); if (last) {present(last);} else {notice.textContent = COPY.noResult;} })));
-        const settings = element('details'); settings.append(element('summary', COPY.updateSettings));
-        const current = api.settings(), mode = element('select'), source = element('select');
-        for (const [key, text] of Object.entries(COPY.modes)) { const option = element('option', text); option.value = key; mode.append(option); }
+        main.append(element('p', COPY.playHelp, 'lwb-state3-intro'));
+        const settings = element('section'), current = api.settings(), auto = element('input'), source = element('select');
+        auto.type = 'checkbox'; auto.checked = current.auto;
         for (const [key, text] of Object.entries(COPY.sources)) { const option = element('option', text); option.value = key; source.append(option); }
-        mode.value = current.mode; source.value = current.source;
-        const save = () => api.saveSettings({ mode: mode.value as UpdaterSettings['mode'], source: source.value as UpdaterSettings['source'] });
-        mode.addEventListener('change', save); source.addEventListener('change', save);
-        settings.append(label(COPY.mode, mode), label(COPY.model, source)); main.append(settings);
-        const actions = element('details'); actions.append(element('summary', COPY.action));
-        if (definition.actions.length) {
-            const selector = element('select'), description = element('p', definition.actions[0].description, 'lwb-state3-action-description'), parameterRoot = element('div');
-            selector.setAttribute('aria-label', COPY.action);
-            for (const action of definition.actions) { const option = element('option', action.title); option.value = action.id; selector.append(option); }
-            let parameters = parameterEditor(definition.actions[0].parameters);
-            parameterRoot.append(parameters.root);
-            selector.addEventListener('change', () => {
-                const action = definition.actions.find(action => action.id === selector.value)!;
-                description.textContent = action.description; parameters = parameterEditor(action.parameters); parameterRoot.replaceChildren(parameters.root);
-            });
-            const run = (preview: boolean): Action => async signal => {
-                const result = await api[preview ? 'preview' : 'apply']([{ action: selector.value, params: parameters.read() }], { signal });
-                present(result);
-            };
-            actions.append(selector, description, parameterRoot, row(button(COPY.preview, run(true)), button(COPY.commit, run(false))));
-        }
-        actions.append(button(COPY.undo, async signal => { const result = await api.undo({ signal }); await render(); present(result); }));
+        source.value = current.source;
+        const save = () => api.saveSettings({ auto: auto.checked, source: source.value as UpdaterSettings['source'] });
+        auto.addEventListener('change', save); source.addEventListener('change', save);
+        const autoLabel = element('label', undefined, 'lwb-state3-check'); autoLabel.append(auto, COPY.auto);
+        settings.append(element('h3', COPY.pluginUpdate), autoLabel, label(COPY.model, source), element('p', COPY.pluginUpdateHelp, 'lwb-state3-parameter-help'));
+        main.append(settings);
+        if (!definition.actions.length) {return;}
+        const actions = element('section');
+        actions.append(element('h3', COPY.action), element('p', COPY.actionHelp, 'lwb-state3-parameter-help'));
+        const selector = element('select'), parameterRoot = element('div');
+        selector.setAttribute('aria-label', COPY.action);
+        for (const action of definition.actions) { const option = element('option', action.title); option.value = action.id; selector.append(option); }
+        let parameters = parameterEditor(definition.actions[0].parameters);
+        parameterRoot.append(parameters.root);
+        selector.addEventListener('change', () => {
+            const action = definition.actions.find(action => action.id === selector.value)!;
+            parameters = parameterEditor(action.parameters); parameterRoot.replaceChildren(parameters.root);
+        });
+        const run = (preview: boolean): Action => async signal => {
+            const result = await api[preview ? 'preview' : 'apply']([{ action: selector.value, params: parameters.read() }], { signal });
+            present(result);
+        };
+        actions.append(selector, parameterRoot, row(button(COPY.preview, run(true)), button(COPY.commit, run(false))));
         main.append(actions);
-        const manage = element('details'); manage.append(element('summary', COPY.savedRules), row(
-            button(COPY.previewRequest, async signal => { const preview = element('pre', JSON.stringify(await api.previewRequest({ signal }), null, 2)); manage.append(preview); }),
-        )); main.append(manage);
     }
     async function render() {
         main.replaceChildren(); nav.replaceChildren();
         for (const [key, text] of [['play', COPY.play], ['author', COPY.author]] as const) {
             const tab = button(text, async () => { page = key; await render(); }); tab.setAttribute('aria-selected', String(key === page)); nav.append(tab);
         }
-        nav.append(button(COPY.assistant, async () => { await api.openAssistant(); dialog.close(); }));
-        if (page === 'author') {await renderAuthor();} else {await renderPlay();}
+        if (page === 'author') {await renderAuthor();} else { await renderPlay(); return; }
         const picker = element('input'); picker.type = 'file'; picker.accept = '.json,application/json'; picker.hidden = true;
         const importButton = button(COPY.importRules, () => picker.click());
         picker.addEventListener('change', () => {
@@ -200,7 +194,6 @@ export function createState3Page(api: State3Api) {
                 signal.throwIfAborted();
                 if (!globalThis.confirm(COPY.importConfirm)) {return;}
                 await api.importRules(prepared, { signal });
-                if (page === 'play') {await render();}
                 notice.textContent = COPY.importedRules;
             }, importButton), { source: import.meta.url, operation: 'importRules' });
         });
@@ -229,7 +222,7 @@ export function createState3Page(api: State3Api) {
                     group.dataset.floor = String(floor);
                     if (floor === index && status.busy) {group.append(button(COPY.cancel, api.cancel));}
                     else if (last?.ok && last.saved === false) {group.append(button(COPY.retrySave, () => api.retrySave()));}
-                    else if (floor === index && api.settings().mode !== 'off') {group.append(button(COPY.update, () => api.update()));}
+                    else if (floor === index) {group.append(button(COPY.update, () => api.update()));}
                     const label = element('span', floor === index && status.busy ? COPY.phases[status.phase] : last ? resultLabel(last) : COPY.noResult);
                     label.setAttribute('role', 'status'); group.append(label, button(COPY.result, () => resultDialog.open(floor)));
                     if (floor === index) {group.append(button(COPY.settings, () => this.open()));}

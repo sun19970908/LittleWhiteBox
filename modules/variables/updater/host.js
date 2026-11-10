@@ -29,7 +29,7 @@ export function initVariableUpdater(stateApi) {
     function clearSwipeRecovery() { swipeRecovery?.disconnect(); swipeRecovery = null; }
     function watchSwipeRecovery(id) {
         clearSwipeRecovery();
-        if (!enabled() || readSettings().mode === 'off') return;
+        if (!enabled()) return;
         const message = getContext().chat[Number(id)];
         if (!Array.isArray(message?.swipes) || message.swipe_id !== message.swipes.length) return;
         // ST restores a failed/aborted new swipe without another rendered/swiped
@@ -49,15 +49,14 @@ export function initVariableUpdater(stateApi) {
         frame = requestAnimationFrame(() => {
             view.refresh();
             if (!enabled()) { clearSwipeRecovery(); controller.invalidate(); document.querySelectorAll('.xb-variable-controls').forEach(node => node.remove()); return; }
-            if (readSettings().mode === 'off') clearSwipeRecovery();
-            try { view.mountControls(latestReply(), controller.status(), readSettings().mode); }
+            try { view.mountControls(latestReply(), controller.status()); }
             catch { document.querySelectorAll('.xb-variable-controls').forEach(node => node.remove()); }
         });
     }
     const controller = createUpdateController({ context: getContext, stateApi, assemble, request: requestUpdate,
         settings: readSettings, assertAvailable, changed: refresh });
     const api = {
-        settings: readSettings, saveSettings(value) { saveSettings(value); if (value.mode === 'off') controller.cancel(); refresh(); },
+        settings: readSettings, saveSettings(value) { saveSettings(value); refresh(); },
         async preview() {
             const ctx = getContext(), target = latestReply(ctx), turn = stateApi.observeTurn(target);
             const task = await assemble(ctx, target);
@@ -108,7 +107,7 @@ export function initVariableUpdater(stateApi) {
             if (!pendingGeneration?.message || pendingGeneration.message !== getContext().chat[id]) return;
             pendingGeneration = null;
             if (hasBodyUpdate(getContext().chat[id])) return;
-            if (enabled() && readSettings().mode === 'auto') observeBackgroundTask(controller.update().catch(error => {
+            if (enabled() && readSettings().auto) observeBackgroundTask(controller.update().catch(error => {
                 globalThis.toastr?.error(error.message, COPY.title);
             }), { source: import.meta.url, operation: 'autoUpdate' });
         },
@@ -117,9 +116,9 @@ export function initVariableUpdater(stateApi) {
     loadChat();
 }
 
-export function openVariableSettings(page) {
+export function openVariableSettings() {
     if (!runtime) throw new Error(COPY.enable);
-    runtime.open(page);
+    runtime.open();
 }
 export function notifyVariableReplyReady(id) { runtime?.replyReady(id); }
 export function cleanupVariableUpdater() { runtime?.dispose(); runtime = null; }

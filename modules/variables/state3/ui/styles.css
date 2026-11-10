@@ -11,6 +11,10 @@
 .lwb-state3-dialog nav{margin-bottom:16px}
 .lwb-state3-dialog nav [aria-selected=true]{outline:2px solid var(--SmartThemeQuoteColor,#9cf)}
 .lwb-state3-dialog label{display:block;margin:12px 0}
+.lwb-state3-dialog .lwb-state3-check{display:flex;gap:8px;align-items:center}
+.lwb-state3-dialog section>h3{font-size:16px;margin:0 0 8px}
+.lwb-state3-dialog main>section+section{margin-top:20px}
+.lwb-state3-intro,.lwb-state3-intro p{line-height:1.7;margin:0 0 10px}
 .lwb-state3-dialog input:not([type=checkbox]):not([hidden]){display:block;max-width:100%;width:100%;margin-top:6px;padding:8px;border:1px solid var(--SmartThemeBorderColor,#666);border-radius:5px;font:inherit;color:inherit;background:var(--SmartThemeBlurTintColor,#222)}
 .lwb-state3-action-description,.lwb-state3-parameter-help,.lwb-state3-source-description{margin:6px 0;line-height:1.6;overflow-wrap:anywhere}
 .lwb-state3-parameter-help,.lwb-state3-parameter-fields{font-size:.92em;opacity:.9}

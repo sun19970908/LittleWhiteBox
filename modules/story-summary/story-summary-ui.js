@@ -1,3 +1,6 @@
+import { init as initChart, use } from 'echarts/core';
+import { GraphChart } from 'echarts/charts';
+import { CanvasRenderer } from 'echarts/renderers';
 import { mountTextApiSettings } from '../text-api/settings-ui.js';
 import { WORKSPACE_COPY } from './workspace-copy.js';
 import { SUMMARY_TRANSFER_COPY } from './transfer-copy.js';
@@ -18,6 +21,8 @@ import { DEFAULT_MEMORY_MAINTENANCE_ENABLED } from './maintenance/settings.js';
 import { SUMMARY_FEEDBACK_COPY } from './feedback-copy.js';
 import { SUMMARY_CONFIG_LOCAL_STORAGE_KEY } from './data/config-local-cache.js';
 import { SUMMARY_EVENT_STYLE_RULES, resolveSummaryStyle, buildSummaryAssistantDocPrompt } from './data/generation-rules.js';
+
+use([GraphChart, CanvasRenderer]);
 
 const UNANNOTATED_LABEL = '未标注';
 const VECTOR_API_TIMEOUT_NORMALIZERS = {
@@ -1599,7 +1604,7 @@ const VECTOR_API_TIMEOUT_NORMALIZERS = {
         summaryData.characters = data || { main: [], relationships: [] };
         const dom = $('relation-chart');
         if (!archiveView.isPeopleVisible()) return;
-        if (!relationChart) relationChart = echarts.init(dom);
+        if (!relationChart) relationChart = initChart(dom);
         const theme = getRelationTheme();
 
         const rels = data?.relationships || [];
@@ -1854,7 +1859,7 @@ const VECTOR_API_TIMEOUT_NORMALIZERS = {
     function openRelationsFullscreen() {
         $('rel-fs-modal').classList.add('active');
         const dom = $('relation-chart-fullscreen');
-        if (!relationChartFullscreen) relationChartFullscreen = echarts.init(dom);
+        if (!relationChartFullscreen) relationChartFullscreen = initChart(dom);
 
         if (!allNodes.length) {
             relationChartFullscreen.clear();

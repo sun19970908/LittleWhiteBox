@@ -18,7 +18,7 @@ export function resultLabel(result: Result): string {
 }
 export function showDiagnostics(root: HTMLElement, diagnostics: Diagnostic[], definition?: Definition) {
     for (const error of diagnostics) {
-        const rule = [...(definition?.rules || []), ...(definition?.actions || []), ...(definition?.constraints || []), ...(definition?.triggers || [])].find(item => item.id === (error.rule || error.action));
+        const rule = [...(definition?.rules || []), ...(definition?.constraints || []), ...(definition?.triggers || [])].find(item => item.id === error.rule);
         root.append(element('p', [errorText(error), !error.condition && !error.parameters ? rule?.description : undefined].filter(Boolean).join(' ')));
         if (Array.isArray(error.errors) && !error.parameters) {
             const fields = parameterIssues(error.code === 'state-schema' && definition ? definition.schema : {}, error.errors as ErrorObject[]);
@@ -68,8 +68,9 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
             : source?.kind === 'trigger' ? definition?.triggers?.find(item => item.id === source.id)
                 : definition?.rules.find(item => item.id === source?.id);
         const title = source?.title || (rule && 'title' in rule ? rule.title : undefined);
+        // An action's description is its instruction to the update model, not a player-facing explanation.
         return { label: title || (source ? COPY.reasons[source.kind] : COPY.restoredChanges),
-            description: source?.description || rule?.description, tag: title || [source && COPY.reasons[source.kind], source?.id].filter(Boolean).join(' · ') };
+            description: source?.kind === 'action' ? undefined : source?.description || rule?.description, tag: title || [source && COPY.reasons[source.kind], source?.id].filter(Boolean).join(' · ') };
     };
     const sourceKey = (source?: Source) => JSON.stringify([source?.kind, source?.id]);
     const groups = new Map<string, { source?: Source; changes: { change: Change; sources: Source[] }[] }>();

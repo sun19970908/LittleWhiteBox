@@ -918,16 +918,19 @@ async function setupSettings() {
         $("#xiaobaix_variables_open_settings").on('click', () => {
             if (!isXiaobaixEnabled) return;
             if (settings.variablesMode === '3.0') {
-                observeBackgroundTask(openState3().catch(error => toastr.warning(error.message)), { source: import.meta.url, operation: 'openState3' });
+                observeBackgroundTask(openState3(), { source: import.meta.url, operation: 'openState3' });
             } else {
                 try { openVariableSettings(); } catch (error) { toastr.warning(error.message); }
             }
         });
+        const syncVariablesSettingsButton = () => $("#xiaobaix_variables_open_settings").toggle(settings.variablesMode === '2.0' || settings.variablesMode === '3.0');
+        syncVariablesSettingsButton();
         $("#xiaobaix_variables_mode")
             .val(settings.variablesMode || "1.0")
             .on("change", function () {
                 settings.variablesMode = String($(this).val() || "1.0");
                 syncState3Mode();
+                syncVariablesSettingsButton();
                 saveSettingsDebounced();
                 toastr.info(`变量系统已切换为 ${settings.variablesMode}`);
             });

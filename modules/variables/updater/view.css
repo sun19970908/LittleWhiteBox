@@ -19,6 +19,9 @@
 .xb-variable-settings output { display:block; white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; }
 .xb-variable-settings footer { padding:10px 22px 16px; }
 .xb-variable-settings [data-error=true] { color:var(--warning,#f5b880); }
+.xb-variable-settings main > h3 { font-size:16px; margin:0 0 12px; }
+.xb-variable-settings .xb-variable-check { flex-direction:row; align-items:center; margin-bottom:12px; }
+.xb-variable-settings main > label { margin-bottom:12px; }
 .xb-variable-settings .xb-variable-help { font-size:14px; line-height:1.65; }
 .xb-variable-settings .xb-variable-help h3 { font-size:inherit; margin:20px 0 8px; }
 .xb-variable-settings .xb-variable-help p { margin:8px 0; }

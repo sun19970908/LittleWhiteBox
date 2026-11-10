@@ -10,76 +10,79 @@ const element = (tag, text, className) => {
     return node;
 };
 
+function createDialog(heading) {
+    const dialog = element('dialog', null, 'xb-variable-settings');
+    const header = element('header'), main = element('main'), footer = element('footer'), notice = element('output');
+    const close = element('button', COPY.close); close.type = 'button'; close.addEventListener('click', () => dialog.close());
+    notice.setAttribute('role', 'status');
+    header.append(element('h2', heading), close); footer.append(notice);
+    dialog.append(header, main, footer); document.body.append(dialog);
+    return { dialog, main, notice };
+}
+
 export function createUpdaterView(api) {
     const style = element('style', viewCss); document.head.append(style);
-    const dialog = element('dialog', null, 'xb-variable-settings');
-    const header = element('header'), title = element('h2', COPY.title), nav = element('nav'), main = element('main'), footer = element('footer');
-    const notice = element('output'); notice.setAttribute('role', 'status');
-    let settings = api.settings(), page = 'update';
-    const button = (text, action, primary = false) => {
-        const node = element('button', text, primary ? 'xb-variable-primary' : ''); node.type = 'button';
-        node.addEventListener('click', () => observeBackgroundTask(act(action, node), { source: import.meta.url, operation: 'action' })); return node;
+    const settingsView = createDialog(COPY.title), resultView = createDialog(COPY.resultTitle);
+    // Dialog buttons report inside their dialog; floor buttons have no dialog and use a toast.
+    const button = (text, action, notice) => {
+        const node = element('button', text); node.type = 'button';
+        node.addEventListener('click', () => observeBackgroundTask(act(action, node, notice), { source: import.meta.url, operation: 'action' })); return node;
     };
-    async function act(action, node) {
+    async function act(action, node, notice) {
         node.disabled = true;
-        notice.textContent = ''; notice.dataset.error = 'false';
+        if (notice) { notice.textContent = ''; notice.dataset.error = 'false'; }
         try { await action(); }
         catch (error) {
-            notice.textContent = error.message; notice.dataset.error = 'true';
-            if (!dialog.open) globalThis.toastr?.error(error.message, COPY.title);
+            if (notice) { notice.textContent = error.message; notice.dataset.error = 'true'; }
+            else globalThis.toastr?.error(error.message, COPY.title);
         }
         finally { node.disabled = false; }
     }
-    header.append(title, button(COPY.close, () => dialog.close())); footer.append(notice);
-    dialog.append(header, nav, main, footer); document.body.append(dialog);
-    const field = (label, control) => { const node = element('label', label); node.append(control); return node; };
-    const select = (items, value, change) => {
-        const node = element('select');
-        for (const [key, text] of Object.entries(items)) { const option = element('option', text); option.value = key; node.append(option); }
-        node.value = value; node.addEventListener('change', () => change(node.value)); return node;
+    const paragraphs = (root, items) => {
+        for (const [label, text] of items) { const paragraph = element('p'); paragraph.append(element('strong', `${label}：`), text); root.append(paragraph); }
     };
-    const row = (...nodes) => { const node = element('div', null, 'xb-variable-row'); node.append(...nodes); return node; };
-    function renderUpdate() {
-        const controls = row(field(COPY.mode, select(COPY.modes, settings.mode, value => { settings.mode = value; })),
-            field(COPY.source, select(COPY.sources, settings.source, value => { settings.source = value; })));
+    function renderSettings() {
+        const { main } = settingsView, settings = api.settings();
+        main.replaceChildren();
+        const save = () => api.saveSettings(settings);
+        const auto = element('input'); auto.type = 'checkbox'; auto.checked = settings.auto;
+        auto.addEventListener('change', () => { settings.auto = auto.checked; save(); });
+        const autoLabel = element('label', null, 'xb-variable-check'); autoLabel.append(auto, COPY.auto);
+        const source = element('select');
+        for (const [key, text] of Object.entries(COPY.sources)) { const option = element('option', text); option.value = key; source.append(option); }
+        source.value = settings.source; source.addEventListener('change', () => { settings.source = source.value; save(); });
+        const sourceLabel = element('label', COPY.source); sourceLabel.append(source);
         const help = element('section', null, 'xb-variable-help');
-        help.append(element('h3', COPY.help.title));
-        for (const [label, text] of COPY.help.steps) {
-            const paragraph = element('p'); paragraph.append(element('strong', `${label}：`), text); help.append(paragraph);
-        }
-        const preview = element('details'), content = element('pre'); preview.append(element('summary', COPY.preview), content);
-        const actions = row(button(COPY.save, () => { api.saveSettings(settings); notice.textContent = COPY.saved; }, true),
-            button(COPY.preview, async () => { content.textContent = JSON.stringify(await api.preview(), null, 2); preview.hidden = false; preview.open = true; }));
-        preview.hidden = true;
-        main.append(controls, actions, help, preview);
+        paragraphs(help, COPY.help);
+        const author = element('details', null, 'xb-variable-help'), content = element('pre');
+        author.append(element('summary', COPY.authorTitle));
+        paragraphs(author, COPY.authorHelp);
+        const actions = element('div', null, 'xb-variable-row');
+        actions.append(button(COPY.preview, async () => { content.textContent = JSON.stringify(await api.preview(), null, 2); }, settingsView.notice),
+            button(COPY.assistant, async () => { await api.openAssistant(); settingsView.dialog.close(); }, settingsView.notice));
+        author.append(actions, content);
+        main.append(element('h3', COPY.pluginUpdate), autoLabel, sourceLabel, help, author);
     }
-    function render() {
-        main.replaceChildren(); nav.replaceChildren();
-        for (const [key, label] of [['update', COPY.title], ['result', COPY.details]]) {
-            const tab = button(label, () => { page = key; render(); }); tab.dataset.selected = String(page === key); nav.append(tab);
-        }
-        nav.append(button(COPY.assistant, async () => { await api.openAssistant(); dialog.close(); }));
-        try {
-            if (page === 'update') renderUpdate();
-            else renderUpdateResult(api.result(), main);
-        } catch (error) { main.append(element('p', error.message)); }
+    function renderResult() {
+        try { renderUpdateResult(api.result(), resultView.main); }
+        catch (error) { resultView.main.replaceChildren(element('p', error.message)); }
     }
-    function open(nextPage = 'update') {
-        if (nextPage === 'card') { observeBackgroundTask(api.openAssistant(), { source: import.meta.url, operation: 'openCardWorkspace' }); return; }
-        page = nextPage; render(); if (!dialog.open) dialog.showModal();
-    }
-    function refresh() { if (dialog.open && page === 'result') render(); }
-    function mountControls(target, status, mode) {
+    function open() { renderSettings(); if (!settingsView.dialog.open) settingsView.dialog.showModal(); }
+    function openResult() { renderResult(); if (!resultView.dialog.open) resultView.dialog.showModal(); }
+    function refresh() { if (resultView.dialog.open) renderResult(); }
+    function mountControls(target, status) {
         document.querySelectorAll('.xb-variable-controls').forEach(node => node.remove());
         const message = document.querySelector(`.mes[mesid="${target.floor}"] .mes_text`);
-        if (!message || mode === 'off') return;
+        if (!message) return;
         const controls = element('div', null, 'xb-variable-controls');
         const label = element('span', COPY.phases[status.phase]); label.setAttribute('role', 'status');
         controls.append(button(status.busy ? COPY.cancel : status.saveFailed ? COPY.saveChat : ['success', 'recorded'].includes(status.phase) ? COPY.retry : COPY.update,
             status.busy ? api.cancel : status.saveFailed ? api.retrySave : api.update), label,
-        button(COPY.details, () => open('result')));
+        button(COPY.details, openResult));
         if (status.phase === 'saving') controls.querySelector('button').disabled = true;
         message.after(controls);
     }
-    return { open, refresh, mountControls, dispose() { dialog.remove(); style.remove(); document.querySelectorAll('.xb-variable-controls').forEach(node => node.remove()); } };
+    return { open, refresh, mountControls, dispose() {
+        settingsView.dialog.remove(); resultView.dialog.remove(); style.remove(); document.querySelectorAll('.xb-variable-controls').forEach(node => node.remove());
+    } };
 }

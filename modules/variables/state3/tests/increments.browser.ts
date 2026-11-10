@@ -28,7 +28,7 @@ export async function verifyIncrements(api: State3Api) {
     const settings = api.settings(), agent = window.xiaobaixAgent!, nativeFetch = window.fetch;
     let modelCalls = 0, rejectedSaves = 0;
     try {
-        api.saveSettings({ ...settings, mode: 'manual' });
+        api.saveSettings({ ...settings, auto: false });
         const before = JSON.stringify(context().chatMetadata);
         success(await api.preview([inc(5)])); success(await api.preview([inc(5)]));
         check(await health() === 80 && JSON.stringify(context().chatMetadata) === before, 'preview changed stored state');
@@ -62,7 +62,7 @@ export async function verifyIncrements(api: State3Api) {
         success(await api.update());
         check(modelCalls === 2 && await health() === 85, 'correction counted the rejected candidate');
         success(await api.update()); check(await health() === 85, 'repeat update accumulated');
-        api.saveSettings({ ...settings, mode: 'auto' });
+        api.saveSettings({ ...settings, auto: true });
         for (const type of ['normal', 'continue']) {
             const previous = api.lastResult();
             await host.eventSource.emit(host.event_types.GENERATION_STARTED, type, {}, false);
@@ -75,7 +75,7 @@ export async function verifyIncrements(api: State3Api) {
         await host.eventSource.emit(host.event_types.MESSAGE_RECEIVED, index);
         await host.eventSource.emit(host.event_types.GENERATION_ENDED);
         check(await health() === 85 && modelCalls === calls, 'duplicate event repeated update');
-        api.saveSettings({ ...settings, mode: 'manual' });
+        api.saveSettings({ ...settings, auto: false });
         window.fetch = async (input, init) => {
             if (String(input).endsWith('/api/chats/save')) { rejectedSaves++; return Response.json({ error: 'isolated save failure' }, { status: 503 }); }
             return nativeFetch(input, init);

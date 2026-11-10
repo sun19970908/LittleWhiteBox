@@ -215,7 +215,7 @@ export function initState3() {
             const messageId = ctx.chat.indexOf(message);
             if (messageId < 0) {return;}
             pendingGeneration = undefined;
-            if (readSettings().mode === 'auto') {await api.update();}
+            if (readSettings().auto) {await api.update();}
             adapter.remember(); refresh();
         })()), { source: import.meta.url, operation: 'afterGeneration' });
     });
@@ -229,6 +229,9 @@ export function initState3() {
     refresh();
     if (state3Selected()) {observeBackgroundTask(report(syncProjection()), { source: import.meta.url, operation: 'projection' });}
 }
-export async function openState3(page?: 'play' | 'author') { if (!runtime) {reject('not-enabled');} return runtime.page.open(page); }
+export async function openState3(page?: 'play' | 'author') {
+    try { if (!runtime) {reject('not-enabled');} await runtime.page.open(page); }
+    catch (error) { notifyError(error); }
+}
 export function syncState3Mode() { runtime?.modeChanged(); }
 export function cleanupState3() { runtime?.dispose(); runtime = undefined; }

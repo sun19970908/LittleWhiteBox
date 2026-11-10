@@ -14,7 +14,7 @@ test('updater host preserves regeneration through its own deletion, but cancels 
         'MESSAGE_SWIPED', 'MESSAGE_UPDATED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'SETTINGS_UPDATED'].map(key => [key, key]));
     const sandbox = { extension_settings: { LittleWhiteBox: { variablesCore: { enabled: true }, variablesMode: '2.0' } },
         getContext: () => ctx, isGenerating: () => false, createModuleEvents: () => ({ on: (key, fn) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
-        requestUpdate() {}, readSettings: () => ({ mode: 'auto' }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
+        requestUpdate() {}, readSettings: () => ({ auto: true }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
         createUpdateController: () => ({ update: async () => { updates++; }, cancel() {}, invalidate() {}, dispose() { disposed++; }, status: () => ({}) }),
         createUpdaterView: () => ({ refresh() {}, mountControls() {}, dispose() {} }),
         cancelAnimationFrame() {}, requestAnimationFrame: () => 1, observeBackgroundTask() {}, COPY: {},
@@ -42,13 +42,13 @@ test('S1: pending swipe recovery follows native DOM restoration without settling
     const source = readFileSync('modules/variables/updater/host.js', 'utf8')
         .replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '').replaceAll('import.meta.url', "'updater-host-test'");
     const handlers = new Map(), frames = new Map(), observers = new Set();
-    let ctx, mode = 'auto', updates = 0, saves = 0, mounts = 0, sequence = 0;
+    let ctx, updates = 0, saves = 0, mounts = 0, sequence = 0;
     const floor = {}, chatNode = { querySelector: () => floor };
     const event_types = Object.fromEntries(['GENERATION_STARTED', 'MESSAGE_RECEIVED', 'MESSAGE_DELETED', 'CHAT_CHANGED',
         'MESSAGE_SWIPED', 'MESSAGE_SWIPE_DELETED', 'MESSAGE_UPDATED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED', 'SETTINGS_UPDATED'].map(key => [key, key]));
     const sandbox = { extension_settings: { LittleWhiteBox: { variablesCore: { enabled: true }, variablesMode: '2.0' } },
         getContext: () => ctx, isGenerating: () => false, createModuleEvents: () => ({ on: (key, fn) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
-        requestUpdate() {}, readSettings: () => ({ mode }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
+        requestUpdate() {}, readSettings: () => ({ auto: true }), latestReply: () => ({ floor: ctx.chat.length - 1 }), hasBodyUpdate: () => false,
         createUpdateController: () => ({ update: async () => { updates++; }, cancel() {}, invalidate() {}, dispose() {}, status: () => ({}) }),
         createUpdaterView: () => ({ refresh() {}, mountControls() { mounts++; }, dispose() {} }),
         document: { getElementById: () => chatNode, querySelectorAll: () => [] },
@@ -84,11 +84,10 @@ test('S1: pending swipe recovery follows native DOM restoration without settling
         assert.equal(mounts, before + 1);
         assert.equal(observers.size, 0);
     }
-    for (const boundary of ['MESSAGE_RECEIVED', 'CHAT_CHANGED', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPE_DELETED', 'off', 'dispose']) {
+    for (const boundary of ['MESSAGE_RECEIVED', 'CHAT_CHANGED', 'MESSAGE_DELETED', 'MESSAGE_UPDATED', 'MESSAGE_SWIPE_DELETED', 'dispose']) {
         resetChat(); pendingSwipe();
         assert.equal(observers.size, 1);
-        if (boundary === 'off') { mode = 'off'; emit('SETTINGS_UPDATED'); flush(); mode = 'auto'; }
-        else if (boundary === 'dispose') sandbox.host.cleanupVariableUpdater();
+        if (boundary === 'dispose') sandbox.host.cleanupVariableUpdater();
         else { if (boundary === 'CHAT_CHANGED') resetChat(); await emit(boundary, 0); }
         assert.equal(observers.size, 0, boundary);
     }
