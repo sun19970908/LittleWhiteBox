@@ -1,23 +1,58 @@
 import { diagnostic } from '../engine/diagnostics.js';
-import type { Diagnostic, Json, Path, Success } from '../types.js';
+import type { Condition, ConditionValue, Diagnostic, Json, ParameterIssue, Path, Success } from '../types.js';
 export const COPY = {
     title: '变量 3.0', author: '制作规则', play: '当前聊天', close: '关闭', assistant: '交给小白助手',
     draftHelp: '草稿可以不完整。先保存草稿，再检查规则；保存到角色卡不会改变当前聊天。',
-    draft: '规则草稿', files: '编辑文件', saveDraft: '保存草稿', savedDraft: '草稿已保存', check: '检查并试算',
+    draft: '规则草稿', saveDraft: '保存草稿', savedDraft: '草稿已保存', check: '检查规则',
+    checkTitle: '检查规则', checkPassed: '规则可以使用。开局变量：', checkFailed: '规则还不能使用：',
     saveCard: '保存到角色卡', savedCard: '规则已保存到角色卡', example: '载入护符样例', exampleConfirm: '将替换编辑器中的规则草稿，尚未保存。继续吗？',
     enable: '在此聊天启用',
-    ruleFiles: '规则包', importRules: '覆盖导入', exportRules: '导出规则包',
+    importRules: '导入规则', exportRules: '导出规则',
     importConfirm: '将完整替换当前角色卡的规则和函数。聊天变量、回滚记录及未保存的草稿不变。继续吗？',
-    importedRules: '卡上规则已替换，之后的更新直接使用新规则。已有草稿已保留。', exportedRules: '规则包已导出',
+    importedRules: '卡上规则已替换，之后的更新直接使用新规则。已有草稿已保留。', exportedRules: '规则已导出',
     notEnabled: '此聊天还没有启用 3.0 规则。保存卡规则后可在这里启用。',
     action: '动作', parameters: '动作参数（JSON）', preview: '试算', commit: '执行动作', cancel: '取消', undo: '撤销最近一次提交',
     omitParameter: '不填写',
+    details: '详细信息', required: '必填', optional: '选填', parameterName: '参数',
+    objectFields: '需要填写的字段', itemFields: '每项需要填写的字段',
+    parameterFormat: (name: string) => `${name}需要填写有效的 JSON。`,
+    parameterTypes: { string: '文字', number: '数字', integer: '整数', boolean: '是或否', array: '列表', object: '对象', null: '空值' } as Record<string, string>,
+    parameterErrors: {
+        maximum: (name: string, p: Record<string, unknown>) => `${name}最多 ${p.limit}`,
+        minimum: (name: string, p: Record<string, unknown>) => `${name}最少 ${p.limit}`,
+        exclusiveMaximum: (name: string, p: Record<string, unknown>) => `${name}必须小于 ${p.limit}`,
+        exclusiveMinimum: (name: string, p: Record<string, unknown>) => `${name}必须大于 ${p.limit}`,
+        required: (name: string) => `请填写${name}`,
+        type: (name: string, p: Record<string, unknown>) => `${name}需要填写${String(p.type).split(',').map(type => COPY.parameterTypes[type] || type).join('或')}`,
+        enum: (name: string, p: Record<string, unknown>) => `${name}请选择：${(p.allowedValues as unknown[]).map(displayValue).join('、')}`,
+        const: (name: string, p: Record<string, unknown>) => `${name}必须为 ${displayValue(p.allowedValue)}`,
+        minLength: (name: string, p: Record<string, unknown>) => `${name}至少 ${p.limit} 个字符`,
+        maxLength: (name: string, p: Record<string, unknown>) => `${name}最多 ${p.limit} 个字符`,
+        minItems: (name: string, p: Record<string, unknown>) => `${name}至少 ${p.limit} 项`,
+        maxItems: (name: string, p: Record<string, unknown>) => `${name}最多 ${p.limit} 项`,
+        pattern: (name: string) => `${name}格式不符，请按输入框下方的说明填写`,
+        format: (name: string, p: Record<string, unknown>) => `${name}格式不符（${p.format}）`,
+        additionalProperties: (name: string) => `不需要填写${name}`,
+        multipleOf: (name: string, p: Record<string, unknown>) => `${name}必须是 ${p.multipleOf} 的倍数`,
+        uniqueItems: (name: string) => `${name}中不能有重复项`,
+    } as Record<string, (name: string, params: Record<string, unknown>) => string>,
+    parameterInvalid: (name: string) => `${name}不符合要求，请检查详细信息`,
+    conditionFailed: (text: string) => `条件不成立：${text}`,
+    conditionCompare: (left: string, symbol: string, right: string) => `${left}，需要 ${symbol} ${right}`,
+    conditionAny: (items: string[]) => `以下条件至少满足一项：${items.join('；')}`,
+    conditionFunction: (name: string, expected: boolean) => expected ? `函数 ${name} 判定不成立` : `函数 ${name} 判定成立，需要不成立`,
+    conditionBefore: (name: string) => `本次操作前的${name}`,
+    computedValue: '计算结果', trueValue: '是', falseValue: '否',
+    comparisonSymbols: { eq: '=', ne: '≠', lt: '<', lte: '≤', gt: '>', gte: '≥' },
+    sourceGroup: (name: string, count: number) => `${name} · ${count} 项`,
+    restoredChanges: '恢复的变化',
     update: '更新变量', updateSettings: '独立更新', mode: '更新方式', model: '更新模型', saveSettings: '保存更新设置', previewRequest: '预览实际请求',
     modes: { off: '关闭', manual: '手动', auto: '回复后自动' }, sources: { main: '小白助手 · 主助手 API', delegate: '小白助手 · 分身 API' },
     undoReply: '撤销此回复的全部结算',
     savedRules: '卡上规则',
     added: '新增', removed: '删除', annotation: '提交说明',
-    result: '结算结果', empty: '没有状态变化', success: '结算成功', previewed: '试算成功，未改变聊天',
+    result: '结算结果', previewTitle: '试算结果', empty: '变量没有变化', success: '结算成功', previewLabel: '已试算', previewed: '执行后变量会这样变化：',
+    settings: '设置', noResult: '这条回复还没有结算结果', floorResult: (index: number) => `第 ${index + 1} 楼 · 结算结果`,
     failed: '本次未生效', saved: '已保存', unconfirmed: '结果已生效，但未确认保存。请重试保存，不要重复执行动作。', retrySave: '重试保存',
     restored: '已恢复变量', restoredConflict: '已恢复，但有规则冲突', restoredUnchecked: '已恢复，但规则检查失败',
     conflictHelp: '请切回原回复，或在后续剧情中解决这个冲突，否则变量更新会继续报错。',
@@ -28,7 +63,7 @@ export const COPY = {
     missingValue: '不存在',
     refreshing: '正在读取…', newFunction: '新建函数', functionName: '函数名（字母、数字、下划线或短横线）',
     phases: { ready: '', preparing: '正在读取资料', requesting: '正在更新', correcting: '正在重试', saving: '正在保存', success: '已更新', unsaved: '尚未保存', failed: '更新失败', cancelled: '已取消' } as Record<string, string>,
-    reasons: { input: '直接修改', action: '动作', derive: '关联计算', correct: '按规则修正', trigger: '状态触发' },
+    reasons: { input: '直接修改', action: '动作', derive: '关联计算', correct: '规则修正', trigger: '状态触发' },
     errors: {
         'not-enabled': '当前聊天尚未启用规则。', 'already-enabled': '当前聊天已启用 3.0。',
         'definition-missing': '尚未保存角色卡规则。', 'definition-shape': '规则包格式不完整。', 'definition-schema': '规则定义的结构不正确。',
@@ -60,6 +95,28 @@ export const COPY = {
         'async-schema': '结构校验应是同步规则；领域自定义计算请使用规则函数。',
     },
 };
+function displayValue(value: unknown): string {
+    if (value === undefined) {return COPY.missingValue;}
+    if (value === true) {return COPY.trueValue;}
+    if (value === false) {return COPY.falseValue;}
+    return typeof value === 'string' ? `“${value}”` : JSON.stringify(value);
+}
+export function parameterIssueText(issue: ParameterIssue): string {
+    const name = issue.name || COPY.parameterName;
+    return COPY.parameterErrors[issue.keyword]?.(name, issue.params) || COPY.parameterInvalid(name);
+}
+function conditionValueText(operand: ConditionValue): string {
+    const name = operand.before ? COPY.conditionBefore(operand.name || COPY.computedValue) : operand.name;
+    return [name, displayValue(operand.value)].filter(Boolean).join(' ');
+}
+export function conditionText(condition: Condition): string {
+    switch (condition.kind) {
+        case 'any': return COPY.conditionAny(condition.conditions.map(conditionText));
+        case 'function': return [COPY.conditionFunction(condition.id, condition.expected), condition.description].filter(Boolean).join(' · ');
+        case 'comparison': return COPY.conditionCompare(conditionValueText(condition.left), COPY.comparisonSymbols[condition.operator], conditionValueText(condition.right));
+        case 'value': return COPY.conditionCompare(conditionValueText(condition.operand), '=', displayValue(condition.expected));
+    }
+}
 export function restorationLabel(result: Success): string {
     if (!result.restoration?.length) {return COPY.restored;}
     return result.restoration.some(issue => ['constraint', 'state-schema'].includes(issue.code)) ? COPY.restoredConflict : COPY.restoredUnchecked;
@@ -74,6 +131,12 @@ export function restorationText(issue: Diagnostic): string {
 }
 export function errorText(error: unknown): string {
     const detail = error && typeof error === 'object' && 'code' in error ? error as Diagnostic : diagnostic(error);
+    if (detail.code === 'action-precondition' && detail.condition) {
+        return [detail.actionTitle || detail.action || detail.rule, COPY.conditionFailed(conditionText(detail.condition))].filter(Boolean).join(' · ');
+    }
+    if (detail.code === 'action-parameters' && detail.parameters?.length) {
+        return [detail.actionTitle || detail.action || detail.rule, detail.parameters.map(parameterIssueText).join('；')].filter(Boolean).join(' · ');
+    }
     const label = (COPY.errors as Record<string, string>)[detail.code] || detail.message || detail.code || COPY.failed;
     return [typeof detail.operation === 'number' ? '第 ' + (detail.operation + 1) + ' 条操作' : '', Array.isArray(detail.path) ? detail.path.join(' → ') : '', detail.rule,
         Array.isArray(detail.rules) ? detail.rules.join(' → ') : '', detail.functionId, label].filter(Boolean).join(' · ');

@@ -58,7 +58,7 @@ description: 制作或修改角色卡、世界书与提示词结构；按需制�
 
 触发时机、停止条件、iframe 寿命见[能力参考](<references/xiaobaix-capabilities.md>)第 2～4 节。常驻任务重跑先卸载旧实例，登记 `onCleanup`；角色任务离开所属角色时由插件停止。图片、地点表等大块共享数据由任务挂到父页面一份，各楼 iframe 从 `window.parent` 取，取不到时降级；带 iframe 的正则用 `maxDepth: 0` 只给最新一楼，见能力参考第 3.4、4 节。
 
-写前端时先读[样式、脚本作用域与交互验收](<references/xiaobaix-capabilities.md#frontend-validation>)；自动后台任务与玩家按钮的区别见同文第 2.1 节。
+写前端时先读[样式、脚本作用域与交互验收](<references/xiaobaix-capabilities.md#frontend-validation>)；显示当前变量的面板同时按[变量刷新](<references/xiaobaix-capabilities.md#state-panel-refresh>)接线。自动后台任务与玩家按钮的区别见同文第 2.1 节。
 
 ## 按需读哪些资料
 

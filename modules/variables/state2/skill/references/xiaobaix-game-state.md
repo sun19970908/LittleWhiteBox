@@ -257,20 +257,7 @@ function readState(root) {
 
 楼层 iframe 里用 `window.parent.SillyTavern`。返回 `null` 表示当前聊天还没有这个根，界面要显示“尚未初始化”而不是报错。
 
-swipe、删楼引起的回滚没有覆盖全部情况的“状态已变化”事件（见下文 `stateAtomsGenerated`）。显示当前值的界面每 0.5 秒比较一次状态字符串，变了才重绘。最新一楼的 iframe 也要这样做：它在生成结束时渲染，同一条回复里的状态可能在它打开之后才写入，后续删楼、切 swipe 也不会重建它。iframe 用自己的 `setInterval`，随 iframe 一起销毁，不往父页面挂定时器。
-
-```js
-// 楼层 iframe 内
-let last = '';
-const timer = window.setInterval(() => {
-  const raw = window.parent.SillyTavern.getContext().variables.local.get('西厢');
-  const key = typeof raw === 'string' ? raw : JSON.stringify(raw);
-  if (key !== last) { last = key; render(); }
-}, 500);
-window.addEventListener('pagehide', () => window.clearInterval(timer));
-```
-
-完整的 iframe 面板见[状态面板示例](<examples/state2-direct/panel.html.txt>)。循环任务里写法相同，但直接用 `SillyTavern`，并把清理放进 `onCleanup`。
+面板按[变量刷新](<../../../../card-workspace/skill/references/xiaobaix-capabilities.md#state-panel-refresh>)读取和更新显示。完整的 2.0 iframe 面板见[状态面板示例](<examples/state2-direct/panel.html.txt>)，包含初次读取、变化比较、定时刷新、失败反馈与卸载清理。
 
 <a id="state-atoms"></a>
 **要知道“这一回合改了什么”时，在任务里订阅变化通知。** 轮询只看得到结果，分不清是新提交还是回滚。插件每次真实写入（正文 `<state>`、`applyText`、`apply`、预设的 `beginTurn().commit()`）和切 swipe 重算后，在父页面 `document` 上触发 jQuery 事件 `xiaobaix:variables:stateAtomsGenerated`，参数 `{ messageId, atoms }`，每个 atom 带路径、`oldValue`、`newValue`。删楼、删 swipe 后插件只重算，不发这个通知。所以：
@@ -300,7 +287,7 @@ function buildStateBlock(changes) {
 }
 ```
 
-发送时填进 `#send_textarea` 再点 `#send_but`，与玩家手动发送走同一条路；不要用 `/send` 拼接，消息里的 `|`、`{{` 会被斜杠命令解析。生成进行中禁用按钮。
+发送、命令解析与生成期间的按钮处理按[公共消息按钮指导](<../../../../card-workspace/skill/references/xiaobaix-capabilities.md#message-buttons>)，与玩家手动发送走同一条路；该规则也适用于不携带状态块的普通消息。
 
 <a id="direct-state-example"></a>
 **直接结算**：[初始化任务](<examples/state2-direct/init.task.js.txt>)与[楼层面板](<examples/state2-direct/panel.html.txt>)演示 `apply()` 的完整回执处理。

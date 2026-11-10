@@ -1,6 +1,7 @@
 import type { Compiled, Json, JsonObject, Result, RunOptions, EvaluationContext, Success, Source } from '../types.js';
 import { changes, clone, contains, overlaps, assertJson, pathOf, setAt, equal } from './data.js';
-import { evaluate } from './expressions.js';
+import { evaluate, explainCondition } from './expressions.js';
+import { parameterIssues } from '../definition/schema-fields.js';
 import { reject, diagnostic } from './diagnostics.js';
 import { difference } from './difference.js';
 import { displayChanges } from './delta-view.js';
@@ -34,6 +35,12 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
         const before = clone(start), state = clone(start);
         const context: EvaluationContext = { bundle: compiled.bundle, before, state, params: {}, signal };
         const record = (previous: Json, source: Source) => {
+            const definition = source.kind === 'action' ? compiled.actions.get(source.id!)
+                : source.kind === 'trigger' ? compiled.definition.triggers?.find(item => item.id === source.id)
+                    : compiled.rules.find(item => item.id === source.id);
+            if (definition) {
+                source = { ...source, description: definition.description, ...('title' in definition ? { title: definition.title } : {}) };
+            }
             for (const change of changes(previous, state)) {provenance.push({ ...change, source });}
         };
         const stabilize = async () => {
@@ -114,8 +121,10 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
                 assertJson(value);
                 setAt(context.params, conversion.path, value);
             }
-            if (!action.validate(context.params)) {reject('action-parameters', { action: action.id, errors: clone(action.validate.errors) });}
-            if (await evaluate(action.requires, context) !== true) {reject('action-precondition', { action: action.id });}
+            if (!action.validate(context.params)) {reject('action-parameters', { action: action.id, actionTitle: action.title,
+                errors: clone(action.validate.errors), parameters: parameterIssues(action.parameters, action.validate.errors || []) });}
+            if (await evaluate(action.requires, context) !== true) {reject('action-precondition', { action: action.id, actionTitle: action.title,
+                condition: await explainCondition(action.requires, context, action.parameters) });}
             const previous = clone(state);
             // One action's effects observe the same pre-action state.
             await effects(action.effects);

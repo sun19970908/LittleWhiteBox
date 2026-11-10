@@ -228,7 +228,7 @@ iframe 还会收到这些消息（`window.addEventListener('message', …)`）�
 
 iframe 拿得到，有四种办法，按推荐顺序：
 
-1. **有对应斜杠命令的，用 `STscript`。** 普通变量读写（`/getvar` `/setvar` `/xbgetvar` `/xbsetvar`）、发送消息（`/send` `/trigger`）、生成（`/gen` `/xbgen`）、执行快速回复和任务（`/run` `/xbqte`）都走这条。受管玩法状态的写入使用所用变量版本的入口（见第 5 节），不能以普通变量命令代替记账。
+1. **有对应斜杠命令的，用 `STscript`。** 普通变量读写（`/getvar` `/setvar` `/xbgetvar` `/xbsetvar`）、生成（`/gen` `/xbgen`）、执行快速回复和任务（`/run` `/xbqte`）都走这条。发送普通玩家文本按[消息按钮](<#message-buttons>)处理；有意执行发送命令（`/send` `/trigger`）时按命令文档处理参数与转义。受管玩法状态的写入使用所用变量版本的入口（见第 5 节），不能以普通变量命令代替记账。
 2. **只需要只读快照的，用 `iframe-ready` / `request-context` 拿 `st-context`。**
 3. **复杂逻辑交给循环任务。** 任务在酒馆页面里挂一个卡专用的接口（例如 `window.MyCardApi`），iframe 用 `parent.MyCardApi.xxx()` 调用，或用 `STscript('/xbqte 任务名')` 触发任务。这样酒馆事件订阅和长期状态都由任务管理和清理，iframe 只负责显示和按钮。
 4. **直接访问父页面。** 楼层 iframe 没有 `sandbox` 属性，且与酒馆页面同源，所以 `parent.SillyTavern.getContext()`、`parent.document` 都能用。适合一次性读取或调用；**不要从 iframe 往父页面注册长期监听、定时器或 DOM**：iframe 在 swipe、编辑、切聊天时被销毁，这些注册不会自动撤销，会重复叠加并持有已销毁页面的引用。
@@ -257,6 +257,31 @@ iframe 拿得到，有四种办法，按推荐顺序：
 - 展开/收起使用原生按钮，核对 `aria-expanded` 与实际显隐一致；用 Enter、Space 连续操作，重绘替换按钮时保留焦点。
 - 核对自动任务按事件启动且未暴露无用途按钮；需要玩家操作的按钮则检查成功反馈和失败提示。
 - 编译通过、截图存在、控制台无错误都不能证明点击逻辑有效。修复前用同一操作稳定复现，修复后断言可见结果，而不是搜索源码里有没有某个变量名。
+
+<a id="state-panel-refresh"></a>
+### 3.6 面板怎样跟随当前变量
+
+显示当前状态的面板由卡自己的脚本重读变量，2.0、3.0 都适用。楼层渲染、正文生成结束与独立变量结算是不同的时机；第 3.2 节的普通聊天消息不表示变量已结算，收到后延迟一次读取也可能早于实际写入。
+
+- iframe 打开时立即读一次，随后用自身的 `window.setInterval` 每 500ms 读取本面板用到的根。每次从 `window.parent.SillyTavern.getContext().variables.local.get(root)` 取当前值，不缓存上一个聊天的变量对象。
+- 字符串直接比较，返回对象时用 `JSON.stringify` 比较；值变了才解析、更新显示。根尚未初始化或已被清空时显示空状态；读取失败显示原因，不把上一次成功值当成当前值。
+- 定时读取只负责显示；按钮按所选变量版本提交，完成后重读实际值。展开状态、当前标签和输入内容留在界面里，更新数值时保留。
+- 定时器在 iframe 自己的 `window` 上创建，随 iframe 销毁；`pagehide` 时清理。常驻任务界面用第 2.3 节的托管定时器和清理机制。
+
+验收时保持当前面板打开，从面板以外修改变量，并分别检查独立更新、撤销、swipe、清空或重置，以及切聊天后新面板的显示。面板应跟随实际当前值，不需要玩家手动刷新页面。单次动画、音效等需要区分事件来源的效果，另读 [2.0 变化通知](<../../../variables/state2/skill/references/xiaobaix-game-state.md#state-atoms>)或 [3.0 单次反馈](<../../../variables/state3/skill/references/card-side.md#effects>)；数值增加也可能是撤销或恢复，不直接等同于新奖励。
+
+<a id="message-buttons"></a>
+### 3.7 Sending player text from a button
+
+A button that sends ordinary player text uses the host's `#send_textarea` and `#send_but`, the same route as manual input. Set the textarea value, dispatch its `input` event and activate the send button. Preserve an existing player draft: offer to insert/append or leave the composed text for confirmation instead of silently replacing it. This follows the host's normal text handling; it does not promise to disable native macros or a leading slash command.
+
+Concatenating player prose into `STscript('/send ' + text)` also makes it command source: `|` and `{{…}}` can be parsed as pipeline/macro syntax. Use command execution only when a command is intended and its arguments are escaped according to the STscript reference. This distinction is independent of the variable version.
+
+While story generation is running, keep the sending control unavailable and restore it when generation ends or stops. Read the host's generation state/events through its documented API; a fixed delay is not a completion signal. Await a panel's own asynchronous operation before accepting another activation of that operation. An update to the numeric display must not release a pending button.
+
+Sending text is not itself a state commit. Decide whether the button submits a state action or asks the model to describe a new action; an already-settled summary must not cause the updater to settle that event again. Keep gameplay writes on the chosen variable API.
+
+Acceptance: send text containing a pipe and macro-shaped text through the normal composer route, preserve an existing draft, try activation while generating and while a button operation is pending, and verify one intended message/action. Check the final chat message and state, not merely that a click handler ran.
 
 ## 4. 任务与 iframe 协作
 

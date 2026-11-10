@@ -1,7 +1,9 @@
-import { extension_settings, getContext, saveMetadataDebounced } from "../../../../../extensions.js";
-import { saveSettingsDebounced, chat_metadata } from "../../../../../../script.js";
+import { extension_settings, getContext } from "../../../../../extensions.js";
+import { chat_metadata } from "../../../../../../script.js";
 import { ownsVariable, readOwnedVariable, writeOwnedVariable } from './state3/runtime/variables.js';
-import { getLocalVariable, setLocalVariable, getGlobalVariable, setGlobalVariable } from "../../../../../variables.js";
+import { getLocalVariable, getGlobalVariable, setGlobalVariable } from "../../../../../variables.js";
+import { savePanelVariables } from './variables-panel-save.js';
+import { PANEL_COPY } from './variables-panel-copy.js';
 import { extensionFolderPath } from "../../core/constants.js";
 import { createModuleEvents, event_types } from "../../core/event-manager.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
@@ -73,6 +75,7 @@ const EMBEDDED_CSS = `
 .vm-list::-webkit-scrollbar-track{background:var(--SmartThemeBodyColor)}
 .vm-list::-webkit-scrollbar-thumb{background:var(--SmartThemeBorderColor);border-radius:3px}
 .vm-empty-message{padding:20px;text-align:center;color:#888}
+.vm-save-status{padding:6px 15px;font-size:13px;overflow-wrap:anywhere}.vm-save-status output{margin-right:8px}.vm-save-status[data-error=true]{color:var(--warning,#e99b69)}.vm-save-status button[hidden]{display:none}
 .vm-item-name-visible{opacity:1}
 .vm-item-separator{opacity:.3}
 .vm-null-value{opacity:.6}
@@ -105,6 +108,7 @@ const EMBEDDED_HTML = `
             ${[['import','fa-upload','导入变量'],['export','fa-download','导出变量'],['add','fa-plus','添加变量'],['collapse','fa-chevron-down','展开/折叠所有'],['clear-all','fa-trash','清除所有变量']].map(([a,ic,ti])=>`<button class="vm-btn ${a==='clear-all'?'vm-clear-all-btn':''}" data-type="${t}" data-act="${a}" title="${ti}"><i class="fa-solid ${ic}"></i></button>`).join('')}
           </div>
         </div>
+        <div class="vm-save-status" id="${t}-vm-save-status"><output role="status"></output><button class="vm-btn" data-type="${t}" data-act="retry-save" hidden>${PANEL_COPY.retry}</button></div>
         <div class="vm-search-container"><input type="text" class="vm-input vm-search-input" id="${t}-vm-search" placeholder="搜索${t==='character'?'本地':'全局'}变量..."></div>
         <div class="vm-list" id="${t}-variables-list"></div>
         <div class="vm-add-form" id="${t}-vm-add-form">
@@ -122,8 +126,8 @@ const EMBEDDED_HTML = `
 
 const VT = {
   character: { getter: name => ownsVariable(chat_metadata, name) ? readOwnedVariable(chat_metadata, name) : getLocalVariable(name),
-    setter: (name, value) => { if (ownsVariable(chat_metadata, name)) { writeOwnedVariable(chat_metadata, name, value); saveMetadataDebounced(); } else { setLocalVariable(name, value); } }, storage: ()=> chat_metadata?.variables || (chat_metadata.variables = {}), save: saveMetadataDebounced },
-  global:    { getter: getGlobalVariable, setter: setGlobalVariable, storage: ()=> extension_settings.variables?.global || ((extension_settings.variables = { global: {} }).global), save: saveSettingsDebounced },
+    setter: (name, value) => { if (ownsVariable(chat_metadata, name)) { writeOwnedVariable(chat_metadata, name, value); } else { (chat_metadata.variables ??= {})[name] = value; } }, storage: ()=> chat_metadata?.variables || (chat_metadata.variables = {}) },
+  global:    { getter: getGlobalVariable, setter: setGlobalVariable, storage: ()=> extension_settings.variables?.global || ((extension_settings.variables = { global: {} }).global) },
 };
 
 const EXT_ID = 'LittleWhiteBox';
@@ -268,6 +272,7 @@ class VariablesPanel {
       collapse:()=>this.collapseAll(t),
       'clear-all':()=>this.clearAllVariables(t),
       'save-add':()=>this.saveAddVariable(t),
+      'retry-save':()=>observeBackgroundTask(this.persist(t), { source: import.meta.url, operation: 'retryVariableSave' }),
       'cancel-add':()=>this.hideAddForm(t),
     }[act]||(()=>{}))();
   }
@@ -284,7 +289,7 @@ class VariablesPanel {
     }[act]||(()=>{}))();
   }
 
-  onInlineAction(e){ e.preventDefault(); e.stopPropagation(); const act=$(e.currentTarget).data('act'); act==='inline-save'? this.handleInlineSave($(e.currentTarget).closest('.vm-inline-form')) : this.hideInlineForm(); }
+  onInlineAction(e){ e.preventDefault(); e.stopPropagation(); const act=$(e.currentTarget).data('act'); if(act==='inline-save') observeBackgroundTask(this.handleInlineSave($(e.currentTarget).closest('.vm-inline-form')), { source: import.meta.url, operation: 'inlineVariableSave' }); else this.hideInlineForm(); }
 
   bindCopyPress(e){
     e.preventDefault(); e.stopPropagation();
@@ -320,6 +325,7 @@ class VariablesPanel {
 
   checkChanges(){
     try{
+      if(this.panelMetadata!==getContext().chatMetadata) { this.loadVariables(); this.updateSnapshot(); }
       const sum=JSON.stringify(getRulesTable()||{});
       if(sum!==this.state.rulesChecksum){
         this.state.rulesChecksum=sum;
@@ -340,6 +346,12 @@ class VariablesPanel {
   }
 
   loadVariables(){
+    const metadata=getContext().chatMetadata;
+    if(this.panelMetadata && this.panelMetadata!==metadata) {
+      this.hideInlineForm(); this.hideAddForm('character');
+      $('#character-vm-save-status output').text(''); $('#character-vm-save-status button').prop('hidden',true);
+    }
+    this.panelMetadata=metadata;
     ['character','global'].forEach(t=>{
       this.renderVariables(t);
       $(`#${t}-variables-section [data-act="collapse"] i`).removeClass('fa-chevron-up').addClass('fa-chevron-down');
@@ -449,18 +461,31 @@ class VariablesPanel {
     }
   }
 
-  handleDelete(_item,t,path){
+  async handleDelete(_item,t,path){
     const n=path[path.length-1];
     if(!confirm(`确定要删除 "${n}" 吗？`)) return;
-    this.withGlobalRefresh(()=> this.deleteByPathSilently(t,path));
-    toastr.success('变量已删除');
+    try { await this.withPreservedExpansion(t,()=> this.deleteByPathSilently(t,path)); }
+    catch(error) { toastr.error(error.message); }
   }
 
-  refreshAndKeep(t,states){ this.vt(t).save(); this.loadVariables(); this.updateSnapshot(); states && this.restoreExpandedStates(t,states); }
-  withPreservedExpansion(t,fn){ const s=this.saveExpandedStates(t); fn(); this.refreshAndKeep(t,s); }
-  withGlobalRefresh(fn){ const s=this.saveAllExpandedStates(); fn(); this.loadVariables(); this.updateSnapshot(); this.restoreAllExpandedStates(s); }
+  async persist(t){
+    const ctx=getContext(), status=$(`#${t}-vm-save-status`);
+    const current=()=>t==='global' || getContext().chatMetadata===ctx.chatMetadata;
+    status.attr('data-error','false').find('output').text(PANEL_COPY.saving); status.find('button').prop('hidden',true);
+    try {
+      await savePanelVariables(t);
+      if(current()) status.find('output').text(PANEL_COPY.saved);
+      else toastr.success(PANEL_COPY.savedChat(ctx.chatId));
+      return true;
+    } catch(error) {
+      if(current()) { status.attr('data-error','true').find('output').text(`${PANEL_COPY.failed}：${error.message}`); status.find('button').prop('hidden',false); }
+      else toastr.error(PANEL_COPY.failedChat(ctx.chatId,error.message));
+      return false;
+    }
+  }
+  async withPreservedExpansion(t,fn){ const s=this.saveExpandedStates(t); fn(); const saved=this.persist(t); this.loadVariables(); this.updateSnapshot(); this.restoreExpandedStates(t,s); return await saved; }
 
-  handleInlineSave(form){
+  async handleInlineSave(form){
     if(this.savingInProgress) return; this.savingInProgress=true;
     try{
       if(!form?.length) return toastr.error('表单未找到');
@@ -472,7 +497,7 @@ class VariablesPanel {
       if(!name) return form.find('.inline-name').focus(), toastr.error('请输入变量名称');
       const {action,path}=this.state.formState;
       const val=this.editorTextToValue(value,type==='character' && ownsVariable(chat_metadata,path[0]));
-      this.withPreservedExpansion(type,()=>{
+      const saved=await this.withPreservedExpansion(type,()=>{
         if(action==='addChild') {
           this.setValueByPath(type,[...path,name],val);
         } else if(action==='edit'){
@@ -491,8 +516,8 @@ class VariablesPanel {
           this.vt(type).setter(name,val);
         }
       });
-      this.hideInlineForm(); toastr.success('变量已保存');
-    }catch(e){ toastr.error('JSON格式错误: '+e.message); }
+      if(saved && this.state.currentInlineForm?.[0]===form[0]) this.hideInlineForm();
+    }catch(e){ toastr.error(e.message); }
     finally{ this.savingInProgress=false; }
   }
   hideInlineForm(){ if(this.state.currentInlineForm){ this.state.currentInlineForm.removeClass('active'); setTimeout(()=>{ this.state.currentInlineForm?.remove(); this.state.currentInlineForm=null; },200);} this.state.formState={}; }
@@ -507,7 +532,7 @@ class VariablesPanel {
   }
   hideAddForm(t){ $(`#${t}-vm-add-form`).removeClass('active'); $(`#${t}-vm-name, #${t}-vm-value`).val(''); this.state.formState={}; }
 
-  saveAddVariable(t){
+  async saveAddVariable(t){
     if(this.savingInProgress) return; this.savingInProgress=true;
     try{
       const rawN=$(`#${t}-vm-name`).val();
@@ -516,11 +541,12 @@ class VariablesPanel {
       const v= typeof rawV==='string' ? rawV.trim() : String(rawV ?? '').trim();
       if(!n) return toastr.error('请输入变量名称');
       const val=this.editorTextToValue(v,t==='character' && ownsVariable(chat_metadata,n));
-      this.withPreservedExpansion(t,()=> {
+      const metadata=getContext().chatMetadata;
+      const saved=await this.withPreservedExpansion(t,()=> {
         this.vt(t).setter(n,val);
       });
-      this.hideAddForm(t); toastr.success('变量已保存');
-    }catch(e){ toastr.error('JSON格式错误: '+e.message); }
+      if(saved && (t==='global' || getContext().chatMetadata===metadata)) this.hideAddForm(t);
+    }catch(e){ toastr.error(e.message); }
     finally{ this.savingInProgress=false; }
   }
 
@@ -539,7 +565,7 @@ class VariablesPanel {
   }
 
   deleteByPathSilently(t,p){
-    if(p.length===1){ delete this.store(t)[p[0]]; this.vt(t).save?.(); return; }
+    if(p.length===1){ delete this.store(t)[p[0]]; return; }
     let root=this.rootValue(t,p[0]); if(typeof root!=='object'||root===null) return;
     let cur=root; p.slice(1,-1).forEach(k=>{ if(typeof cur[k]!=='object'||cur[k]===null) cur[k]={}; cur=cur[k]; });
     delete cur[p[p.length-1]]; this.vt(t).setter(p[0], root);
@@ -579,10 +605,10 @@ class VariablesPanel {
   searchVariables(t,q){ const l=q.toLowerCase().trim(); $(`#${t}-variables-list .vm-item`).each(function(){ $(this).toggle(!l || $(this).text().toLowerCase().includes(l)); }); }
   collapseAll(t){ const items=$(`#${t}-variables-list .vm-item`), icon=$(`#${t}-variables-section [data-act="collapse"] i`); const any=items.filter('.expanded').length>0; items.toggleClass('expanded',!any); icon.toggleClass('fa-chevron-up',!any).toggleClass('fa-chevron-down',any); }
 
-  clearAllVariables(t){
+  async clearAllVariables(t){
     if(!confirm(`确定要清除所有${t==='character'?'角色':'全局'}变量吗？`)) return;
-    this.withPreservedExpansion(t,()=>{ const s=this.store(t); Object.keys(s).forEach(k=> delete s[k]); });
-    toastr.success('变量已清除');
+    try { await this.withPreservedExpansion(t,()=>{ const s=this.store(t); Object.keys(s).forEach(k=> delete s[k]); }); }
+    catch(error) { toastr.error(error.message); }
   }
 
   async importVariables(t){
@@ -593,13 +619,13 @@ class VariablesPanel {
         const file = (tgt && 'files' in tgt && tgt.files && tgt.files[0]) ? tgt.files[0] : null;
         if(!file) throw new Error('未选择文件');
         const txt=await file.text(), v=JSON.parse(txt);
-        this.withPreservedExpansion(t,()=> {
+        const saved=await this.withPreservedExpansion(t,()=> {
           Object.entries(v).forEach(([k,val])=> {
             this.vt(t).setter(k,val);
           });
         });
-        toastr.success(`成功导入 ${Object.keys(v).length} 个变量`);
-      }catch{ toastr.error('文件格式错误'); }
+        if(saved) toastr.success(`成功导入 ${Object.keys(v).length} 个变量`);
+      }catch(error){ toastr.error(error.message); }
     };
     inp.click();
   }

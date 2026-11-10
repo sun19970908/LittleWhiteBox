@@ -31,7 +31,7 @@ export async function saveDraft(draft: Draft, updates: CardFile[]) {
     for (const file of updates) {
         const current = (await readFiles()).find(item => item.path === file.path);
         const original = draft.files.find(item => item.path === file.path);
-        if ((current?.content ?? null) !== (original?.content ?? null)) {reject('draft-conflict', { path: file.path });}
+        if ((current?.content ?? null) !== (original?.content ?? null) && current?.content !== file.content) {reject('draft-conflict', { path: file.path });}
     }
     const result = await workspaceRepository.commitWorkspaceMutation({
         name: INTERNAL_WORKSPACE_TOOL_NAMES.BATCH_WRITE_FILES, args, preconditions: observed,

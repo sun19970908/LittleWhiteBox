@@ -1,4 +1,5 @@
-import type { Expression, Definition, Path, EvaluationContext, Json } from '../types.js';
+import type { Expression, Definition, Path, EvaluationContext, Json, Schema, Condition, ConditionValue, Comparison } from '../types.js';
+import { fieldName } from '../definition/schema-fields.js';
 import { assertJson, equal, getAt, pathOf } from './data.js';
 import { reject } from './diagnostics.js';
 import { runFunction } from './functions.js';
@@ -68,3 +69,35 @@ export async function evaluate(expression: Expression, context: EvaluationContex
     }
 }
 function number(value: unknown): number { if (typeof value !== 'number' || !Number.isFinite(value)) {reject('expression-type');} return value; }
+
+const inverse: Record<Comparison, Comparison> = { eq: 'ne', ne: 'eq', lt: 'gte', lte: 'gt', gt: 'lte', gte: 'lt' };
+
+/** Called only after requires failed. Preserve lazy branches and explain the required truth value. */
+export async function explainCondition(expression: Expression, context: EvaluationContext, parameters: Schema, expected = true): Promise<Condition> {
+    const args = expression.args || [];
+    if (expression.op === 'not') {return explainCondition(args[0], context, parameters, !expected);}
+    if (expression.op === 'if') {return explainCondition(args[await evaluate(args[0], context) ? 1 : 2], context, parameters, expected);}
+    if (expression.op === 'and' || expression.op === 'or') {
+        const findOne = (expression.op === 'and') === expected;
+        const conditions: Condition[] = [];
+        for (const item of args) {
+            if (Boolean(await evaluate(item, context)) === expected) {continue;}
+            const condition = await explainCondition(item, context, parameters, expected);
+            if (findOne) {return condition;}
+            conditions.push(condition);
+        }
+        return { kind: 'any', conditions };
+    }
+    async function operand(item: Expression): Promise<ConditionValue> {
+        const value = await evaluate(item, context);
+        const path = item.get || item.before || item.param;
+        return path ? { kind: item.param ? 'parameter' : 'field', path: [...path], name: fieldName(item.param ? parameters : context.bundle.definition.schema, path),
+            ...(item.before ? { before: true } : {}), value } : { kind: 'value', value };
+    }
+    if (expression.op && Object.hasOwn(inverse, expression.op)) {
+        const operator = expression.op as Comparison;
+        return { kind: 'comparison', operator: expected ? operator : inverse[operator], left: await operand(args[0]), right: await operand(args[1]) };
+    }
+    if (expression.call) {return { kind: 'function', id: expression.call, description: context.bundle.definition.functions[expression.call].description, expected };}
+    return { kind: 'value', operand: await operand(expression), expected };
+}

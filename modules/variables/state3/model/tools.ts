@@ -64,11 +64,10 @@ export function getInputSchema(compiled: Compiled): JsonObject {
         for (const segment of access.path) {schema = object(schema) && object(schema.properties) ? schema.properties[segment] : undefined;}
         const candidates = finitePaths(schema, access.path)?.filter(path => direct(compiled, path));
         if (candidates?.length === 0) {continue;}
-        // Tool providers do not share Ajv's tuple/prefix schema support. Closed
-        // paths are enumerable; dynamic paths keep their array shape and the
-        // same final settlement permissions, without blocking the whole card.
+        // Tool providers may reject array-valued enums and tuple/prefix schemas.
+        // Keep the path shape here; settlement enforces the full permissions.
         const path: JsonObject = { type: 'array', items: { type: 'string' }, minItems: Math.max(1, access.path.length),
-            ...(candidates ? { enum: candidates } : { description: `Field-name segments within ${JSON.stringify(access.path)}. ${access.description}` }) };
+            description: `Field-name segments within ${JSON.stringify(access.path)}. ${access.description}` };
         for (const [op, input] of Object.entries(DIRECT_INPUTS)) {
             operations.push({ type: 'object', description: input.description, required: ['op', 'path', ...Object.keys(input.parameters)],
                 properties: { op: { const: op }, path, ...input.parameters,

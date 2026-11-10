@@ -16,7 +16,7 @@ export const definitionSchema = {
         format: { const: FORMAT }, name: description, schema: { type: 'object' }, initial: { type: 'object' },
         access: { type: 'array', items: { type: 'object', additionalProperties: false, required: ['path', 'write', 'description'], properties: { path, write: { type: 'array', uniqueItems: true, items: { type: 'string' } }, description, update: description } } },
         rules: { type: 'array', items: named({ kind: { enum: ['derive', 'correct'] }, path, value: expression, description }) },
-        actions: { type: 'array', items: named({ parameters: { type: 'object' }, description, requires: expression, effects: { type: 'array', minItems: 1, items: effect }, conversions: { type: 'array', items: effect } }) },
+        actions: { type: 'array', items: named({ title: description, parameters: { type: 'object' }, description, requires: expression, effects: { type: 'array', minItems: 1, items: effect }, conversions: { type: 'array', items: effect } }) },
         triggers: { type: 'array', items: {
             ...named({ description, when: expression, effects: { type: 'array', minItems: 1, items: effect }, timing: { enum: ['batch', 'action'] } }),
             required: ['id', 'description', 'when', 'effects'],

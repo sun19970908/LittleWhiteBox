@@ -74,7 +74,10 @@ export function createState3Updater({ service, adapter, available, changed }: { 
                     }
                     if (attempt) { setPhase('failed'); return preview; }
                     const submission = { text: response.text, toolCalls: response.toolCalls, completion: response.completion, truncated: response.truncated };
-                    task = correctionTask(prepared.task, submission, preview.diagnostics, 'state');
+                    // Action titles label UI controls; the model uses action ids and descriptions.
+                    task = correctionTask(prepared.task, submission, preview.diagnostics.map(issue => {
+                        const detail = { ...issue }; delete detail.actionTitle; return detail;
+                    }), 'state');
                 }
                 return { ok: false, diagnostics: [{ code: 'model-submission' }] };
             } catch (error) {

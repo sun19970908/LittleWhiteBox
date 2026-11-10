@@ -8,10 +8,10 @@ import { buildDescriptionView, buildUpdateView } from '../model/views.js';
 import { getInputSchema, getTools } from '../model/tools.js';
 import { buildUpdateTask } from '../model/prompts.js';
 import { correctionTask } from '../../updater/correction.js';
-import { accepted } from './fixture.js';
+import { accepted, fixture } from './fixture.js';
 import * as agentCore from '../../../agent-core/browser-entry.js';
 import { createPublicAgentApi } from '../../../agent-core/public-api.js';
-import type { Json } from '../types.js';
+import type { Json, JsonObject } from '../types.js';
 
 test('K9: V5 supplies three ordered exchanges; correction appends the rejected response and diagnostics to the same task', async () => {
     const compiled = compileDefinition(equipmentExample()), start = accepted(await initialize(compiled));
@@ -54,11 +54,27 @@ test('K9: V5 exchanges are sendable to DeepSeek with provider-default thinking',
     for (const message of replayed) {assert.ok(message.reasoning_content?.trim());}
 });
 
-test('K2/K9: generated paths exclude derived and action-only fields; RP descriptions exclude values and updater instructions', async () => {
+// K2/K9: provider-compatible paths retain their shape; forbidden writes publish nothing
+// and the update view identifies writable fields (protocol failure / state corruption).
+test('K2/K9: path schemas avoid array enums, settlement enforces permissions and RP descriptions expose only facts', async () => {
     const compiled = compileDefinition(equipmentExample());
-    const validate = new Ajv({ strict: false }).compile(getInputSchema(compiled));
+    const schema = getInputSchema(compiled), validate = new Ajv({ strict: false }).compile(schema);
+    for (const variant of (schema.items as JsonObject).anyOf as JsonObject[]) {
+        const path = (variant.properties as JsonObject).path as JsonObject | undefined;
+        if (!path) {continue;}
+        assert.equal(Object.hasOwn(path, 'enum'), false);
+        assert.equal(path.type, 'array'); assert.deepEqual(path.items, { type: 'string' });
+        assert.equal(path.minItems, 2); assert.equal(typeof path.description, 'string');
+    }
     assert.equal(validate([{ op: 'set', path: ['hero', 'health'], value: 50, reason: 'healed', old: 40 }]), true);
-    for (const path of [['hero'], ['hero', 'maxHealth'], ['hero', 'amulet']]) {assert.equal(validate([{ op: 'set', path, value: 1 }]), false);}
+    assert.equal(validate([{ op: 'set', path: ['hero'], value: 1 }]), false);
+    assert.equal(validate([{ op: 'set', path: ['hero', 1], value: 1 }]), false);
+    const host = fixture(); accepted(await host.service.enable(equipmentExample()));
+    for (const path of [['hero'], ['hero', 'maxHealth'], ['hero', 'amulet'], ['hero', 'absent']]) {
+        const before = host.saved();
+        const result = await host.service.apply([{ op: 'set', path: ['hero', 'health'], value: 50 }, { op: 'set', path, value: 1 }]);
+        assert.equal(result.ok, false); assert.deepEqual(host.saved(), before);
+    }
     const view = buildDescriptionView(compiled, ['equipment']);
     assert.deepEqual(view.fields, [{ path: ['hero', 'amulet'], description: compiled.definition.access[2].description }]);
     for (const key of ['state', 'values', 'result']) {assert.equal(Object.hasOwn(view, key), false);}
@@ -69,7 +85,7 @@ test('K2/K9: generated paths exclude derived and action-only fields; RP descript
     const facts = equipmentExample(), get = (...path: string[]) => ({ get: path }), unchanged = { type: 'object', additionalProperties: false, properties: {} };
     facts.definition.rules = []; facts.definition.constraints = [];
     facts.definition.access.find(entry => entry.path.join('.') === 'hero.health')!.write.push('heal');
-    facts.definition.actions.push({ id: 'heal', parameters: unchanged, conversions: [], description: 'A healing spell restores 10 health.', requires: { literal: true },
+    facts.definition.actions.push({ id: 'heal', title: 'Heal', parameters: unchanged, conversions: [], description: 'A healing spell restores 10 health.', requires: { literal: true },
         effects: [{ path: ['hero', 'health'], value: { op: 'add', args: [get('hero', 'health'), { literal: 10 }] } }] });
     facts.definition.triggers = [
         { id: 'amulet-rest', description: 'Resting heals more while wearing the amulet.', when: { literal: false }, effects: [{ path: ['hero', 'health'], value: { op: 'if', args: [get('hero', 'amulet'), { literal: 20 }, { literal: 10 }] } }] },
@@ -81,6 +97,7 @@ test('K2/K9: generated paths exclude derived and action-only fields; RP descript
     assert.deepEqual(factView('equipment').triggers, ['Resting heals more while wearing the amulet.', 'Removing the amulet leaves a scar.']);
     assert.equal(Object.hasOwn(view.sections[0], 'values'), false);
     const guide = buildUpdateView(compiled, accepted(await initialize(compiled)).state);
+    assert.deepEqual(guide.writable.map(field => field.path), [['hero', 'health']]);
     assert.equal(guide.fields.find(field => field.path.join('.') === 'hero.health')?.update, compiled.definition.access[1].update);
     assert.equal(new Ajv({ strict: false }).compile(getTools(compiled)[0].function.parameters)({ state: [] }), true);
 });

@@ -11,7 +11,7 @@ export interface Expression {
 }
 export interface Effect { path: Path; value: Expression }
 export interface Rule extends Effect { id: string; kind: 'derive' | 'correct'; description: string }
-export interface Action { id: string; parameters: Schema; description: string; requires: Expression; effects: Effect[]; conversions: Effect[] }
+export interface Action { id: string; title: string; parameters: Schema; description: string; requires: Expression; effects: Effect[]; conversions: Effect[] }
 export interface Trigger { id: string; description: string; timing?: 'batch' | 'action'; when: Expression; effects: Effect[] }
 export interface Definition {
     format: number; name: string; schema: Schema; initial: JsonObject;
@@ -28,9 +28,16 @@ export interface Compiled {
     validate: ValidateFunction;
 }
 export type Operation = ({ op: 'set'; path: Path; value: Json } | { op: 'remove'; path: Path } | { op: 'inc'; path: Path; delta: number } | { action: string; params: JsonObject }) & { [note: string]: unknown };
-export interface Source { kind: 'input' | 'action' | 'derive' | 'correct' | 'trigger'; id?: string }
+export interface Source { kind: 'input' | 'action' | 'derive' | 'correct' | 'trigger'; id?: string; title?: string; description?: string }
 export interface Change { path: Path; before?: Json; after?: Json; removed: boolean }
-export interface Diagnostic { code: string; message?: string; path?: unknown; rule?: string; [key: string]: unknown }
+export type Comparison = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
+export interface ConditionValue { kind: 'field' | 'parameter' | 'value'; name?: string; path?: Path; before?: boolean; value?: Json }
+export type Condition = { kind: 'comparison'; operator: Comparison; left: ConditionValue; right: ConditionValue }
+    | { kind: 'any'; conditions: Condition[] }
+    | { kind: 'function'; id: string; description: string; expected: boolean }
+    | { kind: 'value'; operand: ConditionValue; expected: boolean };
+export interface ParameterIssue { keyword: string; path: Path; name: string; params: Record<string, unknown> }
+export interface Diagnostic { code: string; message?: string; path?: unknown; rule?: string; actionTitle?: string; condition?: Condition; parameters?: ParameterIssue[]; [key: string]: unknown }
 export interface Failure { ok: false; diagnostics: Diagnostic[] }
 export interface Success {
     ok: true; state: Json; changes: Change[]; provenance: (Change & { source: Source })[];

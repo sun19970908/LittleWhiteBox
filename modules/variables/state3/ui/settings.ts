@@ -1,7 +1,8 @@
 import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 import styleText from './styles.css?inline';
-import { COPY, errorText, restorationLabel } from './copy.js';
-import { element, showResult } from './result.js';
+import { COPY, errorText } from './copy.js';
+import { element, resultLabel } from './result.js';
+import { createResultDialog } from './result-dialog.js';
 import { notifyInfo } from './notifications.js';
 import { DEFINITION_FILE, FUNCTION_DIRECTORY } from '../definition/format.js';
 import { equipmentExample } from '../definition/example.js';
@@ -14,6 +15,7 @@ type Action = (signal: AbortSignal) => unknown | Promise<unknown>;
 export function createState3Page(api: State3Api) {
     const style = element('style', styleText), dialog = element('dialog', undefined, 'lwb-state3-dialog');
     const header = element('header'), nav = element('nav'), main = element('main'), notice = element('output');
+    const resultDialog = createResultDialog(api);
     notice.setAttribute('role', 'status');
     let page: 'play' | 'author' = 'play', draft: Draft | undefined, working = new Map<string, string>(), selectedFile = '';
     let controller: AbortController | undefined, generation = 0;
@@ -22,7 +24,7 @@ export function createState3Page(api: State3Api) {
         node.addEventListener('click', () => { observeBackgroundTask(act(action, node), { source: import.meta.url, operation: 'pageAction' }); });
         return node;
     };
-    function cancel() { generation++; controller?.abort(); api.cancel(); }
+    function cancel() { generation++; controller?.abort(); }
     async function act(action: Action, node: HTMLButtonElement) {
         controller?.abort(); const turn = ++generation;
         controller = new AbortController(); node.disabled = true; notice.textContent = '';
@@ -54,18 +56,17 @@ export function createState3Page(api: State3Api) {
         select.addEventListener('change', () => { selectedFile = select.value; editor.value = working.get(selectedFile) || ''; });
         editor.addEventListener('input', () => working.set(selectedFile, editor.value));
         choose(); main.append(select, editor);
-        const output = element('section', undefined, 'lwb-state3-result');
         main.append(row(
             button(COPY.saveDraft, async () => { draft = await api.saveDraft(currentDraftBaseline(), [...working].map(([path, content]) => ({ path, content }))); notice.textContent = COPY.savedDraft; }),
-            button(COPY.check, async signal => { showResult(output, await api.checkDraft(currentDraft(), [], { signal })); }),
+            button(COPY.check, async signal => { resultDialog.showCheck(await api.checkDraft(currentDraft(), [], { signal })); }),
             button(COPY.saveCard, async () => {
                 draft = await api.saveDraft(currentDraftBaseline(), [...working].map(([path, content]) => ({ path, content })));
                 const result = await api.saveCardDraft(draft);
                 if (!('ok' in result) || !result.ok) {throw new Error('results' in result ? result.results.filter((item: { saved: boolean }) => !item.saved).map((item: { error: string }) => item.error).join('\n') : COPY.failed);}
                 draft = await api.openDraft(); notice.textContent = COPY.savedCard;
             }),
-        ), output);
-        const files = element('details'); files.append(element('summary', COPY.files), row(
+        ));
+        main.append(row(
             button(COPY.example, () => {
                 if (editor.value.trim() && !globalThis.confirm(COPY.exampleConfirm)) {return;}
                 selectedFile = rootPath + DEFINITION_FILE;
@@ -78,22 +79,40 @@ export function createState3Page(api: State3Api) {
                 if (!working.has(selectedFile)) {working.set(selectedFile, '(input, { get, before }) => null');}
                 choose();
             }),
-        )); main.append(files);
+        ));
     }
     function currentDraftBaseline() { if (!draft) {throw new Error(COPY.notEnabled);} return draft; }
     function parameterEditor(schema: Schema) {
         const root = element('div'), readers: [string, () => JsonObject[string] | undefined][] = [];
+        const readJson = (input: HTMLTextAreaElement, name: string) => {
+            try { return JSON.parse(input.value); }
+            catch { throw new Error(COPY.parameterFormat(name)); }
+        };
+        const hints = (target: HTMLElement, property: Record<string, unknown>) => {
+            if (typeof property.description === 'string') {target.append(element('p', property.description, 'lwb-state3-parameter-help'));}
+            const object = property.type === 'array' ? property.items : property;
+            if (!object || typeof object !== 'object' || !('properties' in object) || !object.properties || typeof object.properties !== 'object') {return;}
+            const required = new Set('required' in object && Array.isArray(object.required) ? object.required : []);
+            const fields = element('dl', undefined, 'lwb-state3-parameter-fields');
+            for (const [key, field] of Object.entries(object.properties as Record<string, Record<string, unknown>>)) {
+                const name = field.title ? `${String(field.title)} (${key})` : key;
+                fields.append(element('dt', name), element('dd', [required.has(key) ? COPY.required : COPY.optional,
+                    COPY.parameterTypes[String(field.type)], field.description].filter(Boolean).join(' · ')));
+            }
+            target.append(element('p', property.type === 'array' ? COPY.itemFields : COPY.objectFields, 'lwb-state3-parameter-help'), fields);
+        };
         const properties = typeof schema === 'object' && schema.properties && typeof schema.properties === 'object' ? schema.properties as Record<string, Record<string, unknown>> : {};
         // A closed flat object has an ordinary form. Keep the full input surface for
         // schemas whose legal keys depend on parameters, alternatives or references.
         if (typeof schema !== 'object' || schema.additionalProperties !== false
             || ['oneOf', 'anyOf', 'allOf', 'if', '$ref', 'patternProperties', 'dependentSchemas'].some(key => key in schema)) {
             const input = element('textarea', '{}'); root.append(label(COPY.parameters, input));
-            return { root, read: (): JsonObject => JSON.parse(input.value) };
+            if (typeof schema === 'object') {hints(root, schema);}
+            return { root, read: (): JsonObject => readJson(input, COPY.parameterName) };
         }
         const required = new Set(Array.isArray(schema.required) ? schema.required : []);
         for (const [name, property] of Object.entries(properties)) {
-            const title = String(property.title || property.description || name);
+            const title = String(property.title || name);
             const optional = !required.has(name);
             if (property.type === 'boolean' && !optional) {
                 const input = element('input'); input.type = 'checkbox'; input.checked = property.default === true;
@@ -107,34 +126,33 @@ export function createState3Page(api: State3Api) {
                 root.append(label(title, input)); readers.push([name, () => input.value === '' ? undefined : JSON.parse(input.value)]);
             } else if (['string', 'number', 'integer'].includes(String(property.type))) {
                 const input = element('input'); input.type = property.type === 'string' ? 'text' : 'number'; input.value = String(property.default ?? '');
+                if (input.type === 'number') {
+                    if (typeof property.minimum === 'number') {input.min = String(property.minimum);}
+                    if (typeof property.maximum === 'number') {input.max = String(property.maximum);}
+                    input.step = property.type === 'integer' ? '1' : 'any';
+                }
                 root.append(label(title, input)); readers.push([name, () => input.value === '' && (optional || input.type === 'number') ? undefined : input.type === 'number' ? Number(input.value) : input.value]);
             } else {
                 const input = element('textarea', property.default === undefined && optional ? '' : JSON.stringify(property.default ?? (property.type === 'array' ? [] : {})));
-                root.append(label(title, input)); readers.push([name, () => optional && !input.value.trim() ? undefined : JSON.parse(input.value)]);
+                root.append(label(title, input)); readers.push([name, () => optional && !input.value.trim() ? undefined : readJson(input, title)]);
             }
+            hints(root, property);
         }
         return { root, read: (): JsonObject => Object.fromEntries(readers.flatMap(([key, read]) => { const value = read(); return value === undefined ? [] : [[key, value]]; })) };
     }
     async function renderPlay() {
         const status = await api.inspect();
         if (!status.ok) {
-            main.append(element('p', COPY.notEnabled), button(COPY.enable, async signal => { const result = await api.enable({ signal }); await render(); const output = element('section'); main.append(output); showResult(output, result); }));
+            main.append(element('p', COPY.notEnabled), button(COPY.enable, async signal => { const result = await api.enable({ signal }); await render(); resultDialog.show(result); }));
             return;
         }
         const definition = status.bundle.definition;
-        const output = element('section', undefined, 'lwb-state3-result');
         const present = (result: Result) => {
-            showResult(output, result, result.ok && result.version === status.version ? definition : undefined);
-            if (result.ok && result.saved === false) {
-                output.append(button(COPY.retrySave, async () => {
-                    await api.retrySave(); const saved = api.lastResult(); if (saved) {present(saved);}
-                }));
-            }
+            resultDialog.show(result, result.ok && result.version === status.version ? definition : undefined);
         };
         main.append(row(button(COPY.update, async () => {
             const result = await api.update(); present(result);
-        })), output);
-        const last = api.lastResult(); if (last) {present(last);}
+        }), button(COPY.result, () => { const last = api.lastResult(); if (last) {present(last);} else {notice.textContent = COPY.noResult;} })));
         const settings = element('details'); settings.append(element('summary', COPY.updateSettings));
         const current = api.settings(), mode = element('select'), source = element('select');
         for (const [key, text] of Object.entries(COPY.modes)) { const option = element('option', text); option.value = key; mode.append(option); }
@@ -145,18 +163,22 @@ export function createState3Page(api: State3Api) {
         settings.append(label(COPY.mode, mode), label(COPY.model, source)); main.append(settings);
         const actions = element('details'); actions.append(element('summary', COPY.action));
         if (definition.actions.length) {
-            const selector = element('select'), parameterRoot = element('div');
-            for (const action of definition.actions) { const option = element('option', action.description); option.value = action.id; selector.append(option); }
+            const selector = element('select'), description = element('p', definition.actions[0].description, 'lwb-state3-action-description'), parameterRoot = element('div');
+            selector.setAttribute('aria-label', COPY.action);
+            for (const action of definition.actions) { const option = element('option', action.title); option.value = action.id; selector.append(option); }
             let parameters = parameterEditor(definition.actions[0].parameters);
             parameterRoot.append(parameters.root);
-            selector.addEventListener('change', () => { parameters = parameterEditor(definition.actions.find(action => action.id === selector.value)!.parameters); parameterRoot.replaceChildren(parameters.root); });
+            selector.addEventListener('change', () => {
+                const action = definition.actions.find(action => action.id === selector.value)!;
+                description.textContent = action.description; parameters = parameterEditor(action.parameters); parameterRoot.replaceChildren(parameters.root);
+            });
             const run = (preview: boolean): Action => async signal => {
                 const result = await api[preview ? 'preview' : 'apply']([{ action: selector.value, params: parameters.read() }], { signal });
                 present(result);
             };
-            actions.append(selector, parameterRoot, row(button(COPY.preview, run(true)), button(COPY.commit, run(false))));
+            actions.append(selector, description, parameterRoot, row(button(COPY.preview, run(true)), button(COPY.commit, run(false))));
         }
-        actions.append(button(COPY.undo, async signal => { const result = await api.undo({ signal }); await render(); const node = element('section'); main.append(node); showResult(node, result, definition); }));
+        actions.append(button(COPY.undo, async signal => { const result = await api.undo({ signal }); await render(); present(result); }));
         main.append(actions);
         const manage = element('details'); manage.append(element('summary', COPY.savedRules), row(
             button(COPY.previewRequest, async signal => { const preview = element('pre', JSON.stringify(await api.previewRequest({ signal }), null, 2)); manage.append(preview); }),
@@ -182,7 +204,7 @@ export function createState3Page(api: State3Api) {
                 notice.textContent = COPY.importedRules;
             }, importButton), { source: import.meta.url, operation: 'importRules' });
         });
-        const transfer = element('details'); transfer.append(element('summary', COPY.ruleFiles), row(importButton,
+        main.append(row(importButton,
             button(COPY.exportRules, async signal => {
                 const bundle = await api.exportRules({ signal });
                 const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }));
@@ -190,48 +212,31 @@ export function createState3Page(api: State3Api) {
                 setTimeout(() => URL.revokeObjectURL(url), 0);
                 notice.textContent = COPY.exportedRules;
             })), picker);
-        main.append(transfer);
     }
     header.append(element('h2', COPY.title), button(COPY.close, () => dialog.close()));
     dialog.addEventListener('close', cancel); dialog.addEventListener('cancel', cancel);
     dialog.append(header, nav, main, notice); document.head.append(style); document.body.append(dialog);
     return {
         async open(nextPage: 'play' | 'author' = 'play') { page = nextPage; await render(); if (!dialog.open) {dialog.showModal();} },
-        targetChanged() { cancel(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();} },
+        targetChanged() { cancel(); api.cancel(); resultDialog.clear(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();} },
         mountControl(index: number, results: { index: number; result: Result }[]) {
-            const expanded = new Set([...document.querySelectorAll<HTMLElement>('.lwb-state3-controls:has(details[open])')].map(node => node.dataset.floor));
             document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove());
-            const target = document.querySelector(`.mes[mesid="${index}"] .mes_text`);
-            const controls = element('div', undefined, 'lwb-state3-controls'), status = api.updateStatus();
-            controls.dataset.floor = String(index);
-            if (status.busy) {controls.append(element('span', COPY.phases[status.phase]), button(COPY.cancel, api.cancel));}
-            else {
-                if (api.settings().mode !== 'off') {controls.append(button(COPY.update, () => api.update()));}
-                controls.append(button(COPY.title, () => this.open()));
-            }
-            target?.after(controls);
-            for (const { index: floor, result: last } of results) {
+            const status = api.updateStatus(); resultDialog.sync(results, index, status);
+            for (const floor of new Set([index, ...results.map(item => item.index)])) {
                 const floorTarget = document.querySelector(`.mes[mesid="${floor}"] .mes_text`);
                 if (floorTarget) {
-                    const group = floor === index ? controls : element('div', undefined, 'lwb-state3-controls');
+                    const group = element('div', undefined, 'lwb-state3-controls'), last = results.find(item => item.index === floor)?.result;
                     group.dataset.floor = String(floor);
-                    const details = element('details'), result = element('section');
-                    details.append(element('summary', last.ok ? last.saved === false ? COPY.phases.unsaved : last.restoration ? restorationLabel(last) : COPY.success : COPY.failed), result);
-                    if (!last.ok || last.saved === false || last.restoration?.length || expanded.has(String(floor))) {details.open = true;}
-                    let rendered = false;
-                    const reveal = () => {
-                        if (details.open && !rendered) {
-                            showResult(result, last);
-                            if (last.ok && last.receipt) {result.append(button(COPY.undoReply, () => api.undo({ index: floor, all: true })));}
-                            rendered = true;
-                        }
-                    };
-                    details.addEventListener('toggle', reveal); reveal(); group.append(details);
-                    if (last.ok && last.saved === false) {group.append(button(COPY.retrySave, () => api.retrySave()));}
-                    if (floor !== index) {floorTarget.after(group);}
+                    if (floor === index && status.busy) {group.append(button(COPY.cancel, api.cancel));}
+                    else if (last?.ok && last.saved === false) {group.append(button(COPY.retrySave, () => api.retrySave()));}
+                    else if (floor === index && api.settings().mode !== 'off') {group.append(button(COPY.update, () => api.update()));}
+                    const label = element('span', floor === index && status.busy ? COPY.phases[status.phase] : last ? resultLabel(last) : COPY.noResult);
+                    label.setAttribute('role', 'status'); group.append(label, button(COPY.result, () => resultDialog.open(floor)));
+                    if (floor === index) {group.append(button(COPY.settings, () => this.open()));}
+                    floorTarget.after(group);
                 }
             }
         },
-        dispose() { cancel(); dialog.remove(); style.remove(); document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove()); },
+        dispose() { cancel(); api.cancel(); resultDialog.dispose(); dialog.remove(); style.remove(); document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove()); },
     };
 }

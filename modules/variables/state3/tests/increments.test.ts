@@ -12,7 +12,7 @@ import type { Bundle, Json, JsonObject } from '../types.js';
 // Acceptance contracts (invisible state corruption / protocol mismatch):
 // I1: increments use the current candidate in order, with existing rule timing.
 // I2: invalid numeric inputs, forbidden writes and invalid final states publish nothing.
-// I3: tool input and execution agree; annotations cannot affect arithmetic.
+// I3: tool and runtime input shapes agree; annotations cannot affect arithmetic.
 // I4: corrections retain the event reason and show the actual change and rule source.
 // I5: previews, replacement, correction, restoration and reopening never repeat an increment.
 const inc = (delta: Json, path = ['hero', 'coins']) => ({ op: 'inc', path, delta });
@@ -37,7 +37,7 @@ function shop(): Bundle {
             { id: 'cap', kind: 'correct', path: ['hero', 'coins'], description: 'Coins are capped at 100.', value: { op: 'min', args: [{ get: ['hero', 'coins'] }, { literal: 100 }] } },
             { id: 'total', kind: 'derive', path: ['hero', 'total'], description: 'Twice the coin balance.', value: { op: 'multiply', args: [{ get: ['hero', 'coins'] }, { literal: 2 }] } },
         ],
-        actions: [{ id: 'sell', description: 'Sell one item and receive 5 coins automatically.', parameters: { type: 'object', properties: {}, additionalProperties: false }, conversions: [],
+        actions: [{ id: 'sell', title: 'Sell', description: 'Sell one item and receive 5 coins automatically.', parameters: { type: 'object', properties: {}, additionalProperties: false }, conversions: [],
             requires: { op: 'gt', args: [{ get: ['hero', 'stock'] }, { literal: 0 }] }, effects: [
                 { path: ['hero', 'stock'], value: { op: 'subtract', args: [{ get: ['hero', 'stock'] }, { literal: 1 }] } },
                 { path: ['hero', 'coins'], value: { op: 'add', args: [{ get: ['hero', 'coins'] }, { literal: 5 }] } },
@@ -94,7 +94,8 @@ test('I2: malformed, missing, nonnumeric and overflowing increments fail without
 test('I3: tool schema and runtime accept the same increment shape and distinguish operands from notes', async () => {
     const bundle = shop(), compiled = compileDefinition(bundle), validate = new Ajv({ strict: false }).compile(getInputSchema(compiled));
     for (const delta of [-2, 0, 2, 0.5]) { assert.equal(validate([inc(delta)]), true); }
-    for (const operation of [{ op: 'inc', path: ['hero', 'coins'] }, inc('2'), inc(null), inc(1, ['hero', 'stock']), inc(1, ['hero', 'total'])]) {
+    // Forbidden paths are covered by I2 at settlement, not by provider schemas.
+    for (const operation of [{ op: 'inc', path: ['hero', 'coins'] }, inc('2'), inc(null)]) {
         assert.equal(validate([operation]), false);
     }
     const result = accepted(await settle(compiled, bundle.definition.initial, [{ ...inc(5), reason: 'Sold an item elsewhere.', old: 999 }]));
@@ -128,8 +129,7 @@ test('I4: a capped increment preserves the event reason and exposes the actual r
         const root = document.querySelector('main')!;
         showResult(root as unknown as HTMLElement, result, bundle.definition);
         assert.equal(root.querySelectorAll('.lwb-state3-change').length, result.changes.length);
-        assert.equal(root.querySelectorAll('details dl dd').length, 1);
-        assert.equal(root.querySelectorAll('.lwb-state3-change small').length, result.provenance.length);
+        assert.equal(root.querySelector('.lwb-state3-reason')?.textContent, result.annotations?.[0].fields[0][1]);
     } finally {
         if (previous) { Object.defineProperty(globalThis, 'document', previous); } else { Reflect.deleteProperty(globalThis, 'document'); }
     }

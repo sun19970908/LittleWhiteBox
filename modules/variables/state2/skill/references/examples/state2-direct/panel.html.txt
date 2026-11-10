@@ -77,6 +77,7 @@ output { display: block; margin: 12px 0; }
 
   function showReadFailure(error) {
     readProblem = true;
+    lastState = undefined;
     rest.disabled = true;
     stateView.textContent = '状态暂不可用';
     feedback.textContent = error.message;

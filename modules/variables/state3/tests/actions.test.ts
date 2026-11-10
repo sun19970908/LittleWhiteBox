@@ -22,7 +22,7 @@ function purchaseCard(): Bundle {
         ], rules: [], constraints: [{ id: 'affordable', description: 'No debt', test: op('gte', get('coins'), literal(0)) }],
         functions: { quantity: { reads: [], description: 'Normalize a numeric quantity' } }, views: {},
         actions: [
-            { id: 'buy', description: 'Pay and receive items together',
+            { id: 'buy', title: 'Purchase', description: 'Pay and receive items together',
                 parameters: { type: 'object', required: ['quantity'], additionalProperties: false, properties: { quantity: { type: 'integer', minimum: 1 } } },
                 conversions: [{ path: ['quantity'], value: { call: 'quantity', args: [{ param: ['quantity'] }] } }],
                 requires: op('gte', get('coins'), op('multiply', { param: ['quantity'] }, literal(5))),
@@ -30,7 +30,7 @@ function purchaseCard(): Bundle {
                     { path: ['coins'], value: op('subtract', get('coins'), op('multiply', { param: ['quantity'] }, literal(5))) },
                     { path: ['items'], value: op('add', get('items'), { param: ['quantity'] }) },
                 ] },
-            ...(['hurt', 'heal'] as const).map(id => ({ id, description: id,
+            ...(['hurt', 'heal'] as const).map(id => ({ id, title: id, description: id,
                 parameters: { type: 'object', additionalProperties: false, properties: {} }, conversions: [], requires: literal(true),
                 effects: [{ path: ['health'], value: literal(id === 'hurt' ? 0 : 10) }],
             })),

@@ -5,6 +5,7 @@ import { worldInfoCache, world_info, newWorldInfoEntryTemplate, originalWIDataKe
 import { saveCharacterTask } from '../scheduled-tasks/scheduled-tasks.js';
 import { allowScopedScripts } from '../../../../../extensions/regex/engine.js';
 import { COPY } from './copy.js';
+import { equalJson, equalText } from './comparison.js';
 import { CARD_FIELDS, projectCard, projectItem, json } from './files.js';
 import { CARD_EXTENSION } from '../variables/state3/definition/format.js';
 import { projectVariableFiles } from '../variables/state3/definition/card-files.js';
@@ -47,15 +48,6 @@ function parseSettings(content) {
     const value = JSON.parse(content);
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error(COPY.invalidObject);
     return value;
-}
-
-function equalText(left, right, settings) {
-    if (left === null || right === null) return left === right;
-    if (!settings) return left === right;
-    // Canonicalize JSON property order without treating settings text as a contract.
-    const canonical = value => Array.isArray(value) ? value.map(canonical) : value && typeof value === 'object'
-        ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
-    return JSON.stringify(canonical(JSON.parse(left))) === JSON.stringify(canonical(JSON.parse(right)));
 }
 
 export function assertUnchanged(file, actual, settings = false) {
@@ -149,7 +141,7 @@ export async function saveFile(target, file, signal, companions = []) {
     } else {
         if (index < 0) list.push(next); else list[index] = next;
         const saved = await mergeCharacter(target.avatar, { extensions: { [field]: list } }, signal);
-        if (JSON.stringify(saved.extensions?.[field]) !== JSON.stringify(list)) throw new Error(COPY.unconfirmed);
+        if (!equalJson(saved.extensions?.[field], list)) throw new Error(COPY.unconfirmed);
         const ctx = getContext();
         allowScopedScripts(ctx.characters.find(item => item.avatar === target.avatar));
     }
@@ -189,7 +181,7 @@ async function saveWorldFile(target, file, signal, companions) {
     assertCard(target.avatar);
     await request('/api/worldinfo/edit', { name: target.book, data: book }, signal);
     const saved = await readBook(target.book, signal);
-    if (JSON.stringify(saved?.entries?.[target.id]) !== JSON.stringify(next)) throw new Error(COPY.unconfirmed);
+    if (!equalJson(saved?.entries?.[target.id], next)) throw new Error(COPY.unconfirmed);
     worldInfoCache.set(target.book, saved);
     const ctx = getContext();
     await ctx.eventSource.emit(ctx.eventTypes.WORLDINFO_UPDATED, target.book, saved);
