@@ -1,0 +1,19 @@
+{
+    "type": "global",
+    "exportDate": "2026-11-11T18:34:53.190Z",
+    "tasks": [
+        {
+            "buttonActivated": true,
+            "createdAt": "2026-08-27T17:24:31.559Z",
+            "disabled": false,
+            "floorType": "all",
+            "id": "54c82c0e-fd97-4742-991b-095ce8805cb9",
+            "importedAt": "2026-09-28T05:28:23.135Z",
+            "interval": 0,
+            "name": "预算2",
+            "triggerTiming": "after_ai",
+            "x": {},
+            "commands": "<<taskjs>>\n// ====== Story Summary 预算重置为默认值（各段独立，循环任务调参）======\n(async () => {\n    // ====== 修改这里（只填想改的，注释是常量名 + 默认值）======\n    const BUDGETS = {\n        constraintMax: 2000,            // CONSTRAINT_MAX            约束上限（默认 2000）\n        arcsMax: 1500,                  // ARCS_MAX                  弧光上限（默认 1500）\n        eventBudgetMax: 5000,           // EVENT_BUDGET_MAX          事件段（L2 摘要）（默认 5000）\n        relatedEventMax: 500,           // RELATED_EVENT_MAX         事件段内「相似命中」子预算（默认 500）\n        unsummarizedEvidenceMax: 2000,  // UNSUMMARIZED_EVIDENCE_MAX 近期未总结证据（默认 2000）\n        topNStar: 5,                    // TOP_N_STAR                星标条数（默认 5）\n        eventEvidenceMax: 4000,         // EVENT_EVIDENCE_MAX        事件证据池（上游默认 4000）\n        distantEvidenceMax: 2000,       // DISTANT_EVIDENCE_MAX      远期证据独立池（上游默认 2000）\n        rerankTopN: 20,                 // RERANK_TOP_N              楼层精排幸存数（默认 20）\n        fusionCap: 60,                  // FUSION_CAP                融合候选楼层数（默认 60）\n        eventSelectMax: 50,             // EVENT_SELECT_MAX          事件 MMR 选择上限（默认 50）\n    };\n    // =====================\n\n    const { getContext } = await import('/scripts/extensions.js');\n    const ctx = getContext();\n    const extSettings = ctx?.extensionSettings;\n    if (!extSettings) {\n        window.toastr?.error('❌ 无法获取 extensionSettings');\n        return;\n    }\n\n    const root = (extSettings.LittleWhiteBox ??= {});\n    root.storySummary ??= {};\n    const raw = {\n        ...(root.storySummary.promptBudgets || {}),\n        ...BUDGETS,\n    };\n    root.storySummary.promptBudgets = raw;\n    ctx.saveSettingsDebounced?.();\n\n    const clamp = (value, fallback, min, max) => {\n        const n = Number(value);\n        return Number.isFinite(n) ? Math.max(min, Math.min(max, Math.round(n))) : fallback;\n    };\n    const b = {\n        CONSTRAINT_MAX: clamp(raw.constraintMax, 2000, 0, 100000),\n        ARCS_MAX: clamp(raw.arcsMax, 1500, 0, 100000),\n        EVENT_BUDGET_MAX: clamp(raw.eventBudgetMax, 5000, 0, 100000),\n        RELATED_EVENT_MAX: clamp(raw.relatedEventMax, 500, 0, 10000),\n        UNSUMMARIZED_EVIDENCE_MAX: clamp(raw.unsummarizedEvidenceMax, 2000, 0, 50000),\n        TOP_N_STAR: clamp(raw.topNStar, 5, 0, 20),\n        EVENT_EVIDENCE_MAX: clamp(raw.eventEvidenceMax, 4000, 0, 100000),\n        DISTANT_EVIDENCE_MAX: clamp(raw.distantEvidenceMax, 2000, 0, 100000),\n        RERANK_TOP_N: clamp(raw.rerankTopN, 20, 0, 200),\n        FUSION_CAP: clamp(raw.fusionCap, 60, 0, 500),\n        EVENT_SELECT_MAX: clamp(raw.eventSelectMax, 50, 0, 500),\n    };\n\n    const total = b.CONSTRAINT_MAX + b.ARCS_MAX + b.EVENT_BUDGET_MAX\n        + b.EVENT_EVIDENCE_MAX + b.DISTANT_EVIDENCE_MAX + b.UNSUMMARIZED_EVIDENCE_MAX;\n    window.toastr?.success('✅ 预算已重置为默认（各段独立，合计 ' + total + '）'\n        + '｜约束=' + b.CONSTRAINT_MAX + ' 弧光=' + b.ARCS_MAX\n        + ' 事件=' + b.EVENT_BUDGET_MAX + '(相关子 ' + b.RELATED_EVENT_MAX + ')'\n        + ' 证据=' + b.EVENT_EVIDENCE_MAX + ' 远期=' + b.DISTANT_EVIDENCE_MAX\n        + ' 未总结=' + b.UNSUMMARIZED_EVIDENCE_MAX + ' 星标=' + b.TOP_N_STAR\n        + '｜精排=' + b.RERANK_TOP_N + ' 融合=' + b.FUSION_CAP + ' 事件选=' + b.EVENT_SELECT_MAX);\n    console.info('[预算] 已修改，当前生效值', b);\n})();\n<</taskjs>>"
+        }
+    ]
+}
