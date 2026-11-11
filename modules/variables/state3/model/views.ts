@@ -1,4 +1,5 @@
-import type { Compiled, Definition, Expression, Json, Path } from '../types.js';
+import type { Compiled, Definition, Expression, Json, Path, UpdateStage } from '../types.js';
+import { allowsStage } from '../definition/stages.js';
 import { reject } from '../engine/diagnostics.js';
 import { clone, overlaps } from '../engine/data.js';
 import { getWritableFields } from './tools.js';
@@ -34,12 +35,16 @@ export function buildDescriptionView(compiled: Compiled, sections = Object.keys(
     };
 }
 
-export function buildUpdateView(compiled: Compiled, state: Json) {
-    const definition = compiled.definition, fields = getWritableFields(compiled);
+export function buildUpdateView(compiled: Compiled, state: Json, stage?: UpdateStage) {
+    const definition = compiled.definition, fields = getWritableFields(compiled, stage);
     return { name: definition.name, state: clone(state), schema: clone(definition.schema),
         writable: fields.map(({ path, descriptions, removable }) => ({ path: clone(path), descriptions, removable })),
-        actions: definition.actions.map(({ id, description, parameters }) => ({ id, description, parameters: clone(parameters) })),
-        fields: definition.access.map(({ path, write, description, update }) => ({ path: clone(path), write: clone(write), description, ...(update ? { update } : {}) })),
+        actions: definition.actions.filter(action => allowsStage(definition, action, stage)).map(({ id, description, parameters }) => ({ id, description, parameters: clone(parameters) })),
+        fields: definition.access.map(entry => {
+            const write = entry.write.filter(actor => actor === 'direct' ? allowsStage(definition, entry, stage)
+                : allowsStage(definition, definition.actions.find(action => action.id === actor)!, stage));
+            return { path: clone(entry.path), write, description: entry.description, ...(write.length && entry.update ? { update: entry.update } : {}) };
+        }),
         triggers: (definition.triggers || []).map(({ id, description, timing }) => ({ id, description, timing: timing || 'batch' })),
         rules: authoredRules(definition), constraints: authoredConstraints(definition),
         functions: Object.entries(definition.functions).map(([id, fn]) => ({ id, description: fn.description })),

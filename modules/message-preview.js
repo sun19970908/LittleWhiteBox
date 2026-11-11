@@ -7,7 +7,7 @@ import { observeAsyncCallback, observeBackgroundTask } from '../shared/common/as
 
 const C = { MAX_HISTORY: 10, CHECK: 200, DEBOUNCE: 300, CLEAN: 300000, TARGET: "/api/backends/chat-completions/generate", TIMEOUT: 30 };
 const REQUEST_ERRORS = { unsupportedBody: '无法只读获取此请求体', previewCancelled: '拦截已取消' };
-const S = { active: false, isPreview: false, isLong: false, isHistoryUiBound: false, previewData: null, previewIds: new Set(), interceptedIds: [], history: [], generation: null, listeners: [], resolve: null, reject: null, sendBtnWasDisabled: null, longPressTimer: null, longPressDelay: 1000, chatLenBefore: 0, restoreLong: null, cleanTimer: null, previewAbort: null, tailAPI: null, genEndedOff: null, cleanupFallback: null, pendingPurge: false };
+const S = { active: false, isPreview: false, isLong: false, isHistoryUiBound: false, previewData: null, previewIds: new Set(), interceptedIds: [], history: [], generation: null, listeners: [], resolve: null, reject: null, sendBtnWasDisabled: null, longPressTimer: null, longPressDelay: 1000, chatLenBefore: 0, restoreLong: null, cleanTimer: null, previewAbort: null, tailAPI: null, genEndedOff: null, pendingPurge: false };
 const historyButtonOwnership = createMessageButtonOwnership();
 const runtimeOptions = { supportsPreview: true };
 
@@ -741,11 +741,12 @@ function associateRecord(messageId, type) {
 }
 
 // Improved purgePreviewArtifacts - follows SillyTavern's batch delete pattern
-async function purgePreviewArtifacts() {
+async function purgePreviewArtifacts(previewChat) {
   try {
     if (!S.pendingPurge) return;
     S.pendingPurge = false;
     const ctx = getContext();
+    if (ctx.chat !== previewChat) return;
     const chat = Array.isArray(ctx.chat) ? ctx.chat : [];
     const start = Math.max(0, Number(S.chatLenBefore) || 0);
     if (start >= chat.length) return;
@@ -882,7 +883,7 @@ async function interceptPreview(snapshot) {
     if (chat.length > 0 && chat[chat.length - 1]?.is_user === true) start = chat.length - 1;
     S.chatLenBefore = start;
     S.pendingPurge = true;
-    oneShotOnLast(event_types.GENERATION_ENDED, () => setTimeout(observeAsyncCallback(() => purgePreviewArtifacts(), { source: import.meta.url, operation: "callback" }), 0));
+    oneShotOnLast(event_types.GENERATION_ENDED, () => setTimeout(observeAsyncCallback(() => purgePreviewArtifacts(chat), { source: import.meta.url, operation: "callback" }), 0));
   }
 
   S.previewData = { url: snapshot.url, method: snapshot.method, requestBody: body, requestData: data, timestamp: snapshot.timestamp, userInput, isPreview: true };
@@ -938,13 +939,14 @@ const triggerSend = () => {
 };
 
 async function showPreview() {
-  let toast = null, backup = null;
+  let toast = null, backup = null, captured = false;
   try {
     const set = getSettings(); if (!set.preview.enabled || !geEnabled()) return toastr.warning("消息拦截功能未启用");
     const text = String($q("#send_textarea").val() || "").trim(); if (!text) return toastr.error("请先输入消息内容");
 
     backup = text; disableSend(true);
     const ctx = getContext();
+    const previewChat = ctx.chat;
     S.chatLenBefore = Array.isArray(ctx.chat) ? ctx.chat.length : 0;
     S.isPreview = true; S.previewData = null; S.previewIds.clear(); S.previewAbort = new AbortController();
     S.pendingPurge = true;
@@ -952,31 +954,31 @@ async function showPreview() {
     const endHandler = () => {
       try { if (S.genEndedOff) { S.genEndedOff(); S.genEndedOff = null; } } catch (caughtError) { console.warn({ source: import.meta.url, operation: "endHandler" }, caughtError); }
       if (S.pendingPurge) {
-        setTimeout(observeAsyncCallback(() => purgePreviewArtifacts(), { source: import.meta.url, operation: "callback" }), 0);
+        setTimeout(observeAsyncCallback(() => purgePreviewArtifacts(previewChat), { source: import.meta.url, operation: "callback" }), 0);
       }
     };
 
     S.genEndedOff = oneShotOnLast(event_types.GENERATION_ENDED, endHandler);
-    clearTimeout(S.cleanupFallback);
-    S.cleanupFallback = setTimeout(() => {
-      try { if (S.genEndedOff) { S.genEndedOff(); S.genEndedOff = null; } } catch (caughtError) { console.warn({ source: import.meta.url, operation: "showPreview" }, caughtError); }
-      observeBackgroundTask(purgePreviewArtifacts(), { source: import.meta.url, operation: "callback" });
-    }, 1500);
 
     toast = toastr.info(`正在拦截请求...（${set.preview.timeoutSeconds}秒超时）`, "消息拦截", { timeOut: 0, tapToDismiss: false });
 
     if (!triggerSend()) throw new Error("无法触发发送事件");
 
     const res = await waitIntercept().catch((e) => ({ success: false, error: e?.message || e }));
+    captured = res.success;
     if (toast) { toastr.clear(toast); toast = null; }
     if (res.success) { await displayPreview(res.data); toastr.success("拦截成功！", "", { timeOut: 3000 }); }
     else toastr.error(`拦截失败: ${res.error}`, "", { timeOut: 5000 });
   } catch (e) {
     if (toast) toastr.clear(toast); toastr.error(`拦截异常: ${e.message}`, "", { timeOut: 5000 });
   } finally {
+    if (!captured) {
+      S.genEndedOff?.();
+      S.genEndedOff = null;
+      S.pendingPurge = false;
+    }
     try { S.previewAbort?.abort("拦截结束"); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "showPreview" }, caughtError); } S.previewAbort = null;
     if (S.resolve) S.resolve({ success: false, error: REQUEST_ERRORS.previewCancelled }); S.resolve = S.reject = null;
-    clearTimeout(S.cleanupFallback); S.cleanupFallback = null;
     S.isPreview = false; S.previewData = null;
     disableSend(false); if (backup) $q("#send_textarea").val(backup);
   }
@@ -1061,7 +1063,6 @@ function cleanup({ detachFetch = true } = {}) {
   if (S.longPressTimer) { clearTimeout(S.longPressTimer); S.longPressTimer = null; }
   if (S.restoreLong) { try { S.restoreLong(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "cleanup" }, caughtError); } S.restoreLong = null; }
   if (S.genEndedOff) { try { S.genEndedOff(); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "cleanup" }, caughtError); } S.genEndedOff = null; }
-  if (S.cleanupFallback) { clearTimeout(S.cleanupFallback); S.cleanupFallback = null; }
 }
 
 function initMessagePreview() {

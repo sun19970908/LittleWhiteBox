@@ -9,7 +9,7 @@ import { fixture, accepted } from './fixture.js';
 import type { Bundle, Json } from '../types.js';
 
 const bundle = (initial: Bundle['definition']['initial']): Bundle => ({
-    definition: { format: 1, name: 'delta contract', schema: {}, initial,
+    definition: { format: 1, updates: ['after'], name: 'delta contract', schema: {}, initial,
         access: Object.keys(initial).map(key => ({ path: [key], write: ['direct'], description: key })),
         rules: [], actions: [], constraints: [], functions: {}, views: {} }, functions: {},
 });

@@ -16,6 +16,8 @@ import { build } from 'esbuild';
 //    resurrect observers, or leak an old chat's request into the next chat.
 // 5. Background calls must not replace a foreground log or its floor owner,
 //    including nested quiet generation and late body decoding.
+// 6. Preview cleanup waits for generation to finish and never truncates a
+//    different chat after switching (lost messages / corrupted generation).
 
 const target = '/api/backends/chat-completions/generate';
 const body = text => JSON.stringify({ model: 'test', messages: [{ role: 'user', content: text }] });
@@ -32,7 +34,7 @@ class Events {
 const built = await build({
     stdin: {
         contents: fs.readFileSync(new URL('./message-preview.js', import.meta.url), 'utf8') +
-            '\nexport const probe = { S, setupFetch, restoreFetch, updateFetchState, addEvents, findRec, waitIntercept, showHistoryPreview, buildPreviewHtml };',
+            '\nexport const probe = { S, setupFetch, restoreFetch, updateFetchState, addEvents, findRec, waitIntercept, showPreview, showHistoryPreview, buildPreviewHtml };',
         resolveDir: fileURLToPath(new URL('.', import.meta.url)),
         sourcefile: 'message-preview.js',
     },
@@ -50,8 +52,10 @@ function fixture(t, fetchImpl, beforeInit = () => {}) {
         preview: { enabled: true, timeoutSeconds: 30 }, recorded: { enabled: true },
     } }, ctx: { chat: [{ is_user: false, mes: 'greeting' }, { is_user: true, mes: 'question' }], characters: [] } };
     const chain = { prop: () => false, val: () => '', length: 0 };
-    for (const name of ['off', 'on', 'remove', 'each', 'css', 'toggle', 'hide', 'before', 'find', 'last', 'removeClass', 'addClass']) chain[name] = () => chain;
+    for (const name of ['off', 'on', 'remove', 'each', 'css', 'toggle', 'hide', 'before', 'find', 'last', 'removeClass', 'addClass', 'nextAll', 'addBack']) chain[name] = () => chain;
     chain.prop = function (_key, value) { return arguments.length === 1 ? false : chain; };
+    chain.val = function (value) { if (!arguments.length) return f.input || ''; f.input = value; return chain; };
+    chain[0] = { dispatchEvent: () => f.onSend?.() };
     const windowEvents = new Events();
     const native = fetchImpl || function (input, options) {
         f.sent.push({ input, options, receiver: this });
@@ -61,7 +65,8 @@ function fixture(t, fetchImpl, beforeInit = () => {}) {
     const box = { __fixture: f, module: { exports: {} },
         console: { ...console, warn: (...args) => f.warnings.push(args), error: (...args) => f.warnings.push(args) },
         Request, Response, Blob, URL, URLSearchParams, ArrayBuffer, TextDecoder, Uint8Array, AbortController,
-        structuredClone, queueMicrotask, $: () => chain, toastr: { error() {}, warning() {}, info() {}, clear() {} },
+        structuredClone, queueMicrotask, $: () => chain, toastr: { error() {}, warning() {}, info() {}, clear() {}, success() {} },
+        MouseEvent: class {},
         setTimeout: (fn, ms) => { timers.set(++timerId, { fn, ms }); return timerId; }, clearTimeout: id => timers.delete(id),
         setInterval: () => 0, clearInterval() {},
         document: { addEventListener() {}, removeEventListener() {}, visibilityState: 'visible' },
@@ -72,6 +77,12 @@ function fixture(t, fetchImpl, beforeInit = () => {}) {
     box.window = box;
     vm.runInNewContext(built.outputFiles[0].text, box);
     f.box = box; f.native = native; f.api = box.module.exports; f.probe = f.api.probe;
+    f.runTimers = async maxDelay => {
+        for (const [id, timer] of [...timers]) {
+            if (timer.ms <= maxDelay && timers.delete(id)) await timer.fn();
+        }
+        await f.flush();
+    };
     f.options = f.settings.LittleWhiteBox;
     f.start = (type = 'normal', options = {}, dryRun = false) => f.events.emit(types.GENERATION_STARTED, type, options, dryRun);
     f.flush = async () => { for (let i = 0; i < 4; i++) await nextTurn(); };
@@ -164,6 +175,61 @@ test('recording off is off even with preview enabled; settings events never reco
     await f.flush();
     assert.equal(f.probe.S.history.length, 0);
     assert.equal(f.sent.length, 1);
+});
+
+test('slow preview retains temporary messages until generation ends; cleanup cannot touch another chat', async t => {
+    for (const switchChat of [false, true]) {
+        const f = fixture(t);
+        let saves = 0;
+        f.ctx.saveChat = async () => { saves++; };
+        f.input = 'preview message';
+        f.onSend = () => {
+            f.ctx.chat.push({ is_user: true, mes: f.input });
+            void f.start();
+        };
+        const preview = f.probe.showPreview();
+        await f.flush();
+        const previewChat = f.ctx.chat;
+        const pending = structuredClone(previewChat);
+        await f.runTimers(1600);
+        assert.deepEqual(previewChat, pending);
+        assert.equal(saves, 0);
+
+        await f.box.fetch(target, { body: body('preview message') });
+        await preview;
+        previewChat.push({ is_user: false, mes: '' });
+        if (switchChat) {
+            f.ctx.chat = [{ mes: 'other greeting' }, { mes: 'other user' }, { mes: 'keep this reply' }];
+            await f.events.emit(types.CHAT_CHANGED);
+        }
+        const current = structuredClone(f.ctx.chat);
+        await f.events.emit(types.GENERATION_ENDED, previewChat.length);
+        await f.runTimers(0);
+        if (switchChat) {
+            assert.deepEqual(f.ctx.chat, current);
+            assert.equal(saves, 0);
+        } else {
+            assert.equal(previewChat.length, 2);
+            assert.equal(saves, 1);
+        }
+        assert.equal(f.sent.length, 0);
+    }
+});
+
+test('timed-out preview cannot delete a later successful turn', async t => {
+    const f = fixture(t);
+    f.input = 'preview message';
+    f.onSend = () => { void f.start(); };
+    const preview = f.probe.showPreview();
+    await f.flush();
+    await f.runTimers(30000);
+    await preview;
+    await f.start();
+    f.ctx.chat.push({ is_user: true, mes: 'real question' }, { is_user: false, mes: 'real answer' });
+    const expected = structuredClone(f.ctx.chat);
+    await f.events.emit(types.GENERATION_ENDED, f.ctx.chat.length);
+    await f.runTimers(0);
+    assert.deepEqual(f.ctx.chat, expected);
 });
 
 test('retries retain only the last real body; streamed end-before-receive, swipe and continue associate precisely', async t => {

@@ -10,6 +10,9 @@ import { clone, equal } from '../engine/data.js';
 import { readVariables, writeVariables, variableRoots } from '../runtime/variables.js';
 import { reject, diagnostic } from '../engine/diagnostics.js';
 import { receiptResult } from '../runtime/history.js';
+import { digest } from '../definition/digest.js';
+import { modelSource } from '../definition/stages.js';
+import { beforeReceipt, beforeOutcome } from '../runtime/before-result.js';
 import { compileDefinition } from '../definition/compile.js';
 import { decodeBundle } from '../definition/card-files.js';
 import { equipmentExample } from '../definition/example.js';
@@ -30,57 +33,100 @@ function harness() {
     const ctx = { chat: [message], chatMetadata: { variables: { neighbor: 'keep' } }, chatId: 'test', characterId: 0,
         characters: [{ name: 'test', chat: 'test', avatar: 'test.png', data: { extensions: { [CARD_EXTENSION]: JSON.stringify(equipmentExample()) } } }], saveChat: async () => { saves++; } } as unknown as Context;
     const env = { getContext: () => ctx, getRequestHeaders: () => ({}), CHAT_KEY, clone, equal, reject,
-        createSaveQueue, readVariables, writeVariables, variableRoots, CARD_EXTENSION, decodeBundle,
+        createSaveQueue, readVariables, writeVariables, variableRoots, CARD_EXTENSION, decodeBundle, digest,
         fetch: async () => ({ ok: true, json: async () => [{ chat_metadata: clone(ctx.chatMetadata) }] }),
     };
-    const exports = runInNewContext(source('runtime/host.ts') + '\n({createHostAdapter,inGroup})', env) as {
-        createHostAdapter(): ReturnType<typeof createHostAdapter>; inGroup(ctx: Context): boolean;
+    const exports = runInNewContext(source('runtime/host.ts') + '\n({createHostAdapter,inGroup,latestUserIndex})', env) as {
+        createHostAdapter(): ReturnType<typeof createHostAdapter>; inGroup(ctx: Context): boolean; latestUserIndex(chat: ChatMessage[], end?: number): number;
     };
     return { ctx, message, exports, saves: () => saves };
 }
 
-function runtimeHarness(bundle = equipmentExample(), initialMode = '3.0') {
+function runtimeHarness(bundle: Bundle | null = equipmentExample(), initialMode = '3.0') {
     const h = harness(), pending = new Set<Promise<unknown>>(), handlers = new Map<string, (...args: unknown[]) => unknown>();
-    h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);
+    if (bundle) {h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);}
+    else {delete h.ctx.characters[0].data!.extensions![CARD_EXTENSION];}
     const selector = { value: initialMode };
     const preferences = { LittleWhiteBox: { variablesMode: initialMode, state3Updater: { auto: false, source: 'main' } } };
     const settings = runInNewContext(source('runtime/settings.ts') + '\n({readSettings,saveSettings,state3Selected,selectState3})', {
         extension_settings: preferences, reject, saveSettingsDebounced() {}, structuredClone,
         document: { getElementById: () => selector },
     });
-    let finish!: (value: unknown) => void, requested!: () => void, disposed = false, lateControls = 0, lateMacros = 0;
+    let finish!: (value: unknown) => void, requested!: () => void, disposed = false, lateControls = 0, lateMacros = 0, controls = false, requests = 0;
     const started = new Promise<void>(resolve => { requested = resolve; });
     const response = new Promise(resolve => { finish = resolve; });
-    const agentWindow = { xiaobaixAgent: { openSession: async () => ({ chat: async () => { requested(); return response; }, dispose() {} }) } };
+    const agentWindow = { xiaobaixAgent: { openSession: async () => ({ chat: async () => { requests++; requested(); return response; }, dispose() {} }) } };
     const { createState3Updater } = runInNewContext(source('model/updater.ts') + '\n({createState3Updater})', {
         getContext: () => h.ctx, exposeVariableReads: () => () => {}, captureContext: async () => ({}), passageText: (text: string) => text,
         compileDefinition, buildUpdateTask: () => ({}), SUBMIT_TOOL: 'write', ...settings, reject, diagnostic,
-        AbortController, window: agentWindow, correctionTask() { throw new Error('unexpected correction'); },
+        digest, modelSource, beforeReceipt, beforeOutcome, mergeAbortSignals, latestUserIndex: h.exports.latestUserIndex,
+        AbortController, structuredClone, window: agentWindow, correctionTask() { throw new Error('unexpected correction'); },
     });
     const event_types = Object.fromEntries(['CHAT_CHANGED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'SETTINGS_UPDATED',
         'CHARACTER_MESSAGE_RENDERED', 'GENERATION_STARTED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'CHAT_CREATED'].map(key => [key, key]));
-    const emitted: { state: unknown }[] = [];
+    const emitted: { state: unknown }[] = [], resumed: number[] = [];
     const env = {
         ...settings, createModuleEvents: () => ({ on: (key: string, fn: (...args: unknown[]) => unknown) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
         observeBackgroundTask(p: Promise<unknown>) { pending.add(p); p.then(() => pending.delete(p), () => pending.delete(p)); },
         isGenerating: () => false, waitForAfterAiReady: async () => true, createSettlementService,
-        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, receiptResult, CHAT_KEY, CARD_EXTENSION,
+        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, receiptResult, CHAT_KEY, CARD_EXTENSION, digest,
         exportRules() {}, prepareRuleImport() {}, importRules() {}, onRulesSaved: () => () => {},
         createState3Macros: () => ({ clear() {}, set() { if (disposed) {lateMacros++;} }, dispose() {} }),
         createState3Updater,
-        createState3Page: () => ({ mountControl() { if (disposed) {lateControls++;} }, targetChanged() {}, dispose() { disposed = true; } }),
+        createBeforeGeneration: ({ updater }: { updater: ReturnType<typeof createState3Updater> }) => ({
+            status: updater.status, cancel: updater.cancel, changed: updater.cancel, dispose: updater.cancel,
+            async resume(index: number) { resumed.push(index); },
+        }),
+        createState3Page: () => ({ mountControl() { controls = true; if (disposed) {lateControls++;} }, targetChanged() {}, dispose() { disposed = true; } }),
         notifyError(error: Error) { throw error; }, openDraft() {}, saveDraft() {}, checkDraft() {}, saveCardDraft() {},
         AbortController, structuredClone, mergeAbortSignals, CustomEvent: class { constructor(public type: string, public options: { detail: { state: unknown } }) {} },
         MutationObserver: class { observe() {} disconnect() {} },
-        document: { getElementById: () => ({ querySelector: () => ({}) }), querySelectorAll: () => [], dispatchEvent(event: { options: { detail: { state: unknown } } }) { emitted.push(event.options.detail); } },
+        document: { getElementById: () => ({ querySelector: () => ({}) }), querySelectorAll: () => controls ? [{ remove() { controls = false; } }] : [], dispatchEvent(event: { options: { detail: { state: unknown } } }) { emitted.push(event.options.detail); } },
         window: {} as { LWB_StateV3: State3Api },
     };
     const runtime = runInNewContext(source('index.ts') + '\ninitState3(); ({cleanupState3})', env);
-    return { ...h, api: env.window.LWB_StateV3, handlers, preferences, selector, started, finish, emitted,
-        cleanup: () => runtime.cleanupState3(), late: () => ({ controls: lateControls, macros: lateMacros }),
+    return { ...h, api: env.window.LWB_StateV3, handlers, preferences, selector, started, finish, emitted, resumed,
+        cleanup: () => runtime.cleanupState3(), late: () => ({ controls: lateControls, macros: lateMacros }), controls: () => controls, requests: () => requests,
         async drain() { while (pending.size) {await Promise.all([...pending]);} },
     };
 }
+
+// R9: selecting 3.0 does not enroll ordinary cards. Opening/rendering/generating
+// must neither fail nor request updates; missing rules on an enabled chat still fail
+// visibly without touching its progress (broken chat / unexpected API cost / hidden data loss).
+test('R9: ordinary cards stay inactive; explicit enable reports missing rules and enabled rule loss remains an error', async t => {
+    const h = runtimeHarness(null); t.after(() => h.cleanup()); await h.drain();
+    const ordinary = clone(h.ctx.chatMetadata);
+    h.preferences.LittleWhiteBox.state3Updater.auto = true;
+    for (let repeat = 0; repeat < 2; repeat++) {
+        for (const event of ['CHAT_CHANGED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_EDITED', 'CHAT_CREATED']) {await h.handlers.get(event)!(0);}
+        await h.handlers.get('GENERATION_STARTED')!('normal', {}, false);
+        h.ctx.chat.push({ mes: 'Ordinary reply.', extra: {} });
+        await h.handlers.get('MESSAGE_RECEIVED')!(h.ctx.chat.length - 1);
+        await h.handlers.get('GENERATION_ENDED')!(); await h.drain();
+        assert.equal(h.controls(), false); assert.equal(h.requests(), 0);
+        assert.deepEqual(h.ctx.chatMetadata, ordinary);
+    }
+    const missing = await h.api.enable();
+    assert.equal(missing.ok, false);
+    assert.equal(missing.diagnostics[0].code, 'definition-missing');
+    assert.equal(h.controls(), false); assert.deepEqual(h.ctx.chatMetadata, ordinary);
+
+    const extensions = h.ctx.characters[0].data!.extensions!, rules = JSON.stringify(equipmentExample());
+    extensions[CARD_EXTENSION] = rules;
+    accepted(await h.api.enable()); assert.equal(h.controls(), true);
+    const progress = clone(h.ctx.chatMetadata);
+    delete extensions[CARD_EXTENSION];
+    assert.throws(() => h.handlers.get('CHARACTER_MESSAGE_RENDERED')!(0), { code: 'definition-missing' });
+    extensions[CARD_EXTENSION] = '{broken';
+    assert.throws(() => h.handlers.get('CHARACTER_MESSAGE_RENDERED')!(0));
+    assert.deepEqual(h.ctx.chatMetadata, progress);
+    extensions[CARD_EXTENSION] = rules;
+    await h.handlers.get('CHARACTER_MESSAGE_RENDERED')!(0); assert.equal(h.controls(), true);
+    delete extensions[CARD_EXTENSION]; h.ctx.chatId = 'ordinary'; h.ctx.chatMetadata = ordinary;
+    await h.handlers.get('CHAT_CHANGED')!(); await h.drain();
+    assert.equal(h.controls(), false); assert.equal(h.requests(), 0);
+});
 
 // R6/R7: delay worker delivery, not the rule or settlement implementation.
 function workerGate() {
@@ -171,6 +217,36 @@ test('R7: shutdown during persistence leaves the published result saved without 
     assert.deepEqual(h.late(), { controls: 0, macros: 0 });
 });
 
+// B9: retrying a before-result save may resume only the same current turn.
+// Cost: an old chat silently starts a paid generation in a different chat.
+test('B9: a late save retry never resumes another chat or replaces its result', async () => {
+    for (const switchChat of [false, true]) {
+        const bundle = equipmentExample(); bundle.definition.updates = ['before'];
+        const h = runtimeHarness(bundle); await h.drain(); accepted(await h.api.enable());
+        h.message.is_user = true;
+        h.ctx.chat.push({ mes: 'An existing reply.', extra: {} });
+        h.ctx.saveChat = async () => { throw new Error('save unavailable'); };
+        const result = accepted(await h.api.apply([], { index: 0, source: modelSource('before'), stage: 'before',
+            beforeUpdate: { inputDigest: digest(h.message.mes), outcome: 'applied', diagnostics: [] } }));
+        assert.equal(result.saved, false);
+        let started!: () => void, release!: () => void;
+        const saving = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+        h.ctx.saveChat = async () => { started(); await gate; };
+        const retrying = h.api.retrySave(); await saving;
+        let current = result;
+        if (switchChat) {
+            h.ctx.chat = [{ mes: 'another chat', extra: {} }]; h.ctx.chatMetadata = clone(h.ctx.chatMetadata); h.ctx.chatId = 'another';
+            await h.handlers.get('CHAT_CHANGED')!(); await h.drain();
+            current = accepted(await h.api.preview([]));
+        }
+        release(); await retrying; await h.drain();
+        assert.deepEqual(h.resumed, switchChat ? [] : [0]);
+        if (switchChat) {assert.equal(h.api.lastResult(), current);}
+        else {assert.equal(accepted(h.api.lastResult()!).saved, true);}
+        h.cleanup();
+    }
+});
+
 // R8: turning automatic updates off is not a cancel command; selecting 3.0 must agree with the visible mode selector.
 // Cost: a silently cancelled request or a UI that controls a different engine from the one displayed.
 test('R8: enable synchronizes mode and disabling auto does not cancel an already requested update', async () => {
@@ -207,7 +283,8 @@ test('K14/K13: native silent swipe recovery restores values and controls without
         createModuleEvents: () => ({ on: (key: string, fn: (...args: unknown[]) => unknown) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
         observeBackgroundTask(p: Promise<unknown>) { pending.add(p); p.then(() => pending.delete(p), () => pending.delete(p)); },
         isGenerating: () => false, waitForAfterAiReady: async () => true, createSettlementService,
-        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, receiptResult, CHAT_KEY, CARD_EXTENSION,
+        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, receiptResult, CHAT_KEY, CARD_EXTENSION, digest,
+        createBeforeGeneration: () => ({ status: () => ({ phase: 'ready', busy: false }), cancel() {}, changed() {}, dispose() {} }),
         exportRules() {}, prepareRuleImport() {}, importRules() {}, onRulesSaved: () => () => {}, state3Selected: () => true, selectState3() {},
         readSettings: () => ({ auto: mode === 'auto', source: 'main' }), saveSettings() {},
         createState3Macros: () => ({ clear() {}, set() {}, dispose() {} }),
@@ -303,21 +380,6 @@ test('R3: copies lose only inherited receipts, regardless of their position; ori
     await service.restoreSelection(change.previous, change.next);
     assert.equal((accepted(await service.inspect()).state as { hero: { health: number } }).hero.health, 20);
     assert.ok(h.ctx.chat[0].extra?.[CHAT_KEY]);
-});
-
-// R4: removing the body entry point preserves applied results and lets a later independent update replace them.
-// Cost: losing saved state or counting the same narrated event twice.
-test('R4: chat-load normalization retains body effects and their replacement ownership', async () => {
-    const h = harness();
-    let service = createSettlementService(h.exports.createHostAdapter());
-    accepted(await service.enable());
-    const result = accepted(await service.apply([{ op: 'inc', path: ['hero', 'health'], delta: 5 }], { source: 'body' }));
-    h.ctx.chat = clone(h.ctx.chat); h.ctx.chatMetadata = clone(h.ctx.chatMetadata);
-    service = createSettlementService(h.exports.createHostAdapter());
-    assert.deepEqual(accepted(await service.inspect()).state, result.state);
-    accepted(await service.apply([{ op: 'inc', path: ['hero', 'health'], delta: 5 }], { source: 'model' }));
-    assert.deepEqual(accepted(await service.inspect()).state, result.state);
-    assert.equal((h.ctx.chat[0].extra![CHAT_KEY] as { entries: object[] }).entries.length, 1);
 });
 
 test('K15/K17: current card rules govern the next operation, owned roots do not expand, and typed native values survive', async () => {

@@ -2,7 +2,7 @@ import type { Expression, Definition, Path, EvaluationContext, Json, Schema, Con
 import { fieldName } from '../definition/schema-fields.js';
 import { assertJson, equal, getAt, pathOf } from './data.js';
 import { reject } from './diagnostics.js';
-import { runFunction } from './functions.js';
+import { createFunctionRunner } from './functions.js';
 
 // All referenced state, including batch-start paths and declared function reads.
 // Dependency ordering below intentionally uses only current-state reads.
@@ -44,9 +44,12 @@ export async function evaluate(expression: Expression, context: EvaluationContex
     if (expression.call) {
         const name = expression.call;
         assertJson(values);
-        return runFunction({ id: name, source: context.bundle.functions[name], input: values,
-            reads: context.bundle.definition.functions[name].reads, state: context.state,
-            beforeState: context.before, signal: context.signal });
+        const runner = context.functions ?? createFunctionRunner();
+        try {
+            return await runner.run({ id: name, source: context.bundle.functions[name], input: values,
+                reads: context.bundle.definition.functions[name].reads, state: context.state,
+                beforeState: context.before, signal: context.signal });
+        } finally { if (!context.functions) {runner.dispose();} }
     }
     const [a, b] = values;
     switch (expression.op) {

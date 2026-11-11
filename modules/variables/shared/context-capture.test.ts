@@ -14,13 +14,13 @@ function deferred() {
     const promise = new Promise<void>(done => { resolve = done; });
     return { promise, resolve };
 }
-function fixture() {
+function fixture(before = false) {
     type Prompt = { identifier?: string; name?: string; role?: string; content: string };
     type Listener = (...args: unknown[]) => unknown;
     const listeners = new Map<string, Set<Listener>>();
     const emit = async (key: string, ...args: unknown[]) => { for (const listener of [...listeners.get(key) || []]) {await listener(...args);} };
     const events = Object.fromEntries(['GENERATION_STARTED', 'CHAT_COMPLETION_PROMPT_READY', 'CHAT_CHANGED', 'WORLDINFO_ENTRIES_LOADED'].map(key => [key, key]));
-    const target = { floor: 0, swipeId: 0, message: { name: 'Alice' } };
+    const target = { floor: before ? 2 : 0, swipeId: 0, message: { name: before ? 'Player' : 'Alice', is_user: before } };
     const chat = [target.message], layouts: string[] = [];
     const entered = deferred(), hold = deferred();
     let holdType = 'quiet';
@@ -56,9 +56,15 @@ function fixture() {
         if (failure) {throw new Error('fixture capture failed');}
         const collection = manager.getPromptCollection(type);
         layouts.push(collection[0].content);
-        const passage = manager.preparePrompt({ identifier: 'chatHistory-0', name: 'Alice', role: 'assistant', content: 'Bought a potion.' });
+        const passages = before ? [
+            { identifier: 'chatHistory-3', name: 'Alice', role: 'assistant', content: 'Later prose, not input to this action.' },
+            { identifier: 'chatHistory-2', name: 'Player', role: 'user', content: 'Buy a potion.' },
+            { identifier: 'chatHistory-1', name: 'Alice', role: 'assistant', content: 'The shop is open.' },
+            { identifier: 'chatHistory-0', name: 'Player', role: 'user', content: 'Visit the shop.' },
+        ].map(prompt => manager.preparePrompt(prompt)).reverse()
+            : [manager.preparePrompt({ identifier: 'chatHistory-0', name: 'Alice', role: 'assistant', content: 'Bought a potion.' })];
         const lore = await readLore();
-        await emit(events.CHAT_COMPLETION_PROMPT_READY, { dryRun: true, chat: [{ role: 'system', content: collection[0].content }, passage,
+        await emit(events.CHAT_COMPLETION_PROMPT_READY, { dryRun: true, chat: [{ role: 'system', content: collection[0].content }, ...passages,
             ...lore.map(entry => ({ role: 'system', content: entry.content }))] });
     }
     const ctx = { chat, characterId: 0, eventTypes: events, eventSource: {
@@ -84,6 +90,22 @@ function fixture() {
             rules ? () => exposeUpdateRules(ctx) : undefined),
     };
 }
+
+// B7: recomputing a USER action must not consume its later AI reply as new
+// evidence, nor mark an older USER as the target (duplicate or wrong settlement).
+test('B7: before context marks the latest USER and excludes later prose', async () => {
+    const f = fixture(true);
+    try {
+        f.hold.resolve();
+        const result = await f.capture();
+        const messages = result.messages.filter(message => ['user', 'assistant'].includes(message.role));
+        assert.deepEqual(JSON.parse(JSON.stringify(messages.map(({ role, content }) => ({ role, content })))), [
+            { role: 'user', content: 'Visit the shop.' },
+            { role: 'assistant', content: 'The shop is open.' },
+            { role: 'user', content: '<variable-update-target>\nBuy a potion.\n</variable-update-target>' },
+        ]);
+    } finally { f.cleanup(); }
+});
 
 test('native token preview arriving during variable capture waits and uses the native preset', async () => {
     const f = fixture();

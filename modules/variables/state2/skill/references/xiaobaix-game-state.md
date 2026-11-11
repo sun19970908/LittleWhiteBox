@@ -1,6 +1,6 @@
 # 变量 2.0：当前状态、模型可见、变化量
 
-前提：小白X 设置里“变量系统”选 **2.0**，变量核心开启；用任务初始化时还需开启循环任务。语法与接口的完整契约在插件 `modules/variables/state2/README.md`，本篇只讲制卡怎样用。
+前提：小白X 设置里“变量系统”选 **2.0**，变量核心开启；用任务初始化时还需开启循环任务。语法与接口的完整契约在插件 `docs/user/variables-v2.md`，本篇只讲制卡怎样用。
 
 ## 1. 变量用来做什么
 
@@ -71,7 +71,7 @@ $range=[0,100] 西厢.人物.*.好感
 
 每条开场白是第 0 楼的一个 swipe，各有自己的变量记录（`swipe_info[i].extra`）。`applyText()` 只写进调用时选中的那一条。玩家切到另一条开场白时，那一条没有记录、正文也没有 `<state>`，重算后这个根**整个消失**。
 
-所以用任务初始化时，任务要在两个时机写入：打开聊天时写当前开场白，第 0 楼切换开场白时写新选中的那条。插件 `modules/variables/state2/README.md` 第一节“角色卡有多条开场白时”给的是同一套做法。
+所以用任务初始化时，任务要在两个时机写入：打开聊天时写当前开场白，第 0 楼切换开场白时写新选中的那条。插件 `docs/user/variables-v2.md` 第一节“角色卡有多条开场白时”给的是同一套做法。
 
 - **触发时机用 `chat_changed`，不用 `character_init`。** 循环任务没有“切换 swipe”这种时机，只能由常驻任务自己订阅酒馆的 `MESSAGE_SWIPED`。`chat_changed` 每次打开聊天都会执行，新建聊天也会：酒馆先放入开场白，再发出聊天切换事件。任务重新执行时插件先停止旧实例，所以订阅不会叠加。
 - **各套初值写在同一个任务里。** 一份共用的 `$schema` 与约束，加一张按开场白顺序排列的初始数据表，下标 0 对应 `message/0.md`，1 对应 `message/1.md`。只要一套初值时，表里每项写同一段。开场白正文里不放 `<state>`。
@@ -230,7 +230,7 @@ JSON 当前值里的数组没有下标注释；需要按名字修改的集合，
 
 ### 用户特别要求正文提交时
 
-正文 `<state>` 的写法（加减带 `+`/`-`，赋负数加括号 `(-5)`，路径写到最底层）见插件 `modules/variables/state2/README.md` 的「二、剧情中：让 AI 在回复里改变量」。隐藏正则放进卡内正则（`regex/`），同时设置 `markdownOnly` 与 `promptOnly`，只改显示和发出的提示词：
+正文 `<state>` 的写法（加减带 `+`/`-`，赋负数加括号 `(-5)`，路径写到最底层）见插件 `docs/user/variables-v2.md` 的「二、剧情中：让 AI 在回复里改变量」。隐藏正则放进卡内正则（`regex/`），同时设置 `markdownOnly` 与 `promptOnly`，只改显示和发出的提示词：
 
 ```json
 {
@@ -303,7 +303,7 @@ function buildStateBlock(changes) {
 <a id="write-entries"></a>
 ## 7. 附录：写入入口与恢复规则
 
-以下入口共用同一套操作与 `$schema`/`$range` 守卫（完整语法与契约见插件 `modules/variables/state2/README.md`）。另有供预设使用的 `beginTurn({ floor, swipeId }).commit({ ops })`，用于工具调用提交本楼变化量，重写时只撤销本楼上一次这样的提交；卡一般不直接调用。
+以下入口共用同一套操作与 `$schema`/`$range` 守卫（完整语法与契约见插件 `docs/user/variables-v2.md`）。另有供预设使用的 `beginTurn({ floor, swipeId }).commit({ ops })`，用于工具调用提交本楼变化量，重写时只撤销本楼上一次这样的提交；卡一般不直接调用。
 
 1. **正文 `<state>`**：AI 回复或玩家消息里的 `<state>…</state>`，只在用户特别要求正文提交时使用。支持文本写法（`路径: 值`、`路径: (负数)`、`路径: +5`）或 JSON 写法（以 `{` 开头，格式同 `apply`）。插件不会自动把标签从显示和提示词中去掉；卡选用这条通道时需配正则隐藏（`markdownOnly: true` 且 `promptOnly: true`）。
 2. **`await LWB_StateV2.applyText(text, { floor, silent })`**：用文本写法直接执行一段 `<state>`。

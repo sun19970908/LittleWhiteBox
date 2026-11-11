@@ -1,54 +1,83 @@
 import type { Json } from '../types.js';
-import { DEFAULT_TIMEOUT_MS, failure, runFunctionInVm, timeoutFor, type FunctionOptions } from './functions-vm.js';
+import { failure, runFunctionInVm, type FunctionOptions } from './functions-vm.js';
 export { FunctionExecutionError, runFunctionInVm } from './functions-vm.js';
 
+const WATCHDOG_TICK_MS = 1000;
+const UNRESPONSIVE_TICKS = 30;
+
 /**
- * Browser entry: each call owns a module Worker, terminated on success, failure, or abort.
- * The VM timeout starts after WASM initialization; a separate startup watchdog also bounds
- * a failed/stalled worker. No worker, runtime, state or global survives a call.
- * Node callers use the same VM entry without a browser Worker (no timer-driven cancellation).
+ * One settlement owns one lazy Worker/WASM. Each call owns a fresh guest VM.
+ * Expressions await calls in order: this runner has no request queue.
  */
-export async function runFunction(options: FunctionOptions): Promise<Json> {
-    const { id, signal } = options;
-    if (typeof globalThis.Worker !== 'function') {
-        if (typeof globalThis.window !== 'undefined') {throw failure('function_worker_unavailable', id);}
-        return runFunctionInVm(options);
+export function createFunctionRunner() {
+    let worker: Worker | undefined, ready = false, closed = false;
+    let waiting: { id: string; send(): void; finish(error: Error | null, value?: Json): void } | undefined;
+    function destroy() {
+        if (worker) {
+            worker.onmessage = null; worker.onerror = null; worker.onmessageerror = null;
+            worker.terminate(); worker = undefined;
+        }
+        ready = false;
     }
-    const timeout = timeoutFor(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, id);
-    if (signal?.aborted) {throw failure('function_aborted', id);}
-    return new Promise<Json>((resolve, reject) => {
-        let worker: Worker;
-        try { worker = new Worker(new URL('./functions-worker.ts', import.meta.url), { type: 'module' }); }
-        catch { reject(failure('function_worker_error', id)); return; }
-        let timer: ReturnType<typeof setTimeout>;
-        const finish = (error: Error | null, value?: Json) => {
-            clearTimeout(timer);
-            signal?.removeEventListener('abort', abort);
-            worker.terminate();
-            if (error) {reject(error);}
-            else {resolve(value!);}
-        };
-        const abort = () => finish(failure('function_aborted', id));
-        signal?.addEventListener('abort', abort, { once: true });
-        timer = setTimeout(() => finish(failure('function_startup_timeout', id)), 10000);
+    function startWorker() {
+        worker = new Worker(new URL('./functions-worker.ts', import.meta.url), { type: 'module' });
+        // These handlers belong to the runner, not to any call's input/state.
         worker.onmessage = event => {
-            if (event.data.type === 'ready') {
-                clearTimeout(timer);
-                // Guest execution has its own VM deadline. Message delivery and
-                // main-thread scheduling are not guest CPU time (especially in
-                // a background tab); this watchdog only catches a stuck worker.
-                timer = setTimeout(() => finish(failure('function_timeout', id)), timeout + 1000);
-                const request = { ...options };
-                delete request.signal;
-                try { worker.postMessage(request); }
-                catch { finish(failure('function_invalid_input', id)); }
-            } else if (event.data.error) {
+            if (event.data.type === 'ready') { ready = true; waiting?.send(); }
+            else if (event.data.error) {
                 const { code, functionId, ...details } = event.data.error;
-                finish(failure(code, functionId ?? id, details));
-            } else {
-                finish(null, event.data.value);
-            }
+                waiting?.finish(failure(code, functionId ?? waiting.id, details));
+            } else {waiting?.finish(null, event.data.value);}
         };
-        worker.onerror = () => finish(failure('function_worker_error', id));
-    });
+        worker.onerror = () => waiting?.finish(failure(ready ? 'function_worker_error' : 'function_startup_failed', waiting.id));
+        worker.onmessageerror = () => waiting?.finish(failure('function_message_error', waiting.id));
+    }
+    return {
+        async run(options: FunctionOptions): Promise<Json> {
+            const { id, signal } = options;
+            if (closed || signal?.aborted) {throw failure('function_aborted', id);}
+            if (waiting) {throw failure('function_busy', id);}
+            if (typeof globalThis.Worker !== 'function') {
+                if (typeof globalThis.window !== 'undefined') {throw failure('function_worker_unavailable', id);}
+                return runFunctionInVm(options);
+            }
+            return new Promise<Json>((resolve, reject) => {
+                let timer: ReturnType<typeof setInterval> | undefined, settled = false;
+                let ticks = 0, lastTick = performance.now();
+                const finish = (error: Error | null, value?: Json) => {
+                    if (settled) {return;}
+                    settled = true; clearInterval(timer);
+                    signal?.removeEventListener('abort', abort);
+                    waiting = undefined;
+                    if (error) { destroy(); reject(error); }
+                    else {resolve(value!);}
+                };
+                const abort = () => finish(failure('function_aborted', id));
+                const send = () => {
+                    ticks = 0; lastTick = performance.now();
+                    const request = { ...options }; delete request.signal;
+                    try { worker!.postMessage(request); }
+                    catch { finish(failure('function_message_error', id)); }
+                };
+                waiting = { id, send, finish };
+                signal?.addEventListener('abort', abort, { once: true });
+                // Only continuous foreground waiting diagnoses an unresponsive
+                // environment. A hidden or suspended page spends no allowance.
+                timer = setInterval(() => {
+                    const now = performance.now(), gap = now - lastTick; lastTick = now;
+                    if (globalThis.document?.hidden || gap > WATCHDOG_TICK_MS * 2) { ticks = 0; return; }
+                    if (++ticks >= UNRESPONSIVE_TICKS) {finish(failure(ready ? 'function_worker_unresponsive' : 'function_startup_failed', id));}
+                }, WATCHDOG_TICK_MS);
+                if (!worker) {
+                    try { startWorker(); }
+                    catch { finish(failure('function_startup_failed', id)); return; }
+                } else if (ready) {send();}
+            });
+        },
+        dispose() {
+            closed = true;
+            waiting?.finish(failure('function_aborted', ''));
+            destroy();
+        },
+    };
 }

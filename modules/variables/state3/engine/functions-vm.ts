@@ -1,10 +1,10 @@
 import type { Json, Path } from '../types.js';
-export interface FunctionOptions { id: string; source: string; input?: Json; reads?: Path[]; state: Json; beforeState?: Json; signal?: AbortSignal; timeoutMs?: number }
+export interface FunctionOptions { id: string; source: string; input?: Json; reads?: Path[]; state: Json; beforeState?: Json; signal?: AbortSignal }
 import { DefaultIntrinsics, newQuickJSWASMModuleFromVariant, type QuickJSHandle, type QuickJSWASMModule, type QuickJSContext } from 'quickjs-emscripten-core';
 import variant from '@jitl/quickjs-singlefile-cjs-release-sync';
 
-export const DEFAULT_TIMEOUT_MS = 250;
-const MAX_TIMEOUT_MS = 1000;
+// QuickJS interrupts track executed bytecode, not browser/OS waiting time.
+export const FUNCTION_WORK_LIMIT = 1024;
 const MEMORY_LIMIT = 16 * 1024 * 1024;
 let engineReady: Promise<QuickJSWASMModule> | undefined;
 
@@ -22,13 +22,6 @@ export class FunctionExecutionError extends Error {
 
 export function failure(code: string, id: string, details?: Record<string, unknown>) {
     return new FunctionExecutionError(code, id, details);
-}
-
-export function timeoutFor(timeoutMs: number, id: string) {
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMEOUT_MS) {
-        throw failure('function_invalid_timeout', id);
-    }
-    return timeoutMs;
 }
 
 function isPath(path: unknown): path is Path {
@@ -106,8 +99,7 @@ const BOOTSTRAP = `(() => {
  * Missing values read as undefined; before() requires an explicit beforeState.
  * This entry cannot observe same-thread timer aborts while executing synchronous JS.
  */
-export async function runFunctionInVm({ id, source, input = [], reads = [], state, beforeState, signal, timeoutMs = DEFAULT_TIMEOUT_MS }: FunctionOptions): Promise<Json> {
-    const timeout = timeoutFor(timeoutMs, id);
+export async function runFunctionInVm({ id, source, input = [], reads = [], state, beforeState, signal }: FunctionOptions): Promise<Json> {
     if (signal?.aborted) {throw failure('function_aborted', id);}
     if (typeof source !== 'string' || !Array.isArray(reads) || !reads.every(isPath)) {
         throw failure('function_invalid_source', id);
@@ -117,12 +109,12 @@ export async function runFunctionInVm({ id, source, input = [], reads = [], stat
     const runtime = engine.newRuntime();
     runtime.setMemoryLimit(MEMORY_LIMIT);
     runtime.setMaxStackSize(256 * 1024);
-    let deadline = Infinity;
+    let work = 0, executing = false;
     let interrupted: string | undefined;
     let violation: FunctionExecutionError | undefined;
     runtime.setInterruptHandler(() => {
         if (signal?.aborted) {interrupted = 'function_aborted';}
-        else if (performance.now() >= deadline) {interrupted = 'function_timeout';}
+        else if (executing && ++work > FUNCTION_WORK_LIMIT) {interrupted = 'function_work_limit';}
         return Boolean(interrupted);
     });
     const context = runtime.newContext({ intrinsics: { ...DefaultIntrinsics, Date: false } });
@@ -152,16 +144,13 @@ export async function runFunctionInVm({ id, source, input = [], reads = [], stat
     }));
     try {
         const invoke = unwrap(context.evalCode(BOOTSTRAP, 'variable3-bootstrap.js'));
-        // VM/bootstrap initialization is platform work, not authored execution.
-        // Start the guest deadline immediately before evaluating its source.
-        deadline = performance.now() + timeout;
+        executing = true;
         const fn = unwrap(context.evalCode(`(${source}\n)`, `${id || 'function'}.js`));
         const inputJson = JSON.stringify(input);
         if (inputJson === undefined) {throw failure('function_invalid_input', id);}
         const result = unwrap(context.callFunction(invoke, context.undefined, fn, hold(context.newString(inputJson)), bridge(state, false), bridge(beforeState, true)));
         if (violation) {throw violation;}
         if (signal?.aborted) {throw failure('function_aborted', id);}
-        if (performance.now() >= deadline) {throw failure('function_timeout', id);}
         return JSON.parse(context.getString(result));
     } catch (error) {
         if (error instanceof FunctionExecutionError) {throw error;}

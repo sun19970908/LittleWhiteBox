@@ -61,4 +61,4 @@ description: 制作或维修小白X变量 2.0 卡：设计玩法状态与条件�
 | 条件触发、阶段分支、解锁、结算、世界书或快捷回复联动 | [条件规则与动作 `<varevent>`](<../../../card-workspace/skill/references/xiaobaix-capabilities.md#varevent>) |
 | 前端或任务直接写入、回执与恢复规则 | [写入入口与恢复规则](<references/xiaobaix-game-state.md#write-entries>) |
 | 前端按游戏规则结算数值 | [前端结算附录](<references/xiaobaix-game-state.md#frontend-settlement>) |
-| `$schema`、约束、`applyText()` / `apply()` 的输入与回执、数组批处理和楼层恢复的完整契约 | 插件 `modules/variables/state2/README.md` 与 `modules/variables/state2/json-tool-design.md` |
+| `$schema`、约束、`applyText()` / `apply()` 的输入与回执、数组批处理和楼层恢复的完整契约 | 插件 `docs/user/variables-v2.md` 与 `modules/variables/state2/json-tool-design.md` |

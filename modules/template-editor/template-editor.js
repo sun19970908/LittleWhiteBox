@@ -19,6 +19,10 @@ const checkEmbeddedTemplateEvent = observeAsyncCallback(checkEmbeddedTemplate, {
 const TEMPLATE_MODULE_NAME = "xiaobaix-template";
 const events = createModuleEvents('templateEditor');
 
+export function createDefaultTemplateSettings() {
+    return { enabled: true, characterBindings: {} };
+}
+
 async function STscript(command) {
     if (!command) return { error: "命令为空" };
     if (!command.startsWith('/')) command = '/' + command;
@@ -77,7 +81,7 @@ const utils = {
 class TemplateSettings {
     static get() {
         const settings = extension_settings[EXT_ID] = extension_settings[EXT_ID] || {};
-        settings.templateEditor = settings.templateEditor || { enabled: false, characterBindings: {} };
+        settings.templateEditor = settings.templateEditor || createDefaultTemplateSettings();
         return settings.templateEditor;
     }
 
@@ -1080,10 +1084,11 @@ async function openEditor() {
             recentMessageCount: parseInt(String($html.find('#recent_message_count').val())) || 5,
             skipFirstMessage: $html.find('#skip_first_message').prop('checked')
         };
-        download(`xiaobai-template-${characters[this_chid].name}.json`, JSON.stringify(data, null, 2), 'text/plain');
+        download(JSON.stringify(data, null, 2), `xiaobai-template-${name}.json`, 'application/json');
         toastr.success('模板设置已导出');
     });
     
+    $html.find('#import_character_settings_button').on('click', () => $html.find('#import_character_settings').trigger('click'));
     $html.find('#import_character_settings').on('change', function(e) {
         const file = e.target?.files?.[0];
         if (!file) return;
@@ -1120,44 +1125,6 @@ async function openEditor() {
         setTimeout(() => MessageHandler.reapplyAll(), 300);
         toastr.success(`已保存 ${name} 的模板设置`);
     }
-}
-
-function exportGlobal() {
-    // 导出时只导出有模板的角色（从角色卡读取）
-    const bindings = {};
-    for (const char of characters) {
-        const embedded = char.data?.extensions?.[TEMPLATE_MODULE_NAME];
-        if (embedded?.enabled && embedded?.template) {
-            bindings[char.avatar] = embedded;
-        }
-    }
-    const exportData = {
-        enabled: TemplateSettings.get().enabled,
-        characterBindings: bindings
-    };
-    download('xiaobai-template-global-settings.json', JSON.stringify(exportData, null, 2), 'text/plain');
-    toastr.success('全局模板设置已导出');
-}
-
-function importGlobal(event) {
-    const file = event.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = e => {
-        try {
-            const data = JSON.parse(typeof e.target.result === 'string' ? e.target.result : '');
-            // 只导入 enabled 状态
-            TemplateSettings.get().enabled = !!data.enabled;
-            saveSettingsDebounced();
-            $("#xiaobaix_template_enabled").prop("checked", data.enabled);
-            state.clear();
-            updateStatus();
-            setTimeout(() => MessageHandler.reapplyAll(), 150);
-            toastr.success('全局模板设置已导入（注：角色模板需在角色编辑器中单独导入）');
-        } catch { toastr.error('文件格式错误'); }
-    };
-    reader.readAsText(file);
-    event.target.value = '';
 }
 
 async function checkEmbeddedTemplate() {
@@ -1259,9 +1226,6 @@ function initTemplateEditor() {
     });
     
     $("#open_template_editor").on("click", openEditorEvent);
-    $("#export_template_settings").on("click", exportGlobal);
-    $("#import_template_settings").on("click", () => $("#import_template_file").click());
-    $("#import_template_file").on("change", importGlobal);
     $("#xiaobaix_template_enabled").prop("checked", TemplateSettings.get().enabled);
     
     updateStatus();

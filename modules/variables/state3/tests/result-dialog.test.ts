@@ -10,7 +10,7 @@ import type { Success } from '../types.js';
 // never repeats settlement, and closing the viewer never cancels an update
 // (wrong-reply edits / duplicate increments / invisible data loss).
 test('U1: the shared result dialog follows selection and retries only persistence', async () => {
-    const { document } = parseHTML('<html><body></body></html>');
+    const { document, Event } = parseHTML('<html><body></body></html>');
     const previous = globalThis.document; globalThis.document = document;
     let retries = 0, cancelled = 0;
     const undone: number[] = [];
@@ -27,20 +27,26 @@ test('U1: the shared result dialog follows selection and retries only persistenc
     const ready = { busy: false, phase: 'ready' } as ReturnType<State3Api['updateStatus']>;
     const view = createResultDialog(api), dialog = document.querySelector('dialog')!;
     dialog.showModal = () => { dialog.open = true; };
-    dialog.close = () => { dialog.open = false; };
+    dialog.close = () => { dialog.open = false; dialog.dispatchEvent(new Event('close')); };
+    const expand = () => {
+        const group = dialog.querySelector('details')!;
+        group.open = true; group.dispatchEvent(new Event('toggle'));
+    };
     const click = async (label: string) => {
         const button = [...dialog.querySelectorAll('button')].find(node => node.textContent === label)!;
         assert.ok(button); button.click(); await new Promise(resolve => setTimeout(resolve, 0));
     };
     try {
         view.sync([{ index: 0, result: first }, { index: 2, result: second }], 2, ready);
-        view.open(0); assert.match(dialog.querySelector('.lwb-state3-change')!.textContent!, /15/);
+        view.open(0); expand(); assert.match(dialog.querySelector('.lwb-state3-change')!.textContent!, /15/);
         await click(COPY.undoReply); assert.deepEqual(undone, [0]);
         view.open(2); await click(COPY.retrySave); assert.equal(retries, 1);
         assert.equal([...dialog.querySelectorAll('button')].some(node => node.textContent === COPY.retrySave), false);
         await click(COPY.close); assert.equal(cancelled, 0); assert.equal(dialog.open, false);
+        assert.equal(dialog.querySelector('main')!.childElementCount, 0);
         view.open(2); view.clear(); assert.equal(dialog.open, false);
         view.sync([{ index: 2, result: result(25) }], 2, ready); view.open(2);
+        expand();
         assert.match(dialog.querySelector('.lwb-state3-change')!.textContent!, /25/);
         assert.doesNotMatch(dialog.querySelector('.lwb-state3-change')!.textContent!, /18/);
     } finally { view.dispose(); globalThis.document = previous; }

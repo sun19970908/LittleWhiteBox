@@ -2,7 +2,8 @@ import type { Result, Definition, Diagnostic, Source, Change } from '../types.js
 import type { ErrorObject } from 'ajv';
 import { COPY, errorText, parameterIssueText, restorationLabel, restorationText } from './copy.js';
 import { overlaps } from '../engine/data.js';
-import { parameterIssues } from '../definition/schema-fields.js';
+import { parameterIssues, fieldName } from '../definition/schema-fields.js';
+import { changeTree, type ChangeTree } from './change-tree.js';
 
 export const element = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: string, className?: string): HTMLElementTagNameMap[K] => {
     const node = document.createElement(tag);
@@ -13,7 +14,10 @@ export const element = <K extends keyof HTMLElementTagNameMap>(tag: K, text?: st
 export function resultLabel(result: Result): string {
     if (!result.ok) {return COPY.failed;}
     if (!result.committed) {return COPY.previewLabel;}
-    if (!result.saved) {return COPY.phases.unsaved;}
+    if (result.saved === false) {return COPY.phases.unsaved;}
+    if (result.saved === undefined && result.receipt?.beforeUpdate) {return COPY.beforeOutcomes[result.receipt.beforeUpdate.outcome];}
+    if (result.restoration?.length) {return `${restorationLabel(result)} · ${COPY.saved}`;}
+    if (result.receipt?.beforeUpdate) {return `${COPY.beforeOutcomes[result.receipt.beforeUpdate.outcome]} · ${COPY.saved}`;}
     return result.restoration ? `${restorationLabel(result)} · ${COPY.saved}` : COPY.saved;
 }
 export function showDiagnostics(root: HTMLElement, diagnostics: Diagnostic[], definition?: Definition) {
@@ -48,8 +52,8 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
     const restorationWarning = Boolean(result.restoration?.length);
     if (!result.committed) {
         if (result.changes.length) {root.append(element('p', COPY.previewed, 'lwb-state3-status'));}
-    } else if (!restorationWarning || !result.saved) {
-        const status = element('p', !result.saved ? COPY.unconfirmed : resultLabel(result), 'lwb-state3-status');
+    } else if (!restorationWarning || result.saved === false) {
+        const status = element('p', result.saved === false ? COPY.unconfirmed : result.saved === undefined ? COPY.hostSave : resultLabel(result), 'lwb-state3-status');
         status.setAttribute('role', 'status'); root.append(status);
     }
     if (result.restoration?.length) {
@@ -61,6 +65,7 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
         root.append(warning);
     }
     for (const error of result.diagnostics) {root.append(element('p', errorText(error)));}
+    if (result.receipt?.beforeUpdate?.diagnostics.length) {showDiagnostics(root, result.receipt.beforeUpdate.diagnostics, definition);}
     const shown = result.changes;
     const shownReasons = new Set<number>();
     const sourceInfo = (source?: Source) => {
@@ -83,24 +88,45 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
     }
     for (const group of groups.values()) {
         const section = element('details', undefined, 'lwb-state3-change-group'), info = sourceInfo(group.source);
-        section.open = !group.source || ['input', 'action'].includes(group.source.kind);
-        section.append(element('summary', COPY.sourceGroup(info.label, group.changes.length)));
+        section.open = Boolean(group.source && ['input', 'action'].includes(group.source.kind));
+        const tree = changeTree(group.changes, result.state);
+        section.append(element('summary', COPY.sourceGroup(info.label, tree.length)));
         if (info.description) {section.append(element('p', info.description, 'lwb-state3-source-description'));}
-        for (const { change, sources } of group.changes) {
+        const renderLeaf = ({ change, sources }: typeof group.changes[number]) => {
             const line = element('div', undefined, 'lwb-state3-change');
-            line.append(element('strong', change.path.join(' → ')),
+            line.append(element('strong', fieldName(definition?.schema ?? {}, change.path)),
                 element('div', change.before === undefined ? `${COPY.added} ＋ ${JSON.stringify(change.after)}` : change.removed ? `${COPY.removed} － ${JSON.stringify(change.before)}` : `${JSON.stringify(change.before)} → ${JSON.stringify(change.after)}`));
             if (sources.length > 1) {line.append(element('small', sources.slice(1).map(source => sourceInfo(source).tag).join(' / ')));}
-            for (const note of result.annotations || []) {
-                if (!(note.path && overlaps(note.path, change.path)) && !(note.action && sources.some(source => source.id === note.action))) {continue;}
-                const reason = note.fields.find(([key]) => key === 'reason');
-                if (reason) {
-                    line.append(element('p', typeof reason[1] === 'string' ? reason[1] : JSON.stringify(reason[1]), 'lwb-state3-reason'));
-                    shownReasons.add(note.index);
-                }
+            return line;
+        };
+        const renderNode = (node: ChangeTree<typeof group.changes[number]>): HTMLElement => {
+            if (!node.children.length) {return renderLeaf(node.items[0]);}
+            const branch = element('details', undefined, 'lwb-state3-change'), body = element('div');
+            branch.append(element('summary', COPY.sourceGroup(fieldName(definition?.schema ?? {}, node.path), node.children.length)), body);
+            // Closed structures hold no field DOM. Closing releases nested DOM
+            // and its listeners; reopening derives it from the same result.
+            branch.addEventListener('toggle', () => {
+                body.replaceChildren();
+                if (branch.open) {body.append(...node.children.map(renderNode));}
+            });
+            return branch;
+        };
+        for (const note of result.annotations || []) {
+            if (shownReasons.has(note.index) || !group.changes.some(({ change, sources }) =>
+                note.path && overlaps(note.path, change.path) || note.action && sources.some(source => source.id === note.action))) {continue;}
+            const reason = note.fields.find(([key]) => key === 'reason');
+            if (reason) {
+                section.append(element('p', typeof reason[1] === 'string' ? reason[1] : JSON.stringify(reason[1]), 'lwb-state3-reason'));
+                shownReasons.add(note.index);
             }
-            section.append(line);
         }
+        const body = element('div'); section.append(body);
+        const expand = () => {
+            body.replaceChildren();
+            if (section.open) {body.append(...tree.map(renderNode));}
+        };
+        section.addEventListener('toggle', expand);
+        expand();
         root.append(section);
     }
     for (const annotation of result.annotations || []) {

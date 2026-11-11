@@ -11,7 +11,7 @@ const get = (key: string): Expression => ({ get: [key] });
 const op = (name: string, ...args: Expression[]): Expression => ({ op: name, args });
 function purchaseCard(): Bundle {
     return { definition: {
-        format: 1, name: 'Action contract',
+        format: 1, updates: ['after'], name: 'Action contract',
         schema: { type: 'object', required: ['coins', 'items', 'claimed', 'health'], additionalProperties: false,
             properties: { coins: { type: 'number', minimum: 0 }, items: { type: 'integer', minimum: 0 }, claimed: { type: 'boolean' }, health: { type: 'number', minimum: 0 } } },
         initial: { coins: 20, items: 0, claimed: false, health: 10 },
@@ -81,7 +81,7 @@ test('K4: oscillating and non-repeating runaway triggers reject with their rule 
         const bundle = purchaseCard(); bundle.definition.triggers = triggers;
         const before = structuredClone(start), result = await settle(compileDefinition(bundle), start, []);
         assert.equal(result.ok, false); assert.deepEqual(start, before);
-        assert.equal(result.diagnostics[0].code, 'trigger-cycle');
+        assert.equal(result.diagnostics[0].code, triggers[0].id === 'toggle' ? 'trigger-cycle' : 'trigger-limit');
         assert.deepEqual(result.diagnostics[0].rules, triggers.map(item => item.id));
     }
 });

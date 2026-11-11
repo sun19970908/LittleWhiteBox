@@ -108,6 +108,10 @@ export function createPlannerGeneration(host) {
             run.releaseSlot = host.reserveSlot(chat, run.source, run.marker);
             host.orderHooks();
             run.phase = 'ready';
+            if (dispatch?.input) {
+                dispatch.input.deferred = true;
+                run.needsRebuild = () => dispatch.input.rebuild;
+            }
             return true;
         } catch (error) {
             if (active === run) {
@@ -171,6 +175,10 @@ export function createPlannerGeneration(host) {
         publish(run);
         try {
             assertActive(run);
+            if (!run.requestStopped && run.needsRebuild?.()) {
+                revokeRequest(run);
+                host.stop();
+            }
             const data = run.request;
             const updates = {};
             if (!run.requestStopped) {

@@ -1,11 +1,12 @@
 import { CONTEXT_COPY } from '../shared/context-copy.js';
 import { UPDATE_RULES_PREFIX } from './world-info.js';
+import { UPDATE_BUTTONS } from '../shared/update-buttons.js';
 
-const ACTIONS = Object.freeze({ update: '更新变量', details: '查看结果', assistant: '让小白助手制作', saveChat: '重试保存', preview: '查看当前上下文' });
+const ACTIONS = Object.freeze({ ...UPDATE_BUTTONS, details: UPDATE_BUTTONS.result, saveChat: UPDATE_BUTTONS.retrySave, preview: UPDATE_BUTTONS.previewRequest });
 
 export const COPY = Object.freeze({
     ...ACTIONS,
-    title: '变量 2.0', resultTitle: '变量更新结果', retry: '重新更新', cancel: '取消',
+    title: '变量 2.0', resultTitle: '变量更新结果',
     close: '关闭', source: '更新模型', pluginUpdate: '插件更新', auto: '回复后自动更新',
     sources: { main: '小白助手 · 主助手 API', delegate: '小白助手 · 分身 API' },
     noChat: '请先进入角色卡', noReply: '请先生成一条 AI 回复',

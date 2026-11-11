@@ -8,9 +8,11 @@ import { displayChanges } from './delta-view.js';
 import { digest } from '../definition/digest.js';
 import { applyDirectInput, inputFields, validateInput } from './input.js';
 import { validateState } from './validation.js';
+import { allowsStage, canWriteDirect } from '../definition/stages.js';
+import { createFunctionRunner } from './functions.js';
 
 // A runaway, non-repeating trigger chain must also return control to the player.
-export const TRIGGER_BUDGET_MS = 2000;
+export const TRIGGER_ROUND_LIMIT = 1024;
 
 function authorize(compiled: Compiled, before: Json, after: Json, actor: string) {
     for (const change of changes(before, after)) {
@@ -23,17 +25,19 @@ function authorize(compiled: Compiled, before: Json, after: Json, actor: string)
 
 // No storage, host events, or publication here. The returned candidate belongs to
 // the caller; every path (including preview) executes this same settlement.
-export async function settle(compiled: Compiled, start: Json, input: unknown, { signal }: RunOptions = {}): Promise<Result> {
+export async function settle(compiled: Compiled, start: Json, input: unknown, { signal, stage }: RunOptions = {}): Promise<Result> {
     const provenance: Success['provenance'] = [], actions: Success['actions'] = [];
     let operationIndex: number | undefined;
     let ruleId: string | undefined;
+    const functions = createFunctionRunner();
     try {
         signal?.throwIfAborted();
+        if (stage && !compiled.definition.updates.includes(stage)) {reject('stage-disabled', { stage });}
         assertJson(start);
         input = clone(input);
         validateInput(input);
         const before = clone(start), state = clone(start);
-        const context: EvaluationContext = { bundle: compiled.bundle, before, state, params: {}, signal };
+        const context: EvaluationContext = { bundle: compiled.bundle, before, state, params: {}, signal, functions };
         const record = (previous: Json, source: Source) => {
             const definition = source.kind === 'action' ? compiled.actions.get(source.id!)
                 : source.kind === 'trigger' ? compiled.definition.triggers?.find(item => item.id === source.id)
@@ -72,14 +76,13 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
         const trigger = async (timing: 'action' | 'batch') => {
             const selected = (compiled.definition.triggers || []).filter(item => (item.timing || 'batch') === timing);
             if (!selected.length) {return;}
-            const visited = new Set<string>(), chain = new Set<string>(), started = performance.now();
+            const visited = new Set<string>(), chain = new Set<string>();
             let rounds = 0;
             while (true) {
                 signal?.throwIfAborted();
                 const key = digest(state);
-                if (visited.has(key) || performance.now() - started > TRIGGER_BUDGET_MS) {
-                    reject('trigger-cycle', { rules: [...chain], timing, budgetMs: TRIGGER_BUDGET_MS });
-                }
+                if (visited.has(key)) {reject('trigger-cycle', { rules: [...chain], timing });}
+                if (rounds >= TRIGGER_ROUND_LIMIT) {reject('trigger-limit', { rules: [...chain], timing, rounds });}
                 visited.add(key);
                 let changed = false;
                 for (const rule of selected) {
@@ -104,6 +107,7 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
             operationIndex = index;
             signal?.throwIfAborted();
             if (!operation.action) {
+                if (stage && !canWriteDirect(compiled.definition, pathOf(operation.path), stage)) {reject('stage-permission', { stage, path: operation.path });}
                 const previous = clone(state);
                 applyDirectInput(state, operation);
                 authorize(compiled, previous, state, 'direct');
@@ -114,6 +118,7 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
             if (pendingDirect) { await stabilize(); pendingDirect = false; }
             const action = compiled.actions.get(String(operation.action));
             if (!action) {reject('action-missing', { action: operation.action });}
+            if (!allowsStage(compiled.definition, action, stage)) {reject('stage-permission', { stage, action: action.id });}
             ruleId = action.id;
             context.params = clone(operation.params as JsonObject);
             for (const conversion of action.conversions) {
@@ -152,7 +157,7 @@ export async function settle(compiled: Compiled, start: Json, input: unknown, { 
             ...(ruleId && !detail.rule ? { rule: ruleId } : {}),
             ...(operationIndex === undefined ? {} : { operation: operationIndex, path: detail.path ?? (input as JsonObject[])[operationIndex]?.path }),
         }] };
-    }
+    } finally { functions.dispose(); }
 }
 
 export const initialize = (compiled: Compiled, options: RunOptions = {}) => settle(compiled, compiled.definition.initial, [], options);

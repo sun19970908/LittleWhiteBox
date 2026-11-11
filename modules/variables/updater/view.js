@@ -1,4 +1,5 @@
 import viewCss from './view.css?inline';
+import controlsCss from '../shared/update-controls.css?inline';
 import { COPY } from './copy.js';
 import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
 import { renderUpdateResult } from './result-view.js';
@@ -21,7 +22,7 @@ function createDialog(heading) {
 }
 
 export function createUpdaterView(api) {
-    const style = element('style', viewCss); document.head.append(style);
+    const style = element('style', viewCss + controlsCss); document.head.append(style);
     const settingsView = createDialog(COPY.title), resultView = createDialog(COPY.resultTitle);
     // Dialog buttons report inside their dialog; floor buttons have no dialog and use a toast.
     const button = (text, action, notice) => {
@@ -74,11 +75,11 @@ export function createUpdaterView(api) {
         document.querySelectorAll('.xb-variable-controls').forEach(node => node.remove());
         const message = document.querySelector(`.mes[mesid="${target.floor}"] .mes_text`);
         if (!message) return;
-        const controls = element('div', null, 'xb-variable-controls');
+        const controls = element('div', null, 'xb-variable-controls lwb-variable-controls');
         const label = element('span', COPY.phases[status.phase]); label.setAttribute('role', 'status');
-        controls.append(button(status.busy ? COPY.cancel : status.saveFailed ? COPY.saveChat : ['success', 'recorded'].includes(status.phase) ? COPY.retry : COPY.update,
-            status.busy ? api.cancel : status.saveFailed ? api.retrySave : api.update), label,
-        button(COPY.details, openResult));
+        controls.append(button(status.busy ? COPY.cancel : status.saveFailed ? COPY.saveChat : ['success', 'recorded', 'noop'].includes(status.phase) ? COPY.retry : COPY.update,
+            status.busy ? api.cancel : status.saveFailed ? api.retrySave : api.update),
+        button(COPY.details, openResult), button(COPY.settings, open), label);
         if (status.phase === 'saving') controls.querySelector('button').disabled = true;
         message.after(controls);
     }

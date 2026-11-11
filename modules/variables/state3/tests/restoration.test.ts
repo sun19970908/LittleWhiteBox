@@ -49,14 +49,17 @@ test('R2: recovery changes and validation diagnostics remain distinct from histo
     const result = accepted((await host.service.restoreSelection(host.saved().records[0].entries, [], { check: true }))!);
     assert.deepEqual(result.restoration, []);
     assert.deepEqual(result.changes, [{ path: ['hero', 'health'], before: 20, after: 80, removed: false }]);
-    const { document } = parseHTML('<html><body><main></main></body></html>');
+    const { document, Event } = parseHTML('<html><body><main></main></body></html>');
     const prior = globalThis.document; globalThis.document = document;
     try {
         const root = document.querySelector('main')!;
+        const expand = () => { const group = root.querySelector('details')!; group.open = true; group.dispatchEvent(new Event('toggle')); };
         showResult(root, result);
+        expand();
         assert.equal(root.querySelectorAll('.lwb-state3-change').length, 1);
         result.restoration = [{ code: 'constraint', rule: 'rule', description: '作者规则', fields: [{ path: ['hero', 'health'], value: 80 }] }];
         showResult(root, result);
+        expand();
         assert.equal(root.querySelectorAll('[role="alert"]').length, 1);
         assert.equal(root.querySelectorAll('.lwb-state3-change').length, 1);
     } finally { globalThis.document = prior; }

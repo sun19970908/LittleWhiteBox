@@ -403,7 +403,7 @@ test('guide scripts can start, respond, and clean up using the documented inject
     Object.assign(h.context, { chat: h.host.chat, eventSource: h.chatEvents, eventTypes: { CHAT_CHANGED: 'CHAT_CHANGED' } });
     h.host.chat.push({ is_user: false }, { is_user: true }, { is_user: false });
     const baselineSubscriptions = h.chatEvents.events.CHAT_CHANGED.length;
-    const guide = fs.readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+    const guide = fs.readFileSync(new URL('../../docs/user/tasks.md', import.meta.url), 'utf8');
     const examples = [...guide.matchAll(/^```text\r?\n(<<taskjs>>[\s\S]*?<<\/taskjs>>)\r?\n```/gm)];
     for (const [index, [, commands]] of examples.entries()) {
         const name = `guide-${index}`;
@@ -434,7 +434,7 @@ test('guide scripts can start, respond, and clean up using the documented inject
 test('guide import JSON and preset-entry field fragment preserve their intended timings', async t => {
     const h = harness(t);
     h.preset('A', []);
-    const guide = fs.readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+    const guide = fs.readFileSync(new URL('../../docs/user/tasks.md', import.meta.url), 'utf8');
     const objects = [...guide.matchAll(/^```json\r?\n([\s\S]*?)^```/gm)].map(([, json]) => JSON.parse(json));
     const file = objects.find(value => Array.isArray(value.tasks));
     await h.api.importGlobalTasks(JSON.stringify(file));

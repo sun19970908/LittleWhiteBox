@@ -1,5 +1,5 @@
 import { compileDefinition } from '../definition/compile.js';
-import { clone } from '../engine/data.js';
+import { clone, equal } from '../engine/data.js';
 import { mergeAbortSignals } from '../../../../shared/common/abort-utils.js';
 import { difference } from '../engine/difference.js';
 import { displayChanges } from '../engine/delta-view.js';
@@ -8,31 +8,38 @@ import { variableRoots } from './variables.js';
 import { reject, diagnostic } from '../engine/diagnostics.js';
 import { validateState } from '../engine/validation.js';
 import { checkpoint, digest, makeReceipt, rebase, rewind } from './history.js';
-import type { History, HostAdapter, Json, JsonObject, Receipt, Result, RunOptions, Snapshot, Success, SwipeRecord } from '../types.js';
+import type { BeforeUpdate, History, HostAdapter, Json, JsonObject, Receipt, Result, RunOptions, Snapshot, Success, SwipeRecord } from '../types.js';
+import { modelSource } from '../definition/stages.js';
 
 interface StageOptions extends RunOptions { index?: number; replaceSource?: string }
-interface ApplyOptions extends StageOptions { preview?: boolean; source?: string }
+interface ApplyOptions extends StageOptions { preview?: boolean; source?: string; beforeUpdate?: BeforeUpdate }
 const success = (state: Json): Success => ({ ok: true, state, changes: [], provenance: [], actions: [], diagnostics: [] });
 
 export function createSettlementService<S extends Snapshot>(adapter: HostAdapter<S>) {
     const assertCurrent = (snapshot: S) => { if (!adapter.isCurrent(snapshot)) {reject('stale-target');} };
-    async function publish(snapshot: S, history: History, records: SwipeRecord[], result: Success, notify: boolean): Promise<Success> {
+    async function checkRestoration(state: Json, signal?: AbortSignal) {
+        try {
+            const compiled = compileDefinition(adapter.bundle());
+            return await validateState(compiled, { bundle: compiled.bundle, state: clone(state), params: {}, signal });
+        } catch (error) { return [diagnostic(error)]; }
+    }
+    async function publish(snapshot: S, history: History, records: SwipeRecord[], result: Success, notify: boolean, hostSaves = false): Promise<Success> {
         assertCurrent(snapshot);
         // Validation and publication are synchronous. Only persistence may wait;
         // another selection must be able to restore this state while it waits.
         history.revision++;
         const save = adapter.publish(snapshot, { state: result.state, history, records });
         let persistence: Success['persistence'];
-        try { await save(); }
+        try { if (!hostSaves) {await save();} }
         catch (error) { persistence = { code: 'save-unconfirmed', message: error instanceof Error ? error.message : String(error) }; }
-        const published = { ...result, committed: true, saved: !persistence, ...(persistence ? { persistence } : {}) };
+        const published = { ...result, committed: true, ...(hostSaves ? {} : { saved: !persistence }), ...(persistence ? { persistence } : {}) };
         if (notify) {
             try { adapter.committed?.(published); }
             catch (error) { published.diagnostics.push({ code: 'notification-failed', message: error instanceof Error ? error.message : String(error) }); }
         }
         return published;
     }
-    async function stage({ index, replaceSource, signal }: StageOptions = {}) {
+    async function stage({ index, replaceSource, signal, stage: preparedStage }: StageOptions = {}) {
         const snapshot = adapter.capture(index), history = snapshot.history;
         const compiled = compileDefinition(adapter.bundle());
         if (!history) {reject('not-enabled');}
@@ -45,33 +52,55 @@ export function createSettlementService<S extends Snapshot>(adapter: HostAdapter
         const start = rewind(history, snapshot.state, suffix);
         assertCurrent(snapshot);
         let consumed = false;
+        let candidate: { input: unknown; stage: RunOptions['stage']; result: Success } | undefined;
+        async function commit(result: Success, source: string, beforeUpdate?: BeforeUpdate): Promise<Success> {
+            if (consumed) {reject('stage-consumed');}
+            assertCurrent(snapshot); signal?.throwIfAborted();
+            const receipt = makeReceipt({ before: start, result, source, revision: history!.revision + 1 });
+            if (beforeUpdate) {receipt.beforeUpdate = clone(beforeUpdate);}
+            const next = clone(records);
+            const retained = target.entries.slice(position).filter(entry => !replaces(entry));
+            next[snapshot.index].entries = [...target.entries.slice(0, position), receipt, ...retained];
+            const later = [...retained, ...next.slice(snapshot.index + 1).flatMap(record => record.entries)];
+            const state = rebase(result.state, later);
+            const updated: History = { ...clone(history!), version: digest(compiled.bundle), checkpoints: snapshot.index === records.length - 1 && !suffix.length ? clone(history!.checkpoints) : [] };
+            consumed = true;
+            if (snapshot.index === records.length - 1) {checkpoint(updated, state, snapshot.index, updated.revision + 1);}
+            const hostSaves = snapshot.index === records.length - 1 && beforeUpdate !== undefined
+                && ['applied', 'rejected', 'skipped'].includes(beforeUpdate.outcome);
+            const publication = publish(snapshot, updated, next, { ...result, state, version: updated.version, receipt,
+                ...(beforeUpdate?.outcome === 'undone' ? { changes: displayChanges(difference(snapshot.state, state)) } : {}) }, true, hostSaves);
+            if (!beforeUpdate || !later.length) {return publication;}
+            const [published, restoration] = await Promise.all([publication, checkRestoration(state, signal)]);
+            return { ...published, restoration };
+        }
         return {
             ok: true as const, snapshot: clone(start), bundle: clone(compiled.bundle), roots: clone(history.roots), target: snapshot.target,
             assertCurrent: () => assertCurrent(snapshot),
-            async run(input: unknown, { preview = true, source = 'api', signal: runSignal }: ApplyOptions = {}): Promise<Result> {
+            async recordBefore(outcome: BeforeUpdate): Promise<Success> {
+                return commit(success(clone(start)), modelSource('before'), outcome);
+            },
+            async run(input: unknown, { preview = true, source = 'api', signal: runSignal, stage: updateStage = preparedStage, beforeUpdate }: ApplyOptions = {}): Promise<Result> {
                 if (consumed) {reject('stage-consumed');}
                 assertCurrent(snapshot);
                 const activeSignal = mergeAbortSignals(signal, runSignal) ?? undefined;
-                const result = await settle(compiled, start, input, { signal: activeSignal });
+                const result = candidate && candidate.stage === updateStage && equal(candidate.input as Json, input as Json)
+                    ? clone(candidate.result) : await settle(compiled, start, input, { signal: activeSignal, stage: updateStage });
                 if (!result.ok) {return result;}
                 if (Object.keys(result.state as JsonObject).some(root => !history.roots.includes(root))) {reject('unowned-root');}
-                const receipt = makeReceipt({ before: start, result, source, revision: history.revision + 1 });
-                const next = clone(records);
-                const retained = target.entries.slice(position).filter(entry => !replaces(entry));
-                next[snapshot.index].entries = [...target.entries.slice(0, position), receipt, ...retained];
-                const state = rebase(result.state, [...retained, ...next.slice(snapshot.index + 1).flatMap(record => record.entries)]);
-                const updated: History = { ...clone(history), version: digest(compiled.bundle), checkpoints: snapshot.index === records.length - 1 && !suffix.length ? clone(history.checkpoints) : [] };
                 assertCurrent(snapshot); activeSignal?.throwIfAborted();
-                if (preview) {return { ...result, version: updated.version, committed: false };}
-                consumed = true;
-                // A point is the saved end state, not the earlier insertion point.
-                if (snapshot.index === records.length - 1) {checkpoint(updated, state, snapshot.index, updated.revision + 1);}
-                return publish(snapshot, updated, next, { ...result, state, version: updated.version, receipt }, true);
+                candidate = { input: clone(input), stage: updateStage, result: clone(result) };
+                if (preview) {return { ...result, version: digest(compiled.bundle), committed: false };}
+                return commit(result, source, beforeUpdate);
             },
         };
     }
     return {
         stage,
+        async recordBefore(index: number, outcome: BeforeUpdate, options: RunOptions = {}) {
+            const staged = await stage({ index, replaceSource: modelSource('before'), ...options });
+            return staged.recordBefore(outcome);
+        },
         async inspect() {
             const snapshot = adapter.capture();
             if (!snapshot.history) {return { ok: false as const, diagnostics: [{ code: 'not-enabled' }] };}
@@ -122,13 +151,7 @@ export function createSettlementService<S extends Snapshot>(adapter: HostAdapter
             // Publish synchronously: validation warns about the restored state; it never vetoes a native swipe.
             const publication = publish(snapshot, { ...clone(history), checkpoints: [] }, records,
                 { ...success(state), changes: displayChanges(difference(snapshot.state, state)), version: history.version }, true);
-            const validation = (async () => {
-                if (!check) {return [];}
-                try {
-                    const compiled = compileDefinition(adapter.bundle());
-                    return await validateState(compiled, { bundle: compiled.bundle, state: clone(state), params: {}, signal });
-                } catch (error) { return [diagnostic(error)]; }
-            })();
+            const validation = check ? checkRestoration(state, signal) : Promise.resolve([]);
             const [result, restoration] = await Promise.all([publication, validation]);
             return { ...result, restoration };
         },

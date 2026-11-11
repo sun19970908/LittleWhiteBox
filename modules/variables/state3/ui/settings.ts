@@ -1,18 +1,19 @@
 import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 import styleText from './styles.css?inline';
+import controlsCss from '../../shared/update-controls.css?inline';
 import { COPY, errorText } from './copy.js';
 import { element, resultLabel } from './result.js';
-import { createResultDialog } from './result-dialog.js';
+import { createResultDialog, type FloorResult } from './result-dialog.js';
 import { notifyInfo } from './notifications.js';
 import { DEFINITION_FILE, FUNCTION_DIRECTORY } from '../definition/format.js';
 import type { State3Api } from '../runtime/api.js';
 import type { Draft } from '../definition/authoring.js';
-import type { JsonObject, Schema, Result } from '../types.js';
+import type { UpdateStage, Definition } from '../types.js';
 import type { UpdaterSettings } from '../runtime/settings.js';
 
 type Action = (signal: AbortSignal) => unknown | Promise<unknown>;
 export function createState3Page(api: State3Api) {
-    const style = element('style', styleText), dialog = element('dialog', undefined, 'lwb-state3-dialog');
+    const style = element('style', styleText + controlsCss), dialog = element('dialog', undefined, 'lwb-state3-dialog');
     const header = element('header'), nav = element('nav'), main = element('main'), notice = element('output');
     const resultDialog = createResultDialog(api);
     notice.setAttribute('role', 'status');
@@ -77,80 +78,23 @@ export function createState3Page(api: State3Api) {
             }),
         ));
         const request = element('pre'); request.hidden = true;
+        const requestStage = element('select');
+        for (const stage of ['before', 'after'] as const) { const option = element('option', COPY.stageNames[stage]); option.value = stage; requestStage.append(option); }
+        requestStage.value = 'after';
         main.append(row(button(COPY.previewRequest, async signal => {
-            request.textContent = JSON.stringify(await api.previewRequest({ signal }), null, 2); request.hidden = false;
-        })), request);
+            request.textContent = JSON.stringify(await api.previewRequest({ signal, stage: requestStage.value as UpdateStage }), null, 2); request.hidden = false;
+        }), requestStage), request);
     }
     function currentDraftBaseline() { if (!draft) {throw new Error(COPY.notEnabled);} return draft; }
-    function parameterEditor(schema: Schema) {
-        const root = element('div'), readers: [string, () => JsonObject[string] | undefined][] = [];
-        const readJson = (input: HTMLTextAreaElement, name: string) => {
-            try { return JSON.parse(input.value); }
-            catch { throw new Error(COPY.parameterFormat(name)); }
-        };
-        // Schema descriptions are written for the update model; the form shows titles, types and limits only.
-        const hints = (target: HTMLElement, property: Record<string, unknown>) => {
-            const object = property.type === 'array' ? property.items : property;
-            if (!object || typeof object !== 'object' || !('properties' in object) || !object.properties || typeof object.properties !== 'object') {return;}
-            const required = new Set('required' in object && Array.isArray(object.required) ? object.required : []);
-            const fields = element('dl', undefined, 'lwb-state3-parameter-fields');
-            for (const [key, field] of Object.entries(object.properties as Record<string, Record<string, unknown>>)) {
-                const name = field.title ? `${String(field.title)} (${key})` : key;
-                fields.append(element('dt', name), element('dd', [required.has(key) ? COPY.required : COPY.optional,
-                    COPY.parameterTypes[String(field.type)]].filter(Boolean).join(' · ')));
-            }
-            target.append(element('p', property.type === 'array' ? COPY.itemFields : COPY.objectFields, 'lwb-state3-parameter-help'), fields);
-        };
-        const properties = typeof schema === 'object' && schema.properties && typeof schema.properties === 'object' ? schema.properties as Record<string, Record<string, unknown>> : {};
-        // A closed flat object has an ordinary form. Keep the full input surface for
-        // schemas whose legal keys depend on parameters, alternatives or references.
-        if (typeof schema !== 'object' || schema.additionalProperties !== false
-            || ['oneOf', 'anyOf', 'allOf', 'if', '$ref', 'patternProperties', 'dependentSchemas'].some(key => key in schema)) {
-            const input = element('textarea', '{}'); root.append(label(COPY.parameters, input));
-            if (typeof schema === 'object') {hints(root, schema);}
-            return { root, read: (): JsonObject => readJson(input, COPY.parameterName) };
-        }
-        const required = new Set(Array.isArray(schema.required) ? schema.required : []);
-        for (const [name, property] of Object.entries(properties)) {
-            const title = String(property.title || name);
-            const optional = !required.has(name);
-            if (property.type === 'boolean' && !optional) {
-                const input = element('input'); input.type = 'checkbox'; input.checked = property.default === true;
-                root.append(label(title, input)); readers.push([name, () => input.checked]);
-            } else if (Array.isArray(property.enum) || property.type === 'boolean') {
-                const input = element('select');
-                if (optional) { const option = element('option', COPY.omitParameter); option.value = ''; input.append(option); }
-                const values = Array.isArray(property.enum) ? property.enum : [true, false];
-                for (const value of values) { const option = element('option', String(value)); option.value = JSON.stringify(value); input.append(option); }
-                if (property.default !== undefined) {input.value = JSON.stringify(property.default);}
-                root.append(label(title, input)); readers.push([name, () => input.value === '' ? undefined : JSON.parse(input.value)]);
-            } else if (['string', 'number', 'integer'].includes(String(property.type))) {
-                const input = element('input'); input.type = property.type === 'string' ? 'text' : 'number'; input.value = String(property.default ?? '');
-                if (input.type === 'number') {
-                    if (typeof property.minimum === 'number') {input.min = String(property.minimum);}
-                    if (typeof property.maximum === 'number') {input.max = String(property.maximum);}
-                    input.step = property.type === 'integer' ? '1' : 'any';
-                }
-                root.append(label(title, input)); readers.push([name, () => input.value === '' && (optional || input.type === 'number') ? undefined : input.type === 'number' ? Number(input.value) : input.value]);
-            } else {
-                const input = element('textarea', property.default === undefined && optional ? '' : JSON.stringify(property.default ?? (property.type === 'array' ? [] : {})));
-                root.append(label(title, input)); readers.push([name, () => optional && !input.value.trim() ? undefined : readJson(input, title)]);
-            }
-            hints(root, property);
-        }
-        return { root, read: (): JsonObject => Object.fromEntries(readers.flatMap(([key, read]) => { const value = read(); return value === undefined ? [] : [[key, value]]; })) };
-    }
     async function renderPlay() {
         const status = await api.inspect();
         if (!status.ok) {
             main.append(element('p', COPY.notEnabled), button(COPY.enable, async signal => { const result = await api.enable({ signal }); await render(); resultDialog.show(result); }));
             return;
         }
-        const definition = status.bundle.definition;
-        const present = (result: Result) => {
-            resultDialog.show(result, result.ok && result.version === status.version ? definition : undefined);
-        };
-        main.append(element('p', COPY.playHelp, 'lwb-state3-intro'));
+        const stages = status.bundle.definition.updates, hasBefore = stages.includes('before'), hasAfter = stages.includes('after');
+        main.append(element('h3', COPY.updateModes[hasBefore && hasAfter ? 'both' : hasBefore ? 'before' : 'after']));
+        if (hasBefore) {main.append(element('p', COPY.beforeAuto));}
         const settings = element('section'), current = api.settings(), auto = element('input'), source = element('select');
         auto.type = 'checkbox'; auto.checked = current.auto;
         for (const [key, text] of Object.entries(COPY.sources)) { const option = element('option', text); option.value = key; source.append(option); }
@@ -158,26 +102,9 @@ export function createState3Page(api: State3Api) {
         const save = () => api.saveSettings({ auto: auto.checked, source: source.value as UpdaterSettings['source'] });
         auto.addEventListener('change', save); source.addEventListener('change', save);
         const autoLabel = element('label', undefined, 'lwb-state3-check'); autoLabel.append(auto, COPY.auto);
-        settings.append(element('h3', COPY.pluginUpdate), autoLabel, label(COPY.model, source), element('p', COPY.pluginUpdateHelp, 'lwb-state3-parameter-help'));
+        if (hasAfter) {settings.append(autoLabel, element('p', COPY.afterHelp, 'lwb-state3-help'));}
+        settings.append(label(COPY.model, source), element('p', COPY.pluginUpdateHelp, 'lwb-state3-help'), element('p', COPY.playHelp, 'lwb-state3-help'));
         main.append(settings);
-        if (!definition.actions.length) {return;}
-        const actions = element('section');
-        actions.append(element('h3', COPY.action), element('p', COPY.actionHelp, 'lwb-state3-parameter-help'));
-        const selector = element('select'), parameterRoot = element('div');
-        selector.setAttribute('aria-label', COPY.action);
-        for (const action of definition.actions) { const option = element('option', action.title); option.value = action.id; selector.append(option); }
-        let parameters = parameterEditor(definition.actions[0].parameters);
-        parameterRoot.append(parameters.root);
-        selector.addEventListener('change', () => {
-            const action = definition.actions.find(action => action.id === selector.value)!;
-            parameters = parameterEditor(action.parameters); parameterRoot.replaceChildren(parameters.root);
-        });
-        const run = (preview: boolean): Action => async signal => {
-            const result = await api[preview ? 'preview' : 'apply']([{ action: selector.value, params: parameters.read() }], { signal });
-            present(result);
-        };
-        actions.append(selector, parameterRoot, row(button(COPY.preview, run(true)), button(COPY.commit, run(false))));
-        main.append(actions);
     }
     async function render() {
         main.replaceChildren(); nav.replaceChildren();
@@ -211,21 +138,40 @@ export function createState3Page(api: State3Api) {
     dialog.append(header, nav, main, notice); document.head.append(style); document.body.append(dialog);
     return {
         async open(nextPage: 'play' | 'author' = 'play') { page = nextPage; await render(); if (!dialog.open) {dialog.showModal();} },
-        targetChanged() { cancel(); api.cancel(); resultDialog.clear(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();} },
-        mountControl(index: number, results: { index: number; result: Result }[]) {
+        targetChanged() { cancel(); resultDialog.clear(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();} },
+        mountControl(index: number, results: FloorResult[], { updates, beforeIndex, definition }: { updates: UpdateStage[]; beforeIndex: number; definition?: Definition }) {
             document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove());
-            const status = api.updateStatus(); resultDialog.sync(results, index, status);
-            for (const floor of new Set([index, ...results.map(item => item.index)])) {
+            const status = api.updateStatus(), busyIndex = status.index ?? index;
+            resultDialog.sync(results, busyIndex, status, beforeIndex, definition);
+            const floors = new Set([...results.map(item => item.index), ...(updates.includes('after') ? [index] : []),
+                ...(beforeIndex >= 0 ? [beforeIndex] : []), ...(status.busy ? [busyIndex] : [])]);
+            for (const floor of floors) {
                 const floorTarget = document.querySelector(`.mes[mesid="${floor}"] .mes_text`);
                 if (floorTarget) {
-                    const group = element('div', undefined, 'lwb-state3-controls'), last = results.find(item => item.index === floor)?.result;
+                    const item = results.find(item => item.index === floor), last = item?.result;
+                    const isBefore = item?.stage === 'before' || floor === beforeIndex;
+                    const current = isBefore ? floor === beforeIndex : floor === index;
+                    const busy = status.busy && floor === busyIndex;
+                    const unsettled = isBefore && (!last || last.ok && !last.receipt?.beforeUpdate);
+                    const group = element('div', undefined, 'lwb-state3-controls lwb-variable-controls');
                     group.dataset.floor = String(floor);
-                    if (floor === index && status.busy) {group.append(button(COPY.cancel, api.cancel));}
+                    if (busy) {group.append(button(COPY.cancel, api.cancel));}
                     else if (last?.ok && last.saved === false) {group.append(button(COPY.retrySave, () => api.retrySave()));}
-                    else if (floor === index) {group.append(button(COPY.update, () => api.update()));}
-                    const label = element('span', floor === index && status.busy ? COPY.phases[status.phase] : last ? resultLabel(last) : COPY.noResult);
-                    label.setAttribute('role', 'status'); group.append(label, button(COPY.result, () => resultDialog.open(floor)));
-                    if (floor === index) {group.append(button(COPY.settings, () => this.open()));}
+                    else if (current && status.retryIndex === floor) {
+                        group.append(button(COPY.retryCalculation, () => isBefore ? api.recomputeBefore(floor) : api.update()));
+                        if (isBefore) {group.append(button(COPY.skipBefore, () => api.skipBefore(floor)));}
+                    }
+                    else if (current && isBefore && (last?.ok ? last.receipt?.beforeUpdate?.outcome === 'failed' : last)) {
+                        group.append(button(COPY.retryBefore, () => api.recomputeBefore(floor)), button(COPY.skipBefore, () => api.skipBefore(floor)));
+                    } else if (current && unsettled) {
+                        group.append(button(COPY.settleBefore, () => api.recomputeBefore(floor)), button(COPY.skipBefore, () => api.skipBefore(floor)));
+                    } else if (current && isBefore && item?.edited) {group.append(button(COPY.recompute, () => api.recomputeBefore(floor)));}
+                    else if (current && !isBefore && updates.includes('after')) {group.append(button(last?.ok && last.receipt ? COPY.retry : COPY.update, () => api.update()));}
+                    if (last) {group.append(button(COPY.result, () => resultDialog.open(floor)));}
+                    if (current) {group.append(button(COPY.settings, () => this.open()));}
+                    const statusLabel = element('span', [COPY.stageNames[isBefore ? 'before' : 'after'],
+                        busy ? COPY.phases[status.phase] : item?.edited ? COPY.messageEdited : unsettled ? COPY.unsettled : last ? resultLabel(last) : COPY.unsettled].join(' · '));
+                    statusLabel.setAttribute('role', 'status'); group.append(statusLabel);
                     floorTarget.after(group);
                 }
             }

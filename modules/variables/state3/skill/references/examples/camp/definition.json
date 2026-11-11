@@ -1,5 +1,6 @@
 {
   "format": 1,
+  "updates": ["after"],
   "name": "营地休息",
   "schema": {
     "type": "object",

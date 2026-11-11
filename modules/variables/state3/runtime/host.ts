@@ -6,6 +6,7 @@ import { readVariables, writeVariables } from './variables.js';
 import { reject } from '../engine/diagnostics.js';
 import { createSaveQueue } from './persistence.js';
 import { decodeBundle } from '../definition/card-files.js';
+import { digest } from '../definition/digest.js';
 import type { History, HostAdapter, JsonObject, Receipt, Snapshot, Success, SwipeRecord } from '../types.js';
 import type { CaptureContext } from '../../shared/context-capture.js';
 
@@ -20,7 +21,7 @@ export interface Context extends CaptureContext {
 }
 interface HostSnapshot extends Snapshot {
     chat: ChatMessage[]; messages: ChatMessage[]; metadata: Record<string, unknown>; chatId: string; characterId: number;
-    message?: ChatMessage; holder?: Holder; revision?: number; rules: unknown;
+    message?: ChatMessage; holder?: Holder; text?: string; revision?: number; rules: unknown;
     destination: { ch_name: string; file_name: string; avatar_url: string }; saveChat(): Promise<void>;
 }
 export const state3Context = () => getContext() as unknown as Context;
@@ -34,6 +35,10 @@ function record(message: ChatMessage): SwipeRecord {
 }
 const holders = (message: ChatMessage) => [message, ...(message.swipe_info || [])];
 export function selectedRecords(chat: ChatMessage[]): SwipeRecord[] { return chat.map(message => clone(record(message))); }
+export function latestUserIndex(chat: ChatMessage[], end = chat.length): number {
+    for (let index = end - 1; index >= 0; index--) {if (chat[index].is_user && !chat[index].is_system) {return index;}}
+    return -1;
+}
 function latestReply(ctx: Context): number {
     for (let index = ctx.chat.length - 1; index >= 0; index--) {if (!ctx.chat[index].is_user && !ctx.chat[index].is_system) {return index;}}
     return ctx.chat.length - 1;
@@ -58,9 +63,6 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             for (const holder of holders(message)) {
                 const stored = holder.extra?.[CHAT_KEY] as SwipeRecord | undefined;
                 if (!stored) {continue;}
-                // Load boundary for the removed test-line body entry point. Keep its effects
-                // and undo history, but let a new model update replace that submission.
-                if (opening) { for (const entry of stored.entries) {if (entry.source === 'body') {entry.source = 'model';}} }
                 if (added) {
                     stored.entries = stored.entries.filter(entry => !owners.has(entry.id) || owners.get(entry.id) === message);
                     if (!stored.entries.length) {delete holder.extra![CHAT_KEY];}
@@ -81,7 +83,15 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
         rememberOrder(): boolean;
         selectionChange(kind: 'delete' | 'swipe', index?: number): { previous: Receipt[]; next: Receipt[]; historical: boolean };
         retrySave(): Promise<{ ok: true; saved: true }>;
+        submissionBasis(index: number): string;
     } = {
+        submissionBasis(index) {
+            const ctx = state3Context(), history = ctx.chatMetadata[CHAT_KEY] as History | undefined;
+            // A pending local retry needs identity, not another copy of chat receipts.
+            return digest({ chat: ctx.chatId, target: { floor: index, swipeId: ctx.chat[index]?.swipe_id ?? 0 }, text: ctx.chat[index]?.mes,
+                revision: history?.revision, state: readVariables((ctx.chatMetadata.variables || {}) as Record<string, unknown>, history?.roots),
+                rules: ctx.characters?.[ctx.characterId]?.data?.extensions?.[CARD_EXTENSION] });
+        },
         bundle() {
             const ctx = state3Context();
             const rules = ctx.characters?.[ctx.characterId]?.data?.extensions?.[CARD_EXTENSION];
@@ -100,7 +110,7 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             if (history && history.format !== 2) {reject('history-format');}
             return { chat: ctx.chat, messages: [...ctx.chat], metadata: ctx.chatMetadata, chatId: ctx.chatId, characterId: ctx.characterId,
                 history: clone(history), state: readVariables((ctx.chatMetadata.variables || {}) as Record<string, unknown>, history?.roots),
-                records: selectedRecords(ctx.chat), index, message, holder: message && selected(message),
+                records: selectedRecords(ctx.chat), index, message, text: message?.mes, holder: message && selected(message),
                 rules: clone(character.data?.extensions?.[CARD_EXTENSION]), revision: history?.revision, target: { floor: index, swipeId: message?.swipe_id ?? 0 },
                 destination: { ch_name: character.name, file_name: character.chat, avatar_url: character.avatar }, saveChat: () => ctx.saveChat() };
         },
@@ -109,11 +119,12 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             return ctx.chat === snapshot.chat && ctx.chatMetadata === snapshot.metadata && ctx.chatId === snapshot.chatId
                 && ctx.characterId === snapshot.characterId && equal(snapshot.rules, ctx.characters?.[ctx.characterId]?.data?.extensions?.[CARD_EXTENSION]) && !inGroup(ctx) && history?.revision === snapshot.revision
                 && equal(snapshot.state, readVariables((ctx.chatMetadata.variables || {}) as Record<string, unknown>, snapshot.history?.roots))
-                && (!snapshot.message || (ctx.chat.includes(snapshot.message) && selected(snapshot.message) === snapshot.holder
+                && (!snapshot.message || (ctx.chat.includes(snapshot.message) && snapshot.message.mes === snapshot.text && selected(snapshot.message) === snapshot.holder
                     && (snapshot.message.swipe_id ?? 0) === snapshot.target.swipeId));
         },
         publish(snapshot, { state, history, records }) {
             if (!adapter.isCurrent(snapshot)) {reject('stale-target');}
+            retry = undefined;
             const roots = history.roots;
             snapshot.metadata.variables ??= {};
             writeVariables(snapshot.metadata.variables as Record<string, unknown>, state as JsonObject, roots);
@@ -142,8 +153,7 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
                 if (typeof metadata?.revision !== 'number' || metadata.revision < history.revision) {reject('save-unconfirmed');}
                 if (retry === requestSave) {retry = undefined;}
             };
-            const requestSave = () => enqueueSave(snapshot.metadata, save);
-            retry = requestSave;
+            const requestSave = () => { retry = requestSave; return enqueueSave(snapshot.metadata, save); };
             return requestSave;
         },
         committed,

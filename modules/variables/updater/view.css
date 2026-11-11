@@ -33,7 +33,4 @@
 .xb-variable-settings .xb-variable-annotations dl { display:grid; grid-template-columns:fit-content(30%) minmax(0,1fr); gap:5px 12px; margin:6px 0; }
 .xb-variable-settings .xb-variable-annotations dt,.xb-variable-settings .xb-variable-annotations dd { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
 .xb-variable-settings .xb-variable-error { color:var(--warning,#f5b880); }
-.xb-variable-controls { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:8px 0 4px; font-size:13px; }
-.xb-variable-controls button { color:inherit; background:var(--black30a,#0002); border:1px solid var(--SmartThemeBorderColor,#718096); border-radius:5px; padding:5px 9px; font:inherit; cursor:pointer; }
-.xb-variable-controls [role=status] { opacity:.8; }
 @media(max-width:640px) { .xb-variable-settings { width:calc(100vw - 12px); max-height:calc(100dvh - 12px); } .xb-variable-settings header,.xb-variable-settings main { padding:14px; } .xb-variable-settings nav { padding:10px 14px 0; flex-wrap:wrap; } .xb-variable-settings main { max-height:calc(100dvh - 180px); } }

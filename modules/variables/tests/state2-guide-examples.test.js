@@ -8,7 +8,7 @@ import { createHarness, readStoredValue } from './helpers/state2-harness.js';
 
 // Execute the guide's runnable examples as inputs, not a source spelling checklist.
 // This catches examples that drift from their initialization schema or public API.
-const guide = readFileSync(new URL('../state2/README.md', import.meta.url), 'utf8');
+const guide = readFileSync(new URL('../../../docs/user/variables-v2.md', import.meta.url), 'utf8');
 const examples = [...guide.matchAll(/^```(\w*)\r?\n([\s\S]*?)^```/gm)]
     .map(([, language, body]) => ({ language, body }));
 const initializer = examples.find(({ body }) => body.trimStart().startsWith('<<taskjs>>'));

@@ -47,13 +47,13 @@ export async function saveDraft(draft: Draft, updates: CardFile[]) {
 }
 
 export function draftBundle(draft: Draft) { return variableBundleFromFiles(draft.root, draft.files); }
-export async function checkDraft(draft: Draft, input: unknown = [], { signal, state }: RunOptions & { state?: Json } = {}): Promise<Result> {
+export async function checkDraft(draft: Draft, input: unknown = [], { signal, state, stage }: RunOptions & { state?: Json } = {}): Promise<Result> {
     try {
         const compiled = compileDefinition(draftBundle(draft));
-        if (state !== undefined) {return settle(compiled, state, input, { signal });}
+        if (state !== undefined) {return settle(compiled, state, input, { signal, stage });}
         const initial = await initialize(compiled, { signal });
         if (!initial.ok) {return initial;}
-        return settle(compiled, initial.state, input, { signal });
+        return settle(compiled, initial.state, input, { signal, stage });
     } catch (error) {return { ok: false, diagnostics: [diagnostic(error)] };}
 }
 export async function saveCardDraft(draft: Draft) {

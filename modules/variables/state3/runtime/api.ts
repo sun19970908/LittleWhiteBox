@@ -15,6 +15,9 @@ export interface State3Api {
     retrySave(): Promise<{ ok: true; saved: true }>;
     settings: typeof readSettings; saveSettings: typeof saveSettings;
     update(): Promise<Result>;
+    recomputeBefore(index: number): Promise<Result | undefined>;
+    skipBefore(index: number): Promise<Result>;
+    undoBefore(index: number): Promise<Result>;
     previewRequest: ReturnType<typeof createState3Updater>['previewRequest'];
     cancel(): void;
     updateStatus: ReturnType<typeof createState3Updater>['status'];

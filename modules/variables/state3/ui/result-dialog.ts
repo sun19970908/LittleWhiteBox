@@ -1,10 +1,10 @@
 import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 import { COPY, errorText } from './copy.js';
 import { element, showCheck, showResult } from './result.js';
-import type { Definition, Result } from '../types.js';
+import type { Definition, Result, UpdateStage } from '../types.js';
 import type { State3Api } from '../runtime/api.js';
 
-export interface FloorResult { index: number; result: Result }
+export interface FloorResult { index: number; result: Result; stage?: UpdateStage; edited?: boolean }
 
 /** The selected floor's current swipe, projected by the runtime; never a second history. */
 export function createResultDialog(api: State3Api) {
@@ -12,7 +12,7 @@ export function createResultDialog(api: State3Api) {
     const header = element('header'), title = element('h2', COPY.result), main = element('main'), notice = element('output');
     notice.setAttribute('role', 'status');
     let results: FloorResult[] = [], selected: number | undefined, standalone: Result | undefined, definition: Definition | undefined, check = false;
-    let busyIndex = -1, phase = '';
+    let busyIndex = -1, phase = '', beforeIndex = -1, retryIndex = -1;
     const button = (label: string, action: () => unknown | Promise<unknown>) => {
         const node = element('button', label, 'menu_button'); node.type = 'button';
         node.addEventListener('click', () => observeBackgroundTask((async () => {
@@ -25,11 +25,14 @@ export function createResultDialog(api: State3Api) {
     };
     function render() {
         main.replaceChildren();
-        const result = selected === undefined ? standalone : results.find(item => item.index === selected)?.result;
-        title.textContent = selected !== undefined ? COPY.floorResult(selected) : check ? COPY.checkTitle : result?.ok && !result.committed ? COPY.previewTitle : COPY.result;
+        const item = results.find(item => item.index === selected);
+        const result = selected === undefined ? standalone : item?.result;
+        title.textContent = selected !== undefined ? [COPY.floorResult(selected), item?.stage && COPY.stageNames[item.stage], COPY.result].filter(Boolean).join(' · ') : check ? COPY.checkTitle : result?.ok && !result.committed ? COPY.previewTitle : COPY.result;
         if (check && result) { const output = element('section'); showCheck(output, result); main.append(output); return; }
         if (selected === busyIndex) {main.append(element('p', COPY.phases[phase], 'lwb-state3-status'));}
         if (!result) { main.append(element('p', COPY.noResult)); return; }
+        if (item?.edited) {main.append(element('p', COPY.beforeEdited));}
+        if (result.ok && result.receipt?.beforeUpdate?.outcome === 'failed') {main.append(element('p', COPY.beforeFailure));}
         const output = element('section'); showResult(output, result, definition); main.append(output);
         const actions = element('div', undefined, 'lwb-state3-actions');
         if (result.ok && result.saved === false) {
@@ -40,7 +43,12 @@ export function createResultDialog(api: State3Api) {
                 notice.textContent = ''; render();
             }));
         }
-        if (selected !== undefined && result.ok && result.receipt && selected !== busyIndex) {
+        if (selected !== undefined && item?.stage === 'before' && selected === beforeIndex && busyIndex < 0 && !(result.ok && result.saved === false)) {
+            const index = selected;
+            actions.append(button(selected === retryIndex ? COPY.retryCalculation : COPY.recompute, () => api.recomputeBefore(index)));
+            if (selected === retryIndex || result.ok && result.receipt?.beforeUpdate?.outcome === 'failed') {actions.append(button(COPY.skipBefore, () => api.skipBefore(index)));}
+            else if (result.ok && result.receipt?.beforeUpdate?.outcome !== 'undone') {actions.append(button(COPY.undoReply, () => api.undoBefore(index)));}
+        } else if (selected !== undefined && item?.stage !== 'before' && result.ok && result.receipt && selected !== busyIndex) {
             const index = selected;
             actions.append(button(COPY.undoReply, () => api.undo({ index, all: true })));
         }
@@ -48,13 +56,14 @@ export function createResultDialog(api: State3Api) {
     }
     header.append(title, button(COPY.close, () => dialog.close()));
     dialog.append(header, main, notice); document.body.append(dialog);
+    dialog.addEventListener('close', () => { if (!dialog.open) {main.replaceChildren(); standalone = undefined;} });
     return {
-        sync(next: FloorResult[], index: number, status: ReturnType<State3Api['updateStatus']>) {
-            results = next; busyIndex = status.busy ? index : -1; phase = status.phase;
+        sync(next: FloorResult[], index: number, status: ReturnType<State3Api['updateStatus']>, userIndex = -1, rules?: Definition) {
+            results = next; busyIndex = status.busy ? index : -1; phase = status.phase; beforeIndex = userIndex; definition = rules; retryIndex = status.retryIndex ?? -1;
             if (dialog.open && selected !== undefined) {render();}
         },
         open(index: number) {
-            selected = index; standalone = undefined; definition = undefined; check = false; notice.textContent = ''; render();
+            selected = index; standalone = undefined; check = false; notice.textContent = ''; render();
             if (!dialog.open) {dialog.showModal();}
         },
         show(result: Result, rules?: Definition) {
@@ -65,7 +74,7 @@ export function createResultDialog(api: State3Api) {
             selected = undefined; standalone = result; definition = undefined; check = true; notice.textContent = ''; render();
             if (!dialog.open) {dialog.showModal();}
         },
-        clear() { results = []; selected = undefined; standalone = undefined; if (dialog.open) {dialog.close();} },
-        dispose() {dialog.remove();},
+        clear() { results = []; selected = undefined; standalone = undefined; definition = undefined; main.replaceChildren(); if (dialog.open) {dialog.close();} },
+        dispose() { results = []; standalone = undefined; definition = undefined; dialog.remove(); main.replaceChildren(); },
     };
 }

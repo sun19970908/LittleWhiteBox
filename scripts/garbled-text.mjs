@@ -4,9 +4,9 @@ import { parse } from 'acorn';
 // 已核实：mdurl/lib/decode.mjs 用替换字符表示非法 UTF-8；markdown-it 的 normalize 用它替换 NUL。
 // 只豁免该产物中这些 UTF-16 字符偏移，不豁免文件/行。原始字节指纹变化后全部失效，须重新核验。
 export const VERIFIED_REPLACEMENT_CHARACTERS = Object.freeze({
-    file: 'dist/shared/message-markdown-ejviO62i.js',
-    sha256: 'f8c9d47a06725efb6baaa4d03a86f5f75e58f6d78f61ef9a06dfa87c8c2ba105',
-    offsets: Object.freeze([632, 633, 871, 872, 873, 1165, 1166, 1167, 1168, 1254, 57715]),
+    file: 'dist/shared/markdown-it-CnQ4poDy.js',
+    sha256: '0cbf709ff85bc8d0c23227d3e200968ac9fb30914427d8c0992e9033e8114c29',
+    offsets: Object.freeze([632, 633, 871, 872, 873, 1165, 1166, 1167, 1168, 1254, 57711]),
 });
 
 // @jitl/quickjs-singlefile-cjs-release-sync 0.32.0 的原始 WASM；已与构建中的两个副本逐字节核对。

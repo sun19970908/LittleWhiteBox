@@ -4,7 +4,8 @@ import { parseHTML } from 'linkedom';
 import { createGalleryImageWindow } from '../gallery-image-window.js';
 import { createGalleryImageRequests } from '../../providers/novelai/gallery-image-requests.js';
 
-// Acceptance: scene-planner-design.md / gallery resource window. Resource
+// Acceptance: each gallery view loads only visible images and revokes off-screen URLs; closing a view
+// or a late response must not resurrect released resources. Resource
 // lifetime, stale delivery and retry are invisible failures that can crash a tab.
 const settle = () => new Promise(resolve => setTimeout(resolve, 0));
 function fixture(load) {

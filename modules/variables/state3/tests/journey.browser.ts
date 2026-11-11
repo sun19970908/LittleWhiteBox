@@ -226,7 +226,7 @@ export async function verifyChatOrganization(api: State3Api) {
 export async function verifyStorage(api: State3Api, size = 10000, turns = 160) {
     const inventory = Array.from({ length: size }, (_, index) => ({ id: 'item-' + index, quantity: 10 }));
     const bundle: Bundle = { definition: {
-        format: 1, name: 'Storage acceptance', initial: { inventory },
+        format: 1, updates: ['after'], name: 'Storage acceptance', initial: { inventory },
         schema: { type: 'object', required: ['inventory'], additionalProperties: false, properties: { inventory: { type: 'array', items: {
             type: 'object', required: ['id', 'quantity'], additionalProperties: false, properties: { id: { type: 'string' }, quantity: { type: 'number' } },
         } } } },

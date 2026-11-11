@@ -2,7 +2,7 @@
 
 本文从插件实现整理，说明角色卡作者能用小白X（LittleWhiteBox）做什么、代码运行在哪里、能调用哪些函数，以及各部分何时创建和销毁。
 
-迁自 cf-card-xiaobaix 1.6.0，已适配当前角色卡工作区。完整接口以插件 `modules/scheduled-tasks/README.md` 和对应源码为准；本文的插件路径相对于 ReadSkill 返回的插件目录。
+迁自 cf-card-xiaobaix 1.6.0，已适配当前角色卡工作区。完整接口以插件 `docs/user/tasks.md` 和对应源码为准；本文的插件路径相对于 ReadSkill 返回的插件目录。
 
 ## 0. 先选运行位置
 
@@ -86,54 +86,19 @@
 
 ### 2.2 触发时机
 
-| `triggerTiming` | 何时触发 | `interval` 的作用 |
-| --- | --- | --- |
-| `chat_changed` | 切换聊天（打开角色、切换到该角色的其他聊天） | 不参与 |
-| `character_init` / `initialization` | 新建聊天 | 不参与 |
-| `plugin_init` | 循环任务模块初始化后一次（页面加载、重新勾选“启用循环任务”） | 不参与。此时角色和聊天可能尚未就绪，角色卡的挂载入口不要只靠它 |
-| `after_ai` | AI 生成结束 | 正数：按楼层编号取模；`0` 表示不自动执行（配合按钮成为纯手动任务） |
-| `before_user` | 用户消息**已渲染到聊天后**；不是发送前拦截 | 同上 |
-| `any_message` | 上述两种时机都参与判断 | 同上 |
-| `only_this_floor` | 上述消息时机，且楼层编号**等于** `interval` | 目标编号。不是永久的一次性标记：同一楼重新生成会再次触发 |
+各时机的触发条件、`interval` 的作用、楼层计数（`floorType`）、swipe 与重新生成的判定、切聊天后约 2 秒的静默期、执行锁“跳过不排队”，统一见插件 `docs/user/tasks.md` 的“什么时候执行”。制卡时记住三点：
 
-楼层编号：`floorType` 对应类型的消息数减一（`all` 计全部消息，`user`/`llm` 只计非系统消息），最小为 0；第 0 层不触发。正数 `N` 在编号为 `N`、`2N`… 时匹配。`all` 配合 `after_ai` 时要同时满足“AI 刚生成”和“编号能整除”，不能理解为“每 N 次 AI 回复”；要按 AI 回复计数，用 `floorType: "llm"`。
-
-swipe 与重新生成：普通回复、重新生成、swipe 生成新候选，都在生成结束时按同一规则判断，不因 `swipe_id > 0` 跳过。只是左右切换查看已有候选，不算新生成。若脚本要求“每层只结算一次”或“替换旧结果”，由脚本自己记录已处理的楼层和候选（例如用 `swipe_id` 或消息的 `send_date` 作键）。
-
-其他约束：
-
-- 切换或新建聊天后约 2 秒内，消息时机不触发。
-- 有任务正在执行时，新的自动触发会被跳过，不排队。任务自己 `await STscript('/trigger')` 期间生成的那条回复，不会再触发 `after_ai` 任务。
-- 同一次触发命中的多个任务依次执行。
+- `all` 配合 `after_ai` 时要同时满足“AI 刚生成”和“编号能整除”，不是“每 N 次 AI 回复”；按 AI 回复计数用 `floorType: "llm"`。
+- swipe 和重新生成都会再次触发；“每层只结算一次”由脚本自己记录已处理的楼层和候选（例如用 `swipe_id` 或 `send_date` 作键）。
+- `plugin_init` 时角色和聊天可能尚未就绪，角色卡的挂载入口不要只靠它。
 
 ### 2.3 `commands` 与 `<<taskjs>>`
 
-`commands` 可以是斜杠命令，也可以包含 JavaScript 块：
+写法、块内注入的全部名字（`taskContext`/`ctx`、`STscript`、`addFloorListener`、托管监听与定时器、`abortSignal`、`onCleanup`）及其返回值，见插件 `docs/user/tasks.md` 的“脚本命令怎么写”和“JavaScript 块内提供的接口”。制卡要点：
 
-```text
-/echo 开始
-<<taskjs>>
-const c = SillyTavern.getContext();
-await STscript('/echo 当前共 ' + c.chat.length + ' 条消息');
-<</taskjs>>
-```
-
-- 块外文本按斜杠命令执行；块与块外片段按书写顺序依次执行。执行前整段做一次宏替换，所以 `/setvar key=a 1 | /echo {{getvar::a}}` 里的宏拿到的是执行前的旧值。
-- 块内是一个异步函数体：可以直接 `await`、`return`，不能写静态 `import`（可用动态 `import()`）。块内代码本身不做宏替换。
-- **块内代码在酒馆页面本身执行，不是 iframe，也不是沙箱。** `window`、`document`、`SillyTavern.getContext()`、jQuery `$`、`toastr` 都可直接用；不需要、也不应该“穿透到 `window.parent`”。
-- 同一任务里后一个 JS 块会替换前一个块的实例。要长期保留的监听和状态，写在同一个块里。
-
-块内可直接使用的名字（插件注入，共 12 个）：
-
-| 名字 | 作用 |
-| --- | --- |
-| `taskContext`（同 `ctx`） | `{ taskName, stableKey, codeSig, log(msg, extra), warn(msg, extra), error(msg, err, extra) }`；日志进小白X调试日志的 `scheduledTasks` 分类 |
-| `STscript(command)` | 执行斜杠命令，返回 Promise。命令先做宏替换；返回管道结果，能解析为 JSON 的会被解析（`"5"` 得到数字 5）。任务停止后调用不再执行，返回 `undefined`。命令执行出错会 reject，需要自己 `try/catch` |
-| `addFloorListener(cb, { interval, timing, floorType })` | 注册后持续响应楼层变化，过滤规则同 2.2；返回取消函数。回调参数 `{ timing, floors: { all, user, llm }, currentFloor, interval, floorType }`。不补发注册前发生的事件 |
-| `addListener(target, type, handler, opts)` / `removeListener(...)` | 注册浏览器事件监听，任务停止时自动移除 |
-| `setTimeoutSafe` / `clearTimeoutSafe` / `setIntervalSafe` / `clearIntervalSafe` | 托管定时器，任务停止时自动清除；`setIntervalSafe` 不等待上一轮异步回调结束 |
-| `abortSignal` | 当前实例的 `AbortSignal`，可传给 `fetch` 等支持取消的接口 |
-| `onCleanup(fn)` | 登记停止时的清理函数，返回取消登记的函数。`fn` 收到 `{ STscript }`，停止期间要执行命令用这个参数，不用正文里的 `STscript` |
+- **块内代码在酒馆页面本身执行，不是 iframe，也不是沙箱。** `window`、`document`、`SillyTavern.getContext()`、`$`、`toastr` 都可直接用；不需要、也不应该“穿透到 `window.parent`”。
+- 执行前整段做一次宏替换，所以 `/setvar key=a 1 | /echo {{getvar::a}}` 里的宏拿到的是执行前的旧值；块内代码本身不做宏替换。
+- 同一任务里后一个 JS 块会替换前一个块的实例，长期保留的监听和状态写在同一个块里。
 
 插件只会自动清理“托管”的东西：`addListener` 的监听、`*Safe` 定时器、`addFloorListener` 回调。以下都要作者在 `onCleanup` 里自己撤销：
 
@@ -144,28 +109,14 @@ await STscript('/echo 当前共 ' + c.chat.length + ' 条消息');
 
 ### 2.4 实例何时停止、何时不停止
 
-每个任务同一时间只有一个 JS 实例。
-
-会停止实例（依次中止信号、清除托管资源、执行 `onCleanup`）：
-
-- 重新执行同一任务（自动触发、按钮、`/xbqte`）：先停旧实例，等其清理完成，再启动新实例。名称以 `[x]` 开头的任务不等待旧实例的顶层代码结束；
-- 停用、删除任务，修改名称或脚本；
-- `/xbtaskreset`（停止全部实例，保留任务定义）；
-- 取消勾选“启用循环任务”；
-- 顶层代码抛出异常；
-- 角色任务离开所属角色：切到别的角色、进入群聊，或关闭聊天回到角色列表。不论实例由自动触发、按钮、`/xbqte` 还是 `XBTasks.exec` 启动。角色任务不在群聊中运行。
-
-**不会**停止实例：
-
-- 同一角色内切换聊天。`chat_changed` 任务会在切换时重新执行，按上面“重新执行”的规则替换旧实例；按钮启动的常驻实例保留；
-- 顶层代码正常结束。注册的监听、回调仍然有效。
+完整规则见插件 `docs/user/tasks.md` 的“运行实例什么时候停止”和“生命周期规则”。制卡要点：角色任务在切到别的角色、进入群聊或关闭聊天时停止（不论由什么方式启动）；同一角色内切换聊天不停止，但 `chat_changed` 任务会重新执行并替换旧实例。
 
 常驻脚本的顶层代码应注册完回调就结束，不要写无限循环或长期 `await`，否则会一直占着执行锁，阻止其他任务的自动触发。
 
 ### 2.5 管理与排错
 
-- `/xbqte 任务名`：手动执行（检查启用状态与冷却）；`/xbtaskreset`：停止全部实例；`/xbset status=on|off interval=N timing=… floorType=… 任务名`：修改全局或角色任务。
-- `window.XBTasks`：`list`、`dump`、`find`、`exec`、`setCommands`、`setJS`、`setProps` 等页面级接口。
+`/xbqte`、`/xbtaskreset`、`/xbset` 和 `window.XBTasks` 见插件 `docs/user/tasks.md` 的“管理已有任务”。
+
 - JS 块抛出的异常只进浏览器控制台和小白X调试日志，没有弹窗，后续片段仍会执行。斜杠命令片段执行出错会中断本次触发里排在后面的任务。
 - 先手动执行确认效果，再测试自动触发；常驻任务要验证：重复执行后没有重复界面或监听，停用任务后界面消失，切到别的角色后界面消失。
 
@@ -173,13 +124,7 @@ await STscript('/echo 当前共 ' + c.chat.length + ' 条消息');
 
 ### 3.1 什么会被渲染成 iframe
 
-小白X只处理楼层显示结果中的**代码块**（`<pre><code>`）。满足以下任一条件的代码块会变成 iframe：
-
-- 内容含 `<!doctype`、`<html` 或 `<script`；
-- 以常见 HTML 标签开头（`div`、`style`、`svg`、`canvas`、`table`、`section`、`button` 等）；
-- 整块只有一个 `http(s)` 网址，或包含 `<!-- xb-src: 网址 -->`（加载外部页面）。
-
-所以：
+识别规则见插件 `docs/user/render.md` 的“哪些代码块会被渲染”。小白X只处理楼层显示结果中的**代码块**（`<pre><code>`），所以：
 
 - AI 输出、开场白或世界书引导 AI 输出的 HTML 要放在代码块里（三个反引号）。直接写在正文里的 HTML 不会被渲染成 iframe。
 - 酒馆正则的替换结果，只有写成代码块时才会被渲染成 iframe；否则按酒馆正则美化处理（净化、无脚本）。
@@ -199,28 +144,7 @@ await STscript('/echo 当前共 ' + c.chat.length + ' 条消息');
 
 ### 3.2 iframe 里可以直接用的函数
 
-小白X在每个楼层 iframe 的 `<head>` 前注入以下全局函数：
-
-| 名字 | 作用 |
-| --- | --- |
-| `STscript(command)`（同 `stscript`） | 让酒馆执行斜杠命令，返回 Promise。与任务里的 `STscript` 一样先宏替换、结果按 JSON 解析；180 秒超时 |
-| `callGenerate(options)`（同 `CallGenerate`） | 调用当前聊天补全 API 生成文本，默认流式，300 秒超时。返回 `{ success, result, sessionId, metadata }`；常用选项见下 |
-| 头像样式 | 自动请求用户与角色头像，设置 CSS 变量 `--xb-user-avatar`、`--xb-char-avatar`，并提供 `.xb-user-avatar`、`.xb-char-avatar`（36px 圆形）类 |
-
-`callGenerate` 常用选项：
-
-- `userInput`：作为最后一条用户消息；
-- `components: { list: ['ALL_PREON'] }`：带上当前预设已启用的全部条目（含聊天记录、世界书）；不写 `list` 时不带任何预设内容；
-- `injections: [{ role, content, position: 'BEFORE_PROMPT' | 'IN_PROMPT' | 'IN_CHAT' | 'AFTER_COMPONENT', depth }]`：额外插入；
-- `streaming: { enabled, onChunk(chunk, accumulated) }`：流式回调；
-- `preset`：临时使用某个聊天补全预设；`api: { overrides: { provider, model, temperature, maxTokens, … } }`：默认继承当前连接，覆盖列出的接口参数。
-
-只支持聊天补全（Chat Completion）类 API。失败时 Promise 会 reject：`error.message` 是原因，`error.code` 是错误码（如 `API_ERROR`、`CANCELLED`、`INVALID_OPTIONS`），`error.details` 是附加信息。
-
-iframe 还会收到这些消息（`window.addEventListener('message', …)`）：
-
-- 向父页面发送 `{ type: 'iframe-ready' }` 或 `{ type: 'request-context' }`，会收到 `{ type: 'st-context', chatId, characterId, characterName, userName, userPersona, userAvatar, msgIndex, swipeId, totalSwipes, totalMessages, isGroupChat, groupId }`。`msgIndex` 是本 iframe 所在楼层。
-- 之后会收到 `{ source: 'xiaobaix-host', type: 'st-event', event, payload }`。`message_sent`、`message_received`、`message_edited`、`message_swiped`、`message_deleted`、`chat_id_changed`、`chat_created` 广播给当前所有楼层 iframe；`chat_deleted`、`group_chat_deleted` 只排队交给下一个发出 `iframe-ready` 的 iframe（插件 `bridges/context-bridge.js`）。所在楼层被 swipe、编辑时本 iframe 会被重建，这些事件主要对其他楼层的 iframe 有用。
+`STscript`、`callGenerate`、头像样式，以及 `request-context` / `iframe-ready` 拿 `st-context`、`st-event` 事件推送，统一见插件 `docs/user/render.md` 的“网页里可以用的函数”。
 
 受管玩法状态的读取、按钮写入和失败反馈由所用变量版本的技能说明（ReadSkill builtin-state3 或 builtin-state2）。
 
@@ -361,7 +285,7 @@ display: "她把你当作轻薄之人。"
 - `await xiaobaixDraw.getPresets({ provider })` 返回 `{ provider, api, params, workflows }`，各预设项为 `{ id, name, selected }`，不暴露密钥。
 - `await xiaobaixTts.synthesize(text, options)` 返回音频 `Blob`。
 
-参数与可复制示例统一读取目标插件的 `docs/media-api.html`：绘图代码在 `#draw-example`，语音代码在 `#tts-example`。按这两段示例处理请求、取消、结果展示及页面退出/返回，再按卡的需求调整提示词、参数与布局。尤其注意供应商字段层级不同：NovelAI / SD 的种子在 `params.seed`，ComfyUI 的种子在请求顶层。
+参数与可复制示例统一读取目标插件的 `docs/user/media-api.md`：绘图代码在 info string 为 `html draw-example` 的代码块，语音代码在 `html tts-example` 的代码块。按这两段示例处理请求、取消、结果展示及页面退出/返回，再按卡的需求调整提示词、参数与布局。尤其注意供应商字段层级不同：NovelAI / SD 的种子在 `params.seed`，ComfyUI 的种子在请求顶层。
 
 图片 Blob 通过 `URL.createObjectURL` 展示，替换或卸载时释放 URL。传 `signal` 支持取消，任务可传 `abortSignal`；`onProgress` 提供阶段/排队反馈，不是百分比。错误中的 `partialResult.images` 可保留显示，不自动重新请求。
 
@@ -370,7 +294,7 @@ display: "她把你当作轻薄之人。"
 <a id="draw-contract"></a>
 ### 6.1 绘图请求的实际契约
 
-先读插件 `docs/media-api.html`（字段表、三家 `params` 表、错误码、保存结果）和类型声明 `modules/draw/shared/public-api.d.ts`。以下是这两份之外、在插件源码里核实的补充。
+先读插件 `docs/user/media-api.md`（字段表、三家 `params` 表、错误码、保存结果）和类型声明 `modules/draw/shared/public-api.d.ts`。以下是这两份之外、在插件源码里核实的补充。
 
 - `xiaobaixDraw.getStatus()` 同步返回 `{ provider, enabled, ready }`。`ready` 只表示总开关开着、选了服务、该服务的画图模块已加载（插件 `plugin-entry.js`），不检查 API 地址、密钥、模型有没有填，这些缺了要到 `generate` 才报 `not_configured`。用它决定显不显示画图按钮；一次点击要先花一次聊天请求构图时，`ready` 只能挡住没开、没选的情况，画图这步仍要处理 `not_configured`，并把已花掉的构图结果留住（例如显示出来、允许重画时复用），不要直接丢弃。
 - 请求顶层或 `params` 里多出任何键都抛 `unsupported_field`；`params` 的值类型须与该供应商默认值一致（`public-api.js` 的 `validateDrawParams`）。
@@ -386,7 +310,7 @@ display: "她把你当作轻薄之人。"
 <a id="draw-storage"></a>
 ### 6.3 把生成的图留在楼层上
 
-编号、单设备（IndexedDB）与跨设备（酒馆服务器 + 聊天元数据）两种存法，按插件 `docs/media-api.html#keep`。卡侧补充：
+编号、单设备（IndexedDB）与跨设备（酒馆服务器 + 聊天元数据）两种存法，按插件 `docs/user/media-api.md` 的“保存生成结果”一节。卡侧补充：
 
 - 单设备存法的库归卡所有，删除路径也归卡：订阅 `CHAT_DELETED`、`GROUP_CHAT_DELETED`（参数为聊天文件名，不带 `.jsonl`）删掉该聊天的记录；`CHAT_RENAMED` 的参数是 `{ oldFileName, newFileName }`，带 `.jsonl`，按新名改键。编号里的聊天名用 `getCurrentChatId()`。
 - 显示时把当前聊天的记录读进内存，楼层重绘后同步插回；`URL.createObjectURL` 的地址在换图、撤去、切换聊天和 `onCleanup` 时释放。
@@ -395,18 +319,12 @@ display: "她把你当作轻薄之人。"
 
 这是已有卡可能使用的另一套显示能力，不在 CardFiles 当前可写回的字段内。需要制作楼层前端时使用本文已说明的正则与 HTML 代码块；不要在 card.json 里自造模板字段。
 
-保存在 `data.extensions['xiaobaix-template']`：`{ enabled, template, customRegex, disableParsers, limitToRecentMessages, recentMessageCount, skipFirstMessage }`。
-
-- 模板 HTML 里写 `[[变量名]]` 占位；默认从 AI 消息中用 `[名]值[/名]` 提取变量，也可用 `customRegex` 自定义，或解析 JSON/YAML。
-- 模板含 `<html`、`<!DOCTYPE` 或 `<script` 时用 iframe 渲染，生成过程中会实时更新占位内容。
-- 模板 iframe 里除 3.2 的函数外，还有 `updateTemplateVariables(vars)` 和 `loadExternalPage(url, 挂载点, { minHeight })`。
-- 只能把每楼输出套进固定版式，不提供跨楼层界面。TauriTavern 托管界面下不可用。
+保存在 `data.extensions['xiaobaix-template']`。`[[变量]]` 占位、提取方式、完整网页模板及其额外函数见插件 `docs/user/template.md`。只能把每楼输出套进固定版式，不提供跨楼层界面；TauriTavern 托管界面下不可用。
 
 ## 8. 其他可用命令
 
-- `/xbgen 提示词`：用完整上下文（预设、世界书、聊天记录）额外生成一段文本，参数 `as=system|user|assistant`、`nonstream=true`（直接返回文本；否则返回会话 ID）、`position=bottom|history` 等。
-- `/xbgenraw 提示词`：只发送自己给的内容，可用 `addon=preset,chatHistory,worldInfo,…` 按需加入上下文，`top…=`/`bottom…=` 指定前后消息。
-- `/xbaudio play=on mode=loop|once volume=1-10 网址`：播放网络音频，切换聊天时重置。
+- `/xbgen`、`/xbgenraw`：额外生成一段文本；参数、返回值与报错见插件 `docs/user/streaming.md`。
+- `/xbaudio`：播放网络音频；参数见插件 `docs/user/render.md` 的“`/xbaudio` 播放网络音频”一节。
 
 <a id="internal-docs"></a>
 ## 9. 查内部文档（画图、斜杠命令、酒馆 API）
@@ -416,12 +334,17 @@ display: "她把你当作轻薄之人。"
 以下路径相对于目标酒馆的 LittleWhiteBox 插件目录，不是角色卡工程目录：
 
 ```text
-docs/media-api.html
+docs/user/media-api.md
+docs/user/render.md
+docs/user/template.md
+docs/user/streaming.md
+docs/user/tasks.md
 modules/assistant/references/stscript-reference.md
 modules/assistant/references/sillytavern-javascript-api-reference.md
 ```
 
-- **画图与语音接口**：读 `docs/media-api.html`。含直接可用的楼层 HTML 画图/语音组件、取消与 `Blob` URL 释放、错误码及三家画图服务的参数表。
+- **画图与语音接口**：读 `docs/user/media-api.md`。含直接可用的楼层 HTML 画图/语音组件、取消与 `Blob` URL 释放、错误码及三家画图服务的参数表。
+- **楼层网页、模板、`/xbgen`、循环任务**：读 `docs/user/render.md`、`template.md`、`streaming.md`、`tasks.md`，均为用户文档，是这些功能的唯一说明。
 - **斜杠命令**：读 `stscript-reference.md`。按命令名查“命令索引”和“命令详细定义”，拼接命令前查“转义与引号规则”，通过 `STscript()` 调用。
 - **酒馆 JavaScript API**：读 `sillytavern-javascript-api-reference.md`。按函数名或数据查签名、用途及源码位置；任务里用 `SillyTavern.getContext()` 取得 `ctx`，HTML 里的调用位置按第 3 节选择。文档中的 `st.*` 是模块命名空间，不是任务或 HTML 默认注入的全局对象。
 - **查阅顺序**：先查上面的文档和对应的 `.d.ts` 类型声明；文档没写、或实际表现与文档不符时，才读插件或酒馆源码。已核实的结论可记到助手工作记录，本内置资料随插件维护。

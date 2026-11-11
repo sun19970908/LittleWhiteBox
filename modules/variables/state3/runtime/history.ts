@@ -4,6 +4,7 @@ import { createIdentifier } from '../../../../shared/common/identifier.js';
 import { difference, applyDifference } from '../engine/difference.js';
 import { displayChanges } from '../engine/delta-view.js';
 import { retainEffects } from './rebase.js';
+import { modelSource } from '../definition/stages.js';
 export { difference, applyDifference } from '../engine/difference.js';
 export { digest } from '../definition/digest.js';
 
@@ -11,7 +12,8 @@ export const effectiveDelta = (receipt: Receipt) => Object.hasOwn(receipt, 'appl
 
 export function makeReceipt({ before, result, revision, source = 'api' }: { before: Json; result: Success; revision: number; source?: string }): Receipt {
     return { id: createIdentifier(), revision, source, delta: difference(before, result.state),
-        actions: result.actions.map(({ id }) => ({ id })) };
+        // Before outcomes must identify the executed actions when replayed to prose.
+        actions: source === modelSource('before') ? clone(result.actions) : result.actions.map(({ id }) => ({ id })) };
 }
 
 export function restore(state: Json, entries: Receipt[], reverse = false): Json {

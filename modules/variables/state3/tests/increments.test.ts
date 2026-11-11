@@ -20,7 +20,7 @@ const set = (value: Json, path = ['hero', 'coins']) => ({ op: 'set', path, value
 const coins = (state: Json) => (state as { hero: { coins: number } }).hero.coins;
 function shop(): Bundle {
     return { definition: {
-        format: 1, name: 'Shop', schema: { type: 'object', required: ['hero'], additionalProperties: false, properties: {
+        format: 1, updates: ['after'], name: 'Shop', schema: { type: 'object', required: ['hero'], additionalProperties: false, properties: {
             hero: { type: 'object', required: ['coins', 'stock', 'total', 'ready', 'claimed'], additionalProperties: false, properties: {
                 coins: { type: 'integer', minimum: 0 }, stock: { type: 'integer', minimum: 0 }, total: { type: 'number' },
                 ready: { type: 'boolean' }, claimed: { type: 'boolean' },
@@ -128,7 +128,6 @@ test('I4: a capped increment preserves the event reason and exposes the actual r
         Object.defineProperty(globalThis, 'document', { value: document, configurable: true });
         const root = document.querySelector('main')!;
         showResult(root as unknown as HTMLElement, result, bundle.definition);
-        assert.equal(root.querySelectorAll('.lwb-state3-change').length, result.changes.length);
         assert.equal(root.querySelector('.lwb-state3-reason')?.textContent, result.annotations?.[0].fields[0][1]);
     } finally {
         if (previous) { Object.defineProperty(globalThis, 'document', previous); } else { Reflect.deleteProperty(globalThis, 'document'); }

@@ -1,0 +1,6 @@
+.lwb-variable-controls{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:8px 0 4px;font-size:13px}
+.lwb-variable-controls button{color:inherit;background:var(--black30a,#0002);border:1px solid var(--SmartThemeBorderColor,#718096);border-radius:5px;padding:5px 9px;margin:0;width:auto;min-height:30px;white-space:nowrap;font:inherit;cursor:pointer}
+.lwb-variable-controls button:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#9cf);outline-offset:2px}
+.lwb-variable-controls button:disabled{opacity:.5;cursor:wait}
+.lwb-variable-controls [role=status]{opacity:.85;overflow-wrap:anywhere}
+@media(pointer:coarse){.lwb-variable-controls button{min-height:38px}}

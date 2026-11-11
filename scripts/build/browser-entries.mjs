@@ -13,6 +13,7 @@ export const entries = {
     'apps/assistant': 'modules/assistant/app-src/main.js',
     'apps/ebook': 'modules/ebook/app-src/main.js',
     'apps/story-summary': 'modules/story-summary/story-summary-ui.js',
+    'apps/docs': 'docs/viewer/main.js',
     'apps/xiaobai-os': 'modules/xiaobai-os/shell/app-src/main.ts',
     'runtime/os-agent': 'modules/xiaobai-os/agent/browser-entry.ts',
     'runtime/map-projection': 'modules/xiaobai-os/apps/map/ui/projection-entry.ts',

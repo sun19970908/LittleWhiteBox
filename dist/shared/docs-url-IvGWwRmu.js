@@ -1,0 +1,1 @@
+import{r as o}from"./constants-RJ4jNr01.js";function d(e="index",n=""){return`/${o}/docs/index.html${e==="index"?"":`?page=${encodeURIComponent(e)}`}${n?`#${encodeURIComponent(n)}`:""}`}export{d as t};

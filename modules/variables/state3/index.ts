@@ -4,7 +4,7 @@ import { mergeAbortSignals } from '../../../shared/common/abort-utils.js';
 import { isGenerating } from '../../../shared/common/sillytavern-generation-state.js';
 import { waitForAfterAiReady } from '../../../core/after-ai-gate.js';
 import { createSettlementService } from './runtime/service.js';
-import { createHostAdapter, state3Context as getContext, inGroup, type ChatMessage } from './runtime/host.js';
+import { createHostAdapter, state3Context as getContext, inGroup, latestUserIndex, type ChatMessage } from './runtime/host.js';
 import { compileDefinition } from './definition/compile.js';
 import { initialize, settle } from './engine/settle.js';
 import { diagnostic, reject } from './engine/diagnostics.js';
@@ -16,9 +16,11 @@ import { notifyError } from './ui/notifications.js';
 import { CHAT_KEY, CARD_EXTENSION } from './definition/format.js';
 import { createState3Macros } from './model/macros.js';
 import { createState3Updater } from './model/updater.js';
+import { createBeforeGeneration } from './runtime/before-generation.js';
+import { digest } from './definition/digest.js';
 import { readSettings, saveSettings, state3Selected, selectState3 } from './runtime/settings.js';
 export { state3Selected } from './runtime/settings.js';
-import type { Result, RunOptions } from './types.js';
+import type { Result, RunOptions, Success } from './types.js';
 import type { State3Api } from './runtime/api.js';
 
 let runtime: { page: ReturnType<typeof createState3Page>; modeChanged(): void; dispose(): void } | undefined;
@@ -28,6 +30,7 @@ export function initState3() {
     const events = createModuleEvents('variables3'), macros = createState3Macros();
     let lastResult: Result | undefined, page: ReturnType<typeof createState3Page> | undefined;
     let resultMessage: ChatMessage | undefined;
+    let beforeResult: Success | undefined;
     let swipeRecovery: MutationObserver | undefined;
     let pendingGeneration: { chat: ChatMessage[]; message?: ChatMessage } | undefined;
     let lifecycle = new AbortController(), selectedMode = state3Selected();
@@ -69,14 +72,16 @@ export function initState3() {
         if (current()) {
             lastResult = result; resultMessage = target; await syncProjection();
             if (!current()) {return result;}
+            if (result.ok && result.receipt?.beforeUpdate) {beforeResult = result;}
             refresh();
             if (result.ok && result.committed) {document.dispatchEvent(new CustomEvent('lwb:state3:committed', { detail: structuredClone(result) }));}
         }
         return result;
     };
     // Every rule writeback, through CardFiles or this API, refreshes the description macros before it resolves.
-    const stopRulesSaved = onRulesSaved(() => report(syncProjection()));
+    const stopRulesSaved = onRulesSaved(() => { updater.cancel(); return report(syncProjection().then(refresh)); });
     const updater = createState3Updater({ service, adapter, available, changed: () => refresh() });
+    const before = createBeforeGeneration({ adapter, service, updater, retain, refresh, report });
     const api: State3Api = {
         stage(options) { available(); return service.stage(owned(options)); },
         apply(input, options) { available(); return retain(service.apply(input, owned(options)), options?.index); },
@@ -93,12 +98,12 @@ export function initState3() {
                 return result;
             })());
         },
-        async tryDefinition(bundle, input = [], { state, signal } = {}) {
+        async tryDefinition(bundle, input = [], { state, signal, stage } = {}) {
             try {
                 const compiled = compileDefinition(bundle);
-                if (state !== undefined) {return settle(compiled, state, input, { signal });}
+                if (state !== undefined) {return settle(compiled, state, input, { signal, stage });}
                 const initial = await initialize(compiled, { signal });
-                return initial.ok ? settle(compiled, initial.state, input, { signal }) : initial;
+                return initial.ok ? settle(compiled, initial.state, input, { signal, stage }) : initial;
             } catch (error) { return { ok: false, diagnostics: [diagnostic(error)] }; }
         },
         openDraft, saveDraft, checkDraft, exportRules, prepareRuleImport,
@@ -107,11 +112,19 @@ export function initState3() {
         async retrySave() {
             const epoch = lifecycle, result = lastResult;
             const saved = await adapter.retrySave();
-            if (epoch === lifecycle && lastResult === result && result?.ok) { lastResult = { ...result, saved: true }; delete lastResult.persistence; }
-            refresh(); return saved;
+            if (epoch !== lifecycle || epoch.signal.aborted || lastResult !== result) {return saved;}
+            if (result?.ok) {
+                lastResult = { ...result, saved: true }; delete lastResult.persistence;
+                if (beforeResult === result) {beforeResult = lastResult;}
+            }
+            refresh();
+            if (result?.ok && result.receipt?.beforeUpdate && resultMessage) {await before.resume(getContext().chat.indexOf(resultMessage));}
+            return saved;
         }, settings: readSettings, saveSettings,
-        update: () => retain(updater.update()), previewRequest: options => updater.previewRequest(owned(options)),
-        cancel: () => updater.cancel(), updateStatus: () => updater.status(),
+        update: () => retain(updater.update(owned({ stage: 'after' as const }))),
+        recomputeBefore: index => before.run(index), skipBefore: index => before.skip(index), undoBefore: index => before.undo(index),
+        previewRequest: options => updater.previewRequest(owned(options)),
+        cancel: () => before.cancel(), updateStatus: () => before.status(),
         async openAssistant() {
             const { openCardWorkspace } = await import('../../assistant/assistant.js');
             await openCardWorkspace({ variables: true, version: '3.0' });
@@ -123,28 +136,37 @@ export function initState3() {
         if (!state3Selected() || inGroup(getContext())) { document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove()); return; }
         try {
             const snapshot = adapter.capture();
+            if (!snapshot.history) { document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove()); return; }
+            const ctx = getContext(), definition = adapter.bundle().definition, updates = definition.updates;
+            const userIndex = latestUserIndex(ctx.chat);
+            const beforeIndex = snapshot.history && updates.includes('before') && ctx.chat[userIndex]?.mes?.trim() ? userIndex : -1;
             const results = snapshot.records.flatMap((record, index) => {
                 const receipt = record.entries.at(-1);
-                return receipt && snapshot.history ? [{ index, result: receiptResult(snapshot.state, receipt) as Result }] : [];
+                return receipt && snapshot.history ? [{ index, result: (receipt.id === beforeResult?.receipt?.id ? beforeResult : receiptResult(snapshot.state, receipt)) as Result,
+                    stage: ctx.chat[index]?.is_user ? 'before' as const : 'after' as const,
+                    edited: Boolean(receipt.beforeUpdate && receipt.beforeUpdate.inputDigest !== digest(ctx.chat[index]?.mes)) }] : [];
             });
             const resultIndex = resultMessage ? getContext().chat.indexOf(resultMessage) : snapshot.index;
             if (lastResult && resultIndex >= 0) {
                 const existing = results.find(item => item.index === resultIndex);
-                if (existing) {existing.result = lastResult;} else {results.push({ index: resultIndex, result: lastResult });}
+                if (existing) {existing.result = lastResult;} else {results.push({ index: resultIndex, result: lastResult,
+                    stage: ctx.chat[resultIndex]?.is_user ? 'before' : 'after', edited: false });}
             }
-            page?.mountControl(snapshot.index, results);
+            page?.mountControl(snapshot.index, results, { updates, beforeIndex, definition });
         }
         catch (error) { if (!['chat-missing', 'character-missing'].includes(diagnostic(error).code)) {throw error;} }
     }
     function changed() {
         clearSwipeRecovery(); pendingGeneration = undefined; lifecycle.abort(); lifecycle = new AbortController();
-        updater.cancel(); macros.clear(); lastResult = undefined; resultMessage = undefined; adapter.remember();
+        before.changed(); macros.clear(); lastResult = undefined; resultMessage = undefined; beforeResult = undefined; adapter.remember();
         page?.targetChanged(); refresh(); observeBackgroundTask(report(syncProjection()), { source: import.meta.url, operation: 'projection' });
     }
     function modeChanged() { if (state3Selected() !== selectedMode) { selectedMode = state3Selected(); changed(); } else {refresh();} }
-    function invalidateResult() {
+    function invalidateResult(keepBefore = false) {
         lifecycle.abort(); lifecycle = new AbortController();
-        updater.cancel(); lastResult = undefined; resultMessage = undefined;
+        lastResult = undefined; resultMessage = undefined;
+        // The before-generation owner handles generation cancellation/reuse.
+        if (!keepBefore) {updater.cancel(); beforeResult = undefined;}
         page?.targetChanged();
     }
     function clearSwipeRecovery() { swipeRecovery?.disconnect(); swipeRecovery = undefined; }
@@ -199,7 +221,7 @@ export function initState3() {
     events.on(event_types.GENERATION_STARTED, (type: string, _options: unknown, dryRun: boolean) => {
         if (dryRun) {return syncProjection();}
         if (!state3Selected() || !['normal', 'regenerate', 'swipe', 'continue', undefined, ''].includes(type)) {return;}
-        invalidateResult(); adapter.remember(); pendingGeneration = { chat: getContext().chat };
+        invalidateResult(true); adapter.remember(); pendingGeneration = { chat: getContext().chat };
         return syncProjection();
     });
     events.on(event_types.MESSAGE_RECEIVED, (index: number) => {
@@ -215,7 +237,7 @@ export function initState3() {
             const messageId = ctx.chat.indexOf(message);
             if (messageId < 0) {return;}
             pendingGeneration = undefined;
-            if (readSettings().auto) {await api.update();}
+            if (ctx.chatMetadata[CHAT_KEY] && readSettings().auto && adapter.bundle().definition.updates.includes('after')) {await api.update();}
             adapter.remember(); refresh();
         })()), { source: import.meta.url, operation: 'afterGeneration' });
     });
@@ -225,7 +247,7 @@ export function initState3() {
         if (ctx.characters?.[ctx.characterId]?.data?.extensions?.[CARD_EXTENSION]) {await api.enable({ signal: lifecycle.signal });}
     });
     window.LWB_StateV3 = api;
-    runtime = { page, modeChanged, dispose() { stopRulesSaved(); lifecycle.abort(); clearSwipeRecovery(); topology.disconnect(); updater.cancel(); macros.dispose(); events.cleanup(); page?.dispose(); delete window.LWB_StateV3; } };
+    runtime = { page, modeChanged, dispose() { stopRulesSaved(); lifecycle.abort(); clearSwipeRecovery(); topology.disconnect(); before.dispose(); macros.dispose(); events.cleanup(); page?.dispose(); delete window.LWB_StateV3; } };
     refresh();
     if (state3Selected()) {observeBackgroundTask(report(syncProjection()), { source: import.meta.url, operation: 'projection' });}
 }

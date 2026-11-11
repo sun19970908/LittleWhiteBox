@@ -29,7 +29,7 @@ export function fixture() {
         committed() { notices++; },
     };
     const service = createSettlementService(adapter);
-    return { service: { ...service, enable: (bundle: Bundle) => { card = clone(bundle); return service.enable(); } },
+    return { adapter, service: { ...service, enable: (bundle: Bundle) => { card = clone(bundle); return service.enable(); } },
         setCard(bundle: Bundle) { card = clone(bundle); identity = {}; },
         saved: () => clone({ state, history, records, card }), counts: () => ({ saves, notices }),
         switch: () => { identity = {}; }, failSave: () => { saveFails = true; },

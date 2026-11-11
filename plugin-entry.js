@@ -15,7 +15,7 @@ import {
     refreshChatMessageImages,
 } from './modules/draw/shared/chat-message-images.js';
 import { initImmersiveMode } from "./modules/immersive-mode.js";
-import { hasActiveCustomTemplate, hasCustomTemplateForMessage, initTemplateEditor } from "./modules/template-editor/template-editor.js";
+import { createDefaultTemplateSettings, hasActiveCustomTemplate, hasCustomTemplateForMessage, initTemplateEditor } from "./modules/template-editor/template-editor.js";
 import {
     cleanupXiaobaiOs,
     createDefaultXiaobaiOsSettings,
@@ -76,6 +76,7 @@ import { initAssistant, cleanupAssistant } from "./modules/assistant/assistant.j
 import { createPublicAgentApi } from './modules/agent-core/public-api.js';
 import { loadSharedAgentSettings } from './modules/agent-core/settings-repository.js';
 import { setHostRequestHeadersProvider } from './shared/host-request-headers.js';
+import { docsUrl } from './shared/docs-url.js';
 import { initEbook, cleanupEbook } from "./modules/ebook/ebook.js";
 import {
     activateTauriTavernChatSurface,
@@ -92,7 +93,7 @@ import { observeAsyncCallback, observeBackgroundTask } from './shared/common/asy
 extension_settings[EXT_ID] = extension_settings[EXT_ID] || {
     enabled: true,
     recorded: { enabled: true },
-    templateEditor: { enabled: true, characterBindings: {} },
+    templateEditor: createDefaultTemplateSettings(),
     tasks: { enabled: true, globalTasks: [], processedMessages: [] },
     preview: { enabled: false },
     immersive: { enabled: false },
@@ -100,7 +101,7 @@ extension_settings[EXT_ID] = extension_settings[EXT_ID] || {
     audio: { enabled: true },
     variablesPanel: { enabled: false },
     variablesCore: { enabled: true },
-    variablesMode: '1.0',
+    variablesMode: '3.0',
     storySummary: { enabled: true },
     storyOutline: { enabled: false },
     drawProvider: 'disabled',
@@ -691,6 +692,25 @@ async function initEnabledXiaobaiOs() {
     registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
 }
 
+async function setXiaobaiOsFeatureEnabled(enabled) {
+    const previous = settings.xiaobaiOs?.enabled === true;
+    settings.xiaobaiOs = await setXiaobaiOsEnabled(enabled);
+    xiaobaiOsSettingsError = null;
+    if (enabled && isXiaobaixEnabled) {
+        try {
+            const initialized = await initXiaobaiOs();
+            if (!initialized) throw new Error('xiaobai_os_initialization_cancelled');
+        } catch (error) {
+            settings.xiaobaiOs = await setXiaobaiOsEnabled(previous);
+            throw error;
+        }
+        registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
+    } else {
+        cleanupXiaobaiOs();
+        moduleCleanupFunctions.delete('xiaobaiOs');
+    }
+}
+
 async function toggleAllFeatures(enabled) {
     replyProgressSettingsView?.syncEnabled();
     if (enabled) {
@@ -779,6 +799,7 @@ async function setupSettings() {
         const response = await fetch(`${extensionFolderPath}/settings.html`);
         const settingsHtml = await response.text();
         $(settingsContainer).append(settingsHtml);
+        $("#xiaobaix_docs_link").attr("href", docsUrl());
         initTaskSettings();
 
         replyProgressSettingsView?.destroy();
@@ -807,25 +828,9 @@ async function setupSettings() {
         $("#xiaobaix_os_enabled").prop("checked", settings.xiaobaiOs?.enabled === true).on("change", observeAsyncCallback(async function () {
             if (!isXiaobaixEnabled) return;
             const enabled = $(this).prop('checked') === true;
-            const previous = settings.xiaobaiOs?.enabled === true;
             this.disabled = true;
             try {
-                const current = await setXiaobaiOsEnabled(enabled);
-                xiaobaiOsSettingsError = null;
-                settings.xiaobaiOs = current;
-                if (enabled) {
-                    try {
-                        const initialized = await initXiaobaiOs();
-                        if (!initialized) throw new Error('xiaobai_os_initialization_cancelled');
-                    } catch (error) {
-                        settings.xiaobaiOs = await setXiaobaiOsEnabled(previous);
-                        throw error;
-                    }
-                    registerModuleCleanup('xiaobaiOs', cleanupXiaobaiOs);
-                } else {
-                    cleanupXiaobaiOs();
-                    moduleCleanupFunctions.delete('xiaobaiOs');
-                }
+                await setXiaobaiOsFeatureEnabled(enabled);
             } catch (error) {
                 $(this).prop('checked', settings.xiaobaiOs?.enabled === true);
                 console.error('[LittleWhiteBox] 切换小白 OS 失败:', error);
@@ -1058,7 +1063,7 @@ async function setupSettings() {
                 tts: 'xiaobaix_tts_enabled',
                 enaPlanner: 'xiaobaix_ena_planner_enabled'
             };
-            const ON = ['templateEditor', 'tasks', 'variablesCore', 'storySummary', 'recorded'];
+            const ON = ['tasks', 'variablesCore', 'storySummary', 'recorded'];
             const OFF = ['preview', 'immersive', 'variablesPanel', 'storyOutline', 'tts', 'enaPlanner'];
             function setChecked(id, val) {
                 if (isTauriTavernControlLocked(id)) return;
@@ -1070,16 +1075,20 @@ async function setupSettings() {
             }
             ON.forEach(k => setChecked(MAP[k], true));
             OFF.forEach(k => setChecked(MAP[k], false));
+            setChecked(MAP.templateEditor, createDefaultTemplateSettings().enabled);
             replyProgressSettingsView?.resetDefaults();
             const osToggle = document.getElementById('xiaobaix_os_enabled');
-            if (osToggle) osToggle.checked = false;
+            if (osToggle) osToggle.disabled = true;
             try {
-                settings.xiaobaiOs = await setXiaobaiOsEnabled(false);
-                cleanupXiaobaiOs();
-                moduleCleanupFunctions.delete('xiaobaiOs');
+                await setXiaobaiOsFeatureEnabled(createDefaultXiaobaiOsSettings().enabled);
             } catch (error) {
-                if (osToggle) osToggle.checked = settings.xiaobaiOs?.enabled === true;
                 console.error('[LittleWhiteBox] 重置小白 OS 失败:', error);
+                toastr.error(`重置小白 OS 失败：${error?.message || error}`);
+            } finally {
+                if (osToggle) {
+                    osToggle.checked = settings.xiaobaiOs?.enabled === true;
+                    osToggle.disabled = !isXiaobaixEnabled;
+                }
             }
             const previousDrawProvider = settings.drawProvider;
             drawProviderTransitionGeneration++;

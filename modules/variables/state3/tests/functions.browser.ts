@@ -8,7 +8,7 @@ import type { Bundle, Json, Result } from '../types.js';
 export async function verifyBuiltFunctions(api: State3Api) {
     const expect = (condition: boolean, name: string) => { if (!condition) {throw new Error(name);} };
     const bundle = (source: string): Bundle => ({ definition: {
-        format: 1, name: 'Worker acceptance',
+        format: 1, updates: ['after'], name: 'Worker acceptance',
         schema: { type: 'object', properties: { output: {} }, required: ['output'], additionalProperties: false },
         initial: { output: null }, access: [], actions: [], constraints: [], views: {},
         rules: [{ id: 'compute', kind: 'derive', path: ['output'], value: { call: 'compute', args: [] }, description: 'Isolated calculation' }],
@@ -40,7 +40,7 @@ export async function verifyBuiltFunctions(api: State3Api) {
         expect(output(await api.tryDefinition(bundle(`()=>Function('return typeof fetch')()`))) === 'undefined', 'K8: dynamic code stays in guest');
         const loop = bundle('()=>{while(true){}}');
         const timeout = await api.tryDefinition(loop);
-        expect(!timeout.ok && timeout.diagnostics[0].code === 'function_timeout', 'K8: infinite loop bounded');
+        expect(!timeout.ok && timeout.diagnostics[0].code === 'function_work_limit', 'K8: infinite loop bounded');
         const controller = new AbortController();
         let ticks = 0;
         const heartbeat = setInterval(() => ticks++, 2);

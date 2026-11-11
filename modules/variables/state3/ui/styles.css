@@ -4,10 +4,10 @@
 .lwb-state3-dialog header,.lwb-state3-dialog nav,.lwb-state3-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .lwb-state3-dialog header{justify-content:space-between;margin-bottom:16px}
 .lwb-state3-dialog h2{margin:0;font-size:20px}
-.lwb-state3-dialog button,.lwb-state3-controls button{width:auto;min-width:fit-content;white-space:nowrap;flex:0 0 auto;font:inherit;color:inherit;background:var(--black30a,#0002);border:1px solid var(--SmartThemeBorderColor,#666);cursor:pointer}
+.lwb-state3-dialog button{width:auto;min-width:fit-content;white-space:nowrap;flex:0 0 auto;font:inherit;color:inherit;background:var(--black30a,#0002);border:1px solid var(--SmartThemeBorderColor,#666);cursor:pointer}
 .lwb-state3-dialog button{padding:8px 12px;border-radius:7px}
 .lwb-state3-dialog button:disabled{opacity:.5;cursor:wait}
-.lwb-state3-dialog button:focus-visible,.lwb-state3-controls button:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#9cf);outline-offset:2px}
+.lwb-state3-dialog button:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#9cf);outline-offset:2px}
 .lwb-state3-dialog nav{margin-bottom:16px}
 .lwb-state3-dialog nav [aria-selected=true]{outline:2px solid var(--SmartThemeQuoteColor,#9cf)}
 .lwb-state3-dialog label{display:block;margin:12px 0}
@@ -16,8 +16,8 @@
 .lwb-state3-dialog main>section+section{margin-top:20px}
 .lwb-state3-intro,.lwb-state3-intro p{line-height:1.7;margin:0 0 10px}
 .lwb-state3-dialog input:not([type=checkbox]):not([hidden]){display:block;max-width:100%;width:100%;margin-top:6px;padding:8px;border:1px solid var(--SmartThemeBorderColor,#666);border-radius:5px;font:inherit;color:inherit;background:var(--SmartThemeBlurTintColor,#222)}
-.lwb-state3-action-description,.lwb-state3-parameter-help,.lwb-state3-source-description{margin:6px 0;line-height:1.6;overflow-wrap:anywhere}
-.lwb-state3-parameter-help,.lwb-state3-parameter-fields{font-size:.92em;opacity:.9}
+.lwb-state3-help,.lwb-state3-source-description{margin:6px 0;line-height:1.6;overflow-wrap:anywhere}
+.lwb-state3-help{font-size:.92em;opacity:.9}
 .lwb-state3-change-group>summary{font-weight:600;padding:6px 0;overflow-wrap:anywhere}
 .lwb-state3-dialog select,.lwb-state3-dialog textarea{display:block;width:100%;margin-top:6px;background:var(--SmartThemeBlurTintColor,#222);color:inherit;border:1px solid var(--SmartThemeBorderColor,#666);border-radius:5px;padding:8px}
 .lwb-state3-definition{min-height:34dvh;font-family:monospace;tab-size:2}
@@ -41,8 +41,5 @@
 .lwb-state3-dialog dl{display:grid;grid-template-columns:fit-content(30%) minmax(0,1fr);gap:6px 12px}
 .lwb-state3-dialog dt,.lwb-state3-dialog dd{margin:0}
 .lwb-state3-result-dialog .lwb-state3-actions{margin-top:16px}
-.lwb-state3-controls{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:8px 0;font-size:13px}
-.lwb-state3-controls button{padding:5px 10px;border-radius:5px}
-.lwb-state3-controls [role=status]{opacity:.85}
 .lwb-state3-dialog [data-error=true]{color:var(--SmartThemeQuoteColor,#f9b)}
 @media(max-width:600px){.lwb-state3-dialog{padding:12px;width:calc(100vw - 12px);max-height:calc(100dvh - 20px)}.lwb-state3-actions button{flex:1 1 auto}.lwb-state3-result-dialog{padding:0}.lwb-state3-result-dialog header{padding:12px}.lwb-state3-result-dialog main{padding:0 12px 12px}.lwb-state3-result-dialog output{padding-inline:12px}.lwb-state3-dialog h2{font-size:18px}}

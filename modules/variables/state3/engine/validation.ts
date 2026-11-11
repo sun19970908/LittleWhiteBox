@@ -2,9 +2,16 @@ import type { Compiled, Diagnostic, EvaluationContext } from '../types.js';
 import { clone, getAt } from './data.js';
 import { evaluate, references } from './expressions.js';
 import { diagnostic } from './diagnostics.js';
+import { createFunctionRunner } from './functions.js';
 
 /** Read-only final-state checks shared by settlement and historical selection warnings. */
 export async function validateState(compiled: Compiled, context: EvaluationContext): Promise<Diagnostic[]> {
+    const functions = context.functions ?? createFunctionRunner();
+    try { return await checkState(compiled, { ...context, functions }); }
+    finally { if (!context.functions) {functions.dispose();} }
+}
+
+async function checkState(compiled: Compiled, context: EvaluationContext): Promise<Diagnostic[]> {
     context.signal?.throwIfAborted();
     if (!compiled.validate(context.state)) {
         const errors = clone(compiled.validate.errors);

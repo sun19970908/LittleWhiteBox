@@ -9,7 +9,7 @@ const get = (key: string): Expression => ({ get: [key] });
 const op = (name: string, ...args: Expression[]): Expression => ({ op: name, args });
 function card(): Bundle {
     return { definition: {
-        format: 1, name: 'Diagnostic contract', initial: { cash: 102, locked: true, bought: false },
+        format: 1, updates: ['after'], name: 'Diagnostic contract', initial: { cash: 102, locked: true, bought: false },
         schema: { type: 'object', properties: { cash: { type: 'number', title: '现金' }, locked: { type: 'boolean' }, bought: { type: 'boolean' } }, additionalProperties: false },
         access: [{ path: ['bought'], write: ['buy'], description: 'Purchase flag' }], rules: [], constraints: [], views: {},
         functions: { route: { reads: [], description: 'Checks the selected route' } },

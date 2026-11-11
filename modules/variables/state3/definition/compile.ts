@@ -5,6 +5,7 @@ import { assertJson, clone, overlaps, pathOf } from '../engine/data.js';
 import { diagnostic, reject } from '../engine/diagnostics.js';
 import { orderRules } from '../engine/dependencies.js';
 import { readsOf } from '../engine/expressions.js';
+import { checkStages } from './stages.js';
 
 const createValidator = () => new Ajv({ allErrors: true, strict: true, ownProperties: true });
 const validateDefinition = createValidator().compile(definitionSchema);
@@ -34,6 +35,7 @@ export function compileDefinition(input: unknown): Compiled {
     if (Object.keys(bundle).some(key => !['definition', 'functions'].includes(key))) {reject('definition-shape');}
     if (!definition || !functions || typeof functions !== 'object' || Array.isArray(functions)) {reject('definition-shape');}
     if (!validateDefinition(definition)) {reject('definition-schema', { errors: clone(validateDefinition.errors) });}
+    checkStages(definition);
     unique([...definition.rules, ...definition.actions, ...definition.constraints, ...(definition.triggers || [])]);
     const actionIds = new Set(definition.actions.map(action => action.id));
     for (const entry of definition.access) {

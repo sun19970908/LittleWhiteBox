@@ -66,8 +66,8 @@ test('only synchronous JSON results may leave the VM', async () => {
 });
 
 test('infinite loops, recursive overflow, and source evaluation are bounded and VM is reusable afterwards', async () => {
-    await rejectsCode(request('() => { while (true) {} }', { timeoutMs: 10 }), 'function_timeout');
-    await rejectsCode(request('(() => { while (true) {} })()', { timeoutMs: 10 }), 'function_timeout');
+    await rejectsCode(request('() => { while (true) {} }'), 'function_work_limit');
+    await rejectsCode(request('(() => { while (true) {} })()'), 'function_work_limit');
     await rejectsCode(request('() => { const f = () => f(); return f(); }'), 'function_exception');
     assert.equal(await run(request('() => 7')), 7);
 });

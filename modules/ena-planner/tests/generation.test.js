@@ -4,6 +4,25 @@ import assert from 'node:assert/strict';
 import { createPlannerGeneration } from '../ena-planner-generation.js';
 
 const tick = () => new Promise(resolve => setImmediate(resolve));
+
+// B4: adopted input that changes native state must rebuild prose instead of
+// dispatching the stale prompt; otherwise the paid story uses obsolete values.
+test('B4: deferred adoption revokes the old payload and resumes exactly once with final input', async () => {
+    const f = fixture(), dispatch = { input: { deferred: false, rebuild: false } };
+    await f.prepare('normal', dispatch);
+    assert.equal(dispatch.input.deferred, true);
+    dispatch.input.rebuild = true;
+    const data = f.payload(), pending = f.runtime.consume(data);
+    await tick();
+    assert.equal(f.state.chat[0].mes, 'input');
+    assert.equal(f.state.generations.length, 0);
+    await f.state.actions.send(); await pending;
+    assert.throws(() => JSON.stringify(data), { name: 'AbortError' });
+    assert.deepEqual(f.state.generations, ['regenerate']);
+    assert.equal(f.state.chat[0].mes, 'input\n\n<plot>plan</plot>');
+    await f.prepare('regenerate', { input: { deferred: false, rebuild: false } });
+    assert.equal(f.state.calls.length, 1);
+});
 function fixture(overrides = {}) {
     const chat = [{ is_user: true, mes: 'input' }];
     const state = { chatId: 'a', chat, slot: null, calls: [], errors: [], stops: 0, aborts: 0,

@@ -1,9 +1,11 @@
 import type { ValidateFunction } from 'ajv';
 import type { StoredDelta } from './engine/difference.js';
+import type { createFunctionRunner } from './engine/functions.js';
 
 export type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
 export type JsonObject = { [key: string]: Json };
 export type Path = string[];
+export type UpdateStage = 'before' | 'after';
 export type Schema = boolean | Record<string, unknown>;
 export interface Expression {
     literal?: Json; get?: Path; before?: Path; param?: Path;
@@ -11,11 +13,11 @@ export interface Expression {
 }
 export interface Effect { path: Path; value: Expression }
 export interface Rule extends Effect { id: string; kind: 'derive' | 'correct'; description: string }
-export interface Action { id: string; title: string; parameters: Schema; description: string; requires: Expression; effects: Effect[]; conversions: Effect[] }
+export interface Action { id: string; title: string; stages?: UpdateStage[]; parameters: Schema; description: string; requires: Expression; effects: Effect[]; conversions: Effect[] }
 export interface Trigger { id: string; description: string; timing?: 'batch' | 'action'; when: Expression; effects: Effect[] }
 export interface Definition {
-    format: number; name: string; schema: Schema; initial: JsonObject;
-    access: { path: Path; write: string[]; description: string; update?: string }[];
+    format: number; name: string; updates: UpdateStage[]; schema: Schema; initial: JsonObject;
+    access: { path: Path; write: string[]; stages?: UpdateStage[]; description: string; update?: string }[];
     rules: Rule[]; actions: Action[]; triggers?: Trigger[];
     constraints: { id: string; test: Expression; description: string }[];
     functions: Record<string, { reads: Path[]; description: string }>;
@@ -49,11 +51,18 @@ export interface Success {
     annotations?: { index: number; path?: Path; action?: string; fields: [string, unknown][] }[];
 }
 export type Result = Success | Failure;
-export interface RunOptions { signal?: AbortSignal }
-export interface EvaluationContext extends RunOptions { bundle: Bundle; before?: Json; state: Json; params: JsonObject }
+export interface RunOptions { signal?: AbortSignal; stage?: UpdateStage }
+export interface EvaluationContext extends RunOptions { bundle: Bundle; before?: Json; state: Json; params: JsonObject; functions?: ReturnType<typeof createFunctionRunner> }
 export interface Receipt {
-    id: string; revision: number; source: string; delta: StoredDelta; actions: { id: string }[];
+    id: string; revision: number; source: string; delta: StoredDelta; actions: Success['actions'];
     applied?: StoredDelta;
+    beforeUpdate?: BeforeUpdate;
+}
+/** Owned by the USER receipt: survives reload, and disappears with that receipt. */
+export interface BeforeUpdate {
+    inputDigest: string;
+    outcome: 'applied' | 'rejected' | 'skipped' | 'undone' | 'failed';
+    diagnostics: Diagnostic[];
 }
 export interface SwipeRecord { entries: Receipt[] }
 export interface History {

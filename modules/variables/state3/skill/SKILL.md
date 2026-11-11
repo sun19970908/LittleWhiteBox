@@ -7,7 +7,7 @@ description: Write variable 3.0 rules and calculations in the current card works
 
 ## What belongs to the card
 
-The card defines the variable structure, initial values, write permissions, actions, derived values, corrections, constraints, triggers and model views. Current values live in SillyTavern's native chat variables, one top-level definition key per native variable. The original variable panel reads and edits these same values. All submitted changes are calculated together; current chat values change only if the whole submission succeeds. Preview and draft checks calculate results without changing the chat.
+The card defines the update stages, variable structure, initial values, write permissions, actions, derived values, corrections, constraints, triggers and model views. Current values live in SillyTavern's native chat variables, one top-level definition key per native variable. The original variable panel reads and edits these same values. All submitted changes are calculated together; current chat values change only if the whole submission succeeds. Preview and draft checks calculate results without changing the chat.
 
 The variables mode (1.0, 2.0 or 3.0) is a player setting. A 3.0 definition runs while that setting is 3.0.
 
@@ -35,6 +35,22 @@ Variables hold what later rules and choices depend on: completion flags, counts,
 
 Read [state design and openings](<references/state-design.md>) when choosing dynamic people/inventory structures, paths, numeric limits, finite choices or alternate greetings. It explains the authoring decisions as well as the format; a valid schema alone does not settle those decisions.
 
+## When should a result become known?
+
+Decide with the author which outcomes must be known before the story is written and which changes require reading the completed story. The required `updates` array declares `before`, `after`, or both.
+
+- `before`: the player's new message is resolved automatically before prose generation. A complete combat turn, check or exploration outcome can be settled first, so prose narrates its actual result.
+- `after`: the model reads the completed AI reply. The player chooses automatic updates or the reply's update button.
+- When both are enabled, every action and every `access` entry allowing `direct` declares `stages`. A single-stage card inherits that stage without repeating it on each entry. The available tools, writable fields and settlement permissions all follow this assignment. Ordinary calculations, corrections, constraints and triggers are one shared set, executed in both stages; they have no `stages` field.
+
+Each executed stage makes a separate paid model request; a correction may make another. Recommend a stage only when its job justifies that cost. A single health subtraction is usually an existing action effect, rule, panel operation or part of the other stage, not a reason to buy an extra model request. Explain this tradeoff to the author and review your own stage choices. Group a coherent gameplay decision into one update; extra fields or padding do not make a stage worthwhile. The equipment and camp examples use only `after`; their deterministic panel actions need no extra model stage.
+
+Before results are written into the native variables and saved on the player's message before prose is assembled. Executed before actions retain their ids and complete parameters as used, including values produced by parameter conversions. Stop, prose failure, regeneration and reopening the chat reuse this saved result.
+
+ENA previews do not settle; adopting the plan settles its final text and rebuilds the prose context. A failed action precondition can be narrated as failure; request, submission and execution errors stop prose and offer retry or explicit skip. Edited player text retains its previous result and offers recomputation, which replaces rather than adds to it. Undo retains an undone marker so regeneration does not silently apply it again.
+
+The after updater receives the already settled before outcome with the current state. Give before and after distinct event ownership, including when an action is available in both. The result of a panel action is likewise an established fact, not a new event to submit again.
+
 ## How to express a rule
 
 Definition format is `1`. JSON Schema describes structure; explicit conversions happen in action parameter conversions. Schema checks validate values as submitted: they insert no defaults, delete no unknown fields and coerce nothing.
@@ -53,19 +69,19 @@ Ordinary input is an array of `{op:"set",path,value}`, `{op:"remove",path}`, `{o
 
 For example, a separate sale already completed outside a card action can submit `{ "op": "inc", "path": ["hero", "coins"], "delta": 5, "reason": "Sold an item elsewhere." }`. When this card's `sell` action already grants those coins, submit that action instead of also submitting its income. A reward trigger supplies its own reward after its condition becomes true. A separate event may still justify another increment to the same field.
 
-Add `reason` to each input object: one sentence citing the passage that supports the change. An optional `old` shows its previous value for the reader. Players read `reason` beside the affected change. Changes are grouped by source, with each source's full explanation shown once; action and direct changes open by default, while calculations, corrections and triggers are collapsed. These annotations are shown beside the latest live result with their operation number; they do not execute, do not validate the previous value, and are discarded when the chat, swipe or message changes. A batch without them is still accepted. For example, an equipment removal is `{ "action": "unequip", "params": {}, "reason": "The passage says the character takes off the amulet." }`.
+Recommend `reason` for numeric changes or changes requiring judgement: one short sentence citing the supporting passage event. Straightforward factual updates need no restatement. Use `old` only when an explicit comparison with the prior value helps explain a change, rather than copying entire objects or arrays. These optional annotations explain the latest live result; they do not execute, validate the previous value, or enter saved history. Changes are grouped by source; explanations appear once, and added or removed structures can be expanded to inspect their fields. For a routine equipment removal, `{ "action": "unequip", "params": {} }` is sufficient.
 
 ## Names and explanations players see
 
-Every action has a required `title`: the short name players see, such as “购买” or “休息”. Its `id` is the name submitted by code and the update model. Its `description` explains the complete action and appears below the action selector. Action titles are used by the interface, not added to the update model's action list.
+Every action has a required `title`: the short name players see in results and failure messages, such as “购买” or “休息”. Its `id` is the name submitted by code and the update model. Its `description` explains the complete action. Action titles are used by the interface, not added to the update model's action list. Card panels supply their own controls; the plugin settings do not contain an action form.
 
-JSON Schema `title` gives a field or parameter a readable name. Use it where a name helps players fill a form or understand a failure; it is optional, and an unnamed field displays its path. A parameter's `description` appears below its input: explain its range, format and a useful example there. Array/object parameters still use JSON; their field names and descriptions appear beside the input.
+JSON Schema `title` gives a field or parameter a readable name. Use it where a name helps players understand a failure; it is optional, and an unnamed field displays its path. A parameter's `description` explains its range, format and a useful example. When making a panel form, show these facts beside its inputs.
 
-Failed conditions show the relevant comparison and actual values. A condition inside a custom function can only show the function name and description, so describe what that function checks. Use short, familiar player-facing names and explain failures with the affected value and what is needed. When explaining the editor, use its button names: “保存草稿”, “检查规则”, “保存到角色卡”, “导入规则” and “导出规则”. Checking rules shows either the opening variables or the specific errors; it does not change the chat.
+Failed conditions show the relevant comparison and actual values. A condition inside a custom function can only show the function name and description, so describe what that function checks. Use short, familiar player-facing names and explain failures with the affected value and what is needed. When explaining the editor, use its button names: “保存草稿”, “检查规则”, “存入角色卡”, “导入规则” and “导出规则”. Checking rules shows either the opening variables or the specific errors; it does not change the chat.
 
 ## What the two models receive
 
-The ordinary RP model writes the story, and it sees only what the worldbook entries put in its context. Two macros supply the managed state:
+The ordinary RP model writes the story. Worldbook macros supply state and its meaning:
 
 - `{{xbgetvar::path}}` expands to the current value at that path. A scalar expands as is, such as `{{xbgetvar::hero.health}}` inside a sentence; an object or array expands as compact JSON, so `{{xbgetvar::hero}}` shows the whole subtree with its current values.
 - `{{xbvardesc::view}}` expands to that view's meanings: the section descriptions, the selected fields, and the descriptions of rules, actions, triggers and constraints that read or change those fields. It contains no current values. `{{xbvardesc}}` supplies all views; view names come from this card's `views`.
@@ -84,6 +100,12 @@ What these fields mean:
 
 Use worldbook conditions and activation to select further subpaths and groups when one constant entry would carry state the scene does not use.
 
+Before results reach the RP model automatically when an action was executed, a value changed, or an action was rejected for an unmet precondition. An executed action still reaches prose when it changes no values. A successful before result with neither actions nor changes adds no reference block; skipped and undone results add none either.
+
+This reference describes only the already resolved part of the latest player message; the rest remains for prose to develop. An unchanged before result says nothing about changes arising later in the reply. The RP model and the after updater read the same recorded outcome, including executed action parameters and rejection reasons. Raw JSON, field paths and outcome labels are reference data, not story text.
+
+Normal before updates publish native variables and the USER receipt before prose, then rely on SillyTavern's chat save. They do not wait for a separate save before prose. Manual operations, undo and after updates save explicitly. Local execution-environment failures retry the same model submission once without another model request; if still failing, “重试结算” reuses the single pending submission while its message, state and rules remain current. That submission lives only in page memory and is released on success, cancellation or context change.
+
 The independent update model receives SillyTavern's assembled context, including activated worldbook entries, with the target passage marked. It also receives the starting state, structure, writable fields, actions, rule and trigger descriptions generated from the definition, and submits one batch.
 
 Put each instruction where its reader needs it:
@@ -95,7 +117,7 @@ Put each instruction where its reader needs it:
 
 The RP model narrates with the same rules the settlement applies, while submission instructions stay out of its context, so it does not narrate them as story tasks. Saving rules refreshes the description macros of an enabled chat. Macros expand before the host applies its worldbook budget; after enabling an isolated chat, `previewRequest()` returns the exact update request. A story behaviour that changes managed state needs a corresponding allowed field or action before the card can offer it to players.
 
-Players update through the reply's update button or automatic post-reply updates. Both use the independent update model; custom interfaces can submit through the state API.
+The current-chat settings show the card's declared stages. Before updates run automatically; after updates use the reply's button or the player's automatic-update choice. Custom interfaces can submit through the state API without a model stage.
 
 ## How a card panel follows current state
 
@@ -110,8 +132,9 @@ For buttons and tasks, read [card-side settlement](<references/card-side.md>): t
 3. Connect the RP views through worldbook macros, using the card-files skill for worldbook layout, activation and ordering. A 3.0 definition initializes its own state; a loop task is only needed for actual host automation or a persistent custom UI. Compare every greeting with its intended starting state using [the alternate-opening workflow](<references/state-design.md#alternate-openings>); changing greeting text does not select another `initial`.
 4. Trial the draft against this card's own mechanics, each with `checkDraft` from a state that sets up the case: every consequence when its condition holds and when it does not, a one-time reward claimed twice, a time or count threshold crossed, a change after equipment or a stage switches, and the first action after a rule edit, started from state saved under the earlier rules. Also trial a forbidden edit and a failed action, and confirm failure leaves the supplied starting state untouched. For numeric inputs, mix assignments, increments and actions to verify execution order, and check a missing field, a final type violation and a rule correction. Repair errors in the same editable draft.
 5. Trial every ending, stage and one-time reward as a route played from the initial state: one `checkDraft` call per player turn, each passing the input that turn would submit and the previous result's `state`, until the result shows that goal reached. Each condition can look satisfiable alone while another rule blocks its prerequisite, such as a repair that needs power while the only power source needs that repair; trials that start from a hand-set state skip exactly that path. A goal no route reaches gets its rules fixed before the card is saved.
-6. Save the definition, its function files and the changed worldbook files. Check and report which files were saved. With permission, enable an isolated chat. Description macros follow the enabled chat's saved rules: expand each macro used by the worldbooks once, for example `ctx.substituteParams('{{xbvardesc::character}}')` and `ctx.substituteParams('{{xbgetvar::hero}}')`, and confirm the descriptions list the intended fields and the values show the chat's actual current state; an empty field list means the view name or a view path misses the definition, and an empty value means the path misses the managed roots. Play one turn for a key mechanic: the reply's narration and the settled values agree, and the visible result shows each change with its reason. Check the update button, save/reopen and undo before calling the card playable.
+6. Save the definition, its function files and the changed worldbook files. Check and report which files were saved. With permission, enable an isolated chat. Preview the assembled request with `previewRequest` and check each worldbook macro in its context: descriptions list the intended fields and values show the chat's actual current state. An empty field list means the view name or a view path misses the definition; an empty value means the path misses the managed roots. `ctx.substituteParams` can check `xbvardesc` on its own; `xbgetvar` needs the full request pipeline. Play one turn for a key mechanic: the reply's narration and the settled values agree, and numerical or judgement-based changes have a useful reason without repeating ordinary facts or whole inventories. Check the update button, save/reopen and undo before calling the card playable.
 7. For a custom panel, test its [submission and refresh journey](<references/card-side.md#acceptance>) in the actual iframe. For alternate openings, start each directly in a fresh chat and switch away and back before the first player turn; check both the opening facts and the saved state, then reopen a progressed chat to confirm it was not reinitialized.
+8. For a staged card, verify tools and requests contain only that stage's actions and direct writes. Play a before turn, stop and regenerate, reopen the chat and regenerate again: the same saved outcome must be reused. Confirm prose macros read the settled native values and after updates do not repeat the same event. Edit the player message and explicitly recompute; check replacement, undo, failure/retry and save-only retry. Historical swipe and suffix deletion restore records, not a newly simulated story.
 
 ## When a custom function is useful
 
@@ -119,7 +142,7 @@ Use a function when the expression format does not express the calculation clear
 
 Declare every state-read subtree in `reads`. `get(path)` and `before(path)` authorize that path and descendants, not undeclared ancestors. Both use the same declarations. Returned objects are copies. Missing fields read as undefined; returning undefined is not a JSON result.
 
-Functions run in an isolated engine with only their arguments and declared reads: there is no host, DOM, network, storage, current time or random input. Any event/time/random facts required by a card must be supplied as recorded input. Async results are rejected, and a function running longer than 250 ms fails the batch.
+Functions run in an isolated engine with only their arguments and declared reads: there is no host, DOM, network, storage, current time or random input. Any event/time/random facts required by a card must be supplied as recorded input. Functions return synchronous JSON. Execution work and memory are bounded; trigger chains have cycle detection and a round limit. Browser scheduling delays do not consume those work limits.
 
 For a function named `health_bonus`, declare `reads: [["hero", "baseHealth"]]` and a description, then write this expression into its function file. It adds an explicitly supplied bonus to the declared base health:
 
@@ -166,7 +189,7 @@ The [card-side API reference](<references/card-side.md#submission>) explains the
 
 Tail deletion and swipe selection restore the recorded state for that position without running actions, corrections or triggers; later confirmed fields stay with the parent structure they require. Switching an earlier reply while keeping later settlements also checks the restored state's schema and constraints. Conflicts are shown with the author's rule and current field values; the selection and restored values remain in place. A subsequent update is accepted when its resulting state satisfies the rules. Editing, hiding, moving and middle deletion leave variables as they are. Copied replies carry prose, not executed settlements. When a changed passage needs a different result, the player updates it again; re-updating the current reply replaces its previous model submission.
 
-`settings()` reads updater choices, defaulting to `{mode:'manual', source:'main'}`. `saveSettings({mode,source})` requires both fields. Modes are `off`, `manual`, `auto`; sources are `main`, `delegate`. These are player preferences, separate from the card definition.
+`settings()` reads updater choices, defaulting to `{auto:false, source:'main'}`. `saveSettings({auto,source})` requires both fields. `auto` controls after updates only; sources are `main`, `delegate`. These are player preferences, separate from the card definition. `previewRequest({stage:'before'})` previews the latest player message's update request; `previewRequest({stage:'after'})` previews the latest AI reply.
 
 ## What to report
 

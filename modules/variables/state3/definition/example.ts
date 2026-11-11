@@ -9,6 +9,7 @@ export function equipmentExample(): Bundle {
     return {
         definition: {
             format: 1,
+            updates: ['after'],
             name: '护符与生命',
             schema: {
                 type: 'object', additionalProperties: false, required: ['hero'], properties: {

@@ -27,7 +27,7 @@ export interface CaptureContext {
         removeListener(event: string, callback: (...args: never[]) => unknown): unknown;
     };
 }
-interface CaptureTarget { floor: number; swipeId: number; message: { name?: string; extra?: Record<PropertyKey, unknown> } }
+interface CaptureTarget { floor: number; swipeId: number; message: { name?: string; is_user?: boolean; extra?: Record<PropertyKey, unknown> } }
 
 let contextQueue: { run<T>(task: () => Promise<T>): Promise<T>; dispose(): void } | undefined;
 
@@ -81,9 +81,9 @@ async function capture(ctx: CaptureContext, target: CaptureTarget, reservation: 
     const prepare = function(this: Manager, prompt: Prompt, ...args: unknown[]) {
         const result = original.prepare.call(this, prompt, ...args);
         if (prompt.identifier?.startsWith('chatHistory-') && prompt.name) {
-            if (!targetSeen && prompt.role === 'assistant' && prompt.name === target.message.name) {
+            if (!targetSeen && prompt.role === (target.message.is_user ? 'user' : 'assistant') && prompt.name === target.message.name) {
                 targetSeen = true; result.content = passage[0] + cleanPassage(result.content) + passage[1];
-            } else if (!targetSeen && prompt.role === 'user') {result.content = pending[0] + result.content + pending[1];}
+            } else if (!targetSeen) {result.content = pending[0] + result.content + pending[1];}
             else if (prompt.role === 'assistant') {result.content = cleanPassage(result.content);}
         }
         return result;
