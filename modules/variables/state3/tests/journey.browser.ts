@@ -174,7 +174,7 @@ export async function verifyRewardHistory(api: State3Api) {
     // eslint-disable-next-line no-unsanitized/method -- Fixed official host URL.
     const constants = await import(/* @vite-ignore */ constantsUrl) as { SWIPE_DIRECTION: { LEFT: unknown; RIGHT: unknown }; SWIPE_SOURCE: { SWIPE_PICKER: unknown } };
     const saved = accepted(await api.inspect()).state;
-    const start = (await api.stage({ replaceSource: 'model' })).snapshot;
+    const start = (await api.stage({ replace: true })).snapshot;
     const index = ctx.chat.length - 1, message = ctx.chat[index];
     host.ensureSwipes(message); host.syncMesToSwipe(index);
     const alternateId = message.swipes!.length;

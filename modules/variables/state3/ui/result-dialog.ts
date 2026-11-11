@@ -12,10 +12,13 @@ export function createResultDialog(api: State3Api) {
     const header = element('header'), title = element('h2', COPY.result), main = element('main'), notice = element('output');
     notice.setAttribute('role', 'status');
     let results: FloorResult[] = [], selected: number | undefined, standalone: Result | undefined, definition: Definition | undefined, check = false;
-    let busyIndex = -1, phase = '', beforeIndex = -1, retryIndex = -1;
+    let busyIndex = -1, phase = '', beforeIndex = -1, latestIndex = -1, retryIndex = -1;
+    const isLatest = (index: number | undefined, stage?: UpdateStage) => index === undefined || index >= 0 && index === (stage === 'before' ? beforeIndex : latestIndex);
+    const current = (index: number | undefined, stage?: UpdateStage) => dialog.open && selected === index && isLatest(index, stage);
     const button = (label: string, action: () => unknown | Promise<unknown>) => {
         const node = element('button', label, 'menu_button'); node.type = 'button';
         node.addEventListener('click', () => observeBackgroundTask((async () => {
+            if (!node.isConnected) {return;}
             node.disabled = true; notice.textContent = '';
             try { await action(); }
             catch (error) { notice.textContent = errorText(error); }
@@ -35,22 +38,29 @@ export function createResultDialog(api: State3Api) {
         if (result.ok && result.receipt?.beforeUpdate?.outcome === 'failed') {main.append(element('p', COPY.beforeFailure));}
         const output = element('section'); showResult(output, result, definition); main.append(output);
         const actions = element('div', undefined, 'lwb-state3-actions');
-        if (result.ok && result.saved === false) {
-            actions.append(button(COPY.retrySave, async () => {
+        const index = selected, stage = item?.stage;
+        const latest = isLatest(index, stage);
+        const action = (label: string, run: () => unknown | Promise<unknown>, confirmation?: string) => {
+            const node = button(label, () => {
+                if (!current(index, stage) || confirmation && !globalThis.confirm(confirmation)) {return;}
+                if (node.isConnected && current(index, stage)) {return run();}
+            });
+            return node;
+        };
+        if (latest && result.ok && result.saved === false) {
+            actions.append(action(COPY.retrySave, async () => {
                 notice.textContent = COPY.phases.saving;
                 await api.retrySave();
                 if (selected === undefined) {standalone = api.lastResult();}
                 notice.textContent = ''; render();
             }));
         }
-        if (selected !== undefined && item?.stage === 'before' && selected === beforeIndex && busyIndex < 0 && !(result.ok && result.saved === false)) {
-            const index = selected;
-            actions.append(button(selected === retryIndex ? COPY.retryCalculation : COPY.recompute, () => api.recomputeBefore(index)));
-            if (selected === retryIndex || result.ok && result.receipt?.beforeUpdate?.outcome === 'failed') {actions.append(button(COPY.skipBefore, () => api.skipBefore(index)));}
-            else if (result.ok && result.receipt?.beforeUpdate?.outcome !== 'undone') {actions.append(button(COPY.undoReply, () => api.undoBefore(index)));}
-        } else if (selected !== undefined && item?.stage !== 'before' && result.ok && result.receipt && selected !== busyIndex) {
-            const index = selected;
-            actions.append(button(COPY.undoReply, () => api.undo({ index, all: true })));
+        if (latest && index !== undefined && stage === 'before' && busyIndex < 0 && !(result.ok && result.saved === false)) {
+            actions.append(action(index === retryIndex ? COPY.retryCalculation : COPY.recompute, () => api.recomputeBefore(index), COPY.recomputeConfirm));
+            if (index === retryIndex || result.ok && result.receipt?.beforeUpdate?.outcome === 'failed') {actions.append(action(COPY.skipBefore, () => api.skipBefore(index), COPY.undoConfirm));}
+            else if (result.ok && result.receipt?.beforeUpdate?.outcome !== 'undone') {actions.append(action(COPY.undoReply, () => api.undoBefore(index), COPY.undoConfirm));}
+        } else if (latest && index !== undefined && stage !== 'before' && result.ok && result.receipt && busyIndex < 0) {
+            actions.append(action(COPY.undoReply, () => api.undo({ index, all: true }), COPY.undoConfirm));
         }
         main.append(actions);
     }
@@ -59,7 +69,7 @@ export function createResultDialog(api: State3Api) {
     dialog.addEventListener('close', () => { if (!dialog.open) {main.replaceChildren(); standalone = undefined;} });
     return {
         sync(next: FloorResult[], index: number, status: ReturnType<State3Api['updateStatus']>, userIndex = -1, rules?: Definition) {
-            results = next; busyIndex = status.busy ? index : -1; phase = status.phase; beforeIndex = userIndex; definition = rules; retryIndex = status.retryIndex ?? -1;
+            results = next; latestIndex = index; busyIndex = status.busy ? status.index ?? index : -1; phase = status.phase; beforeIndex = userIndex; definition = rules; retryIndex = status.retryIndex ?? -1;
             if (dialog.open && selected !== undefined) {render();}
         },
         open(index: number) {

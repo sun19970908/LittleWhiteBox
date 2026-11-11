@@ -351,6 +351,85 @@ test('K11/K14: cancelling an old-floor swipe preserves already recorded later-fl
     assert.equal((accepted(await service.inspect()).state as { hero: { health: number } }).hero.health, 30);
 });
 
+test('K7: only the latest USER and latest AI accept explicit mutations; rejected history stays untouched', async () => {
+    const h = harness(), adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter);
+    accepted(await service.enable());
+    accepted(await service.apply([{ op: 'set', path: ['hero', 'health'], value: 70 }]));
+    for (const [isUser, health] of [[true, 60], [false, 50], [true, 40]] as const) {
+        h.ctx.chat.push({ mes: String(health), is_user: isUser, extra: {} });
+        accepted(await service.apply([{ op: 'set', path: ['hero', 'health'], value: health }], { index: h.ctx.chat.length - 1 }));
+    }
+    const metadata = clone(h.ctx.chatMetadata), chat = clone(h.ctx.chat), saves = h.saves();
+    for (const index of [0, 1]) {
+        await assert.rejects(service.stage({ index }), { code: 'target-missing' });
+        await assert.rejects(service.apply([], { index }), { code: 'target-missing' });
+        await assert.rejects(service.undo({ index, all: true }), { code: 'target-missing' });
+        await assert.rejects(service.rollback({ index }), { code: 'target-missing' });
+    }
+    assert.deepEqual(h.ctx.chatMetadata, metadata); assert.deepEqual(h.ctx.chat, chat); assert.equal(h.saves(), saves);
+    accepted(await service.preview([], { index: 2 }));
+    accepted(await service.preview([], { index: 3 }));
+    accepted(await service.rollback({ index: 3 }));
+    assert.equal((accepted(await service.inspect()).state as { hero: { health: number } }).hero.health, 50);
+    accepted(await service.rollback({ index: 2 }));
+    assert.equal((accepted(await service.inspect()).state as { hero: { health: number } }).hero.health, 60);
+    const staged = await service.stage({ index: 2 }), current = clone(h.ctx.chatMetadata), saved = h.saves();
+    h.ctx.chat.push({ mes: 'A newer reply.', extra: {} });
+    await assert.rejects(staged.run([], { preview: false }), { code: 'target-missing' });
+    assert.deepEqual(h.ctx.chatMetadata, current); assert.equal(h.saves(), saved);
+    const movedStage = await service.stage({ index: 4 });
+    h.ctx.chat.unshift(h.ctx.chat.pop()!);
+    const reordered = clone(h.ctx.chat);
+    // The old numeric index now names the latest USER, not the captured AI.
+    await assert.rejects(movedStage.run([{ op: 'set', path: ['hero', 'health'], value: 1 }], { preview: false }), { code: 'stale-target' });
+    assert.deepEqual(h.ctx.chatMetadata, current); assert.deepEqual(h.ctx.chat, reordered); assert.equal(h.saves(), saved);
+});
+
+test('K5: USER rollback invalidates every later swipe receipt so selecting an old AI alternative cannot revive it', async () => {
+    const h = harness(); h.message.is_user = true;
+    let adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter);
+    accepted(await service.enable());
+    const initial = accepted(await service.inspect()).state;
+    accepted(await service.apply([{ op: 'set', path: ['hero', 'health'], value: 70 }], { index: 0 }));
+    const reply: ChatMessage = { mes: 'wounded', extra: {}, swipe_id: 0, swipes: ['wounded', 'alternate'], swipe_info: [{ extra: {} }, { extra: {} }] };
+    h.ctx.chat.push(reply);
+    accepted(await service.apply([{ op: 'set', path: ['hero', 'health'], value: 30 }], { index: 1 }));
+    reply.swipe_info![1].extra = { ...clone(reply.swipe_info![0].extra), neighbor: 'keep' };
+    const result = accepted(await service.rollback({ index: 0 }));
+    assert.equal(result.saved, true); assert.deepEqual(result.state, initial);
+    for (const message of h.ctx.chat) {
+        for (const holder of [message, ...(message.swipe_info || [])]) {assert.equal(holder.extra?.[CHAT_KEY], undefined);}
+    }
+    assert.equal(reply.swipe_info![1].extra!.neighbor, 'keep');
+    reply.swipe_id = 1;
+    let change = adapter.selectionChange('swipe', 1);
+    await service.restoreSelection(change.previous, change.next);
+    assert.deepEqual(accepted(await service.inspect()).state, initial);
+    h.ctx.chat = JSON.parse(JSON.stringify(h.ctx.chat)); h.ctx.chatMetadata = JSON.parse(JSON.stringify(h.ctx.chatMetadata));
+    adapter = h.exports.createHostAdapter(); service = createSettlementService(adapter);
+    h.ctx.chat[1].swipe_id = 0;
+    change = adapter.selectionChange('swipe', 1);
+    await service.restoreSelection(change.previous, change.next);
+    assert.deepEqual(accepted(await service.inspect()).state, initial);
+
+    // Selected suffix is empty; only the unselected AI alternative owns effects.
+    accepted(await service.apply([{ op: 'set', path: ['hero', 'health'], value: 20 }], { index: 1 }));
+    h.ctx.chat[1].swipe_id = 1;
+    change = adapter.selectionChange('swipe', 1);
+    await service.restoreSelection(change.previous, change.next);
+    assert.ok(adapter.capture(0).records.every(record => record.entries.length === 0));
+    assert.equal(adapter.capture(0).lastReceiptIndex, 1);
+    const saves = h.saves();
+    accepted(await service.rollback({ index: 0 }));
+    assert.equal(h.saves(), saves + 1);
+    assert.deepEqual(accepted(await service.inspect()).state, initial);
+    assert.equal(adapter.capture(0).lastReceiptIndex, -1);
+    h.ctx.chat[1].swipe_id = 0;
+    change = adapter.selectionChange('swipe', 1);
+    await service.restoreSelection(change.previous, change.next);
+    assert.deepEqual(accepted(await service.inspect()).state, initial);
+});
+
 // R3: a copied reply owns no settlement, including non-selected swipes; moving it and reopening cannot change that.
 // Cost: deleting a copy silently undoes the original reply's saved effect.
 test('R3: copies lose only inherited receipts, regardless of their position; originals survive save and reopen', async () => {
@@ -417,7 +496,7 @@ test('K15/K17: current card rules govern the next operation, owned roots do not 
     assert.equal(native.gold, 75);
 });
 
-test('K16: a later child effect survives removal of its creator, toggles, replacement, undo and saved tail deletion', async () => {
+test('K16: native historical selections retain child effects, but explicit writes reject the old floor', async () => {
     for (const scenario of [
         { value: { person: { affinity: 10, obsolete: 'old' } }, path: ['own', 'person', 'affinity'], expected: { person: { affinity: 11 } } },
         { value: { '0': { affinity: 10, obsolete: 'old' } }, path: ['own', '0', 'affinity'], expected: { '0': { affinity: 11 } } },
@@ -443,14 +522,17 @@ test('K16: a later child effect survives removal of its creator, toggles, replac
             await service.restoreSelection(change.previous, change.next);
             assert.deepEqual(accepted(await service.inspect()).state, original);
         }
-        accepted(await service.apply([{ op: 'set', path: ['own'], value: {} }], { index: 0, source: 'model' }));
-        assert.deepEqual(accepted(await service.inspect()).state, { own: scenario.expected });
+        await assert.rejects(service.apply([{ op: 'set', path: ['own'], value: {} }], { index: 0, source: 'model', replace: true }), { code: 'target-missing' });
+        await assert.rejects(service.undo({ index: 0, all: true }), { code: 'target-missing' });
+        assert.deepEqual(accepted(await service.inspect()).state, original);
         h.ctx.chat = JSON.parse(JSON.stringify(h.ctx.chat));
         h.ctx.chatMetadata = JSON.parse(JSON.stringify(h.ctx.chatMetadata));
         adapter = h.exports.createHostAdapter(); service = createSettlementService(adapter);
         h.ctx.chat.pop();
         const change = adapter.selectionChange('delete');
         await service.restoreSelection(change.previous, change.next);
+        assert.deepEqual(accepted(await service.inspect()).state, { own: scenario.value });
+        accepted(await service.undo({ index: 0, all: true }));
         assert.deepEqual(accepted(await service.inspect()).state, { own: {} });
     }
 });

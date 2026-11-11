@@ -13,6 +13,34 @@ const bundle = (initial: Bundle['definition']['initial']): Bundle => ({
         access: Object.keys(initial).map(key => ({ path: [key], write: ['direct'], description: key })),
         rules: [], actions: [], constraints: [], functions: {}, views: {} }, functions: {},
 });
+test('K5: receipt source labels do not replace effects unless replacement is explicitly requested', async () => {
+    const host = fixture(); accepted(await host.service.enable(bundle({ counter: 0 })));
+    const input = [{ op: 'inc', path: ['counter'], delta: 1 }];
+    accepted(await host.service.apply(input, { source: 'model' }));
+    accepted(await host.service.apply(input, { source: 'model' }));
+    assert.deepEqual(host.saved().state, { counter: 2 });
+    assert.equal(host.saved().records[0].entries.length, 2);
+    accepted(await host.service.apply(input, { source: 'model', replace: true }));
+    assert.deepEqual(host.saved().state, { counter: 1 });
+    assert.equal(host.saved().records[0].entries.length, 1);
+});
+
+test('K5: undo removes the last target transaction and every subsequent floor without rebasing', async () => {
+    const host = fixture(); accepted(await host.service.enable(bundle({ counter: 0 })));
+    accepted(await host.service.apply([{ op: 'inc', path: ['counter'], delta: 1 }]));
+    accepted(await host.service.apply([{ op: 'inc', path: ['counter'], delta: 2 }]));
+    const saved = host.saved(); saved.records.push({ entries: [] }); host.load(saved);
+    accepted(await host.service.apply([{ op: 'inc', path: ['counter'], delta: 4 }]));
+    const first = host.saved().records[0].entries[0];
+    accepted(await host.service.undo({ index: 0 }));
+    assert.deepEqual(host.saved().state, { counter: 1 });
+    assert.deepEqual(host.saved().records.map(record => record.entries), [[first], []]);
+    host.load(JSON.parse(JSON.stringify(host.saved())));
+    accepted(await host.service.undo({ index: 0 }));
+    assert.deepEqual(host.saved().state, { counter: 0 });
+    assert.ok(host.saved().records.every(record => record.entries.length === 0));
+});
+
 const receipt = (before: Json, state: Json) => makeReceipt({ before, revision: 1,
     result: { ok: true, state, changes: [], provenance: [], actions: [], diagnostics: [] } });
 
@@ -99,7 +127,7 @@ test('K16: absent deletions do not create containers; retained array positions u
     }
 });
 
-test('K16/K18: removing the creator of an array preserves later deletions without saving empty slots or blocking updates', async () => {
+test('K16/K18: explicit undo and replacement discard the suffix while native selection retains reversible effects', async () => {
     const host = fixture(), rules = bundle({ list: [] });
     rules.definition.schema = { type: 'object', properties: { list: { type: 'array', items: {
         type: 'object', properties: { x: { type: 'number' } }, additionalProperties: false,
@@ -113,12 +141,13 @@ test('K16/K18: removing the creator of an array preserves later deletions withou
         host.load(confirmed);
         if (route === 'undo') {accepted(await host.service.undo({ index: 0, all: true }));}
         else if (route === 'replace') {
-            accepted(await host.service.apply([{ op: 'set', path: ['list'], value: [] }], { index: 0, replaceSource: 'api' }));
+            accepted(await host.service.apply([{ op: 'set', path: ['list'], value: [] }], { index: 0, replace: true }));
         } else {
             const alternate = host.saved(); alternate.records[0].entries = []; host.load(alternate);
             await host.service.restoreSelection(confirmed.records.flatMap(record => record.entries), confirmed.records[1].entries);
         }
         assert.deepEqual(host.saved().state, { list: [] }, route);
+        if (route !== 'swipe') {assert.equal(host.saved().records[1].entries.length, 0, route);}
         host.load(JSON.parse(JSON.stringify(host.saved())));
         assert.deepEqual(accepted(await host.service.apply([])).state, { list: [] }, route);
         accepted(await host.service.undo({ index: 1, all: true }));

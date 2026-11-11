@@ -122,6 +122,85 @@ function useFunction(h: Awaited<ReturnType<typeof harness>>) {
     h.f.setCard(bundle);
 }
 
+// Recalculation must expose the real rollback while saving, then build the paid
+// request from that state; the latest USER may still have a later AI outcome.
+test('B12: USER recalculation waits for rollback persistence and never retains the old AI outcome', async t => {
+    const h = await harness(); t.after(() => h.dispose());
+    const initial = h.f.saved().state;
+    h.append({ mes: 'Take off the amulet.', is_user: true, name: 'Player' });
+    accepted(await h.updater.update({ index: 1, stage: 'before' }));
+    h.append({ mes: 'The player was wounded.', name: 'Hero' });
+    accepted(await h.f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 30 }], { index: 2 }));
+    const oldIds = h.f.saved().records.flatMap(record => record.entries.map(entry => entry.id));
+    const beforePreview = h.f.saved(), savesBeforePreview = h.f.counts().saves;
+    await h.updater.previewRequest({ index: 1, stage: 'before' });
+    assert.deepEqual(h.f.saved(), beforePreview); assert.equal(h.f.counts().saves, savesBeforePreview);
+    const requests = h.requests.length, gate = h.f.holdNextSave();
+    const recomputing = h.before().run(1);
+    try {
+        await gate.started;
+        assert.deepEqual(h.f.saved().state, initial);
+        assert.ok(h.f.saved().records.slice(1).every(record => record.entries.length === 0));
+        assert.equal(h.requests.length, requests);
+    } finally {gate.release();}
+    accepted((await recomputing)!);
+    assert.equal(h.requests.length, requests + 1);
+    const stateMessage = h.requests.at(-1)!.messages.filter(message => message.role === 'tool')
+        .map(message => JSON.parse(String(message.content))).find(value => value.state);
+    assert.deepEqual(stateMessage.state, initial);
+    assert.equal((h.f.saved().state as { hero: { health: number } }).hero.health, 60);
+    assert.equal(h.f.saved().records[1].entries.length, 1);
+    assert.equal(h.f.saved().records[2].entries.length, 0);
+    assert.ok(h.f.saved().records.flatMap(record => record.entries).every(entry => !oldIds.includes(entry.id)));
+});
+
+test('B12: rollback save failure blocks a fresh paid request and retains only the rolled-back state', async t => {
+    const h = await harness(); t.after(() => h.dispose());
+    const initial = h.f.saved().state;
+    h.append({ mes: 'Take off the amulet.', is_user: true, name: 'Player' });
+    accepted(await h.updater.update({ index: 1, stage: 'before' }));
+    const requests = h.requests.length;
+    h.f.failSave();
+    const result = accepted((await h.before().run(1))!);
+    assert.equal(result.saved, false);
+    assert.equal(h.requests.length, requests);
+    assert.deepEqual(h.f.saved().state, initial);
+    assert.equal(h.f.saved().records[1].entries.length, 0);
+});
+
+test('B12: failed, invalid and cancelled USER recalculations cannot resurrect old target or later effects', async t => {
+    for (const failure of ['transport', 'submission', 'cancel']) {
+        const h = await harness(); t.after(() => h.dispose());
+        const initial = h.f.saved().state;
+        h.append({ mes: 'Take off the amulet.', is_user: true, name: 'Player' });
+        accepted(await h.updater.update({ index: 1, stage: 'before' }));
+        h.append({ mes: 'The player was wounded.', name: 'Hero' });
+        accepted(await h.f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 30 }], { index: 2 }));
+        const oldIds = h.f.saved().records.flatMap(record => record.entries.map(entry => entry.id));
+        let started!: () => void, release!: (value: unknown) => void;
+        const requesting = new Promise<void>(resolve => {started = resolve;});
+        h.answer(() => {
+            started();
+            if (failure === 'transport') {throw new Error('offline');}
+            if (failure === 'submission') {return { completion: 'complete', toolCalls: [] };}
+            return new Promise(resolve => {release = resolve;});
+        });
+        const recomputing = h.before().run(1);
+        await requesting;
+        assert.deepEqual(h.f.saved().state, initial, failure);
+        if (failure === 'cancel') {
+            h.before().cancel();
+            release({ completion: 'complete', toolCalls: [{ name: 'write', arguments: '{"state":[]}' }] });
+        }
+        await recomputing;
+        assert.deepEqual(h.f.saved().state, initial, failure);
+        assert.equal(h.f.saved().records[2].entries.length, 0, failure);
+        assert.ok(h.f.saved().records.flatMap(record => record.entries).every(entry => !oldIds.includes(entry.id)), failure);
+        h.f.load(JSON.parse(JSON.stringify(h.f.saved())));
+        assert.deepEqual(accepted(await h.f.service.inspect()).state, initial, failure);
+    }
+});
+
 // E3: a paid submission survives local faults, not a session or chat snapshot;
 // retry commits once and releases resources (duplicate API charge / partial state).
 test('E3: automatic and repeated manual local retries use one model request and commit once', async t => {

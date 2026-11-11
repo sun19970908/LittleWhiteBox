@@ -25,7 +25,7 @@ export function parseSubmission(response: AgentChatResult): unknown[] {
     return args.state;
 }
 
-export function createState3Updater({ service, adapter, available, changed }: { service: SettlementService; adapter: ReturnType<typeof createHostAdapter>; available(): void; changed?(): void }) {
+export function createState3Updater({ service, adapter, available, changed, rewound }: { service: SettlementService; adapter: ReturnType<typeof createHostAdapter>; available(): void; changed?(): void; rewound?(): Promise<void> }) {
     let controller: AbortController | undefined, phase = 'ready', activeIndex: number | undefined;
     // One retry slot, not a history/cache. No session, prompt, Worker or full
     // snapshot survives an update. Only submitted input and its basis identity do.
@@ -45,7 +45,7 @@ export function createState3Updater({ service, adapter, available, changed }: { 
     const cancel = () => { pending = undefined; interrupt(); };
     async function prepare(stage: UpdateStage, index?: number, signal?: AbortSignal) {
         available();
-        const staged = await service.stage({ index, replaceSource: modelSource(stage), signal });
+        const staged = await service.stage({ index, replace: true, signal });
         const ctx = getContext(), message = ctx.chat[staged.target.floor];
         if (!message || Boolean(message.is_user) !== (stage === 'before') || message.is_system || !message.mes?.trim()) {reject('target-missing');}
         const snapshot = adapter.capture(staged.target.floor);
@@ -80,8 +80,21 @@ export function createState3Updater({ service, adapter, available, changed }: { 
                 setPhase('preparing');
                 available();
                 const target = index ?? (stage === 'before' ? latestUserIndex(getContext().chat) : adapter.capture().index);
+                activeIndex = target;
+                const message = getContext().chat[target];
+                if (!message || Boolean(message.is_user) !== (stage === 'before') || message.is_system || !message.mes?.trim()) {reject('target-missing');}
+                adapter.assertMutable(adapter.capture(target));
+                if (!adapter.bundle().definition.updates.includes(stage)) {reject('stage-disabled', { stage });}
                 const retry = retryIndex() === target && pending?.stage === stage ? pending : undefined;
                 pending = undefined;
+                if (!retry) {
+                    setPhase('saving');
+                    const rolledBack = await service.rollback({ index: target, signal });
+                    if (rolledBack.committed) {await rewound?.();}
+                    if (rolledBack.saved === false) {setPhase('unsaved'); return rolledBack;}
+                    signal.throwIfAborted(); setPhase('preparing');
+                }
+                if (getContext().chat[target] !== message) {reject('stale-target');}
                 const finish = async (staged: Awaited<ReturnType<SettlementService['stage']>>, input: unknown[], inputDigest: string): Promise<Result> => {
                     let preview: Result;
                     for (let execution = 0; ; execution++) {
@@ -101,7 +114,7 @@ export function createState3Updater({ service, adapter, available, changed }: { 
                 };
                 if (retry) {
                     activeIndex = target;
-                    const staged = await service.stage({ index: target, replaceSource: modelSource(stage), signal });
+                    const staged = await service.stage({ index: target, replace: true, signal });
                     const result = await finish(staged, retry.input, digest(getContext().chat[target].mes));
                     setPhase(result.ok ? result.saved === false ? 'unsaved' : 'success' : 'failed');
                     return result;

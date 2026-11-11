@@ -111,6 +111,8 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             return { chat: ctx.chat, messages: [...ctx.chat], metadata: ctx.chatMetadata, chatId: ctx.chatId, characterId: ctx.characterId,
                 history: clone(history), state: readVariables((ctx.chatMetadata.variables || {}) as Record<string, unknown>, history?.roots),
                 records: selectedRecords(ctx.chat), index, message, text: message?.mes, holder: message && selected(message),
+                lastReceiptIndex: ctx.chat.reduce((last, item, floor) => holders(item).some(holder =>
+                    Boolean((holder.extra?.[CHAT_KEY] as SwipeRecord | undefined)?.entries.length)) ? floor : last, -1),
                 rules: clone(character.data?.extensions?.[CARD_EXTENSION]), revision: history?.revision, target: { floor: index, swipeId: message?.swipe_id ?? 0 },
                 destination: { ch_name: character.name, file_name: character.chat, avatar_url: character.avatar }, saveChat: () => ctx.saveChat() };
         },
@@ -122,8 +124,21 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
                 && (!snapshot.message || (ctx.chat.includes(snapshot.message) && snapshot.message.mes === snapshot.text && selected(snapshot.message) === snapshot.holder
                     && (snapshot.message.swipe_id ?? 0) === snapshot.target.swipeId));
         },
-        publish(snapshot, { state, history, records }) {
+        assertMutable(snapshot) {
+            const ctx = state3Context(), message = ctx.chat[snapshot.index];
+            if (message !== snapshot.message) {reject('stale-target');}
+            const latest = message?.is_user ? latestUserIndex(ctx.chat) : latestReply(ctx);
+            if (!message || message.is_system || snapshot.index !== latest) {reject('target-missing');}
+        },
+        publish(snapshot, { state, history, records, invalidateFrom }) {
             if (!adapter.isCurrent(snapshot)) {reject('stale-target');}
+            // A rewind invalidates every alternative in its suffix too. Switching
+            // an old AI swipe must not resurrect effects based on the discarded USER.
+            if (invalidateFrom !== undefined) {
+                snapshot.messages.slice(invalidateFrom).forEach(message => {
+                    holders(message).forEach(holder => { if (holder.extra) {delete holder.extra[CHAT_KEY];} });
+                });
+            }
             retry = undefined;
             const roots = history.roots;
             snapshot.metadata.variables ??= {};

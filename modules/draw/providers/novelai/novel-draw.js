@@ -21,7 +21,7 @@ import {
     buildContinuityEntries,
     buildContinuityMemoryView,
     createContinuityNameResolver,
-    nextContinuityEditPosition,
+    getContinuityEditAnchor,
     normalizeContinuityEdits,
     normalizeContinuityLimits,
     stripEmptyCostumeText,
@@ -3704,6 +3704,9 @@ function postStatus(state, text, target = '', extra = {}) {
 }
 
 // ── 沿用角色着装：记忆清单与手动修改（修改按聊天存在 chatMetadata.LittleWhiteBox.continuityEdits）──
+// 只在本次运行内排队，读图、写入和回传完成后才处理下一次操作（包括移除和重置）。
+let continuityEditQueue = Promise.resolve();
+
 function readContinuityEdits(ctx) {
     return normalizeContinuityEdits(ctx?.chatMetadata?.LittleWhiteBox?.continuityEdits);
 }
@@ -3751,6 +3754,44 @@ async function postContinuityMemory(scanned = null) {
         })
         : [];
     postToIframe(iframe, { type: 'CONTINUITY_MEMORY', hasChat: withChat, entries, scan: withChat ? { ...scan, maxFloors: limits.maxFloors } : null }, 'LittleWhiteBox-NovelDraw');
+}
+
+function enqueueContinuityMemoryEdit(ctx, data) {
+    const chatId = ctx?.chatId;
+    const chat = ctx?.chat;
+    const isCurrentChat = () => {
+        const current = getContext();
+        return current?.chatId === chatId && current?.chat === chat;
+    };
+    continuityEditQueue = continuityEditQueue.then(async () => {
+        try {
+            let scanned = null;
+            if (hasChat(ctx) && isCurrentChat()) {
+                const characters = allContinuityCharacters();
+                const resolver = createContinuityNameResolver(characters);
+                const scan = {};
+                const records = await loadContinuityMemoryRecords(ctx, scan);
+                // 排队或读图期间已离开这份聊天，就只刷新当前聊天，不转移未完成的修改。
+                if (isCurrentChat()) {
+                    scanned = { records, scan, characters };
+                    const next = updateContinuityEdits(readContinuityEdits(ctx), {
+                        op: data.op,
+                        name: data.name,
+                        form: data.form,
+                        appear: data.appear,
+                        costume: stripEmptyCostumeText(data.costume),
+                        afterSlotId: getContinuityEditAnchor(records),
+                    }, { resolver });
+                    await writeContinuityEdits(ctx, next);
+                }
+            }
+            await postContinuityMemory(isCurrentChat() ? scanned : null);
+        } catch (error) {
+            console.warn('[NovelDraw] 修改沿用角色着装记忆失败:', error);
+            postStatus('error', `修改服装记忆失败：${error.message || error}`);
+        }
+    });
+    return continuityEditQueue;
 }
 
 function postGroupPresetContext() {
@@ -4695,35 +4736,7 @@ async function handleFrameMessage(event) {
         }
 
         case 'CONTINUITY_MEMORY_EDIT': {
-            const ctx = getContext();
-            try {
-                let scanned = null;
-                if (hasChat(ctx)) {
-                    const chatId = ctx.chatId;
-                    const characters = allContinuityCharacters();
-                    const resolver = createContinuityNameResolver(characters);
-                    const scan = {};
-                    const records = await loadContinuityMemoryRecords(ctx, scan);
-                    // 读图片记录期间用户可能切了聊天：ctx 还指向旧聊天，不能把修改写进去，只刷新当前聊天的清单。
-                    if (getContext()?.chatId === chatId) {
-                        scanned = { records, scan, characters };
-                        const next = updateContinuityEdits(readContinuityEdits(ctx), {
-                            op: data.op,
-                            name: data.name,
-                            form: data.form,
-                            appear: data.appear,
-                            // 模型可能把提示里的“（空＝没穿）”抄进衣着，用户也可能从清单里复制，这里统一去掉。
-                            costume: stripEmptyCostumeText(data.costume),
-                            at: nextContinuityEditPosition(records),
-                        }, { resolver });
-                        await writeContinuityEdits(ctx, next);
-                    }
-                }
-                await postContinuityMemory(scanned);
-            } catch (error) {
-                console.warn('[NovelDraw] 修改沿用角色着装记忆失败:', error);
-                postStatus('error', `修改服装记忆失败：${error.message || error}`);
-            }
+            await enqueueContinuityMemoryEdit(getContext(), data);
             break;
         }
 

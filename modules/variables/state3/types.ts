@@ -72,12 +72,15 @@ export interface History {
 export interface Snapshot {
     state: Json;
     history?: History; records: SwipeRecord[]; index: number;
+    /** Last floor with receipts, including unselected reply alternatives; -1 if empty. */
+    lastReceiptIndex: number;
     target: { floor: number; swipeId: number };
 }
 export interface HostAdapter<S extends Snapshot = Snapshot> {
     bundle(): Bundle;
     capture(index?: number): S;
     isCurrent(snapshot: S): boolean;
-    publish(snapshot: S, update: { state: Json; history: History; records: SwipeRecord[] }): () => Promise<void>;
+    assertMutable(snapshot: S): void;
+    publish(snapshot: S, update: { state: Json; history: History; records: SwipeRecord[]; invalidateFrom?: number }): () => Promise<void>;
     committed?(result: Success): void;
 }

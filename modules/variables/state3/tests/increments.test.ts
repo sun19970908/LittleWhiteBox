@@ -137,12 +137,12 @@ test('I4: a capped increment preserves the event reason and exposes the actual r
 test('I5: previews, failed correction, replacement, restoration and reopening cannot double count', async () => {
     const host = fixture(); accepted(await host.service.enable(shop())); const before = host.saved();
     accepted(await host.service.preview([inc(5)])); assert.deepEqual(host.saved(), before);
-    const stage = await host.service.stage({ replaceSource: 'model' });
+    const stage = await host.service.stage({ replace: true });
     assert.equal((await stage.run([inc('5')], { preview: true })).ok, false); assert.deepEqual(host.saved(), before);
     accepted(await stage.run([inc(5)], { preview: true })); assert.deepEqual(host.saved(), before);
     accepted(await stage.run([inc(5)], { preview: false, source: 'model' }));
     await assert.rejects(stage.run([inc(5)], { preview: false }), { code: 'stage-consumed' });
-    accepted(await host.service.apply([inc(5)], { source: 'model' }));
+    accepted(await host.service.apply([inc(5)], { source: 'model', replace: true }));
     assert.equal(coins(host.saved().state), 15); assert.equal(host.saved().records[0].entries.length, 1);
     const entries = host.saved().records[0].entries;
     await host.service.restoreSelection(entries); assert.equal(coins(host.saved().state), 10);

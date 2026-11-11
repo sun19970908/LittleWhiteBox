@@ -767,12 +767,12 @@ export async function getContinuityImageRecords({ chat, beforeMessageId, maxFloo
     // A target past the end of the chat (the whole chat is wanted) excludes nothing.
     const targetIndex = target === undefined ? Infinity : chat.indexOf(target);
     return records.flatMap((continuityChars, index) => {
-        const { message, text } = sources[index];
+        const { message, text, slotId } = sources[index];
         // The floor can move or vanish while images load: the cheap check first, a lookup only when it did move.
         const messageId = chat[sources[index].messageId] === message ? sources[index].messageId : chat.indexOf(message);
         if (messageId < 0 || messageId >= targetIndex || message.mes !== text
             || !continuityChars?.length) return [];
-        return [{ messageId, timestamp: index, continuityChars }];
+        return [{ slotId, messageId, timestamp: index, continuityChars }];
     });
 }
 

@@ -89,7 +89,8 @@ test('the memory view lists the most recent characters first, hand edits count a
     const characters = detectPresentCharacters('渔行歌 Alice', library(SI, ALICE));
     const records = [record(3, { name: 'Alice', form: '', appear: '', costume: 'red coat' }), record(5, si('a')), record(8, { name: 'Alice', form: '', appear: '', costume: 'blue coat' })];
     assert.deepEqual(buildContinuityMemoryView(records, [], { characters, beforeMessageId: 99 }).map(row => row.name), ['Alice', '司盈昃']);
-    const edited = buildContinuityMemoryView(records, [{ name: '司盈昃', form: '', appear: '', costume: 'x', at: 9 }], { characters, beforeMessageId: 99 });
+    records.at(-1).slotId = 'last-image';
+    const edited = buildContinuityMemoryView(records, [{ name: '司盈昃', form: '', appear: '', costume: 'x', afterSlotId: 'last-image' }], { characters, beforeMessageId: 99 });
     assert.deepEqual(edited.map(row => row.name), ['司盈昃', 'Alice']);
 });
 

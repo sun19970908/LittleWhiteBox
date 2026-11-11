@@ -19,6 +19,7 @@ export function createState3Page(api: State3Api) {
     notice.setAttribute('role', 'status');
     let page: 'play' | 'author' = 'play', draft: Draft | undefined, working = new Map<string, string>(), selectedFile = '';
     let controller: AbortController | undefined, generation = 0;
+    let latestAiIndex = -1, latestUserIndex = -1;
     const button = (label: string, action: Action) => {
         const node = element('button', label, 'menu_button'); node.type = 'button';
         node.addEventListener('click', () => { observeBackgroundTask(act(action, node), { source: import.meta.url, operation: 'pageAction' }); });
@@ -138,37 +139,45 @@ export function createState3Page(api: State3Api) {
     dialog.append(header, nav, main, notice); document.head.append(style); document.body.append(dialog);
     return {
         async open(nextPage: 'play' | 'author' = 'play') { page = nextPage; await render(); if (!dialog.open) {dialog.showModal();} },
-        targetChanged() { cancel(); resultDialog.clear(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();} },
-        mountControl(index: number, results: FloorResult[], { updates, beforeIndex, definition }: { updates: UpdateStage[]; beforeIndex: number; definition?: Definition }) {
+        targetChanged() { cancel(); latestAiIndex = latestUserIndex = -1; resultDialog.clear(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();} },
+        mountControl(index: number, results: FloorResult[], { updates, beforeIndex, lastReceiptIndex, definition }: { updates: UpdateStage[]; beforeIndex: number; lastReceiptIndex: number; definition?: Definition }) {
             document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove());
+            latestAiIndex = index; latestUserIndex = beforeIndex;
             const status = api.updateStatus(), busyIndex = status.index ?? index;
-            resultDialog.sync(results, busyIndex, status, beforeIndex, definition);
-            const floors = new Set([...results.map(item => item.index), ...(updates.includes('after') ? [index] : []),
-                ...(beforeIndex >= 0 ? [beforeIndex] : []), ...(status.busy ? [busyIndex] : [])]);
+            resultDialog.sync(results, index, status, beforeIndex, definition);
+            const floors = new Set([...results.filter(item => item.index >= 0 && item.index === (item.stage === 'before' ? beforeIndex : index)).map(item => item.index),
+                ...(updates.includes('after') && index >= 0 ? [index] : []), ...(beforeIndex >= 0 ? [beforeIndex] : [])]);
             for (const floor of floors) {
                 const floorTarget = document.querySelector(`.mes[mesid="${floor}"] .mes_text`);
                 if (floorTarget) {
                     const item = results.find(item => item.index === floor), last = item?.result;
-                    const isBefore = item?.stage === 'before' || floor === beforeIndex;
-                    const current = isBefore ? floor === beforeIndex : floor === index;
+                    const isBefore = floor === beforeIndex;
                     const busy = status.busy && floor === busyIndex;
                     const unsettled = isBefore && (!last || last.ok && !last.receipt?.beforeUpdate);
                     const group = element('div', undefined, 'lwb-state3-controls lwb-variable-controls');
                     group.dataset.floor = String(floor);
-                    if (busy) {group.append(button(COPY.cancel, api.cancel));}
-                    else if (last?.ok && last.saved === false) {group.append(button(COPY.retrySave, () => api.retrySave()));}
-                    else if (current && status.retryIndex === floor) {
-                        group.append(button(COPY.retryCalculation, () => isBefore ? api.recomputeBefore(floor) : api.update()));
-                        if (isBefore) {group.append(button(COPY.skipBefore, () => api.skipBefore(floor)));}
+                    const current = () => group.isConnected && floor === (isBefore ? latestUserIndex : latestAiIndex);
+                    const control = (label: string, action: Action, confirmation?: string) => button(label, signal => {
+                        if (!current() || confirmation && !globalThis.confirm(confirmation)) {return;}
+                        if (current()) {return action(signal);}
+                    });
+                    const replacesResult = lastReceiptIndex >= floor;
+                    const calculate = (label: string) => control(label, () => isBefore ? api.recomputeBefore(floor) : api.update(), replacesResult ? COPY.recomputeConfirm : undefined);
+                    const skip = () => control(COPY.skipBefore, () => api.skipBefore(floor), replacesResult ? COPY.undoConfirm : undefined);
+                    if (busy) {group.append(control(COPY.cancel, api.cancel));}
+                    else if (last?.ok && last.saved === false) {group.append(control(COPY.retrySave, () => api.retrySave()));}
+                    else if (status.retryIndex === floor) {
+                        group.append(calculate(COPY.retryCalculation));
+                        if (isBefore) {group.append(skip());}
                     }
-                    else if (current && isBefore && (last?.ok ? last.receipt?.beforeUpdate?.outcome === 'failed' : last)) {
-                        group.append(button(COPY.retryBefore, () => api.recomputeBefore(floor)), button(COPY.skipBefore, () => api.skipBefore(floor)));
-                    } else if (current && unsettled) {
-                        group.append(button(COPY.settleBefore, () => api.recomputeBefore(floor)), button(COPY.skipBefore, () => api.skipBefore(floor)));
-                    } else if (current && isBefore && item?.edited) {group.append(button(COPY.recompute, () => api.recomputeBefore(floor)));}
-                    else if (current && !isBefore && updates.includes('after')) {group.append(button(last?.ok && last.receipt ? COPY.retry : COPY.update, () => api.update()));}
-                    if (last) {group.append(button(COPY.result, () => resultDialog.open(floor)));}
-                    if (current) {group.append(button(COPY.settings, () => this.open()));}
+                    else if (isBefore && (last?.ok ? last.receipt?.beforeUpdate?.outcome === 'failed' : last)) {
+                        group.append(calculate(COPY.retryBefore), skip());
+                    } else if (unsettled) {
+                        group.append(calculate(COPY.settleBefore), skip());
+                    } else if (isBefore && item?.edited) {group.append(calculate(COPY.recompute));}
+                    else if (!isBefore && updates.includes('after')) {group.append(calculate(last?.ok && last.receipt ? COPY.retry : COPY.update));}
+                    if (last) {group.append(control(COPY.result, () => resultDialog.open(floor)));}
+                    group.append(control(COPY.settings, () => this.open()));
                     const statusLabel = element('span', [COPY.stageNames[isBefore ? 'before' : 'after'],
                         busy ? COPY.phases[status.phase] : item?.edited ? COPY.messageEdited : unsettled ? COPY.unsettled : last ? resultLabel(last) : COPY.unsettled].join(' · '));
                     statusLabel.setAttribute('role', 'status'); group.append(statusLabel);

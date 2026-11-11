@@ -3,6 +3,7 @@ import test from 'node:test';
 import { Buffer } from 'node:buffer';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { setImmediate as nextTurn } from 'node:timers/promises';
 import { build } from 'esbuild';
 import { parseHTML } from 'linkedom';
 import { mergeNovelDrawProviderSettingsIntoStorageRoot } from '../draw-settings.js';
@@ -13,6 +14,8 @@ import { normalizeContinuityLimits, positiveInteger, stripEmptyCostumeText } fro
 // - Limits are normalized in one place: positive integers only, anything else falls back to the defaults (100 floors / 50 characters).
 // - The memory-edit handler strips the "（空＝没穿）" placeholder from the costume before storing it.
 // - If the chat changes while the edit is being prepared, nothing is written; the view of the current chat is posted instead.
+// - Concurrent edits persist in input order even when the first image read is slower (cost: silently losing the latest user input).
+// - Pending saves, removal/reset, and a failed operation cannot reorder or block later edits; leaving a chat cannot redirect queued edits (same data-loss cost).
 
 test('the memory range settings survive the provider-settings merge', () => {
     const merged = mergeNovelDrawProviderSettingsIntoStorageRoot({ saveAsJpeg: true }, { mode: 'nai', continuityMaxFloors: 80, continuityMaxEntries: 20 });
@@ -31,7 +34,8 @@ test('limits are normalized by one shared rule', () => {
     assert.equal(positiveInteger('12', 7), 12);
 });
 
-const host = { ctx: null, messages: [], records: async () => [], onRecords: null };
+const imageRecords = [{ slotId: 'source-image', messageId: 0, timestamp: 0, continuityChars: [{ name: 'Alice', costume: 'grey coat', action: '' }] }];
+const host = { ctx: null, messages: [], records: async () => imageRecords };
 globalThis.__continuityHandlerTest = host;
 const stubs = {
     'novel-prompts.js': 'exports.DEFAULT_PROMPT_CONFIG={topSystem:"fixture",topSystemPov:"fixture",sceneRules:"fixture"};exports.PROMPT_TEMPLATE_VERSION=1;exports.normalizeNovelPromptGuideOverrides=()=>({});',
@@ -66,7 +70,7 @@ const bundle = await build({
 
 const chatContext = (chatId) => {
     const ctx = { chatId, chat: [{ is_user: true, mes: 'hi' }], chatMetadata: {}, saves: 0 };
-    ctx.saveMetadata = async () => { ctx.saves++; };
+    ctx.saveMetadata = async () => { ctx.saves++; ctx.persisted = JSON.stringify(ctx.chatMetadata); };
     return ctx;
 };
 const lastMemory = () => host.messages.findLast(message => message.type === 'CONTINUITY_MEMORY');
@@ -85,7 +89,7 @@ test('the memory-edit handler strips the placeholder, and drops the edit when th
     host.messages = [];
     await send(edit('（空＝没穿）, red coat，（空＝没穿）'));
     assert.equal(chatA.chatMetadata.LittleWhiteBox.continuityEdits[0].costume, 'red coat');
-    assert.equal(lastMemory().entries[0].costume, 'red coat');
+    assert.equal(lastMemory().entries.find(entry => entry.name === '韩枫').costume, 'red coat');
     await send(edit('（空＝没穿）'));
     assert.equal(chatA.chatMetadata.LittleWhiteBox.continuityEdits[0].costume, '', 'only the placeholder left means "not wearing"');
     assert.equal(chatA.chatMetadata.LittleWhiteBox.continuityEdits.length, 1);
@@ -110,4 +114,90 @@ test('placeholder stripping keeps the real tags and tidies the commas it leaves 
     assert.equal(stripEmptyCostumeText('a, （空＝没穿）, b'), 'a, b');
     assert.equal(stripEmptyCostumeText('red coat'), 'red coat');
     assert.equal(stripEmptyCostumeText(undefined), '');
+});
+
+test('a slow earlier edit cannot overwrite the latest input', async () => {
+    const { document, window } = parseHTML('<html><body><iframe id="xiaobaix-novel-draw-iframe"></iframe></body></html>');
+    Object.assign(globalThis, { document, window });
+    // eslint-disable-next-line no-unsanitized/method -- Only the local bundled handler and fixed test stubs are imported.
+    const api = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].text + '\n//# sourceURL=continuity-handler-order.mjs').toString('base64'));
+    host.ctx = chatContext('order');
+    host.messages = [];
+    let releaseFirst;
+    const firstRead = new Promise(resolve => { releaseFirst = resolve; });
+    let reads = 0;
+    host.records = async () => { if (++reads === 1) await firstRead; return imageRecords; };
+    const send = costume => api.handleFrameMessage({ data: { type: 'CONTINUITY_MEMORY_EDIT', op: 'set', name: 'Alice', costume } });
+    const red = send('red coat');
+    const blue = send('blue coat');
+    await nextTurn();
+    releaseFirst();
+    await Promise.all([red, blue]);
+    const persisted = JSON.parse(host.ctx.persisted);
+    assert.equal(persisted.LittleWhiteBox.continuityEdits[0].costume, 'blue coat');
+    assert.equal(lastMemory().entries[0].costume, 'blue coat');
+});
+
+async function orderFixture(label) {
+    const { document, window } = parseHTML('<html><body><iframe id="xiaobaix-novel-draw-iframe"></iframe></body></html>');
+    Object.assign(globalThis, { document, window });
+    // eslint-disable-next-line no-unsanitized/method -- Only the local bundled handler and fixed test stubs are imported.
+    const api = await import('data:text/javascript;base64,' + Buffer.from(bundle.outputFiles[0].text + `\n//# sourceURL=continuity-handler-${label}.mjs`).toString('base64'));
+    const ctx = chatContext(label);
+    host.ctx = ctx;
+    host.messages = [];
+    host.records = async () => imageRecords;
+    const send = (op, costume = '', name = 'Alice') => api.handleFrameMessage({ data: { type: 'CONTINUITY_MEMORY_EDIT', op, name, costume } });
+    return { ctx, send };
+}
+
+test('pending saves, edits to other characters, removal and reset retain their input order after reload', async () => {
+    const { ctx, send } = await orderFixture('save-order');
+    let releaseSave;
+    const heldSave = new Promise(resolve => { releaseSave = resolve; });
+    const saved = [];
+    ctx.saveMetadata = async () => {
+        const snapshot = JSON.stringify(ctx.chatMetadata);
+        if (++ctx.saves === 1) await heldSave;
+        ctx.persisted = snapshot;
+        saved.push(JSON.parse(snapshot).LittleWhiteBox.continuityEdits ?? []);
+    };
+    const pending = [send('set', 'red coat'), send('set', 'green coat', 'Bobby'), send('remove'), send('reset'), send('set', 'blue coat')];
+    await nextTurn();
+    releaseSave();
+    await Promise.all(pending);
+    assert.deepEqual(saved.map(edits => edits.map(edit => [edit.name, edit.removed === true ? 'removed' : edit.costume])), [
+        [['Alice', 'red coat']], [['Alice', 'red coat'], ['Bobby', 'green coat']],
+        [['Bobby', 'green coat'], ['Alice', 'removed']], [], [['Alice', 'blue coat']],
+    ]);
+    ctx.chatMetadata = JSON.parse(ctx.persisted);
+    await send('set', 'black coat', 'Bobby');
+    assert.deepEqual(lastMemory().entries.map(entry => [entry.name, entry.costume]), [['Bobby', 'black coat'], ['Alice', 'blue coat']]);
+});
+
+test('a failed read is reported and does not block a later edit', async () => {
+    const { ctx, send } = await orderFixture('failed-read');
+    let reads = 0;
+    host.records = async () => { if (++reads === 1) throw new Error('fixture read failure'); return imageRecords; };
+    await Promise.all([send('set', 'red coat'), send('set', 'blue coat')]);
+    assert.equal(ctx.saves, 1);
+    assert.equal(JSON.parse(ctx.persisted).LittleWhiteBox.continuityEdits[0].costume, 'blue coat');
+    assert.ok(host.messages.some(message => message.type === 'STATUS' && message.state === 'error'));
+});
+
+test('queued edits are discarded when the originating chat is left', async () => {
+    const { ctx, send } = await orderFixture('left-chat');
+    let releaseRead;
+    const heldRead = new Promise(resolve => { releaseRead = resolve; });
+    let reads = 0;
+    host.records = async () => { if (++reads === 1) await heldRead; return imageRecords; };
+    const pending = [send('set', 'red coat'), send('reset'), send('set', 'blue coat')];
+    await nextTurn();
+    const current = chatContext('current');
+    host.ctx = current;
+    releaseRead();
+    await Promise.all(pending);
+    assert.equal(ctx.saves + current.saves, 0);
+    assert.equal(ctx.chatMetadata.LittleWhiteBox, undefined);
+    assert.equal(current.chatMetadata.LittleWhiteBox, undefined);
 });

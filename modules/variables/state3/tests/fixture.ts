@@ -15,8 +15,11 @@ export function fixture() {
     interface TestSnapshot extends Snapshot { identity: object; revision?: number }
     const adapter: HostAdapter<TestSnapshot> = {
         bundle: () => clone(card),
-        capture(index = records.length - 1) { return { identity, state: clone(state), history: clone(history), records: clone(records), index, revision: history?.revision, target: { floor: index, swipeId: 0 } }; },
+        capture(index = records.length - 1) { return { identity, state: clone(state), history: clone(history), records: clone(records), lastReceiptIndex: records.reduce((last, record, floor) => record.entries.length ? floor : last, -1), index, revision: history?.revision, target: { floor: index, swipeId: 0 } }; },
         isCurrent(snapshot) { return snapshot.identity === identity && snapshot.revision === history?.revision; },
+        assertMutable(snapshot) {
+            if (snapshot.index < Math.max(0, records.length - 2) || snapshot.index >= records.length) {throw { code: 'target-missing' };}
+        },
         publish(_snapshot, next) {
             state = clone(next.state); history = clone(next.history); records = clone(next.records);
             return async () => {

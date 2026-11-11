@@ -57,8 +57,8 @@ test('K5: current state survives missing middle records; selection restoration n
 
 test('K5/K7: redoing a reply replaces its prior settlement; stale targets cannot publish', async () => {
     const host = fixture(); accepted(await host.service.enable(equipmentExample()));
-    accepted(await host.service.apply(unequip, { source: 'model' }));
-    accepted(await host.service.apply(unequip, { source: 'model' }));
+    accepted(await host.service.apply(unequip, { source: 'model', replace: true }));
+    accepted(await host.service.apply(unequip, { source: 'model', replace: true }));
     assert.equal(host.saved().records[0].entries.length, 1);
     const staged = await host.service.stage(); host.switch();
     await assert.rejects(staged.run([], { preview: false }), { code: 'stale-target' });

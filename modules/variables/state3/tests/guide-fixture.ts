@@ -12,9 +12,10 @@ export async function createGuideFixture(bundle: Bundle) {
     const adapter: HostAdapter = {
         bundle: () => bundle,
         capture(index = records.length - 1) {
-            return structuredClone({ state, history, records, index, target: { floor: index, swipeId: 0 } });
+            return structuredClone({ state, history, records, lastReceiptIndex: records.reduce((last, record, floor) => record.entries.length ? floor : last, -1), index, target: { floor: index, swipeId: 0 } });
         },
         isCurrent: snapshot => snapshot.history?.revision === history?.revision,
+        assertMutable(snapshot) { if (snapshot.index !== records.length - 1) {throw { code: 'target-missing' };} },
         publish(_snapshot, next) {
             ({ state, history, records } = structuredClone(next));
             save = async () => {

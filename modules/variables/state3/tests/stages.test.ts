@@ -9,6 +9,35 @@ import { initialize, settle } from '../engine/settle.js';
 import { fixture, accepted } from './fixture.js';
 import { beforeOutcome } from '../runtime/before-result.js';
 
+// B13: a replacement preview is harmless, but committing even an invalid new
+// submission first persists removal of the old suffix rather than preserving it.
+test('B13: replacement preview is read-only and rejected replacement stays at the saved rollback', async () => {
+    const f = fixture(); accepted(await f.service.enable(equipmentExample()));
+    const initial = f.saved().state;
+    accepted(await f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 70 }], { source: 'model' }));
+    accepted(await f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 65 }]));
+    const saved = f.saved(); saved.records.push({ entries: [] }); f.load(saved);
+    accepted(await f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 30 }], { index: 1 }));
+    const before = f.saved(), saves = f.counts().saves;
+    const staged = await f.service.stage({ index: 0, replace: true });
+    accepted(await staged.run([{ op: 'inc', path: ['hero', 'health'], delta: -10 }]));
+    assert.deepEqual(f.saved(), before); assert.equal(f.counts().saves, saves);
+    const gate = f.holdNextSave();
+    let finished = false;
+    const replacing = staged.run([{ op: 'inc', path: ['hero', 'health'], delta: 'invalid' }], { preview: false, source: 'model' })
+        .then(result => {finished = true; return result;});
+    try {
+        await gate.started;
+        assert.deepEqual(f.saved().state, initial);
+        assert.ok(f.saved().records.every(record => record.entries.length === 0));
+        assert.equal(finished, false);
+    } finally {gate.release();}
+    assert.equal((await replacing).ok, false);
+    assert.equal(f.counts().saves, saves + 1);
+    assert.deepEqual(f.saved().state, initial);
+    assert.ok(f.saved().records.every(record => record.entries.length === 0));
+});
+
 function dualCard() {
     const bundle = equipmentExample(); bundle.definition.updates = ['before', 'after'];
     for (const action of bundle.definition.actions) {action.stages = ['before'];}
@@ -43,13 +72,14 @@ test('B1: stages restrict tools, instructions and whole submissions, not shared 
     assert.equal((await settle(single, start.state, [], { stage: 'before' })).diagnostics[0].code, 'stage-disabled');
 });
 
-// B2: the USER result is durable and replacement/undo is not a second increment;
-// later confirmed effects are preserved, never causally replayed (data loss).
-test('B2: before receipt replacement, reload and explicit undo preserve the known history contract', async () => {
+// B2: replacing a USER outcome discards the whole affected transaction suffix,
+// including API edits and the latest AI outcome; no old effect can reappear after reload.
+test('B2: USER recalculation durably rolls back its whole floor and every later receipt', async () => {
     const f = fixture(), bundle = equipmentExample(); bundle.definition.updates = ['before'];
     accepted(await f.service.enable(bundle));
+    const initial = f.saved().state;
     const input = [{ op: 'inc', path: ['hero', 'health'], delta: -10 }];
-    const options = { index: 0, stage: 'before' as const, source: 'model:before', replaceSource: 'model:before',
+    const options = { index: 0, stage: 'before' as const, source: 'model:before', replace: true,
         beforeUpdate: { inputDigest: 'player-message', outcome: 'applied' as const, diagnostics: [] } };
     const staged = await f.service.stage(options);
     const preview = accepted(await staged.run(input, { stage: 'before' }));
@@ -58,19 +88,23 @@ test('B2: before receipt replacement, reload and explicit undo preserve the know
     const reopened = f.saved(); f.load(reopened);
     assert.deepEqual(beforeOutcome(reopened.records[0].entries[0]).changes, applied.changes);
     assert.deepEqual(accepted(await f.service.apply(input, options)).state, applied.state);
-    accepted(await f.service.recordBefore(0, { inputDigest: 'player-message', outcome: 'undone', diagnostics: [] }));
-    assert.equal((f.saved().state as { hero: { health: number } }).hero.health, 80);
-    assert.equal(f.saved().records[0].entries[0].beforeUpdate!.outcome, 'undone');
-    assert.equal(f.saved().records[0].entries.length, 1);
-    accepted(await f.service.apply(input, options));
+    accepted(await f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 65 }], { index: 0 }));
     const saved = f.saved(); saved.records.push({ entries: [] }); f.load(saved);
     accepted(await f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 30 }], { index: 1 }));
-    accepted(await f.service.recordBefore(0, { inputDigest: 'player-message', outcome: 'undone', diagnostics: [] }));
-    assert.equal((f.saved().state as { hero: { health: number } }).hero.health, 30);
-    // Replacing the latest USER still preserves its later AI receipt. Report a
-    // conflict if that preserved result no longer fits, rather than rewriting it.
     accepted(await f.service.apply([{ op: 'set', path: ['hero', 'health'], value: 90 }], { index: 1 }));
+    const oldIds = f.saved().records.flatMap(record => record.entries.map(entry => entry.id));
+    const saves = f.counts().saves;
+    const rolledBack = accepted(await f.service.rollback({ index: 0 }));
+    assert.equal(rolledBack.saved, true);
+    assert.equal(f.counts().saves, saves + 1);
+    assert.deepEqual(f.saved().state, initial);
+    assert.ok(f.saved().records.every(record => record.entries.length === 0));
+    f.load(JSON.parse(JSON.stringify(f.saved())));
     const changed = accepted(await f.service.apply([{ action: 'unequip', params: {} }], options));
-    assert.equal((changed.state as { hero: { health: number } }).hero.health, 90);
-    assert.equal(changed.restoration![0].code, 'constraint');
+    assert.equal((changed.state as { hero: { health: number } }).hero.health, 60);
+    assert.equal(f.saved().records[0].entries.length, 1);
+    assert.equal(f.saved().records[1].entries.length, 0);
+    assert.ok(f.saved().records.flatMap(record => record.entries).every(entry => !oldIds.includes(entry.id)));
+    accepted(await f.service.undo({ index: 0, all: true }));
+    assert.deepEqual(f.saved().state, initial);
 });

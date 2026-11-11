@@ -6,7 +6,7 @@ import { normalizePendingImageJob } from '../pending-image-jobs.js';
 import { prepareImageInput } from '../prepared-image-input.js';
 import { compileNovelPromptForTask } from '../../providers/novelai/compiler.js';
 import projection from '../../server/draw-runs/projection.js';
-import { buildContinuityFromImageRecords } from '../character-continuity.js';
+import { buildContinuityFromImageRecords, buildContinuityMemoryView, getContinuityEditAnchor, updateContinuityEdits } from '../character-continuity.js';
 
 // Acceptance contracts (cost: unintended paid requests / invisible false history):
 // - Manual planning never calls transport, even with backend mode enabled; failed placement cleans up.
@@ -14,6 +14,7 @@ import { buildContinuityFromImageRecords } from '../character-continuity.js';
 // - Compiler facts survive backend journal and saved-chat reload without a parallel history store.
 // - Character TAG edits skip the edited character's snapshot for that image only (earlier memory stays), without guessing new tags;
 //   the save toast says so only when an edit actually skipped a character.
+// - Deleting earlier messages and reloading cannot make an older manual edit override a later image (cost: invisible false outfit history).
 for (const backend of [false, true]) test(`manual planning makes no paid request, backend=${backend}`, async () => {
     const saved = new Map(); let commits = 0; let requests = 0;
     const options = {
@@ -65,6 +66,20 @@ test('middle deletion and slot removal cannot reuse stale gallery floor numbers'
     h.ctx.chat[1].mes = 'image removed';
     assert.deepEqual(await read(h), []);
     assert.ok(await h.api.getPreview('deleted'), 'removing a floor must not erase paid gallery images');
+});
+
+test('manual memory stays between its source image and a later image after earlier messages are deleted and reloaded', async t => {
+    const h = await fixture(['start', 'padding', '[image:first]', '[image:later]', 'plain', 'plain', 'target']); t.after(() => h.stop());
+    await h.api.setDrawSavedEntry(2, 'first', { imgId: 'first-image', savedUrl: '/images/first.png', continuityChars: [{ name: 'Alice', costume: 'grey coat', action: '' }] });
+    const earlier = await h.api.getContinuityImageRecords({ chat: h.ctx.chat, beforeMessageId: 3 });
+    let edits = updateContinuityEdits([], { op: 'set', name: 'Alice', costume: 'red coat', afterSlotId: getContinuityEditAnchor(earlier) });
+    await h.api.setDrawSavedEntry(3, 'later', { imgId: 'later-image', savedUrl: '/images/later.png', continuityChars: [{ name: 'Alice', costume: 'blue coat', action: '' }] });
+    const memory = async () => buildContinuityMemoryView(await read(h), edits, { beforeMessageId: h.ctx.chat.length - 1 });
+    assert.equal((await memory())[0].costume, 'blue coat');
+    h.ctx.chat.splice(0, 2);
+    h.ctx.chat = JSON.parse(JSON.stringify(h.ctx.chat));
+    edits = JSON.parse(JSON.stringify(edits));
+    assert.equal((await memory())[0].costume, 'blue coat', 'deleting unrelated earlier messages does not reverse the outfit history');
 });
 
 test('saved chat metadata retains continuity after cache loss and reload', async t => {

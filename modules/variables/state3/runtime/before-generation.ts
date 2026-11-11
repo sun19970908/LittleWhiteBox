@@ -67,8 +67,8 @@ export function createBeforeGeneration({ adapter, service, updater, retain, refr
             if (!current()) {return;}
             const previous = receiptAt(index)?.beforeUpdate;
             if (!result.ok && updater.status().retryIndex !== index && (!previous || previous.outcome === 'failed')) {
-                // An unsuccessful first attempt must still be visible after reload.
-                // A failed recompute never erases a previously settled result.
+                // Failure is recorded on the already-rolled-back state. Never
+                // restore a superseded USER/AI settlement when recomputation fails.
                 result = await retain(service.recordBefore(index, { inputDigest, outcome: 'failed', diagnostics: result.diagnostics }, { signal }), index);
             }
         } finally {

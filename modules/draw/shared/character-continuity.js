@@ -399,8 +399,8 @@ export function continuityAfterTagEdit(record, characterPrompts) {
 }
 
 // ── 用户对记忆的手动修改（按聊天保存的覆盖层）─────────────────────────────
-// 记忆仍由图片记录重建；用户的改动只是一条条“插在某个楼层之后”的快照：
-// at = 修改时已有图片的最大楼层 + 1，所以只对之后新画的图生效，之后画出的新图仍然会盖过它。
+// 记忆仍由图片记录重建；修改跟随最后一张图已有的 slotId，不另存会随删楼失真的楼层号。
+// 读取时放在该图当前所在楼层之后；后续楼层的图片仍然覆盖它，图位消失或不在读取范围内时修改不生效。
 
 /**
  * 整理手动修改：脏数据一律丢弃；同一角色（按正式名）后写的替换先写的；最多 MAX_EDITS 条（留最新的）。
@@ -411,7 +411,8 @@ export function normalizeContinuityEdits(raw, { resolver = createContinuityNameR
     for (const item of Array.isArray(raw) ? raw : []) {
         if (!item || typeof item !== 'object' || typeof item.name !== 'string') continue;
         const name = resolver.canonicalName(item.name);
-        if (!name) continue;
+        const afterSlotId = typeof item.afterSlotId === 'string' ? item.afterSlotId.trim() : '';
+        if (!name || !afterSlotId) continue;
         const key = lowerKey(name);
         map.delete(key);
         map.set(key, {
@@ -419,46 +420,48 @@ export function normalizeContinuityEdits(raw, { resolver = createContinuityNameR
             form: sanitizeForm(item.form),
             appear: sanitizeTags(item.appear),
             costume: sanitizeTags(item.costume),
-            at: Math.max(0, Math.floor(Number(item.at) || 0)),
+            afterSlotId,
             ...(item.removed === true ? { removed: true } : {}),
         });
     }
     return [...map.values()].slice(-MAX_EDITS);
 }
 
-/** 新的修改应该插在哪：已有图片的最大楼层 + 1（没有图片时为 0）。 */
-export function nextContinuityEditPosition(records) {
-    const ids = (Array.isArray(records) ? records : []).map(record => Number(record?.messageId)).filter(Number.isFinite);
-    return ids.length ? Math.max(...ids) + 1 : 0;
+/** 记录已按聊天中的图片顺序排列；手改跟随最后一张图，不跟随聊天末尾。 */
+export function getContinuityEditAnchor(records) {
+    return records.at(-1)?.slotId || '';
 }
 
 /**
  * 增删改一条修改：op 为 set（整条替换该角色的记忆）/ remove（让该角色的记忆消失）/ reset（清空全部修改）。
  * 其它 op 或空名字不改动。
  */
-export function updateContinuityEdits(edits, { op, name, form, appear, costume, at } = {}, { resolver } = {}) {
+export function updateContinuityEdits(edits, { op, name, form, appear, costume, afterSlotId } = {}, { resolver } = {}) {
     if (op === 'reset') return [];
     const current = normalizeContinuityEdits(edits, { resolver });
     if (op !== 'set' && op !== 'remove') return current;
-    return normalizeContinuityEdits([...current, { name, form, appear, costume, at, removed: op === 'remove' }], { resolver });
+    return normalizeContinuityEdits([...current, { name, form, appear, costume, afterSlotId, removed: op === 'remove' }], { resolver });
 }
 
 /**
- * 把修改作为快照记录插进图片记录：排在所有 messageId < at 的真实记录之后、其余记录之前。
- * at > beforeMessageId 的修改（还没轮到的楼层）忽略。修改是一张“最近的图”：set 整条覆盖该角色，remove 让该角色的记忆消失；清空衣着再保存就是没穿。
+ * 用原图位定位修改：排在它当前所在楼层的图片之后、后续楼层之前。楼层移动不改变先后关系。
+ * 原图位被删、切到别的分支或不在本次读取范围内时，忽略对应修改。
+ * set 整条覆盖该角色，remove 让该角色的记忆消失；清空衣着就是没穿。
  * 返回新数组，不改入参。
  */
 export function applyContinuityEdits(records, edits, { beforeMessageId = Infinity } = {}) {
     const real = Array.isArray(records) ? records : [];
-    const list = normalizeContinuityEdits(edits).filter(edit => edit.at <= beforeMessageId);
+    const list = normalizeContinuityEdits(edits);
     if (!list.length) return real;
     const merged = [...real];
     list.forEach((edit, index) => {
-        const at = merged.findIndex(record => Number(record?.messageId) >= edit.at);
+        const anchor = real.find(record => record.slotId === edit.afterSlotId);
+        if (!anchor || anchor.messageId >= beforeMessageId) return;
+        const at = merged.findIndex(record => Number(record?.messageId) >= anchor.messageId + 1);
         const position = at < 0 ? merged.length : at;
         const previous = merged[position - 1];
         merged.splice(position, 0, {
-            messageId: edit.at - 0.5,
+            messageId: anchor.messageId + 0.5,
             timestamp: (Number(previous?.timestamp) || 0) + 0.0001 * (index + 1),
             // 快照没有 action 键：edited 标记让它不被当成旧版撤销快照，空 costume 仍是“没穿”。
             continuityChars: [edit.removed

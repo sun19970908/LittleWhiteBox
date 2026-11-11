@@ -80,13 +80,17 @@ export function initState3() {
     };
     // Every rule writeback, through CardFiles or this API, refreshes the description macros before it resolves.
     const stopRulesSaved = onRulesSaved(() => { updater.cancel(); return report(syncProjection().then(refresh)); });
-    const updater = createState3Updater({ service, adapter, available, changed: () => refresh() });
+    const updater = createState3Updater({ service, adapter, available, changed: () => refresh(), rewound: async () => {
+        lastResult = undefined; resultMessage = undefined; beforeResult = undefined;
+        await syncProjection(); refresh();
+    } });
     const before = createBeforeGeneration({ adapter, service, updater, retain, refresh, report });
+    const writable = () => { available(); if (before.status().busy) {reject('commit-busy');} };
     const api: State3Api = {
-        stage(options) { available(); return service.stage(owned(options)); },
-        apply(input, options) { available(); return retain(service.apply(input, owned(options)), options?.index); },
+        stage(options) { writable(); return service.stage(owned(options)); },
+        apply(input, options) { writable(); return retain(service.apply(input, owned(options)), options?.index); },
         preview(input, options) { available(); return retain(service.preview(input, owned(options)), options?.index); },
-        undo(options) { available(); return retain(service.undo(owned(options)), options?.index); },
+        undo(options) { writable(); return retain(service.undo(owned(options)), options?.index); },
         inspect: () => service.inspect(),
         async enable(options) {
             lifecycle.signal.throwIfAborted();
@@ -152,7 +156,7 @@ export function initState3() {
                 if (existing) {existing.result = lastResult;} else {results.push({ index: resultIndex, result: lastResult,
                     stage: ctx.chat[resultIndex]?.is_user ? 'before' : 'after', edited: false });}
             }
-            page?.mountControl(snapshot.index, results, { updates, beforeIndex, definition });
+            page?.mountControl(snapshot.index, results, { updates, beforeIndex, lastReceiptIndex: snapshot.lastReceiptIndex, definition });
         }
         catch (error) { if (!['chat-missing', 'character-missing'].includes(diagnostic(error).code)) {throw error;} }
     }
