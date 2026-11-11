@@ -1,5 +1,5 @@
 {
-  "buildId": "8f30905bbd9526ca81ae",
+  "buildId": "ae3e14433ffaa8b03393",
   "entries": {
     "apps/assistant": {
       "file": "apps/assistant-BF64paCM.js",
@@ -294,7 +294,7 @@
         "shared/server-storage-DPJwEaSD.js",
         "shared/generate-interceptor-CbnhGGGD.js",
         "shared/transfer-copy-fsbm_2Qn.js",
-        "shared/prompt-zRu9zEZS.js",
+        "shared/prompt-Cu3snIOP.js",
         "shared/chat-message-image-markup-Cqn-Ihag.js",
         "shared/scene-placement-BT-9mWg4.js",
         "shared/gallery-cache-DsPRLm6S.js",
@@ -1484,16 +1484,7 @@
       "dynamicImports": [],
       "css": []
     },
-    "shared/prompt-layout-editor-BeApvqJN.js": {
-      "imports": [
-        "shared/filter-rule-sort-B5y4GI7C.js",
-        "shared/scene-planner-handoff-kCFDjuxo.js",
-        "shared/preset-list-view-BUOgF472.js"
-      ],
-      "dynamicImports": [],
-      "css": []
-    },
-    "shared/prompt-zRu9zEZS.js": {
+    "shared/prompt-Cu3snIOP.js": {
       "imports": [
         "shared/rolldown-runtime-W-g5d7YK.js",
         "shared/preload-helper-BdDHxvum.js",
@@ -1511,8 +1502,17 @@
       ],
       "dynamicImports": [
         "shared/server-storage-DPJwEaSD.js",
-        "shared/prompt-zRu9zEZS.js"
+        "shared/prompt-Cu3snIOP.js"
       ],
+      "css": []
+    },
+    "shared/prompt-layout-editor-BeApvqJN.js": {
+      "imports": [
+        "shared/filter-rule-sort-B5y4GI7C.js",
+        "shared/scene-planner-handoff-kCFDjuxo.js",
+        "shared/preset-list-view-BUOgF472.js"
+      ],
+      "dynamicImports": [],
       "css": []
     },
     "shared/protocol-CDuR5NqC.js": {

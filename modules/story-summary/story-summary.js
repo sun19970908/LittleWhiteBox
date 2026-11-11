@@ -140,6 +140,11 @@ import { getEntityVocabulary } from "./vector/retrieval/entity-lexicon.js";
 import {
     getMeta,
     updateMeta,
+    getAllChunks,
+    getAllChunkVectors,
+    getAllEventVectors,
+    makeChunkId,
+    makeEventVectorRecords,
     saveEventVectors as saveEventVectorsToDb,
     getEventVectorDescriptors,
     clearEventVectors,
@@ -170,12 +175,16 @@ import {
 } from "./vector/pipeline/state-integration.js";
 import {
     clearStateVectors,
+    getAllStateVectors,
     getStateAtoms,
     getStateAtomsCount,
     getStateVectorsCount,
     saveStateVectors,
     getL0Index,
+    getL0FloorStatus,
+    deleteStateVectorsByIds,
 } from "./vector/storage/state-store.js";
+import { db, chunksTable, chunkVectorsTable, lexicalIndexTable } from "./data/db.js";
 
 // vector io
 import { chunkMessage } from './vector/pipeline/chunk-text.js';
@@ -208,7 +217,7 @@ import {
     waitForVectorWrites,
 } from "./vector/runtime/maintenance-coordinator.js";
 
-import { invalidateLexicalIndex, warmupIndex, addEventDocuments, addChunkDocuments, clearChunkDocuments, removeEventDocuments, removeDocumentsByFloor, removeDocumentsFromFloor, replaceEventDocuments } from "./vector/retrieval/lexical-index.js";
+import { invalidateLexicalIndex, warmupIndex, getLexicalIndex, addEventDocuments, addChunkDocuments, clearChunkDocuments, removeEventDocuments, removeDocumentsByFloor, removeDocumentsFromFloor, replaceEventDocuments } from "./vector/retrieval/lexical-index.js";
 import { trackVectorActivity } from './vector/runtime/vector-activity.js';
 import { checkVectorCacheConsistency, recordVectorCacheDiagnostic } from './vector/storage/package/service.js';
 import { createMessageSourceTracker } from './data/message-sources.js';
@@ -4639,6 +4648,64 @@ function handleChatChange() {
     scheduleWithChatGuard(chatId => handleChatChanged(chatId, { reload: !!reloaded }), 80);
 }
 
+function installStorySummaryFacade() {
+    if (typeof window === 'undefined') return;
+    window.xiaobaixStorySummary = Object.freeze({
+        vectorModules: Object.freeze({
+            chunkStore: Object.freeze({
+                getMeta,
+                updateMeta,
+                getAllChunks,
+                getAllChunkVectors,
+                getAllEventVectors,
+                makeChunkId,
+                makeEventVectorRecords,
+                saveEventVectors: saveEventVectorsToDb,
+                deleteEventVectorsByIds,
+            }),
+            stateStore: Object.freeze({
+                getAllStateVectors,
+                getStateAtoms,
+                getL0FloorStatus,
+                deleteStateVectorsByIds,
+            }),
+            digest: Object.freeze({ inputDigest }),
+            stateVectorInput: Object.freeze({ buildRAggregateText }),
+            eventVectorInput: Object.freeze({ buildEventVectorText }),
+            chunkText: Object.freeze({ chunkMessage }),
+            config: Object.freeze({ getVectorConfig }),
+            embedder: Object.freeze({ getEngineFingerprint, embed }),
+            db: Object.freeze({
+                db,
+                chunksTable,
+                chunkVectorsTable,
+                lexicalIndexTable,
+            }),
+            lexicalIndex: Object.freeze({
+                removeDocumentsByFloor,
+                removeEventDocuments,
+                addChunkDocuments,
+                addEventDocuments,
+                getLexicalIndex,
+                warmupIndex,
+                invalidateLexicalIndex,
+            }),
+            chunkRepair: Object.freeze({ repairMissingChunks }),
+            stateIntegration: Object.freeze({ vectorizeMissingStateAtoms }),
+            runtime: Object.freeze({
+                clearRecallRuntime,
+                refreshRecallRuntime,
+                getRecallRuntimeStats,
+            }),
+        }),
+    });
+}
+
+function uninstallStorySummaryFacade() {
+    if (typeof window === 'undefined') return;
+    delete window.xiaobaixStorySummary;
+}
+
 async function registerEvents() {
     if (storySummaryTeardown) await storySummaryTeardown;
     if (!isXiaobaiMasterEnabled() || !getSettings().storySummary?.enabled) return;
@@ -4650,6 +4717,8 @@ async function registerEvents() {
     activeChatId = getContext().chatId || null;
     messageSources.reset(getContext());
     registerAfterAiGateHandler();
+    // Guard against isolated vm-sliced tests that extract lifecycle handlers alone.
+    if (typeof installStorySummaryFacade === 'function') installStorySummaryFacade();
 
     CacheRegistry.register(MODULE_ID, {
         name: "剧情总结运行缓存",
@@ -4787,6 +4856,7 @@ async function runStorySummaryTeardown() {
     clearWarningCooldowns();
     clearRecallFailureNotice();
     if (events) {
+        if (typeof uninstallStorySummaryFacade === 'function') uninstallStorySummaryFacade();
         CacheRegistry.unregister(MODULE_ID);
         events.cleanup();
         events = null;
