@@ -7,6 +7,10 @@ export function redactRequestSecrets(value) {
     }
     const redacted = {};
     Object.entries(value).forEach(([key, entry]) => {
+        if (/^(?:serviceAccountJson|private_key|privateKey|assertion)$/i.test(key)) {
+            redacted[key] = entry === '' ? '' : '[redacted]';
+            return;
+        }
         redacted[key] = /^(?:authorization|proxy[-_]?authorization|(?:x[-_])?csrf(?:[-_]?token)?|token|access[-_]?token|refresh[-_]?token|id[-_]?token|api[-_]?key|x[-_](?:goog[-_])?api[-_]?key|proxy[-_]?password|password|client[-_]?secret)$/i.test(key)
             ? (entry === '' ? '' : '[redacted]')
             : redactRequestSecrets(entry);

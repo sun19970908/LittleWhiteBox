@@ -1,5 +1,7 @@
 import { generateSemantic } from './semantic.js';
 import { validate, setRule, replaceRules, getRulesSnapshot } from './guard-core.js';
+import { parsePath, formatPath, isArrayIndex } from './path.js';
+import { operationMessage } from './diagnostics.js';
 
 export const EXECUTION_ERROR = Object.freeze({
     UNMANAGED_ROOT: 'unmanaged_root',
@@ -11,47 +13,7 @@ const EXECUTION_MESSAGES = {
     rejected: '被规则拒绝',
 };
 
-export function splitPath(path) {
-    const s = String(path || '');
-    const segs = [];
-    let buf = '';
-    let i = 0;
-
-    while (i < s.length) {
-        const ch = s[i];
-        if (ch === '.') {
-            if (buf) { segs.push(/^\d+$/.test(buf) ? Number(buf) : buf); buf = ''; }
-            i++;
-        } else if (ch === '[') {
-            if (buf) { segs.push(/^\d+$/.test(buf) ? Number(buf) : buf); buf = ''; }
-            i++;
-            let val = '';
-            if (s[i] === '"' || s[i] === "'") {
-                const q = s[i++];
-                while (i < s.length && s[i] !== q) val += s[i++];
-                i++;
-            } else {
-                while (i < s.length && s[i] !== ']') val += s[i++];
-            }
-            if (s[i] === ']') i++;
-            const normalizedBracketValue = val.trim();
-            if (normalizedBracketValue === '*') {
-                segs.push('[*]');
-            } else {
-                segs.push(/^\d+$/.test(normalizedBracketValue) ? Number(normalizedBracketValue) : normalizedBracketValue);
-            }
-        } else {
-            buf += ch;
-            i++;
-        }
-    }
-    if (buf) segs.push(/^\d+$/.test(buf) ? Number(buf) : buf);
-    return segs;
-}
-
-export function normalizePath(path) {
-    return splitPath(path).map(String).join('.');
-}
+export const splitPath = parsePath;
 
 function safeJSON(v) {
     try { return JSON.stringify(v); } catch { return ''; }
@@ -102,7 +64,7 @@ function jsonValue(value) {
  */
 
 export function getRootFromPath(path) {
-    return String(splitPath(path)[0] ?? '').trim();
+    return String(parsePath(path, { pattern: true })[0] ?? '').trim();
 }
 
 function sameValue(left, right) {
@@ -137,7 +99,6 @@ function createVariableAccess(variables, memory, trackChanges) {
             : encodeStoredVariable(value);
     };
     function writeMember(parent, key, value) {
-        if (!memory) { parent[key] = value; return true; }
         if (Array.isArray(parent)) {
             if (key === 'length') {
                 const length = parent.length;
@@ -145,7 +106,7 @@ function createVariableAccess(variables, memory, trackChanges) {
                 for (let index = length; index < parent.length; index++) parent[index] = null;
                 return true;
             }
-            if (!/^(0|[1-9]\d*)$/.test(String(key)) || Number(key) >= 4294967295) return false;
+            if (!isArrayIndex(key)) throw new Error('数组元素须使用非负整数下标');
             for (let index = parent.length; index < Number(key); index++) parent[index] = null;
             parent[key] = value === undefined ? null : value;
         } else if (value === undefined) {
@@ -216,9 +177,9 @@ function createVariableAccess(variables, memory, trackChanges) {
         const target = parentAt(segs, false);
         if (!target) return { ok: true, changed: false };
         let changed;
-        if (Array.isArray(target.parent) && typeof target.key === 'number') {
-            changed = target.key < target.parent.length;
-            target.parent.splice(target.key, 1);
+        if (Array.isArray(target.parent) && isArrayIndex(target.key)) {
+            changed = Number(target.key) < target.parent.length;
+            target.parent.splice(Number(target.key), 1);
         } else {
             changed = Object.hasOwn(target.parent, target.key);
             delete target.parent[target.key];
@@ -278,7 +239,7 @@ function isIndexDeleteOp(opItem) {
     const segs = splitPath(opItem.path);
     if (!segs.length) return false;
     const last = segs[segs.length - 1];
-    return typeof last === 'number' && Number.isFinite(last);
+    return isArrayIndex(last);
 }
 
 function buildExecOpsWithIndexDeleteReorder(ops) {
@@ -293,11 +254,8 @@ function buildExecOpsWithIndexDeleteReorder(ops) {
     for (const op of ops) {
         if (isIndexDeleteOp(op)) {
             const segs = splitPath(op.path);
-            const idx = segs[segs.length - 1];
-            const parentPath = segs.slice(0, -1).reduce((acc, s) => {
-                if (typeof s === 'number') return acc + `[${s}]`;
-                return acc ? `${acc}.${s}` : String(s);
-            }, '');
+            const idx = Number(segs[segs.length - 1]);
+            const parentPath = JSON.stringify(segs.slice(0, -1).map(String));
 
             if (!groups.has(parentPath)) {
                 groups.set(parentPath, []);
@@ -348,7 +306,7 @@ export function executeStateOperations(meta, rules, ops, {
     const roots = new Set();
     for (const { path, rule } of rules) {
         if (path && rule && Object.keys(rule).length) {
-            setRule(normalizePath(path), rule);
+            setRule(path, rule);
             const root = getRootFromPath(path);
             roots.add(root);
             if (!claimRoots || claimRoots.has(root)) ownedRoots.add(root);
@@ -364,46 +322,49 @@ export function executeStateOperations(meta, rules, ops, {
     const unmanaged = new Set();
     const indexedOps = ops.map((item, index) => ({ ...item, index }));
     for (const item of buildExecOpsWithIndexDeleteReorder(indexedOps)) {
-        const { path, op, value, delta, warning, index } = item;
-        if (!path) continue;
+        const { op, value, delta, warning, index } = item;
+        if (!item.path) continue;
+        const path = parsePath(item.path);
+        const displayPath = formatPath(path);
         const root = getRootFromPath(path);
         const failure = (code, message) => {
             if (!report) return;
-            errors.push({ code, index, path, message });
+            message = operationMessage(index, displayPath, '', message);
+            errors.push({ code, index, path: displayPath, message });
             messages.push(message);
         };
         if (item.source === 'json' && !ownedRoots.has(root)) {
             unmanaged.add(index);
-            if (report) failure(EXECUTION_ERROR.UNMANAGED_ROOT, `${path}: ${EXECUTION_MESSAGES.unmanaged}`);
+            if (report) failure(EXECUTION_ERROR.UNMANAGED_ROOT, EXECUTION_MESSAGES.unmanaged);
             continue;
         }
-        if (report && warning) messages.push(`[${path}] ${warning}`);
+        if (report && warning) messages.push(`[${displayPath}] ${warning}`);
         const currentValue = access.getVar(path);
         const oldValue = report ? deepClone(currentValue) : currentValue;
         const oldRoot = report && !memory ? variables[root] : undefined;
         // Records are immutable requests; neither guard coercion nor a later push may mutate them.
-        const guarded = validate(op, normalizePath(path), deepClone(op === 'inc' ? delta : value), currentValue);
+        const guarded = validate(op, path, deepClone(op === 'inc' ? delta : value), currentValue);
         if (!guarded.allow) {
-            if (report) failure(EXECUTION_ERROR.RULE_REJECTED, `${path}: ${guarded.reason || EXECUTION_MESSAGES.rejected}`);
+            if (report) failure(EXECUTION_ERROR.RULE_REJECTED, `${guarded.reason || EXECUTION_MESSAGES.rejected}；提交值：${safeJSON(op === 'inc' ? delta : value)}`);
             continue;
         }
         if (report && (guarded.note || (op !== 'inc' && safeJSON(value) !== safeJSON(guarded.value)))) {
-            corrections.push({ index, path, requested: deepClone(op === 'inc' ? delta : value), value: deepClone(guarded.value), note: guarded.note || '' });
+            corrections.push({ index, path: displayPath, requested: deepClone(op === 'inc' ? delta : value), value: deepClone(guarded.value), note: guarded.note || '' });
         }
         if (report && guarded.note) {
             const raw = Number(delta);
             const deltaText = Number.isFinite(raw) ? `${raw >= 0 ? '+' : ''}${raw}` : String(delta ?? '');
-            messages.push(`${path}: ${op === 'inc' ? deltaText + ' ' : ''}${guarded.note}`);
+            messages.push(`${displayPath}: ${op === 'inc' ? deltaText + ' ' : ''}${guarded.note}`);
         }
         let outcome;
         try {
             outcome = applyOperation(access, op, path, guarded.value);
             if (!outcome.ok) {
-                if (report) failure(EXECUTION_ERROR.OPERATION_FAILED, `[${path}] 失败: ${outcome.reason}`);
+                if (report) failure(EXECUTION_ERROR.OPERATION_FAILED, outcome.reason);
                 continue;
             }
         } catch (error) {
-            if (report) failure(EXECUTION_ERROR.OPERATION_FAILED, `[${path}] 失败: ${error.message}`);
+            if (report) failure(EXECUTION_ERROR.OPERATION_FAILED, error.message);
             continue;
         }
         roots.add(root);
@@ -412,15 +373,15 @@ export function executeStateOperations(meta, rules, ops, {
         const newValue = deepClone(access.getVar(path));
         const atom = {
             atomId: `${atomPrefix}-${floor}-${atoms.length}`, chatId, floor, idx: atoms.length,
-            path, op, oldValue, newValue, delta: op === 'inc' ? delta : undefined,
-            semantic: generateSemantic(path, op, oldValue, newValue, delta, value),
+            path: displayPath, op, oldValue, newValue, delta: op === 'inc' ? delta : undefined,
+            semantic: generateSemantic(displayPath, op, oldValue, newValue, delta, value),
             timestamp: Date.now(),
         };
         atoms.push(atom);
         if (memory ? outcome.changed : oldRoot !== variables[root]) {
             const actualDelta = op === 'inc' ? Number(newValue) - (Number(oldValue) || 0) : undefined;
             changes.push({ ...atom, index, delta: actualDelta,
-                semantic: generateSemantic(path, op, oldValue, newValue, actualDelta, guarded.value) });
+                semantic: generateSemantic(displayPath, op, oldValue, newValue, actualDelta, guarded.value) });
         }
     }
     // Preserve request order, including rule refusals and operation failures, not derived effects.

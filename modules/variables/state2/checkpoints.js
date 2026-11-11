@@ -1,7 +1,7 @@
 export const CHECKPOINT_KEY = 'stateCkptV2';
 export const CHECKPOINT_INTERVAL = 50;
 // Bump when point content changes meaning; points of any other version are ignored and refilled.
-const CHECKPOINT_VERSION = 4;
+const CHECKPOINT_VERSION = 5;
 
 export function candidateFloors(lastFloor) {
     const latest = Math.floor((lastFloor + 1) / CHECKPOINT_INTERVAL) * CHECKPOINT_INTERVAL - 1;

@@ -1,4 +1,4 @@
-import { bodyBlocks, readRecord, writeRecord, deriveEntryRoots } from './records.js';
+import { bodyBlocks, readRecord, writeRecord, deriveEntryRoots, currentRecord } from './records.js';
 import { decodeStoredVariable, getRootFromPath } from './executor.js';
 
 export const LEGACY_CONVERSION_ERROR = 'legacy_conversion_failed';
@@ -92,7 +92,7 @@ export function stageLegacyLog(ctx) {
             replacements.set(ctx.chat[floor], { v: 1, entries: [entry] });
         }
         stageInitialCheckpoint(ctx, log, replacements);
-        return replacements;
+        return new Map([...replacements].map(([message, record]) => [message, currentRecord(record)]));
     } catch (cause) {
         throw conversionError(cause);
     }

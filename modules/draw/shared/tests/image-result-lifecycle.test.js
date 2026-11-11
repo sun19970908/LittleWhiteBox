@@ -4,7 +4,8 @@ import { fixture } from './helpers/draw-journey.js';
 import { prepareImageInput } from '../prepared-image-input.js';
 import { resolveImageOrientation, resolveImageTaskOrientations } from '../image-orientation.js';
 
-// Acceptance: scene-planner-design.md, paid dimensions and view-owned URLs.
+// Acceptance: a paid image keeps its original dimensions through cache/save/retry, and each view
+// owns and releases its own object URLs.
 const base64 = 'aGVsbG8=';
 const nativeFetch = globalThis.fetch;
 const recipe = { overrideSize: 'auto', seeds: [1], timeout: 30000, requestDelay: { min: 0, max: 0 },

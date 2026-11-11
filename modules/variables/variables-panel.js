@@ -1,11 +1,15 @@
-import { extension_settings, getContext, saveMetadataDebounced } from "../../../../../extensions.js";
-import { saveSettingsDebounced, chat_metadata } from "../../../../../../script.js";
-import { getLocalVariable, setLocalVariable, getGlobalVariable, setGlobalVariable } from "../../../../../variables.js";
+import { extension_settings, getContext } from "../../../../../extensions.js";
+import { chat_metadata } from "../../../../../../script.js";
+import { ownsVariable, readOwnedVariable, writeOwnedVariable } from './state3/runtime/variables.js';
+import { getLocalVariable, getGlobalVariable, setGlobalVariable } from "../../../../../variables.js";
+import { savePanelVariables } from './variables-panel-save.js';
+import { PANEL_COPY } from './variables-panel-copy.js';
 import { extensionFolderPath } from "../../core/constants.js";
 import { createModuleEvents, event_types } from "../../core/event-manager.js";
 import { createMessageButtonOwnership } from "../../core/message-button-ownership.js";
 import { createVariablesPanelRuntime } from "./variables-panel-runtime.js";
 import { observeBackgroundTask } from '../../shared/common/async-errors.js';
+import { formatPath } from './state2/path.js';
 
 
 const CONFIG = {
@@ -71,6 +75,7 @@ const EMBEDDED_CSS = `
 .vm-list::-webkit-scrollbar-track{background:var(--SmartThemeBodyColor)}
 .vm-list::-webkit-scrollbar-thumb{background:var(--SmartThemeBorderColor);border-radius:3px}
 .vm-empty-message{padding:20px;text-align:center;color:#888}
+.vm-save-status{padding:6px 15px;font-size:13px;overflow-wrap:anywhere}.vm-save-status output{margin-right:8px}.vm-save-status[data-error=true]{color:var(--warning,#e99b69)}.vm-save-status button[hidden]{display:none}
 .vm-item-name-visible{opacity:1}
 .vm-item-separator{opacity:.3}
 .vm-null-value{opacity:.6}
@@ -103,6 +108,7 @@ const EMBEDDED_HTML = `
             ${[['import','fa-upload','导入变量'],['export','fa-download','导出变量'],['add','fa-plus','添加变量'],['collapse','fa-chevron-down','展开/折叠所有'],['clear-all','fa-trash','清除所有变量']].map(([a,ic,ti])=>`<button class="vm-btn ${a==='clear-all'?'vm-clear-all-btn':''}" data-type="${t}" data-act="${a}" title="${ti}"><i class="fa-solid ${ic}"></i></button>`).join('')}
           </div>
         </div>
+        <div class="vm-save-status" id="${t}-vm-save-status"><output role="status"></output><button class="vm-btn" data-type="${t}" data-act="retry-save" hidden>${PANEL_COPY.retry}</button></div>
         <div class="vm-search-container"><input type="text" class="vm-input vm-search-input" id="${t}-vm-search" placeholder="搜索${t==='character'?'本地':'全局'}变量..."></div>
         <div class="vm-list" id="${t}-variables-list"></div>
         <div class="vm-add-form" id="${t}-vm-add-form">
@@ -119,8 +125,9 @@ const EMBEDDED_HTML = `
 `;
 
 const VT = {
-  character: { getter: getLocalVariable, setter: setLocalVariable, storage: ()=> chat_metadata?.variables || (chat_metadata.variables = {}), save: saveMetadataDebounced },
-  global:    { getter: getGlobalVariable, setter: setGlobalVariable, storage: ()=> extension_settings.variables?.global || ((extension_settings.variables = { global: {} }).global), save: saveSettingsDebounced },
+  character: { getter: name => ownsVariable(chat_metadata, name) ? readOwnedVariable(chat_metadata, name) : getLocalVariable(name),
+    setter: (name, value) => { if (ownsVariable(chat_metadata, name)) { writeOwnedVariable(chat_metadata, name, value); } else { (chat_metadata.variables ??= {})[name] = value; } }, storage: ()=> chat_metadata?.variables || (chat_metadata.variables = {}) },
+  global:    { getter: getGlobalVariable, setter: setGlobalVariable, storage: ()=> extension_settings.variables?.global || ((extension_settings.variables = { global: {} }).global) },
 };
 
 const EXT_ID = 'LittleWhiteBox';
@@ -132,6 +139,7 @@ const getRulesTable = () => {
     const ctx = getContext();
     const mode = extension_settings?.[EXT_ID]?.variablesMode || '1.0';
     const meta = ctx?.chatMetadata || {};
+    if (mode === '3.0') return {};
     return mode === '2.0'
       ? (meta[LWB_RULES_V2_KEY] || {})
       : (meta[LWB_RULES_V1_KEY] || {});
@@ -140,7 +148,7 @@ const getRulesTable = () => {
   }
 };
 
-const pathKey = (arr)=>{ try { return (arr||[]).map(String).join('.'); } catch { return ''; } };
+const pathKey = (arr)=> extension_settings?.[EXT_ID]?.variablesMode === '2.0' ? formatPath(arr || []) : (arr || []).map(String).join('.');
 const getRuleNodeByPath = (arr)=> (pathKey(arr) ? (getRulesTable()||{})[pathKey(arr)] : undefined);
 const hasAnyRule = (n) => {
   if (!n) return false;
@@ -264,6 +272,7 @@ class VariablesPanel {
       collapse:()=>this.collapseAll(t),
       'clear-all':()=>this.clearAllVariables(t),
       'save-add':()=>this.saveAddVariable(t),
+      'retry-save':()=>observeBackgroundTask(this.persist(t), { source: import.meta.url, operation: 'retryVariableSave' }),
       'cancel-add':()=>this.hideAddForm(t),
     }[act]||(()=>{}))();
   }
@@ -280,7 +289,7 @@ class VariablesPanel {
     }[act]||(()=>{}))();
   }
 
-  onInlineAction(e){ e.preventDefault(); e.stopPropagation(); const act=$(e.currentTarget).data('act'); act==='inline-save'? this.handleInlineSave($(e.currentTarget).closest('.vm-inline-form')) : this.hideInlineForm(); }
+  onInlineAction(e){ e.preventDefault(); e.stopPropagation(); const act=$(e.currentTarget).data('act'); if(act==='inline-save') observeBackgroundTask(this.handleInlineSave($(e.currentTarget).closest('.vm-inline-form')), { source: import.meta.url, operation: 'inlineVariableSave' }); else this.hideInlineForm(); }
 
   bindCopyPress(e){
     e.preventDefault(); e.stopPropagation();
@@ -316,6 +325,7 @@ class VariablesPanel {
 
   checkChanges(){
     try{
+      if(this.panelMetadata!==getContext().chatMetadata) { this.loadVariables(); this.updateSnapshot(); }
       const sum=JSON.stringify(getRulesTable()||{});
       if(sum!==this.state.rulesChecksum){
         this.state.rulesChecksum=sum;
@@ -336,6 +346,12 @@ class VariablesPanel {
   }
 
   loadVariables(){
+    const metadata=getContext().chatMetadata;
+    if(this.panelMetadata && this.panelMetadata!==metadata) {
+      this.hideInlineForm(); this.hideAddForm('character');
+      $('#character-vm-save-status output').text(''); $('#character-vm-save-status button').prop('hidden',true);
+    }
+    this.panelMetadata=metadata;
     ['character','global'].forEach(t=>{
       this.renderVariables(t);
       $(`#${t}-variables-section [data-act="collapse"] i`).removeClass('fa-chevron-up').addClass('fa-chevron-down');
@@ -348,17 +364,18 @@ class VariablesPanel {
     else root.forEach(([k,v])=> c.append(this.createVariableItem(t,k,v,0,[k])));
   }
 
-  createVariableItem(t,k,v,l=0,fullPath=[]){
-    const parsed=this.parseValue(v), hasChildren=typeof parsed==='object' && parsed!==null;
+  createVariableItem(t,k,v,l=0,fullPath=[],typed=false){
+    typed ||= t==='character' && ownsVariable(chat_metadata,String(fullPath[0]));
+    const parsed=typed && l>0 ? v : this.parseValue(v), hasChildren=typeof parsed==='object' && parsed!==null;
     const disp = l===0? this.formatTopLevelValue(v) : this.formatValue(v);
     const ruleNode=getRuleNodeByPath(fullPath);
-    return $(`<div class="vm-item ${l>0?'vm-tree-level-var':''}" data-key="${k}" data-type="${t||''}" ${l>0?`data-level="${l}"`:''} data-path="${this.escape(pathKey(fullPath))}">
+    return $(`<div class="vm-item ${l>0?'vm-tree-level-var':''}" data-key="${this.escape(k)}" data-type="${t||''}" ${l>0?`data-level="${l}"`:''} data-path="${this.escape(pathKey(fullPath))}">
       <div class="vm-item-header">
         <div class="vm-item-name vm-item-name-visible">${this.escape(k)}${badgesHtml(ruleNode)}<span class="vm-item-separator">:</span></div>
         <div class="vm-tree-value">${disp}</div>
         <div class="vm-item-controls">${this.createButtons()}</div>
       </div>
-      ${hasChildren?`<div class="vm-item-content">${this.renderChildren(parsed,l+1,fullPath)}</div>`:''}
+      ${hasChildren?`<div class="vm-item-content">${this.renderChildren(parsed,l+1,fullPath,typed)}</div>`:''}
     </div>`);
   }
 
@@ -389,7 +406,7 @@ class VariablesPanel {
     return inf;
   }
 
-  renderChildren(obj,level,parentPath){ return Object.entries(obj).map(([k,v])=> this.createVariableItem(null,k,v,level,[...(parentPath||[]),k])[0].outerHTML).join(''); }
+  renderChildren(obj,level,parentPath,typed=false){ return Object.entries(obj).map(([k,v])=> this.createVariableItem(null,k,v,level,[...(parentPath||[]),Array.isArray(obj) ? Number(k) : k],typed)[0].outerHTML).join(''); }
 
   handleTouch(e){
     if($(e.target).closest('.vm-item-controls').length) return;
@@ -420,7 +437,7 @@ class VariablesPanel {
     const formatted=this.formatPath(t,path); let cmd='';
     if(longPress){
       if(t==='character'){
-        cmd = level===0 ? `{{getvar::${path[0]}}}` : `{{xbgetvar::${formatted}}}`;
+        cmd = level===0 && !ownsVariable(chat_metadata,path[0]) ? `{{getvar::${path[0]}}}` : `{{xbgetvar::${formatted}}}`;
       }else{
         cmd = `{{getglobalvar::${path[0]}}}`;
         if(level>0) toastr.info('全局变量宏暂不支持子路径，已复制顶级变量');
@@ -436,7 +453,7 @@ class VariablesPanel {
       setTimeout(()=>{
         inf.find('.inline-name').val(path[path.length-1]);
         const ta=inf.find('.inline-value');
-        ta.val(this.valueToEditorText(v)); this.autoResizeTextarea(ta);
+        ta.val(this.valueToEditorText(v,type==='character' && ownsVariable(chat_metadata,path[0]))); this.autoResizeTextarea(ta);
       },50);
     }else if(action==='addChild'){
       inf.find('.inline-name').attr('placeholder',`为 "${path.join('.')}" 添加子变量名称`);
@@ -444,18 +461,31 @@ class VariablesPanel {
     }
   }
 
-  handleDelete(_item,t,path){
+  async handleDelete(_item,t,path){
     const n=path[path.length-1];
     if(!confirm(`确定要删除 "${n}" 吗？`)) return;
-    this.withGlobalRefresh(()=> this.deleteByPathSilently(t,path));
-    toastr.success('变量已删除');
+    try { await this.withPreservedExpansion(t,()=> this.deleteByPathSilently(t,path)); }
+    catch(error) { toastr.error(error.message); }
   }
 
-  refreshAndKeep(t,states){ this.vt(t).save(); this.loadVariables(); this.updateSnapshot(); states && this.restoreExpandedStates(t,states); }
-  withPreservedExpansion(t,fn){ const s=this.saveExpandedStates(t); fn(); this.refreshAndKeep(t,s); }
-  withGlobalRefresh(fn){ const s=this.saveAllExpandedStates(); fn(); this.loadVariables(); this.updateSnapshot(); this.restoreAllExpandedStates(s); }
+  async persist(t){
+    const ctx=getContext(), status=$(`#${t}-vm-save-status`);
+    const current=()=>t==='global' || getContext().chatMetadata===ctx.chatMetadata;
+    status.attr('data-error','false').find('output').text(PANEL_COPY.saving); status.find('button').prop('hidden',true);
+    try {
+      await savePanelVariables(t);
+      if(current()) status.find('output').text(PANEL_COPY.saved);
+      else toastr.success(PANEL_COPY.savedChat(ctx.chatId));
+      return true;
+    } catch(error) {
+      if(current()) { status.attr('data-error','true').find('output').text(`${PANEL_COPY.failed}：${error.message}`); status.find('button').prop('hidden',false); }
+      else toastr.error(PANEL_COPY.failedChat(ctx.chatId,error.message));
+      return false;
+    }
+  }
+  async withPreservedExpansion(t,fn){ const s=this.saveExpandedStates(t); fn(); const saved=this.persist(t); this.loadVariables(); this.updateSnapshot(); this.restoreExpandedStates(t,s); return await saved; }
 
-  handleInlineSave(form){
+  async handleInlineSave(form){
     if(this.savingInProgress) return; this.savingInProgress=true;
     try{
       if(!form?.length) return toastr.error('表单未找到');
@@ -465,8 +495,9 @@ class VariablesPanel {
       const value= typeof rawValue==='string'? rawValue.trim() : String(rawValue ?? '').trim();
       const type=form.data('type');
       if(!name) return form.find('.inline-name').focus(), toastr.error('请输入变量名称');
-      const val=this.editorTextToValue(value), {action,path}=this.state.formState;
-      this.withPreservedExpansion(type,()=>{
+      const {action,path}=this.state.formState;
+      const val=this.editorTextToValue(value,type==='character' && ownsVariable(chat_metadata,path[0]));
+      const saved=await this.withPreservedExpansion(type,()=>{
         if(action==='addChild') {
           this.setValueByPath(type,[...path,name],val);
         } else if(action==='edit'){
@@ -485,8 +516,8 @@ class VariablesPanel {
           this.vt(type).setter(name,val);
         }
       });
-      this.hideInlineForm(); toastr.success('变量已保存');
-    }catch(e){ toastr.error('JSON格式错误: '+e.message); }
+      if(saved && this.state.currentInlineForm?.[0]===form[0]) this.hideInlineForm();
+    }catch(e){ toastr.error(e.message); }
     finally{ this.savingInProgress=false; }
   }
   hideInlineForm(){ if(this.state.currentInlineForm){ this.state.currentInlineForm.removeClass('active'); setTimeout(()=>{ this.state.currentInlineForm?.remove(); this.state.currentInlineForm=null; },200);} this.state.formState={}; }
@@ -501,7 +532,7 @@ class VariablesPanel {
   }
   hideAddForm(t){ $(`#${t}-vm-add-form`).removeClass('active'); $(`#${t}-vm-name, #${t}-vm-value`).val(''); this.state.formState={}; }
 
-  saveAddVariable(t){
+  async saveAddVariable(t){
     if(this.savingInProgress) return; this.savingInProgress=true;
     try{
       const rawN=$(`#${t}-vm-name`).val();
@@ -509,37 +540,49 @@ class VariablesPanel {
       const n= typeof rawN==='string' ? rawN.trim() : String(rawN ?? '').trim();
       const v= typeof rawV==='string' ? rawV.trim() : String(rawV ?? '').trim();
       if(!n) return toastr.error('请输入变量名称');
-      const val=this.editorTextToValue(v);
-      this.withPreservedExpansion(t,()=> {
+      const val=this.editorTextToValue(v,t==='character' && ownsVariable(chat_metadata,n));
+      const metadata=getContext().chatMetadata;
+      const saved=await this.withPreservedExpansion(t,()=> {
         this.vt(t).setter(n,val);
       });
-      this.hideAddForm(t); toastr.success('变量已保存');
-    }catch(e){ toastr.error('JSON格式错误: '+e.message); }
+      if(saved && (t==='global' || getContext().chatMetadata===metadata)) this.hideAddForm(t);
+    }catch(e){ toastr.error(e.message); }
     finally{ this.savingInProgress=false; }
   }
 
-  getValueByPath(t,p){ if(p.length===1) return this.vt(t).getter(p[0]); let v=this.parseValue(this.vt(t).getter(p[0])); p.slice(1).forEach(k=> v=v?.[k]); return v; }
+  rootValue(t,key){ const value=this.vt(t).getter(key); return t==='character' && ownsVariable(chat_metadata,key) ? value : this.parseValue(value); }
+
+  getValueByPath(t,p){ if(p.length===1) return this.vt(t).getter(p[0]); let v=this.rootValue(t,p[0]); p.slice(1).forEach(k=> v=v?.[k]); return v; }
 
   setValueByPath(t,p,v){
     if(p.length===1){
       this.vt(t).setter(p[0], v);
       return;
     }
-    let root=this.parseValue(this.vt(t).getter(p[0])); if(typeof root!=='object'||root===null) root={};
+    let root=this.rootValue(t,p[0]); if(typeof root!=='object'||root===null) root={};
     let cur=root; p.slice(1,-1).forEach(k=>{ if(typeof cur[k]!=='object'||cur[k]===null) cur[k]={}; cur=cur[k]; });
     cur[p[p.length-1]]=v; this.vt(t).setter(p[0], root);
   }
 
   deleteByPathSilently(t,p){
-    if(p.length===1){ delete this.store(t)[p[0]]; this.vt(t).save?.(); return; }
-    let root=this.parseValue(this.vt(t).getter(p[0])); if(typeof root!=='object'||root===null) return;
+    if(p.length===1){ delete this.store(t)[p[0]]; return; }
+    let root=this.rootValue(t,p[0]); if(typeof root!=='object'||root===null) return;
     let cur=root; p.slice(1,-1).forEach(k=>{ if(typeof cur[k]!=='object'||cur[k]===null) cur[k]={}; cur=cur[k]; });
     delete cur[p[p.length-1]]; this.vt(t).setter(p[0], root);
   }
 
   formatPath(t,path){
     if(!Array.isArray(path)||!path.length) return '';
-    let out=String(path[0]), cur=this.parseValue(this.vt(t).getter(path[0]));
+    if(extension_settings?.[EXT_ID]?.variablesMode === '2.0'){
+      let current=this.rootValue(t,path[0]);
+      const parts=[String(path[0])];
+      for(let i=1;i<path.length;i++){
+        const key=Array.isArray(current) && /^(0|[1-9]\d*)$/.test(String(path[i])) ? Number(path[i]) : String(path[i]);
+        parts.push(key); current=current?.[key];
+      }
+      return formatPath(parts);
+    }
+    let out=String(path[0]), cur=this.rootValue(t,path[0]);
     for(let i=1;i<path.length;i++){
       const k=String(path[i]), isNum=/^\d+$/.test(k);
       if(Array.isArray(cur) && isNum){ out+=`[${Number(k)}]`; cur=cur?.[Number(k)]; }
@@ -552,8 +595,8 @@ class VariablesPanel {
   getItemPath(i){ const p=[]; let c=i; while(c.length&&c.hasClass('vm-item')){ const k=c.data('key'); if(k!==undefined) p.unshift(String(k)); if(!c.attr('data-level')) break; c=c.parent().closest('.vm-item'); } return p; }
 
   parseValue(v){ try{ return typeof v==='string'? JSON.parse(v) : v; }catch{ return v; } }
-  valueToEditorText(v){ return (v&&typeof v==='object') ? JSON.stringify(v,null,2) : String(v??''); }
-  editorTextToValue(v){ if(typeof v!=='string') return v; const s=v.trim(); return (s.startsWith('{')||s.startsWith('[')) ? JSON.parse(s) : v; }
+  valueToEditorText(v,typed=false){ return typed || (v&&typeof v==='object') ? JSON.stringify(v,null,2) : String(v??''); }
+  editorTextToValue(v,typed=false){ if(typeof v!=='string') return v; if(typed) return this.parseValue(v); const s=v.trim(); return (s.startsWith('{')||s.startsWith('[')) ? JSON.parse(s) : v; }
 
   formatTopLevelValue(v){ const p=this.parseValue(v); if(typeof p==='object'&&p!==null){ const c=Array.isArray(p)? p.length : Object.keys(p).length; return `<span class="vm-object-count">[${c} items]</span>`; } return this.formatValue(p); }
   formatValue(v){ if(v==null) return `<span class="vm-null-value">${v}</span>`; const e=this.escape(String(v)); return `<span class="vm-formatted-value">${e.length>50? e.substring(0,50)+'...' : e}</span>`; }
@@ -562,10 +605,10 @@ class VariablesPanel {
   searchVariables(t,q){ const l=q.toLowerCase().trim(); $(`#${t}-variables-list .vm-item`).each(function(){ $(this).toggle(!l || $(this).text().toLowerCase().includes(l)); }); }
   collapseAll(t){ const items=$(`#${t}-variables-list .vm-item`), icon=$(`#${t}-variables-section [data-act="collapse"] i`); const any=items.filter('.expanded').length>0; items.toggleClass('expanded',!any); icon.toggleClass('fa-chevron-up',!any).toggleClass('fa-chevron-down',any); }
 
-  clearAllVariables(t){
+  async clearAllVariables(t){
     if(!confirm(`确定要清除所有${t==='character'?'角色':'全局'}变量吗？`)) return;
-    this.withPreservedExpansion(t,()=>{ const s=this.store(t); Object.keys(s).forEach(k=> delete s[k]); });
-    toastr.success('变量已清除');
+    try { await this.withPreservedExpansion(t,()=>{ const s=this.store(t); Object.keys(s).forEach(k=> delete s[k]); }); }
+    catch(error) { toastr.error(error.message); }
   }
 
   async importVariables(t){
@@ -576,19 +619,19 @@ class VariablesPanel {
         const file = (tgt && 'files' in tgt && tgt.files && tgt.files[0]) ? tgt.files[0] : null;
         if(!file) throw new Error('未选择文件');
         const txt=await file.text(), v=JSON.parse(txt);
-        this.withPreservedExpansion(t,()=> {
+        const saved=await this.withPreservedExpansion(t,()=> {
           Object.entries(v).forEach(([k,val])=> {
             this.vt(t).setter(k,val);
           });
         });
-        toastr.success(`成功导入 ${Object.keys(v).length} 个变量`);
-      }catch{ toastr.error('文件格式错误'); }
+        if(saved) toastr.success(`成功导入 ${Object.keys(v).length} 个变量`);
+      }catch(error){ toastr.error(error.message); }
     };
     inp.click();
   }
 
   exportVariables(t){
-    const v=this.store(t), b=new Blob([JSON.stringify(v,null,2)],{type:'application/json'}), a=document.createElement('a');
+    const v=Object.fromEntries(Object.entries(this.store(t)).map(([key,value])=>[key,t==='character' && ownsVariable(chat_metadata,key) ? readOwnedVariable(chat_metadata,key) : value])), b=new Blob([JSON.stringify(v,null,2)],{type:'application/json'}), a=document.createElement('a');
     a.href=URL.createObjectURL(b); a.download=`${t}-variables-${new Date().toISOString().split('T')[0]}.json`; a.click();
     toastr.success('变量已导出');
   }

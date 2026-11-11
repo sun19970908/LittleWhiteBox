@@ -190,7 +190,10 @@ for (const [model, toolMode, signed, reasoningMode = 'inherit'] of [
                 }
             }
             for (const call of calls) {
-                if (signed) assert.deepEqual(call.extra_content, { google: { thought_signature: GOOGLE_SYNTHETIC_HISTORY_SIGNATURE } });
+                if (signed) assert.deepEqual(call.extra_content, { google: {
+                    thought_signature: GOOGLE_SYNTHETIC_HISTORY_SIGNATURE,
+                    thoughtSignature: GOOGLE_SYNTHETIC_HISTORY_SIGNATURE,
+                } });
                 else assert.equal(Object.hasOwn(call, 'extra_content'), false);
             }
             assertHistory({

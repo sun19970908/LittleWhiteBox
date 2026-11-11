@@ -79,7 +79,7 @@ Files:
 Responsibilities:
 
 - 维护真实的 `assistantSessionId`
-- session store 只恢复和保存消息、历史摘要；workspace store 只调度工作区 UI 状态保存，不能提交文件快照
+- session store 只恢复和保存消息、历史摘要及已归档的技能读取标识；workspace store 只调度工作区 UI 状态保存，不能提交文件快照
 - 清空对话前完成待提交的编辑，随后在一个事务内删除旧消息、摘要及计划并切换 session；失败时不清掉页面内容、不报告成功
 - 自动压缩历史只压上下文，不切 session
 
@@ -148,9 +148,20 @@ Important runtime rules:
 - 上下文仪表和每轮请求前的压缩判断共用 Agent Core 本地估算器，计入送模消息、工具定义和会回放的 provider payload；不请求宿主 tokenizer。数值是估算，不是供应商实际用量；保留既有压缩阈值，近期原文保留遵循 Agent Core 的偏好顺序，预算不足时全部旧轮可转为摘要，当前请求与工具链独立保留。
 - `Plan*` 只管理状态，不执行实际工作
 - `DelegateRun` 是 runtime 内部能力，不是 host 侧普通工具
-- 子任务默认复用当前模型配置、权限模式和工具能力
+- 子任务默认复用当前模型配置、权限模式；工具按自己的技能读取记录启用，不继承主对话的已加载选择
 - 子任务不继承整段主对话历史；需要的背景由主助手显式写进 `task/context/deliverable`
 - 子任务不能再次 `DelegateRun`，也不能管理 `Plan*`
+
+### Skill-activated tools
+
+技能由所属功能声明 `tools`；助手的 `shared/skill-tools.js` 汇总内置目录、读取回执和工具筛选。工具定义只保留一份，多个技能引用同一个工具时取并集。
+
+- 角色卡制作启用 CardFiles；前端卡排查启用 InspectPage、CardFiles；计划与分派启用四个 Plan 工具和 DelegateRun；技能管理启用 GenerateSkill、UpdateSkill、DeleteSkill。变量 3.0 技能也引用已有 CardFiles 依赖。
+- ReadSkill 常驻；读取成功后，所列工具从后续请求开始可用。ReadLogs 常驻，独立服务主页面与插件日志排查。
+- 活跃历史中，只有配对的 ReadSkill 成功内置技能回执参与选择；用户文本、自定义技能正文及摘要文字不能启用工具。失败读取不改变选择。
+- 历史压缩删除原回执前，把这些回执对应的技能 ID 合入 session 的 `archivedSkillIds`。该检查点必须随 session 保存，否则重开后无法恢复已删除回执的选择；它不存工具定义或提示词。保存失败沿用会话保存错误反馈；清空对话时随 session 一起删除。删除此功能时移除注册、筛选和该会话字段，无独立表或后台状态。
+- 当前工具由归档检查点与保留历史派生；重试删掉某轮时，该轮独有的读取不再生效。子任务从自己的短历史派生，不修改主对话选择。
+- 工具集变化时重新发送完整历史及新工具表；工具集不变时保留供应商已有的连续工具轮机制。工具加载不替代执行权限和审批。
 
 ### 7. Plan Ledger
 

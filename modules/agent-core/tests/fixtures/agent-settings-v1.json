@@ -1,0 +1,51 @@
+{
+  "configVersion": 1,
+  "currentPresetName": "captured-preset",
+  "presets": {
+    "captured-preset": {
+      "provider": "openai-compatible",
+      "modelConfigs": {
+        "google-vertex": {
+          "baseUrl": "", "model": "model-google-vertex", "apiKey": "",
+          "vertex": { "authMode": "relay", "projectId": "", "location": "global", "serviceAccountJson": "", "streamFunctionCallArguments": true },
+          "temperature": 1, "maxTokens": 32000, "sendTemperature": true, "reasoning": { "mode": "inherit" }, "sampling": {}
+        },
+        "openai-responses": {
+          "baseUrl": "https://fixture.invalid/openai-responses", "model": "model-openai-responses", "apiKey": "fixture-openai-responses",
+          "temperature": 1, "maxTokens": 32000, "sendTemperature": true, "reasoning": { "mode": "inherit" }, "sampling": {}
+        },
+        "openai-compatible": {
+          "baseUrl": "https://fixture.invalid/openai-compatible", "model": "model-openai-compatible", "apiKey": "fixture-openai-compatible",
+          "temperature": 1, "maxTokens": 8000, "sendTemperature": true, "toolMode": "native",
+          "reasoning": { "mode": "inherit", "effort": "high" },
+          "sampling": {
+            "topP": { "enabled": false, "value": 1 }, "topK": { "enabled": false, "value": 40 },
+            "frequencyPenalty": { "enabled": false, "value": 0 }, "presencePenalty": { "enabled": false, "value": 0 },
+            "repetitionPenalty": { "enabled": false, "value": 1 }
+          }
+        },
+        "sillytavern-openai-compatible": {
+          "baseUrl": "https://fixture.invalid/sillytavern-openai-compatible", "model": "model-sillytavern-openai-compatible", "apiKey": "fixture-sillytavern-openai-compatible",
+          "temperature": 0.2, "maxTokens": 32000, "sendTemperature": true, "toolMode": "native", "reasoning": { "mode": "inherit" }, "sampling": {}
+        },
+        "sillytavern-claude": {
+          "baseUrl": "https://fixture.invalid/sillytavern-claude", "model": "model-sillytavern-claude", "apiKey": "fixture-sillytavern-claude", "modelListAuth": "x-api-key",
+          "temperature": 1, "maxTokens": 32000, "sendTemperature": true, "reasoning": { "mode": "inherit" }, "sampling": {}
+        },
+        "sillytavern-google": {
+          "baseUrl": "https://fixture.invalid/sillytavern-google", "model": "model-sillytavern-google", "apiKey": "fixture-sillytavern-google", "modelListAuth": "x-goog-api-key",
+          "temperature": 0.2, "maxTokens": 32000, "sendTemperature": true, "reasoning": { "mode": "inherit" }, "sampling": {}
+        },
+        "anthropic": {
+          "baseUrl": "https://fixture.invalid/anthropic", "model": "model-anthropic", "apiKey": "fixture-anthropic", "modelListAuth": "x-api-key",
+          "temperature": 0.2, "maxTokens": 32000, "sendTemperature": true, "reasoning": { "mode": "inherit" }, "sampling": {}
+        },
+        "google": {
+          "baseUrl": "https://fixture.invalid/google", "model": "model-google", "apiKey": "", "modelListAuth": "x-goog-api-key",
+          "temperature": 0.2, "maxTokens": 32000, "sendTemperature": true, "reasoning": { "mode": "inherit" }, "sampling": {}
+        }
+      },
+      "permissionMode": "full"
+    }
+  }
+}

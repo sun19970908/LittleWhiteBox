@@ -12,6 +12,7 @@ const realImports = new Set([
     '../agent-core/runtime/ordered-concurrent-read.js', './shared/workspace-protocol.js', './shared/read-window.js',
     '../../shared/common/async-errors.js',
     '../../shared/common/json-candidate.js',
+    '../card-workspace/paths.js',
 ]);
 
 // Execute the real private host function, replacing only unrelated SillyTavern

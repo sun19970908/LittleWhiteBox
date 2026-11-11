@@ -23,7 +23,7 @@
 
 升级重启前，请先等待正在运行的任务完成并接回；后台任务及取消回执保存在进程内存中，重启不会续跑。
 
-Scene Planner 支持免密反代，Agent API Key 可以留空；图片生成供应商的凭据要求不变。取消执行与恢复的准确边界见 [整组取消契约](../../docs/image-backend-batch-jobs.md#整组取消)。
+Scene Planner 支持免密反代，Agent API Key 可以留空；图片生成供应商的凭据要求不变。整组取消一经后端确认即停止该批全部未完成任务，已出的图保留。
 
 角色 `type` 是提示词文本，不限定语言或固定枚举；空字符串、`null` 或省略也不因此拒绝出图。除表示未提供的 `null` 外，非文本值仍属于结构错误。角色库匹配与外貌注入不变；浏览器接回时，自动学习跳过没有提供类型的新角色，不把未知类型补成 `girl`。
 
@@ -41,7 +41,7 @@ Scene Planner 支持免密反代，Agent API Key 可以留空；图片生成供�
 
 联网接口受酒馆登录与 CSRF 保护，仅能调用固定 Exa 官方地址的两个操作，不接收任意目标地址、方法或转发头，不跟随重定向。请求体上限 32 KiB，供应商响应上限 2 MiB，上游请求限时 30 秒。每次请求独立，不新增数据库、缓存或恢复记录。
 
-联网协议与 HTTP 处理的源码在 `modules/agent-core/web/`，本包 `web/web-runtime.cjs` 由同一源码生成，随插件统一构建与验收，见[构建规则](../../docs/plugin-build.md)。删除联网功能时删除 `web/`、入口注册、对应前端路由与生成任务即可，不影响绘图任务。
+联网协议与 HTTP 处理的源码在 `modules/agent-core/web/`，本包 `web/web-runtime.cjs` 由同一源码生成，随插件统一构建与验收，见[构建规则](../../scripts/build/README.md)。删除联网功能时删除 `web/`、入口注册、对应前端路由与生成任务即可，不影响绘图任务。
 
 ## 图片保存与打开文件夹
 
@@ -129,7 +129,7 @@ NovelAI、SD WebUI 与 ComfyUI 开启“小白X后台任务”后，将场景分
 npm run build
 ```
 
-总构建核对实际入包依赖与 `package-lock.json` 的锁定版本；总验收重建并比对已提交产物，阻止源码、依赖锁文件与 bundle/许可证清单脱节。若依赖未附带 LICENSE/NOTICE/COPYING 文件，构建会提取 README 的 License 段；两处都没有许可证正文时直接失败。暂存、发布与失败恢复统一遵循[构建规则](../../docs/plugin-build.md)，本目标不独立发布。
+总构建核对实际入包依赖与 `package-lock.json` 的锁定版本；总验收重建并比对已提交产物，阻止源码、依赖锁文件与 bundle/许可证清单脱节。若依赖未附带 LICENSE/NOTICE/COPYING 文件，构建会提取 README 的 License 段；两处都没有许可证正文时直接失败。暂存、发布与失败恢复统一遵循[构建规则](../../scripts/build/README.md)，本目标不独立发布。
 
 总验收使用固定 Node.js 18.20.8 隔离加载执行包，创建七类 Adapter、调用 Draw Run compiler，并让打包后的 SDK 访问本机模拟端点。模拟端点用于验证协议，不替代真实供应商出图验收。
 

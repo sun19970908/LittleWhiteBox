@@ -33,6 +33,7 @@ export function readSamplingForm(root, provider, previous, scope = 'main') {
         // Keep the draft while a number is being edited; saving reports native input validity.
         const value = input.value !== '' && input.validity?.valid !== false
             ? Number(input.value) : sampling[parameter.key]?.value ?? parameter.value;
+        if (!Object.hasOwn(sampling, parameter.key) && !toggle.checked && value === parameter.value) continue;
         sampling[parameter.key] = { enabled: toggle.checked, value };
     }
     return sampling;
@@ -55,7 +56,8 @@ function updateSamplingSummary(section) {
 export function syncSamplingForm(root, { provider, temperature, sendTemperature, sampling }, scope = 'main') {
     const section = root.querySelector(`[data-sampling-scope="${scope}"]`);
     if (!section) return;
-    const supported = new Set(['temperature', ...samplingParametersFor(provider).map(parameter => parameter.key)]);
+    const supported = new Set(provider === 'google-vertex' ? [] : ['temperature', ...samplingParametersFor(provider).map(parameter => parameter.key)]);
+    section.hidden = !supported.size;
     const values = normalizeSampling(sampling);
     for (const parameter of PARAMETERS) {
         const row = section.querySelector(`[data-sampling-key="${parameter.key}"]`);

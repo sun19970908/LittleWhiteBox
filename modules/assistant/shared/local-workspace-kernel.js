@@ -221,6 +221,7 @@ export function buildLocalFileRecordFromPath(publicPath, content = '', options =
         originalContent: Object.prototype.hasOwnProperty.call(options, 'originalContent')
             ? options.originalContent
             : normalizedContent,
+        ...(typeof options.originalGroupHash === 'string' ? { originalGroupHash: options.originalGroupHash } : {}),
         source: LOCAL_SOURCE_FILE_KIND,
         extension: getPathExtension(normalizedPath),
         rootPath,
@@ -242,6 +243,7 @@ export function normalizeLocalSourceFile(file = {}) {
         sizeBytes: Math.max(0, Number(file.sizeBytes) || new TextEncoder().encode(content).length),
         content,
         originalContent: normalizeOriginalContent(file, content),
+        ...(typeof file.originalGroupHash === 'string' ? { originalGroupHash: file.originalGroupHash } : {}),
         source: LOCAL_SOURCE_FILE_KIND,
         extension: getPathExtension(path),
         rootPath: normalizeLocalSourceRootPath(file.rootPath, getLocalSourceLabelFromPath(path) || 'source'),
@@ -434,6 +436,8 @@ export function upsertLocalFileInSources(localSources = [], targetPath = '', con
             : fileExisted
                 ? existingFile?.originalContent ?? existingFile?.content ?? String(content ?? '')
                 : null,
+        ...(typeof options.originalGroupHash === 'string' || typeof existingFile?.originalGroupHash === 'string'
+            ? { originalGroupHash: options.originalGroupHash ?? existingFile.originalGroupHash } : {}),
     });
 
     const sourcesWithTarget = sourceFound
@@ -728,6 +732,7 @@ export function moveLocalPathInSources(localSources = [], fromPath = '', toPath 
         const nextPath = mappingByFromPath.get(file.path);
         const upsert = upsertLocalFileInSources(nextSources, nextPath, file.content, {
             originalContent: file.originalContent,
+            ...(typeof file.originalGroupHash === 'string' ? { originalGroupHash: file.originalGroupHash } : {}),
         });
         nextSources = upsert.nextSources;
         movedEntries.push(upsert.file);

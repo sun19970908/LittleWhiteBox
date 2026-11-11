@@ -8,7 +8,6 @@ export function contextMeterMarkup() {
                 <circle class="xb-assistant-context-track" cx="16" cy="16" r="13"/>
                 <circle class="xb-assistant-context-fill" cx="16" cy="16" r="13" pathLength="100"/>
             </svg>
-            <span class="xb-assistant-context-busy" aria-hidden="true" hidden>···</span>
         </summary>
         <section class="xb-assistant-context-popover" aria-labelledby="xb-assistant-context-title">
             <header><strong id="xb-assistant-context-title">${C.context}</strong>
@@ -28,7 +27,6 @@ export function renderContextMeter(root, state, { summaryTriggerTokens, buildCon
     const percent = Math.min(100, Math.max(0, usedTokens / budgetTokens * 100));
     meter.style.setProperty('--context-fill', `${percent}`);
     meter.classList.toggle('is-warning', usedTokens >= summaryTriggerTokens);
-    meter.querySelector('.xb-assistant-context-busy').hidden = !state.isBusy;
     const usage = C.contextUsage(buildContextMeterLabel());
     meter.setAttribute('aria-label', `${C.context}：${usage}`);
     root.querySelector('#xb-assistant-context-total').textContent = usage;

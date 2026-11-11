@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>休息面板</title>
+<style>
+body { margin: 0; padding: 16px; color: #e9eef5; background: #17202c; font: 16px/1.6 system-ui; }
+section { max-width: 32rem; margin: auto; }
+button { padding: 8px 16px; border-radius: 8px; cursor: pointer; }
+output { display: block; margin: 12px 0; }
+#feedback { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<section>
+<h2>休息一下</h2>
+<output id="state">读取中……</output>
+<button id="rest" type="button">休息（体力 +15）</button>
+<p>结果记在当前聊天的最后一条消息上，不会发送新消息。</p>
+<p id="feedback" role="status" aria-live="polite"></p>
+</section>
+<script>
+(() => {
+  const host = window.parent;
+  const stateView = document.getElementById('state');
+  const feedback = document.getElementById('feedback');
+  const rest = document.getElementById('rest');
+  let disposed = false;
+  let initialChatId;
+  let lastState;
+  let readProblem = false;
+
+  function readState() {
+    const tavern = host.SillyTavern.getContext();
+    if (tavern.chatId !== initialChatId) throw new Error('聊天已切换，请使用当前聊天里的面板。');
+    if (!host.LWB_StateV2) throw new Error('请先开启小白X变量核心并选择变量 2.0。');
+    const raw = tavern.variables.local.get('cardRest');
+    const state = typeof raw === 'string' && raw !== '' ? JSON.parse(raw) : raw;
+    if (!state || typeof state.体力 !== 'number') {
+      throw new Error('尚未初始化休息状态，请检查本卡的初始化任务。');
+    }
+    return state;
+  }
+
+  function refresh() {
+    const state = readState();
+    const key = JSON.stringify(state);
+    if (key !== lastState) {
+      stateView.textContent = '体力：' + state.体力 + ' / 100';
+      lastState = key;
+    }
+    rest.disabled = false;
+    return state;
+  }
+
+  // 所有结算都走这个入口；只调用一次，不因 errors / warnings 自动重试。
+  function submit(ops) {
+    readState();
+    const result = host.LWB_StateV2.apply({ ops });
+    refresh(); // 以实际保存值为准，包括截断、部分成功、noop、failed。
+    const labels = {
+      success: '已完成。',
+      partial: '部分操作已完成，未完成的项目见下方；不会自动重试。',
+      noop: '当前数值没有变化。',
+      failed: '操作未完成。',
+    };
+    const lines = [labels[result.status]];
+    if (result.changes.length) lines.push('实际更新了 ' + result.changes.length + ' 项。');
+    if (result.corrections.length) lines.push('有数值被规则修正，面板已显示实际结果。');
+    for (const error of result.errors) lines.push(error.message);
+    for (const warning of result.warnings) lines.push('附带提示：' + warning.message);
+    feedback.dataset.status = result.status;
+    feedback.textContent = lines.join('\n');
+    return result;
+  }
+
+  function showReadFailure(error) {
+    readProblem = true;
+    lastState = undefined;
+    rest.disabled = true;
+    stateView.textContent = '状态暂不可用';
+    feedback.textContent = error.message;
+  }
+
+  function onRest() {
+    if (disposed) return;
+    rest.disabled = true;
+    try {
+      submit([{ op: 'inc', path: 'cardRest.体力', delta: 15 }]);
+    } catch (error) {
+      // 写入后的读取也可能失败；不据此重发已经提交的请求。
+      showReadFailure(error);
+    }
+  }
+  rest.addEventListener('click', onRest);
+  try {
+    initialChatId = host.SillyTavern.getContext().chatId;
+    refresh();
+  } catch (error) { showReadFailure(error); }
+
+  const timer = window.setInterval(() => {
+    if (disposed) return;
+    try {
+      refresh();
+      if (readProblem) { feedback.textContent = '状态已恢复，可以继续操作。'; readProblem = false; }
+    } catch (error) { showReadFailure(error); }
+  }, 500);
+
+  window.addEventListener('pagehide', () => {
+    disposed = true;
+    window.clearInterval(timer);
+    rest.removeEventListener('click', onRest);
+  }, { once: true });
+})();
+</script>
+</body>
+</html>

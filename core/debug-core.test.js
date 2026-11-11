@@ -1,0 +1,48 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+// 验收契约见 modules/debug-panel/README.md：持续收集、容量、清空及原生处理器行为。
+test('host logging starts without a panel, retains the latest 100 and preserves native handlers', async t => {
+    const native = Object.fromEntries(['log', 'info', 'warn', 'error'].map(key => [key, console[key]]));
+    const calls = [];
+    for (const key of Object.keys(native)) console[key] = (...args) => { calls.push([key, ...args]); return key; };
+    const previousWindow = globalThis.window;
+    const oldError = (...args) => { calls.push(['onerror', ...args]); return true; };
+    const oldRejection = event => { calls.push(['rejection', event]); return false; };
+    globalThis.window = { onerror: oldError, onunhandledrejection: oldRejection };
+    let logger;
+    t.after(() => {
+        logger?.disable();
+        Object.assign(console, native);
+        if (previousWindow === undefined) delete globalThis.window;
+        else globalThis.window = previousWindow;
+    });
+    const { xbLog } = await import('./debug-core.js');
+    logger = xbLog;
+    assert.equal(xbLog.isEnabled(), true);
+    assert.equal(xbLog.snapshot().maxSize, 100);
+    const error = new Error('scheduled callback');
+    assert.equal(console.warn('warning'), 'warn');
+    assert.equal(console.error('task failed', error), 'error');
+    assert.equal(window.onerror('uncaught', 'task.js', 3, 4, error), true);
+    const rejection = { reason: error };
+    window.onunhandledrejection(rejection);
+    xbLog.info('scheduledTasks', { task: 'fixture', msg: 'started' });
+    assert.deepEqual(xbLog.getAll().map(log => log.module), ['console', 'console', 'window', 'promise', 'scheduledTasks']);
+    assert.equal(xbLog.getAll()[2].stack, error.stack);
+    assert.ok(calls.some(call => call[0] === 'rejection' && call[1] === rejection));
+    const before = xbLog.getAll();
+    xbLog.enable();
+    assert.equal(console.log('ordinary info'), 'log');
+    assert.deepEqual(xbLog.getAll(), before);
+    for (let index = 0; index < 350; index++) xbLog.info('scheduledTasks', String(index));
+    assert.deepEqual(xbLog.getAll().map(log => log.message), Array.from({ length: 100 }, (_, index) => String(index + 250)));
+    const lastId = xbLog.getAll().at(-1).id;
+    xbLog.clear();
+    assert.deepEqual(xbLog.getAll(), []);
+    assert.equal(xbLog.isEnabled(), true);
+    console.warn('after clear');
+    assert.equal(xbLog.getAll().length, 1);
+    assert.equal(xbLog.getAll()[0].id, lastId + 1);
+    assert.deepEqual(JSON.parse(xbLog.export()).logs, xbLog.snapshot().logs);
+});

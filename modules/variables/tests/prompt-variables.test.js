@@ -9,7 +9,8 @@ import { createHarness, readStoredValue } from './helpers/state2-harness.js';
 
 // Acceptance contracts:
 // - Every prompt carrier expands JSON/YAML reads to the current, rolled-back state (wrong model input).
-// - Repeated dry runs never queue, execute or persist varevent actions (invisible data corruption).
+// - Dry runs select matching prose from the same read state as macros, including 3.0's staged state (wrong model input).
+// - Repeated/interleaved dry runs never queue, execute or persist varevent actions (invisible data corruption).
 // - Real generation still queues actions and executes them after the turn (lost variable updates).
 // - Indexed YAML preserves multiline strings, keys and scalar types (silent prompt data corruption).
 // - YAML formatting preserves subpath selection, scalar-leaf output and array indices (wrong model input).
@@ -260,9 +261,10 @@ test('dry-run reads reflect this floor rollback, without rolling back a precedin
     assert.equal(readStoredValue(ctx(), '西厢').好感度, 25);
     const turn = begin();
     for (const macro of macros) {
-        const data = { chat: [{ content: `{{${macro}::西厢}}` }], dryRun: true };
+        const data = { chat: [{ content: `{{${macro}::西厢}}` }, { content: '<varevent>\n[event.before]\ndisplay: before\n[event.after]\ncondition: var("西厢.好感度") > val("20")\ndisplay: after\n</varevent>' }], dryRun: true };
         await emit('CHAT_COMPLETION_PROMPT_READY', data);
         assert.equal(yaml.load(data.chat[0].content).好感度, 20);
+        assert.equal(data.chat[1].content, 'before');
     }
     turn.commit(update);
     ctx().chat.push({ mes: 'next prose', swipe_id: 0 });
@@ -272,7 +274,7 @@ test('dry-run reads reflect this floor rollback, without rolling back a precedin
     assert.equal(yaml.load(data.chat[0].content).好感度, 25);
 });
 
-test('dry runs leave varevent actions and saved state untouched; real turns still execute once', async () => {
+test('dry runs expand prose without changing actions or saved state; real turns still execute once', async () => {
     for (const carrier of carriers) {
         const before = structuredClone(ctx().chatMetadata);
         const saves = ctx().metadataSaveCount;
@@ -284,7 +286,7 @@ test('dry runs leave varevent actions and saved state untouched; real turns stil
             assert.equal(ctx().metadataSaveCount, saves);
             assert.equal(ctx().actionCount, 0);
             assert.deepEqual(JSON.parse(text.split('\n')[0]), value);
-            assert.equal(text.slice(text.indexOf('\n') + 1), eventBlock);
+            assert.equal(text.slice(text.indexOf('\n') + 1), 'shown');
         }
         await emit('GENERATION_ENDED');
         assert.equal(ctx().actionCount, 0);
@@ -303,6 +305,28 @@ test('dry runs leave varevent actions and saved state untouched; real turns stil
         assert.equal(ctx().actionCount, 1);
         ctx().actionCount = 0;
     }
+});
+
+test('3.0 request-local reads select branches and macros together without changing stored state', async () => {
+    const block = '<varevent>\n[event.low]\ncondition: var("西厢.好感度") < val("85")\ndisplay: low={{xbgetvar::西厢.好感度}}\njs_execute: ctx.actionCount++;\n[event.high]\ncondition: var("西厢.好感度") >= val("85")\ndisplay: high={{xbgetvar::西厢.好感度}}\njs_execute: ctx.actionCount++;\n</varevent>';
+    const before = structuredClone(ctx().chatMetadata), saves = ctx().metadataSaveCount;
+    for (const carrier of carriers) {
+        for (const [state, expected] of [[{ 西厢: { 好感度: 90 } }, 'high=90'], [{ 西厢: { 好感度: 0 } }, 'low=0'], [{}, '']]) {
+            const restore = commands.exposeVariableReads(state, ['西厢']);
+            try {
+                const data = { ...carrier.make(block), dryRun: true };
+                await emit(carrier.event, data);
+                assert.equal(carrier.read(data), expected);
+                assert.deepEqual(ctx().chatMetadata, before);
+                assert.equal(ctx().metadataSaveCount, saves);
+            } finally { restore(); }
+            const restored = { ...carrier.make(block), dryRun: true };
+            await emit(carrier.event, restored);
+            assert.equal(carrier.read(restored), 'low=20');
+        }
+    }
+    await succeed();
+    assert.equal(ctx().actionCount, 0);
 });
 
 test('display and script use the selected tier even when variables change before reply', async () => {
@@ -377,12 +401,12 @@ test('event STscript preserves the host result instead of parsing its pipe', asy
 // Integration contracts: auxiliary assembly cannot replace the real request's actions;
 // normal macro finalization cannot cancel actions; supplied host helpers must settle
 // before later scripts start (wrong-chat writes or silently missing variable changes).
-test('interleaved raw requests cannot clear or contribute to the real generation queue', async () => {
-    for (const carrier of carriers) for (const when of ['before', 'after']) {
+test('interleaved raw requests and dry runs cannot clear or contribute to the real generation queue', async () => {
+    for (const carrier of carriers) for (const when of ['before', 'after']) for (const dryRun of [false, true]) {
         ctx().actionCount = 0;
         await emit('GENERATION_STARTED', 'normal');
         const real = { ...carrier.make(eventBlock), dryRun: false };
-        const auxiliary = { ...carrier.make(eventBlock.replace('+= 1', '+= 100')), dryRun: false };
+        const auxiliary = { ...carrier.make(eventBlock.replace('+= 1', '+= 100')), dryRun };
         await emit(carrier.event, real);
         if (when === 'before') await emit(carrier.event, auxiliary);
         const final = { prompt: real.chat || real.prompt };
@@ -393,7 +417,7 @@ test('interleaved raw requests cannot clear or contribute to the real generation
             assert.equal(carrier.read(auxiliary), 'shown');
         }
         await succeed();
-        assert.equal(ctx().actionCount, 1, `${carrier.event}/${when}`);
+        assert.equal(ctx().actionCount, 1, `${carrier.event}/${when}/dryRun=${dryRun}`);
         assert.ok(!JSON.stringify(final.prompt).includes('<varevent>'));
     }
 });

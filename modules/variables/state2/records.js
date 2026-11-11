@@ -1,9 +1,39 @@
 import { extractStateBlocks, parseStateBlock } from './parser.js';
 import { getRootFromPath } from './executor.js';
 import { validateJsonBatch } from './json-input.js';
+import { parsePath, formatPath } from './path.js';
+import { upgradeV1Record, parseV1Path } from './path-v1.js';
 
 export const RECORD_KEY = 'LittleWhiteBox_state2';
+export const RECORD_VERSION = 2;
 const fingerprints = new WeakMap();
+const convertedRecords = new WeakMap();
+
+export function currentRecord(record) {
+    if (record?.v === 1 && Array.isArray(record.entries)) {
+        if (!convertedRecords.has(record)) convertedRecords.set(record, upgradeV1Record(record));
+        return convertedRecords.get(record);
+    }
+    if (record?.v !== RECORD_VERSION || !Array.isArray(record.entries)) throw new Error('invalid_state_record');
+    return record;
+}
+
+/** Syntax-only upgrade, including inactive swipes. Values and historical requests are not replayed. */
+export function upgradeChatPaths(ctx, legacyConverted = false) {
+    const replacements = [];
+    for (const message of ctx.chat) {
+        for (const holder of [message, ...(message.swipe_info || [])]) {
+            const record = holder?.extra?.[RECORD_KEY];
+            if (record?.v === 1) replacements.push([holder, currentRecord(record)]);
+        }
+    }
+    if (!replacements.length && !legacyConverted) return false;
+    const rules = Object.fromEntries(Object.entries(ctx.chatMetadata.LWB_RULES_V2 || {}).map(([path, rule]) =>
+        [formatPath(parseV1Path(path, true)), rule]));
+    for (const [holder, record] of replacements) holder.extra[RECORD_KEY] = record;
+    ctx.chatMetadata.LWB_RULES_V2 = rules;
+    return true;
+}
 
 // Two independent 32-bit accumulators; these are cache/content fingerprints, not IDs.
 export function fingerprint(text) {
@@ -23,8 +53,7 @@ export function bodyBlocks(text) {
 export function readRecord(message) {
     const record = message?.extra?.[RECORD_KEY];
     if (record === undefined) return undefined;
-    if (record?.v !== 1 || !Array.isArray(record.entries)) throw new Error('invalid_state_record');
-    return record;
+    return currentRecord(record);
 }
 
 export function readRecords(chat) {
@@ -33,6 +62,7 @@ export function readRecords(chat) {
 
 // The host owns swipe snapshots. Only its selected, existing snapshot is mirrored.
 export function writeRecord(message, record) {
+    if (record !== undefined) record = currentRecord(record);
     message.extra ||= {};
     if (record === undefined) delete message.extra[RECORD_KEY];
     else message.extra[RECORD_KEY] = record;
@@ -46,12 +76,12 @@ export function writeRecord(message, record) {
 
 export function parseEntry(blocks, kind = 'text') {
     const parsed = blocks.map(block => parseStateBlock(block.text));
-    const ops = parsed.flatMap(block => block.ops).map(op => ({ ...op, source: op.source || 'text' }));
+    const ops = parsed.flatMap(block => block.ops).map(op => ({ ...op, path: parsePath(op.path), source: op.source || 'text' }));
     validateJsonBatch(ops);
     const entry = {
         kind, ...(kind === 'call' ? { source: 'text' } : {}),
         blocks: blocks.map(block => block.digest),
-        rules: parsed.flatMap(block => block.rules),
+        rules: parsed.flatMap(block => block.rules).map(item => ({ ...item, path: parsePath(item.path, { pattern: true }) })),
         ops,
     };
     return { ...entry, roots: [...deriveEntryRoots(entry)] };
@@ -72,7 +102,7 @@ export function withEntry(record, entry, replaceBody = false) {
     // Keep this caller-owned entry's identity for replay receipts.
     if (!Object.hasOwn(entry, 'roots')) entry.roots = [...deriveEntryRoots(entry)];
     const entries = record?.entries || [];
-    if (!replaceBody) return { v: 1, entries: [...entries, entry] };
+    if (!replaceBody) return { v: RECORD_VERSION, entries: [...entries, entry] };
     const next = [];
     let inserted = false;
     for (const existing of entries) {
@@ -80,7 +110,7 @@ export function withEntry(record, entry, replaceBody = false) {
         else if (!inserted) { next.push(entry); inserted = true; }
     }
     if (!inserted) next.push(entry);
-    return { v: 1, entries: next };
+    return { v: RECORD_VERSION, entries: next };
 }
 
 /** Intake claims for new entries; JSON requests never claim roots. */

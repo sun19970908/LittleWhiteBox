@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>营地休息</title>
+<style>
+body { margin: 0; padding: 20px; color: #163128; background: #f4faf6; font: 16px/1.6 system-ui; }
+main { max-width: 30rem; margin: auto; }
+h2 { margin: 0 0 12px; font-size: 1.2rem; }
+output { display: block; font-variant-numeric: tabular-nums; }
+button { min-height: 44px; margin-top: 12px; padding: 8px 18px; border: 1px solid #246246; border-radius: 6px; color: white; background: #246246; font: inherit; cursor: pointer; }
+button:disabled { opacity: .55; cursor: default; }
+button:focus-visible { outline: 3px solid #a36212; outline-offset: 3px; }
+#retry { color: #163128; background: transparent; }
+#read-error, #feedback { margin: 10px 0; white-space: pre-wrap; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: .85rem; }
+[hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+<h2>营地休息</h2>
+<output id="state">读取中……</output>
+<p id="read-error" role="status" hidden></p>
+<button id="rest" type="button" disabled>休息</button>
+<p id="feedback" role="status" aria-live="polite"></p>
+<button id="retry" type="button" hidden>重试保存</button>
+<details id="details" hidden><summary>详细原因</summary><pre id="diagnostic"></pre></details>
+</main>
+<script>
+(() => {
+  const host = window.parent;
+  const ui = Object.fromEntries(['state', 'read-error', 'rest', 'feedback', 'retry', 'details', 'diagnostic'].map(id => [id, document.getElementById(id)]));
+  const copy = {
+    unavailable: '请开启小白X变量管理并选择变量 3.0。',
+    switched: '聊天已切换，请使用当前聊天的面板。',
+    uninitialized: '当前聊天缺少完整的营地状态，请检查本卡的变量初始化。',
+    unreadable: '状态暂不可用',
+    working: '正在结算……',
+    saving: '正在保存……',
+    saved: '已保存。',
+    unchanged: '数值没有变化。',
+    unsaved: '结算已生效，尚未确认保存。请重试保存，不要重复休息。',
+    failed: '操作未完成，请查看原因。',
+    errors: {
+      'commit-busy': '正在生成回复，请稍后再试。',
+      'not-enabled': '请先启用本聊天的变量 3.0。',
+      'stale-target': '聊天状态已变化，请确认当前状态后再操作。',
+      'nothing-to-save': '当前没有可重试的保存，请查看最新结算结果。',
+    },
+    stamina: (value, maximum) => `体力：${value} / ${maximum}`,
+    change: (before, after) => `体力：${before} → ${after}`,
+  };
+  let disposed = false, busy = false, readable = false;
+  let initialChatId, lastState, pendingReceipt;
+
+  function context() {
+    const ctx = host.SillyTavern.getContext();
+    if (ctx.chatId !== initialChatId) throw new Error(copy.switched);
+    return ctx;
+  }
+  function api() {
+    context();
+    if (!host.LWB_StateV3) throw new Error(copy.unavailable);
+    return host.LWB_StateV3;
+  }
+  function controls() {
+    ui.rest.disabled = disposed || busy || !readable;
+    ui.retry.disabled = disposed || busy || !readable;
+    ui.retry.hidden = !pendingReceipt;
+  }
+  function refresh() {
+    try {
+      const raw = context().variables.local.get('camp');
+      const key = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      if (key !== lastState) {
+        const state = typeof raw === 'string' && raw !== '' ? JSON.parse(raw) : raw;
+        if (!state || typeof state.stamina !== 'number' || typeof state.maxStamina !== 'number') throw new Error(copy.uninitialized);
+        if (!busy && lastState !== undefined) {
+          ui.feedback.textContent = '';
+          ui.details.hidden = true;
+          pendingReceipt = undefined;
+        }
+        ui.state.textContent = copy.stamina(state.stamina, state.maxStamina);
+        lastState = key;
+      }
+      const current = api().lastResult();
+      if (pendingReceipt && (!current?.ok || current.receipt?.id !== pendingReceipt || current.saved)) pendingReceipt = undefined;
+      readable = true;
+      ui['read-error'].hidden = true;
+    } catch (error) {
+      readable = false;
+      lastState = undefined;
+      ui.state.textContent = copy.unreadable;
+      ui['read-error'].textContent = error.message;
+      ui['read-error'].hidden = false;
+    }
+    controls();
+  }
+  function showFailure(error) {
+    const diagnostic = error.diagnostics?.[0] || error;
+    ui.feedback.textContent = copy.errors[diagnostic.code] || diagnostic.description || copy.failed;
+    ui.diagnostic.textContent = JSON.stringify(error.diagnostics || { code: error.code, message: error.message }, null, 2);
+    ui.details.hidden = false;
+  }
+  async function run(saveOnly) {
+    if (disposed || busy || !readable) return;
+    busy = true;
+    controls();
+    ui.feedback.textContent = saveOnly ? copy.saving : copy.working;
+    ui.details.hidden = true;
+    try {
+      const stateApi = api();
+      if (saveOnly) {
+        await stateApi.retrySave();
+        if (disposed) return;
+        context();
+        pendingReceipt = undefined;
+        ui.feedback.textContent = copy.saved;
+      } else {
+        const result = await stateApi.apply([{ action: 'rest', params: {} }]);
+        if (disposed) return;
+        context();
+        if (!result.ok) { showFailure(result); return; }
+        pendingReceipt = result.saved ? undefined : result.receipt.id;
+        const change = result.changes.find(item => item.path.length === 2 && item.path[0] === 'camp' && item.path[1] === 'stamina');
+        ui.feedback.textContent = [change ? copy.change(change.before, change.after) : copy.unchanged, result.saved ? copy.saved : copy.unsaved].join('\n');
+        if (result.persistence || result.diagnostics.length) {
+          ui.diagnostic.textContent = JSON.stringify([...(result.persistence ? [result.persistence] : []), ...result.diagnostics], null, 2);
+          ui.details.hidden = false;
+        }
+        // One-time rest effects belong here, after this call's committed result,
+        // not in refresh() or the save-only branch.
+      }
+    } catch (error) {
+      if (!disposed) showFailure(error);
+    } finally {
+      if (!disposed) refresh();
+      busy = false;
+      controls();
+    }
+  }
+  const onRest = () => run(false), onRetry = () => run(true);
+  ui.rest.addEventListener('click', onRest);
+  ui.retry.addEventListener('click', onRetry);
+  try { initialChatId = host.SillyTavern.getContext().chatId; } catch (error) { showFailure(error); }
+  refresh();
+  const timer = window.setInterval(refresh, 500);
+  window.addEventListener('pagehide', () => {
+    disposed = true;
+    window.clearInterval(timer);
+    ui.rest.removeEventListener('click', onRest);
+    ui.retry.removeEventListener('click', onRetry);
+  }, { once: true });
+})();
+</script>
+</body>
+</html>

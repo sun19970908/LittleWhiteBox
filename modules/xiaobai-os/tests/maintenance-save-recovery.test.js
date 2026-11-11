@@ -26,7 +26,7 @@ async function prepare(id) {
         registry: createMaintenanceRegistry([participant]), captureSurface: h.capture, isGenerationActive: () => false,
         writeGate: { getState: h.coordinator.getFileState, subscribe: listener => h.coordinator.subscribeFileState(() => listener(h.coordinator.getFileState())) },
         gateway: {
-            async loadConfig() { return { currentPresetName: 'test', presets: { test: { provider: 'sillytavern-openai-compatible', modelConfigs: { 'sillytavern-openai-compatible': { model: 'test' } } } } }; },
+            async loadConfig() { return { currentPresetName: 'test', presets: { test: { provider: 'sillytavern-openai-compatible', model: 'test' } } }; },
             async openSession() { return { providerConfig: {}, supportsSessionToolLoop: false, async run() { return step++ === 0 ? { toolCalls: [{ id: 'edit', ...tool }] } : { text: 'done' }; } }; },
         },
     });

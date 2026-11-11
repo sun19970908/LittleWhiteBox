@@ -1,6 +1,6 @@
 # Map scene assets
 
-Author: Kenney. Retrieved 2026-09-13. All four packs are CC0 and permit modification and redistribution; attribution is optional. The original license files are preserved beside the models. Only 22 prepared models are shipped, not the full packs. Asset distribution follows the [plugin build rules](../../../../../../../../docs/plugin-build.md).
+Author: Kenney. Retrieved 2026-09-13. All four packs are CC0 and permit modification and redistribution; attribution is optional. The original license files are preserved beside the models. Only 22 prepared models are shipped, not the full packs. Asset distribution follows the [plugin build rules](../../../../../../../../scripts/build/README.md).
 
 | Pack (version from archive) | Official source | Archive SHA-256 |
 | --- | --- | --- |

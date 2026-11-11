@@ -8,6 +8,7 @@ import {
 import { isSillyTavernProvider } from './provider-resolution.js';
 import { resolveAgentAuth } from './provider-auth.js';
 import { normalizeModelListAuth } from './model-list-auth.js';
+import { VERTEX_PROVIDER } from './vertex-config.js';
 
 const MODEL_FILTERS = {
     chat: {
@@ -216,6 +217,10 @@ async function pullSillyTavernClaudeModels(providerConfig, options = {}) {
 
 export async function pullModelsForProvider(providerConfig, options = {}) {
     const provider = providerConfig.provider;
+    if (provider === VERTEX_PROVIDER) {
+        const { pullVertexModels } = await import('./adapters/google-vertex.js');
+        return pullVertexModels(providerConfig, options);
+    }
     const baseUrl = normalizeBaseUrl(providerConfig.baseUrl || '');
     const auth = resolveAgentAuth(provider, providerConfig.apiKey);
 

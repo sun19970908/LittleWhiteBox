@@ -1,0 +1,1 @@
+import{n as a}from"./identity-5HfkUKqx.js";var e=`server-plugin/${a}`,r="SillyTavern/plugins",l=`${r}/${a}`,i=Object.freeze({sourceDirectory:e,installRoot:r,installDirectory:l,install:`请将扩展内的 ${e} 整个文件夹复制到 ${r}/，在 config.yaml 设置 enableServerPlugins: true，然后重启酒馆。`,update:`请将扩展内的 ${e} 整个文件夹复制到 ${r}/，同名文件全部替换，然后重启酒馆。`});export{i as t};

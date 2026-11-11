@@ -19,6 +19,8 @@ import {
     deepClone,
 } from "../../core/variable-path.js";
 
+import { ownsVariable, readOwnedVariable } from './state3/runtime/variables.js';
+
 const MODULE_ID = 'varCommands';
 const TAG_RE_XBGETVAR = /\{\{xbgetvar::([^}]+)\}\}/gi;
 const TAG_RE_XBGETVAR_YAML = /\{\{xbgetvar_yaml::([^}]+)\}\}/gi;
@@ -26,6 +28,19 @@ const TAG_RE_XBGETVAR_YAML_IDX = /\{\{xbgetvar_yaml_idx::([^}]+)\}\}/gi;
 
 let events = null;
 let initialized = false;
+let readProjection;
+
+/** A request-local read view; native variables and stored chat data are untouched. */
+export function exposeVariableReads(values, roots) {
+    const previous = readProjection, own = { values, roots: new Set(roots) };
+    readProjection = own;
+    return () => { if (readProjection === own) readProjection = previous; };
+}
+
+/** A projected root may be absent in the staged state; it must not fall back to saved data. */
+export function projectedVariableRead(root) {
+    return readProjection?.roots.has(root) ? { value: readProjection.values[root] } : undefined;
+}
 
 function getMsgKey(msg) {
     return (typeof msg?.mes === 'string') ? 'mes'
@@ -126,13 +141,17 @@ export function lwbResolveVarPath(path) {
         if (!segs.length) return '';
 
         const rootName = String(segs[0]);
-        const rootRaw = getLocalVariable(rootName);
+        const metadata = getContext().chatMetadata;
+        const projected = projectedVariableRead(rootName);
+        const typed = Boolean(projected) || ownsVariable(metadata, rootName);
+        const rootRaw = projected ? projected.value
+            : typed ? readOwnedVariable(metadata, rootName) : getLocalVariable(rootName);
 
         if (segs.length === 1) {
             return valueToString(rootRaw);
         }
 
-        const obj = maybeParseObject(rootRaw);
+        const obj = typed ? rootRaw !== null && typeof rootRaw === 'object' ? rootRaw : undefined : maybeParseObject(rootRaw);
         if (!obj) return '';
 
         let cur = obj;

@@ -4,6 +4,9 @@ import {
     isWorkspaceMutationTool,
 } from '../../shared/workspace-protocol.js';
 import { applyWorkspaceObservations, buildWorkspacePreconditions } from '../../shared/workspace-preconditions.js';
+import { INVALID_LOOKUP_SCOPE, LOOKUP_SCOPES, describeInvalidLookupScope } from '../../shared/lookup-scope.js';
+import { JSAPI_CANCEL_NOTICE } from '../../shared/jsapi-contract.js';
+import { TOOL_NAMES } from '../tooling.js';
 
 export function createHostToolRequestController(deps) {
     const {
@@ -131,6 +134,8 @@ export function createHostToolRequestController(deps) {
 
             pendingToolCalls.set(requestId, {
                 runId: options.runId,
+                toolName: name,
+                get dispatched() { return dispatched; },
                 cleanup,
                 resolve: finishResolve,
                 reject: finishReject,
@@ -169,6 +174,14 @@ export function createHostToolRequestController(deps) {
             error: code || 'tool_failed',
             raw,
             message: describeError(error),
+            ...(toolName === TOOL_NAMES.RUN_JAVASCRIPT_API && ['tool_timeout', 'tool_aborted'].includes(code)
+                ? { message: `${describeError(error)} ${JSAPI_CANCEL_NOTICE}` } : {}),
+            ...(code === INVALID_LOOKUP_SCOPE ? {
+                parameter: 'scope',
+                received: args?.scope,
+                allowed: LOOKUP_SCOPES,
+                message: describeInvalidLookupScope(args?.scope),
+            } : {}),
         };
     }
 

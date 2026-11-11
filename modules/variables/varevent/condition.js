@@ -49,15 +49,17 @@ export function parseCondition(source) {
     return { program, code: compileNode(program, String(source)) };
 }
 
-export function readConditionVariable(variables, path, readRoot) {
+export function readConditionVariable(variables, path, readRoot, readProjectedRoot) {
     const segments = lwbSplitPathWithBrackets(String(path ?? '').trim());
-    if (!segments.length || !Object.hasOwn(variables, segments[0])) return undefined;
-    let value = variables[segments[0]];
+    if (!segments.length) return undefined;
+    const projected = readProjectedRoot?.(segments[0]);
+    if (!projected && !Object.hasOwn(variables, segments[0])) return undefined;
+    let value = projected ? projected.value : variables[segments[0]];
     // Missing/null are checked before the host's coercion. Defined root values keep
     // the same getLocalVariable semantics as existing handwritten conditions.
     if (value == null) return value;
-    if (segments.length === 1 && readRoot) value = readRoot(segments[0]);
-    if (segments.length > 1 && typeof value === 'string') {
+    if (segments.length === 1 && readRoot && !projected) value = readRoot(segments[0]);
+    if (segments.length > 1 && typeof value === 'string' && !projected) {
         try { value = JSON.parse(value); } catch { return undefined; }
     }
     for (const segment of segments.slice(1)) {
@@ -83,9 +85,9 @@ export function compareConditionValues(a, operator, b) {
 }
 
 // Handwritten conditions intentionally retain JavaScript execution, not a new sandbox.
-export function executeCondition(parsed, getContext, getLocalVariable) {
+export function executeCondition(parsed, getContext, getLocalVariable, readProjectedRoot) {
     // eslint-disable-next-line no-unused-vars -- Referenced by the compiled user expression.
-    const VAR = path => readConditionVariable(getContext()?.chatMetadata?.variables || {}, path, getLocalVariable);
+    const VAR = path => readConditionVariable(getContext()?.chatMetadata?.variables || {}, path, getLocalVariable, readProjectedRoot);
     // eslint-disable-next-line no-unused-vars -- Referenced by the compiled user expression.
     const VAL = value => String(value ?? '');
     // eslint-disable-next-line no-unused-vars -- Referenced by the compiled user expression.

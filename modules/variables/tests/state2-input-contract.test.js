@@ -38,7 +38,7 @@ test('public schema checks format independently of card rules and current chat',
     assert.deepEqual(detached.getInputSchema(), schema);
 });
 
-test('public schema and parser agree on each operation\'s required and allowed fields', () => {
+test('public schema and parser require execution fields and discard supplementary fields', () => {
     const schema = api.getInputSchema();
     const operations = [
         { op: 'set', path: '角色.金钱', value: 20 },
@@ -58,10 +58,12 @@ test('public schema and parser agree on each operation\'s required and allowed f
             assert.ok(collectToolInputIssues(invalid, schema).length, `${operation.op} requires ${field}`);
             assert.throws(() => parseJsonInput(invalid));
         }
-        for (const field of ['value', 'delta', 'extra'].filter(key => !Object.hasOwn(operation, key))) {
-            const invalid = { ops: [{ ...operation, [field]: 0 }] };
-            assert.ok(collectToolInputIssues(invalid, schema).length, `${operation.op} rejects ${field}`);
-            assert.throws(() => parseJsonInput(invalid), { code: 'unexpected_field' });
+        for (const field of ['value', 'delta', 'old', '理由', 'extra', 'source', 'roots'].filter(key => !Object.hasOwn(operation, key))) {
+            const annotated = { ops: [{ ...operation, [field]: 0 }], 理由: '本轮结算' };
+            assert.deepEqual(collectToolInputIssues(annotated, schema), []);
+            for (const input of [annotated, JSON.stringify(annotated)]) {
+                assert.deepEqual(parseJsonInput(input), parseJsonInput({ ops: [operation] }));
+            }
         }
     }
 });
@@ -73,11 +75,48 @@ test('public schema rejects malformed increments while preserving signed and zer
         assert.deepEqual(collectToolInputIssues(input, schema), []);
         assert.equal(parseJsonInput(input)[0].delta, delta);
     }
-    for (const fields of [{ value: 0 }, { delta: 0, value: 0 }, { delta: '2' }, { delta: null }]) {
+    for (const fields of [{ value: 0 }, { delta: '2' }, { delta: null }]) {
         const input = { ops: [{ op: 'inc', path: '角色.金钱', ...fields }] };
         assert.ok(collectToolInputIssues(input, schema).length);
         assert.throws(() => parseJsonInput(input));
     }
+});
+
+// Data integrity: model annotations must neither reject valid operations nor
+// enter saved requests; accepting them must not relax the actual value schema.
+test('annotated submissions execute and replay without granting metadata any authority', () => {
+    const initial = '<state>$schema 西厢\n  人物:\n    红娘:\n      态度: ""\n西厢: {"人物":{"红娘":{"态度":"原来的态度"}}}</state>';
+    assert.deepEqual(api.applyText(initial, { floor: 0 }).errors, []);
+    const attitude = '当真洗剥干净翻墙赴约，一心讨姑爷欢心，又怕内院惊醒';
+    const operation = { op: 'set', path: '西厢.人物.红娘.态度', value: attitude };
+    const input = { 理由: '根据本楼发生的事更新', ops: [
+        { ...deduct(), old: 999, 理由: '花了十枚钱' },
+        { ...operation, old: '', 理由: { 依据: ['赴约'], 判断: '期待与担心并存' }, source: 'text', roots: ['未纳管'] },
+    ] };
+    const before = structuredClone(input);
+    assert.deepEqual(collectToolInputIssues(input, api.getInputSchema()), []);
+    const target = { floor: 1, swipeId: 0 };
+    const result = api.beginUpdate(target).commit(input);
+    assert.equal(result.status, 'success');
+    assert.equal(readStoredValue(ctx(), '角色').金钱, 90);
+    assert.equal(readStoredValue(ctx(), '西厢').人物.红娘.态度, attitude);
+    const entry = ctx().chat[1].extra.LittleWhiteBox_state2.entries[0];
+    assert.deepEqual(entry.ops, parseJsonInput({ ops: [deduct(), operation] }));
+    assert.deepEqual(entry.roots, []);
+    assert.deepEqual(input, before);
+    harness.executor.cleanupStateService();
+    ctx().chat = structuredClone(ctx().chat);
+    ctx().chatMetadata = structuredClone(ctx().chatMetadata);
+    harness.executor.openStateChat();
+    harness.executor.rebuildStateV2();
+    assert.equal(readStoredValue(ctx(), '角色').金钱, 90);
+    assert.equal(readStoredValue(ctx(), '西厢').人物.红娘.态度, attitude);
+    const retry = api.beginUpdate(target);
+    const saved = structuredClone({ chat: ctx().chat, meta: ctx().chatMetadata });
+    const rejected = retry.commit({ ops: [{ op: 'set', path: '西厢.人物.红娘',
+        value: { 态度: attitude, 非模板字段: true }, old: {}, 理由: '说明不能授权破坏模板' }] });
+    assert.equal(rejected.status, 'failed');
+    assert.deepEqual({ chat: ctx().chat, meta: ctx().chatMetadata }, saved);
 });
 
 test('public schema preserves arbitrary JSON values and empty batches', () => {
@@ -181,7 +220,6 @@ test('input errors locate the failing field and allow one corrected submission w
         { operation: { op: 'pop', path: '角色.背包', value: '药' }, code: 'invalid_operation', pointer: '/ops/1/op', allowed: ['set', 'inc', 'push', 'remove', 'del'] },
         { operation: { op: 'remove', path: '角色.背包' }, code: 'missing_field', pointer: '/ops/1/value' },
         { operation: { op: 'inc', path: '角色.金钱', delta: '-5' }, code: 'invalid_delta', pointer: '/ops/1/delta' },
-        { operation: { op: 'del', path: '角色.背包[0]', value: 1 }, code: 'unexpected_field', pointer: '/ops/1/value' },
         { operation: { op: 'set', path: '角色..金钱', value: 1 }, code: 'invalid_path', pointer: '/ops/1/path' },
         { operation: { op: 'set', path: '角色.值', value: { nested: Infinity } }, code: 'invalid_input', pointer: '/ops/1/value/nested' },
     ];

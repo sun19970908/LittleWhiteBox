@@ -1,5 +1,7 @@
 import { normalizeAgentConfig } from '../../../agent-core/config.js';
 import { resolveActiveProviderConfig } from '../../../agent-core/provider-config.js';
+import { getProviderLabel } from '../../../agent-core/provider-resolution.js';
+import { vertexConfigFields, type normalizeVertexConfig } from '../../../agent-core/vertex-config.js';
 
 export type XbTavernProviderRole = 'main' | 'delegate';
 export const TAVERN_DELEGATE_REQUIRED_MESSAGE = '请先配置分身模型。';
@@ -26,6 +28,7 @@ export interface XbTavernResolvedProvider {
     baseUrl: string;
     model: string;
     apiKey: string;
+    vertex?: ReturnType<typeof normalizeVertexConfig>;
     temperature: number;
     maxTokens: number | null;
     timeoutMs: number;
@@ -38,18 +41,8 @@ export interface XbTavernResolvedProvider {
     };
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-    'openai-responses': 'OpenAI Responses',
-    'openai-compatible': 'OpenAI 兼容',
-    'sillytavern-openai-compatible': '酒馆 OpenAI 兼容',
-    'sillytavern-claude': '酒馆 Claude',
-    'sillytavern-google': '酒馆 Google AI',
-    anthropic: 'Anthropic',
-    google: 'Google AI',
-};
-
 export function getXbTavernProviderLabel(provider = ''): string {
-    return PROVIDER_LABELS[provider] || provider || '未配置';
+    return getProviderLabel(provider);
 }
 
 export function resolveXbTavernProviderConfig(
@@ -104,6 +97,7 @@ export function resolveXbTavernProviderConfig(
         baseUrl: String(providerConfig.baseUrl || ''),
         model,
         apiKey,
+        ...vertexConfigFields(provider, providerConfig.vertex),
         temperature: Number(providerConfig.temperature ?? 1),
         maxTokens: providerConfig.maxTokens === null || providerConfig.maxTokens === undefined
             ? null

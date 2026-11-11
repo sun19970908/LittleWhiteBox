@@ -14,6 +14,7 @@ export const GENERATE_INTERCEPTOR_ORDER = Object.freeze({
     DRAW: 100,
     STORY_SUMMARY: 200,
     ENA_PLANNER: 300,
+    VARIABLES: 350,
     XIAOBAI_OS_SHOP: 400,
     XIAOBAI_OS_MAP: 410,
     XIAOBAI_OS_TASKS: 420,
@@ -55,6 +56,9 @@ async function dispatch(chat, contextSize, abort, type) {
     const runContext = Object.freeze({
         abort: wrappedAbort,
         results: new Map(),
+        // A deferred input editor may adopt text after prompt assembly. Later
+        // consumers can request a fresh assembly before that text is sent.
+        input: { deferred: false, rebuild: false },
         signal: controller.signal,
         reportProgress: detail => notifyObservers('handler-progress', null, type, dispatchRun, detail),
     });

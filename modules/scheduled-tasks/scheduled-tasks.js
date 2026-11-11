@@ -319,16 +319,95 @@ function getCharacterTasks(c = characters[this_chid]) {
     return c.data.extensions[TASKS_MODULE_NAME].tasks;
 }
 
-// Only writes to the same captured character wait for one another. Anonymous
-// row identities live only in the in-flight batch; nothing is added to task data.
-const characterTaskWrites = new WeakMap();
+// Domain editors save one task through the same queue and confirmation as the task UI.
+export function readCharacterTaskSnapshot() {
+    const character = characters[this_chid];
+    if (!character || getContext().groupId) throw new Error(TASK_SAVE_COPY.characterRequired);
+    return { avatar: character.avatar, name: character.name, tasks: structuredClone(getCharacterTasks(character)) };
+}
 
-async function saveCharacterTasks(tasks, { signal, target, mutation } = {}) {
+export async function saveCharacterTask({ avatar, previous, task, signal }) {
+    const character = characters[this_chid];
+    if (!character || character.avatar !== avatar || getContext().groupId) throw new Error(TASK_SAVE_COPY.characterRequired);
+    const tasks = getCharacterTasks(character);
+    const index = task.id ? tasks.findIndex(item => item.id === task.id) : -1;
+    if (JSON.stringify(index < 0 ? null : tasks[index]) !== JSON.stringify(previous)) throw new Error(TASK_SAVE_COPY.changed);
+    const next = structuredClone(task);
+    const previousRuntime = index < 0 ? null : captureTaskRuntime(tasks[index], 'character');
+    if (index < 0) next.id ||= uuidv4();
+    const desired = tasks.slice();
+    if (index < 0) desired.push(next); else desired[index] = next;
+    await saveCharacterTasks(desired, { target: { character }, signal, expectedTask: { id: task.id, previous } });
+    if (previousRuntime) resetTaskRun(previousRuntime.key, { cancelStartup: true });
+    state.lastTasksHash = '';
+    if (window.__XB_TASKS_INITIALIZED__) refreshUI();
+    return next.id;
+}
+
+// The host replaces character objects after editing a card (including its lorebook).
+// The avatar identifies the saved card; object identity does not identify a write queue.
+const characterTaskWrites = new Map();
+const characterTaskPreparations = new Map();
+
+function resolveTaskCharacter(character) {
+    if (!character) return character;
+    return characters.find(item => item?.avatar === character.avatar) || character;
+}
+
+function publishCharacterTasks(character, tasks) {
+    if (character.json_data) {
+        const json = JSON.parse(character.json_data);
+        json.data ??= {};
+        json.data.extensions ??= {};
+        json.data.extensions[TASKS_MODULE_NAME] = { tasks };
+        character.json_data = JSON.stringify(json);
+        if (characters[this_chid] === character) $('#character_json_data').val(character.json_data);
+    }
+    character.data ??= {};
+    character.data.extensions ??= {};
+    character.data.extensions[TASKS_MODULE_NAME] = { tasks };
+}
+
+function prepareCharacterTasks(character = characters[this_chid]) {
+    if (!character) return Promise.resolve();
+    const avatar = character.avatar;
+    const pending = characterTaskPreparations.get(avatar);
+    if (pending) return pending.then(() => prepareCharacterTasks(resolveTaskCharacter(character)));
+    const current = resolveTaskCharacter(character);
+    const tasks = getCharacterTasks(current);
+    if (tasks.every(task => task.id)) return Promise.resolve();
+    const identities = new WeakMap();
+    const normalized = tasks.map(task => ({ ...task, id: taskSaveKey(task, identities) }));
+    // Normalize the card's input, not its rendered rows. Keep the host's edit form
+    // in sync immediately so an overlapping lorebook save also retains these IDs.
+    // A failed backfill keeps the same IDs available for the next ordinary save.
+    publishCharacterTasks(current, normalized);
+    const work = saveCharacterTasks(normalized, { target: { character: current } });
+    const preparation = work.finally(() => {
+        if (characterTaskPreparations.get(avatar) === preparation) characterTaskPreparations.delete(avatar);
+    });
+    characterTaskPreparations.set(avatar, preparation);
+    return preparation;
+}
+
+async function onCharacterEdited() {
+    const avatar = characters[this_chid]?.avatar;
+    try {
+        await prepareCharacterTasks();
+    } finally {
+        if (window.__XB_TASKS_INITIALIZED__ && characters[this_chid]?.avatar === avatar) {
+            state.lastTasksHash = '';
+            refreshUI();
+        }
+    }
+}
+
+async function saveCharacterTasks(tasks, { signal, target, mutation, expectedTask } = {}) {
     throwIfSignalAborted(signal);
-    const character = target?.character || characters[this_chid];
+    const character = resolveTaskCharacter(target?.character || characters[this_chid]);
     if (!character) throw new Error(TASK_SAVE_COPY.characterRequired);
     const avatar = character.avatar;
-    const previousWrite = characterTaskWrites.get(character);
+    const previousWrite = characterTaskWrites.get(avatar);
     const identities = previousWrite?.identities || new WeakMap();
     const current = getCharacterTasks(character);
     const clone = (task, key = taskSaveKey(task, identities)) => {
@@ -337,31 +416,28 @@ async function saveCharacterTasks(tasks, { signal, target, mutation } = {}) {
         return copy;
     };
     const base = current.map(task => clone(task));
-    const snapshot = tasks.map((task, index) => clone(task,
-        mutation?.index === index ? taskSaveKey(current[index], identities) : taskSaveKey(task, identities)));
+    const snapshot = tasks.map((task, index) => {
+        const copy = clone(task, mutation?.index === index ? taskSaveKey(current[index], identities) : taskSaveKey(task, identities));
+        copy.id ||= taskSaveKey(copy, identities);
+        return copy;
+    });
     const work = (previousWrite?.tail || Promise.resolve()).then(async () => {
         throwIfSignalAborted(signal);
-        const merged = mergeTaskListChanges(base, snapshot, getCharacterTasks(character), mutation, identities);
-        await saveCharacterTasksConfirmed(avatar, TASKS_MODULE_NAME, merged, signal);
-        // Match the host's two in-memory representations only after confirmation.
-        if (character.json_data) {
-            const json = JSON.parse(character.json_data);
-            json.data ??= {};
-            json.data.extensions ??= {};
-            json.data.extensions[TASKS_MODULE_NAME] = { tasks: merged };
-            character.json_data = JSON.stringify(json);
-            if (characters[this_chid] === character) $('#character_json_data').val(character.json_data);
+        if (expectedTask) {
+            const currentTask = expectedTask.id ? getCharacterTasks(resolveTaskCharacter(character)).find(item => item.id === expectedTask.id) || null : null;
+            if (JSON.stringify(currentTask) !== JSON.stringify(expectedTask.previous)) throw new Error(TASK_SAVE_COPY.changed);
         }
-        character.data ??= {};
-        character.data.extensions ??= {};
-        character.data.extensions[TASKS_MODULE_NAME] = { tasks: merged };
+        const merged = mergeTaskListChanges(base, snapshot, getCharacterTasks(resolveTaskCharacter(character)), mutation, identities);
+        await saveCharacterTasksConfirmed(avatar, TASKS_MODULE_NAME, merged, signal);
+        // Publish to the current copy of this card, never the object retired by ST.
+        publishCharacterTasks(resolveTaskCharacter(character), merged);
     });
     const release = () => {
-        if (characterTaskWrites.get(character) === write) characterTaskWrites.delete(character);
+        if (characterTaskWrites.get(avatar) === write) characterTaskWrites.delete(avatar);
     };
     // A failed save rejects its caller without poisoning later submissions.
     const write = { identities, tail: work.then(release, release) };
-    characterTaskWrites.set(character, write);
+    characterTaskWrites.set(avatar, write);
     return await waitTaskSave(() => work, signal);
 }
 
@@ -667,7 +743,7 @@ async function savePresetTasks(tasks, { signal, target } = {}) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const getTaskListByScope = (scope, target) => {
-    if (scope === 'character') return getCharacterTasks(target?.character);
+    if (scope === 'character') return getCharacterTasks(resolveTaskCharacter(target?.character));
     if (scope === 'preset') return target?.name && target.name !== PresetTasksStore.currentName()
         ? PresetTasksStore.read(target.name) : getPresetTasks();
     return getSettings().globalTasks;
@@ -675,7 +751,7 @@ const getTaskListByScope = (scope, target) => {
 
 function taskSaveKey(task, identities) {
     if (!identities) return task.id;
-    if (!identities.has(task)) identities.set(task, task.id || Symbol());
+    if (!identities.has(task)) identities.set(task, task.id || uuidv4());
     return identities.get(task);
 }
 
@@ -1524,6 +1600,7 @@ async function onChatChanged(chatId) {
     chatTaskAbort = visit;
     const character = syncCharacterTaskBinding();
     if (visit.signal.aborted) return;
+    observeBackgroundTask(onCharacterEdited(), { source: import.meta.url, operation: 'prepareCharacterTasks' });
     Object.assign(state, {
         chatJustChanged: true,
         isNewChat: state.lastChatId !== chatId && chat.length <= 1,
@@ -1663,7 +1740,7 @@ function getTasksHash() {
 }
 
 function createTaskItemSimple(task, scope = 'global') {
-    if (!task.id) task.id = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    if (!task.id && scope !== 'character') task.id = `task_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     const taskType = scope || 'global';
     const floorTypeText = { user: '用户楼层', llm: 'LLM楼层' }[task.floorType] || '全部楼层';
     const triggerTimingText = {
@@ -2144,7 +2221,7 @@ async function deleteTask(index, scope) {
     const task = list[index];
     if (!task) return;
     const runtime = captureTaskRuntime(task, scope);
-    const target = scope === 'preset' ? captureTaskSaveTarget(scope) : undefined;
+    const target = scope === 'global' ? undefined : captureTaskSaveTarget(scope);
 
     try {
         const styleId = 'temp-dialog-style';
@@ -2937,6 +3014,7 @@ async function initTasks() {
         });
 
     $('#scheduled_tasks_enabled').prop('checked', getSettings().enabled);
+    observeBackgroundTask(onCharacterEdited(), { source: import.meta.url, operation: 'prepareCharacterTasks' });
     refreshTaskLists();
 
     if (event_types.GENERATION_ENDED) {
@@ -2949,6 +3027,7 @@ async function initTasks() {
     events.on(event_types.CHAT_CREATED, onChatCreated);
     events.on(event_types.MESSAGE_DELETED, onMessageDeleted);
     events.on(event_types.MESSAGE_SWIPED, onMessageSwiped);
+    events.on(event_types.CHARACTER_EDITED, observeAsyncCallback(onCharacterEdited, { source: import.meta.url, operation: 'characterEdited' }));
 
     $(window).off('beforeunload.xbTasks').on('beforeunload.xbTasks', cleanup);
     registerSlashCommands();

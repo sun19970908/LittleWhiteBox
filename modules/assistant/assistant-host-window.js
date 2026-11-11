@@ -1,6 +1,6 @@
 import { getSafeViewportStyles, observeViewport } from '../../shared/common/viewport.js';
+import { ASSISTANT_HEADER_HEIGHT, ASSISTANT_WINDOW_CONTROLS_WIDTH, ASSISTANT_WINDOW_MODE_PARAM } from './shared/window-layout.js';
 
-const DESKTOP_CHROME_HEIGHT = 36;
 const ASSISTANT_OVERLAY_Z_INDEX = 100001;
 
 export function createAssistantHostWindow(options) {
@@ -211,9 +211,9 @@ export function createAssistantHostWindow(options) {
         titleBar.style.cssText = `
             position: absolute;
             top: 0;
-            left: 0;
-            right: 0;
-            height: ${DESKTOP_CHROME_HEIGHT}px;
+            left: 196px;
+            right: ${ASSISTANT_WINDOW_CONTROLS_WIDTH}px;
+            height: ${ASSISTANT_HEADER_HEIGHT}px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -276,8 +276,8 @@ export function createAssistantHostWindow(options) {
         const titleActions = document.createElement('div');
         titleActions.style.cssText = `
             position: absolute;
-            top: 4px;
-            right: 14px;
+            top: 14px;
+            right: 12px;
             z-index: 10000;
             display: flex;
             align-items: center;
@@ -299,20 +299,18 @@ export function createAssistantHostWindow(options) {
                 padding: 0;
                 border: none;
                 border-radius: 999px;
-                background: ${isClose ? 'rgba(20, 32, 51, 0.75)' : 'rgba(20, 32, 51, 0.08)'};
-                color: ${isClose ? '#fff' : '#203249'};
+                background: transparent;
+                color: #6f675d;
                 cursor: pointer;
                 font: 700 12px/1 "Segoe UI Symbol", "Noto Sans Symbols 2", "Microsoft YaHei", sans-serif;
                 backdrop-filter: blur(8px);
                 transition: all 0.16s ease;
             `;
             button.addEventListener('mouseenter', () => {
-                button.style.background = isClose ? 'rgba(20, 32, 51, 0.95)' : 'rgba(20, 32, 51, 0.15)';
-                button.style.transform = 'scale(1.05)';
+                button.style.background = isClose ? 'rgba(182, 90, 85, 0.12)' : 'rgba(167, 95, 67, 0.10)';
             });
             button.addEventListener('mouseleave', () => {
-                button.style.background = isClose ? 'rgba(20, 32, 51, 0.75)' : 'rgba(20, 32, 51, 0.08)';
-                button.style.transform = 'scale(1)';
+                button.style.background = button.getAttribute('aria-pressed') === 'true' ? 'rgba(167, 95, 67, 0.10)' : 'transparent';
             });
             return button;
         };
@@ -354,14 +352,16 @@ export function createAssistantHostWindow(options) {
         `;
 
         const iframe = document.createElement('iframe');
-        iframe.src = htmlPath;
+        const iframeUrl = new URL(htmlPath, window.location.href);
+        iframeUrl.searchParams.set(ASSISTANT_WINDOW_MODE_PARAM, isAssistantMobileDevice() ? 'mobile' : 'desktop');
+        iframe.src = iframeUrl.href;
         iframe.style.cssText = `
             position: absolute;
-            top: ${DESKTOP_CHROME_HEIGHT}px;
+            top: 0;
             left: 0;
             display: block;
             width: 100%;
-            height: calc(100% - ${DESKTOP_CHROME_HEIGHT}px);
+            height: 100%;
             border: none;
             border-radius: 0 0 22px 22px;
             background: transparent;
@@ -371,10 +371,10 @@ export function createAssistantHostWindow(options) {
         resizeMask.setAttribute('aria-hidden', 'true');
         resizeMask.style.cssText = `
             position: absolute;
-            top: ${DESKTOP_CHROME_HEIGHT}px;
+            top: 0;
             left: 0;
             width: 100%;
-            height: calc(100% - ${DESKTOP_CHROME_HEIGHT}px);
+            height: 100%;
             display: none;
             pointer-events: none;
             border-radius: 0 0 22px 22px;
@@ -514,7 +514,7 @@ function createWindowInteractionController(options) {
     const applyShellChrome = () => {
         shell.style.background = 'rgba(238, 243, 248, 0.96)';
         shell.style.overflow = 'hidden';
-        titleBar.style.height = `${DESKTOP_CHROME_HEIGHT}px`;
+        titleBar.style.height = `${ASSISTANT_HEADER_HEIGHT}px`;
         titleBar.style.padding = '0';
         titleBar.style.justifyContent = 'center';
         titleBar.style.background = 'transparent';
@@ -523,14 +523,14 @@ function createWindowInteractionController(options) {
         titleBar.style.pointerEvents = 'auto';
         dragPill.style.display = '';
         iframe.style.display = 'block';
-        iframe.style.top = `${DESKTOP_CHROME_HEIGHT}px`;
-        iframe.style.height = `calc(100% - ${DESKTOP_CHROME_HEIGHT}px)`;
+        iframe.style.top = '0';
+        iframe.style.height = '100%';
         titleActions.style.display = 'flex';
-        titleActions.style.top = '4px';
+        titleActions.style.top = '14px';
         minimizedIcon.classList.remove('is-visible');
         resizeHint.style.display = '';
-        resizeMask.style.top = `${DESKTOP_CHROME_HEIGHT}px`;
-        resizeMask.style.height = `calc(100% - ${DESKTOP_CHROME_HEIGHT}px)`;
+        resizeMask.style.top = '0';
+        resizeMask.style.height = '100%';
         if (quickLayoutMode === QUICK_LAYOUT_MODE.FULLSCREEN) {
             shell.style.borderRadius = '0';
             shell.style.border = 'none';
@@ -582,11 +582,8 @@ function createWindowInteractionController(options) {
         const setButtonState = (button, active) => {
             button.setAttribute('aria-pressed', active ? 'true' : 'false');
             button.setAttribute('data-active', active ? 'true' : 'false');
-            button.style.background = active ? 'rgba(20, 32, 51, 0.88)' : 'rgba(255, 255, 255, 0.76)';
-            button.style.color = active ? '#fff' : '#203249';
-            button.style.boxShadow = active
-                ? '0 10px 24px rgba(6, 17, 32, 0.22)'
-                : '0 8px 18px rgba(17, 31, 51, 0.10)';
+            button.style.background = active ? 'rgba(167, 95, 67, 0.10)' : 'transparent';
+            button.style.color = active ? '#814733' : '#6f675d';
             button.style.transform = '';
         };
         setButtonState(minimizeButton, quickLayoutMode === QUICK_LAYOUT_MODE.MINIMIZED);
@@ -644,7 +641,7 @@ function createWindowInteractionController(options) {
         const viewportHeight = window.innerHeight;
         const maxWidth = Math.max(320, viewportWidth);
         const maxHeight = Math.max(240, viewportHeight);
-        const minWidth = quickLayoutMode === QUICK_LAYOUT_MODE.MINIMIZED ? 36 : 220;
+        const minWidth = quickLayoutMode === QUICK_LAYOUT_MODE.MINIMIZED ? 36 : 360;
         const minHeight = quickLayoutMode === QUICK_LAYOUT_MODE.MINIMIZED ? 36 : 140;
         const nextWidth = Math.max(minWidth, Math.min(width, maxWidth));
         const nextHeight = Math.max(minHeight, Math.min(height, maxHeight));

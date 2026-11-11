@@ -41,6 +41,7 @@ import {
     TOP_OP_RE,
 } from "./varevent-editor.js";
 import { observeAsyncCallback, observeBackgroundTask } from '../../shared/common/async-errors.js';
+import { initVariableUpdater, cleanupVariableUpdater, notifyVariableReplyReady } from './updater/host.js';
 
 
 /* ============ Module Constants ============= */
@@ -1859,6 +1860,7 @@ async function applyVarsForMessage(messageId) {
 
     const text = readMessageText(msg);
     const mode = getVariablesMode();
+    if (mode === '3.0') return;
 
     if (mode === '2.0') {
         const result = applyStateForMessage(messageId, text);
@@ -2336,6 +2338,7 @@ function notifyStateAfterAi(chatId, messageId, message) {
                 job.lastText = unchanged ? readMessageText(message) : text;
                 job.lastGeneration = generation;
                 await executeQueuedVareventJsAfterTurn();
+                if (isCurrent()) notifyVariableReplyReady(messageId);
             }
         } finally {
             job.pending = false;
@@ -2390,11 +2393,18 @@ function registerVariablesAfterAiGate() {
     initAfterAiGate();
     if (afterAiGateDispose) return;
     afterAiGateDispose = registerAfterAiHandler(MODULE_ID, ({ chatId, messageId }) => {
-        if (getVariablesMode() === '2.0') return;
+        if (getVariablesMode() !== '1.0') return;
         if (String(getContext()?.chatId || '') !== String(chatId || '')) return;
         const message = getContext()?.chat?.[messageId];
         if (!message || message.is_user) return;
         observeBackgroundTask(queuePostReceiveApply(messageId, { snapshot: true }), { source: import.meta.url, operation: "callback" });
+    });
+}
+
+function onLegacyEvent(type, handler) {
+    events?.on(type, (...args) => {
+        if (getVariablesMode() === '3.0') return;
+        return handler(...args);
     });
 }
 
@@ -2405,7 +2415,7 @@ function bindEvents() {
 
     // note
 
-    events?.on(event_types.MESSAGE_SENT, async () => {
+    onLegacyEvent(event_types.MESSAGE_SENT, async () => {
         try {
             if (getVariablesMode() !== '2.0') snapshotCurrentLastFloor();
             const chat = getContext()?.chat || [];
@@ -2418,14 +2428,14 @@ function bindEvents() {
     });
 
     // message received
-    events?.on(event_types.MESSAGE_RECEIVED, (data) => {
+    onLegacyEvent(event_types.MESSAGE_RECEIVED, (data) => {
         try {
             notifyVariablesAfterAi(data, 'message_received');
         } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindEvents" }, caughtError); }
     });
 
     // user message rendered
-    events?.on(event_types.USER_MESSAGE_RENDERED, async (data) => {
+    onLegacyEvent(event_types.USER_MESSAGE_RENDERED, async (data) => {
         try {
             const id = getMsgIdLoose(data);
             if (typeof id === 'number') {
@@ -2437,20 +2447,20 @@ function bindEvents() {
     });
 
     // character message rendered
-    events?.on(event_types.CHARACTER_MESSAGE_RENDERED, (data) => {
+    onLegacyEvent(event_types.CHARACTER_MESSAGE_RENDERED, (data) => {
         try {
             notifyVariablesAfterAi(data, 'character_message_rendered');
         } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindEvents" }, caughtError); }
     });
 
-    events?.on(event_types.GENERATION_ENDED, (data) => {
+    onLegacyEvent(event_types.GENERATION_ENDED, (data) => {
         try {
             notifyVariablesAfterAi(data, 'generation_ended');
         } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindEvents" }, caughtError); }
     });
 
     // message updated
-    events?.on(event_types.MESSAGE_UPDATED, async (data) => {
+    onLegacyEvent(event_types.MESSAGE_UPDATED, async (data) => {
         try {
             const id = getMsgIdLoose(data);
             if (typeof id === 'number') {
@@ -2465,7 +2475,7 @@ function bindEvents() {
     });
 
     // message edited
-    events?.on(event_types.MESSAGE_EDITED, async (data) => {
+    onLegacyEvent(event_types.MESSAGE_EDITED, async (data) => {
         try {
             const id = getMsgIdLoose(data);
             if (typeof id !== 'number') return;
@@ -2507,7 +2517,7 @@ function bindEvents() {
     });
 
     // message swiped
-    events?.on(event_types.MESSAGE_SWIPED, async (data) => {
+    onLegacyEvent(event_types.MESSAGE_SWIPED, async (data) => {
         try {
             const id = getMsgIdLoose(data);
             if (typeof id !== 'number') return;
@@ -2534,12 +2544,12 @@ function bindEvents() {
         } catch (caughtError) { console.warn({ source: import.meta.url, operation: "bindEvents" }, caughtError); }
     });
 
-    events?.on(event_types.MESSAGE_SWIPE_DELETED, (data) => {
+    onLegacyEvent(event_types.MESSAGE_SWIPE_DELETED, (data) => {
         if (getVariablesMode() === '2.0') handleStateSwipeDeleted(data);
     });
 
     // message deleted
-    events?.on(event_types.MESSAGE_DELETED, async (data) => {
+    onLegacyEvent(event_types.MESSAGE_DELETED, async (data) => {
         try {
             if (getVariablesMode() === '2.0') {
                 rebuildStateV2();
@@ -2560,7 +2570,7 @@ function bindEvents() {
 
     // note
 
-    events?.on(event_types.GENERATION_STARTED, (data, _options, dryRun) => {
+    onLegacyEvent(event_types.GENERATION_STARTED, (data, _options, dryRun) => {
         try {
             if (getVariablesMode() === '2.0' && dryRun !== true) stateAfterAiGeneration += 1;
             if (getVariablesMode() !== '2.0') snapshotPreviousFloor();
@@ -2578,7 +2588,7 @@ function bindEvents() {
     });
 
     // chat changed
-    events?.on(event_types.CHAT_CHANGED, () => {
+    onLegacyEvent(event_types.CHAT_CHANGED, () => {
         try {
             resetStateAfterAiJobs();
             openStateChat();
@@ -2654,6 +2664,7 @@ export function initVariablesCore() {
         beginContinuation: stateApi.beginContinuation,
     };
     openStateChat();
+    initVariableUpdater(stateApi);
 }
 
 /**
@@ -2663,6 +2674,8 @@ export function cleanupVariablesCore() {
     try { xbLog.info('variablesCore', '变量系统清理'); } catch (error) { console.warn({ source: import.meta.url, operation: 'cleanupVariablesCore' }, error); }
     if (!initialized) return;
     resetStateAfterAiJobs();
+
+    cleanupVariableUpdater();
 
     // cleanup events
     events?.cleanup();

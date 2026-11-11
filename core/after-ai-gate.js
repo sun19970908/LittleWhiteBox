@@ -280,6 +280,7 @@ export function registerAfterAiHandler(moduleId, handler) {
     };
 }
 
+/** @param {{ chatId?: string, messageId?: number, source?: string, kind?: string }} [hint] */
 export function notifyAfterAiHint({ chatId, messageId, source = "unknown", kind = "unknown" } = {}) {
     initAfterAiGate();
     const normalizedChatId = String(chatId || "");

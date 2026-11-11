@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { Buffer } from 'node:buffer';
 import test from 'node:test';
 import { createServer } from 'node:http';
-import { normalizeAgentConfig, normalizeModelConfigs } from '../config.js';
+import { normalizeAgentConfig, normalizeAgentPreset } from '../config.js';
 import { resolveActiveProviderConfig } from '../provider-resolution.js';
 import { createAgentAdapter } from '../provider-config.js';
 import { buildSamplingParameters } from '../sampling.js';
@@ -96,24 +96,24 @@ test('Claude model restrictions do not change other provider protocols', () => {
 
 test('disabled values survive normalization and all routes omit them', () => {
     const disabled = Object.fromEntries(Object.entries(sampling).map(([key, entry]) => [key, { ...entry, enabled: false }]));
-    const config = normalizeModelConfigs({ google: { sampling: disabled } }).google;
+    const config = normalizeAgentPreset({ sampling: disabled });
     assert.deepEqual(config.sampling.topP, { enabled: false, value: 0.83 });
     for (const provider of Object.keys(expected)) assert.deepEqual(buildSamplingParameters(provider, config.sampling), {});
 });
 
 test('main, delegate and presets persist independent sampling', () => {
-    const configs = value => ({ 'openai-compatible': { sampling: { topP: { enabled: true, value } } } });
+    const configs = value => ({ sampling: { topP: { enabled: true, value } } });
     const raw = { currentPresetName: 'Main',
-        delegateConfig: { provider: 'openai-compatible', modelConfigs: configs(0.61) },
-        presets: { Main: { provider: 'openai-compatible', modelConfigs: configs(0.83) }, A: { provider: 'openai-compatible', modelConfigs: configs(0.42) } },
+        delegateConfig: { provider: 'openai-compatible', ...configs(0.61) },
+        presets: { Main: { provider: 'openai-compatible', ...configs(0.83) }, A: { provider: 'openai-compatible', ...configs(0.42) } },
     };
     const config = normalizeAgentConfig(JSON.parse(JSON.stringify(raw)));
     assert.equal(resolveActiveProviderConfig(config).sampling.topP.value, 0.83);
     assert.equal(resolveActiveProviderConfig(config, { role: 'delegate' }).sampling.topP.value, 0.61);
-    assert.equal(config.presets.A.modelConfigs['openai-compatible'].sampling.topP.value, 0.42);
-    config.modelConfigs['openai-compatible'].sampling.topP.value = 0.7;
-    assert.equal(config.delegateConfig.modelConfigs['openai-compatible'].sampling.topP.value, 0.61);
-    assert.equal(config.presets.A.modelConfigs['openai-compatible'].sampling.topP.value, 0.42);
+    assert.equal(config.presets.A.sampling.topP.value, 0.42);
+    config.presets.Main.sampling.topP.value = 0.7;
+    assert.equal(config.delegateConfig.sampling.topP.value, 0.61);
+    assert.equal(config.presets.A.sampling.topP.value, 0.42);
 });
 
 test('actual SDK and host-client requests use route-specific sampling', async t => {

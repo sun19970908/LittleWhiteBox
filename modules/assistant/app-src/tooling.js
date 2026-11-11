@@ -1,14 +1,37 @@
-import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, getWebSearchToolDefinition } from '../../agent-core/web/tools.js';
+import { filterSkillTools } from '../shared/skill-tools.js';
+import { COORDINATION_TOOLS, SKILL_MANAGEMENT_TOOLS } from '../skills/contract.js';
+import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, getWebSearchToolDefinition, getWebFetchToolDefinition, isWebConfigured } from '../../agent-core/web/tools.js';
+import { ACTIVITY_COPY } from './ui/activity-copy.js';
+import { getToolResultReadDefinition, TOOL_RESULT_READ, withPagedToolResult } from '../../agent-core/runtime/tool-result-contract.js';
+import { CARD_TOOL } from '../../card-workspace/assistant-contract.js';
+import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
+import { LOOKUP_SCOPES, LOOKUP_SCOPE_PROJECT, LOOKUP_SCOPE_LOCAL } from '../shared/lookup-scope.js';
+import { INSPECT_PAGE_TOOL } from '../../live-page-inspection/tool-contract.ts';
+import { COPY as INSPECTION_COPY } from '../../live-page-inspection/contract.ts';
+import { READ_LOGS_TOOL, LOG_TOOL_COPY } from '../../debug-panel/log-tool-contract.js';
+
+function lookupScopeParameter(pathParameter = 'path') {
+    return {
+        type: 'string',
+        enum: LOOKUP_SCOPES,
+        description: `File source; the path itself goes in ${pathParameter}. ${LOOKUP_SCOPE_PROJECT} (default) = project code, with paths that omit \`public/\`, e.g. \`scripts/extensions/third-party/LittleWhiteBox/index.js\`. ${LOOKUP_SCOPE_LOCAL} = the assistant workspace, with paths that keep the \`local/\` prefix, e.g. \`local/notes.md\`.`,
+    };
+}
 
 // ============================================================
 // 工具名称常量
 // ============================================================
 export const TOOL_NAMES = {
+    READ_LOGS: READ_LOGS_TOOL.function.name,
+    INSPECT_PAGE: INSPECT_PAGE_TOOL.function.name,
+    CARD_FILES: CARD_TOOL.function.name,
     LS: 'LS',
     GLOB: 'Glob',
     GREP: 'Grep',
     READ: 'Read',
     WEB_SEARCH: WEB_SEARCH_TOOL_NAME,
+    WEB_FETCH: WEB_FETCH_TOOL_NAME,
+    TOOL_RESULT_READ,
     WRITE: 'Write',
     APPLY_PATCH: 'apply_patch',
     DELETE: 'Delete',
@@ -19,41 +42,41 @@ export const TOOL_NAMES = {
     WRITE_IDENTITY: 'WriteIdentity',
     READ_WORKLOG: 'ReadWorklog',
     WRITE_WORKLOG: 'WriteWorklog',
-    PLAN_CREATE: 'PlanCreate',
-    PLAN_UPDATE: 'PlanUpdate',
-    PLAN_LIST: 'PlanList',
-    PLAN_GET: 'PlanGet',
-    DELEGATE_RUN: 'DelegateRun',
+    PLAN_CREATE: COORDINATION_TOOLS.PLAN_CREATE,
+    PLAN_UPDATE: COORDINATION_TOOLS.PLAN_UPDATE,
+    PLAN_LIST: COORDINATION_TOOLS.PLAN_LIST,
+    PLAN_GET: COORDINATION_TOOLS.PLAN_GET,
+    DELEGATE_RUN: COORDINATION_TOOLS.DELEGATE_RUN,
     READ_SKILLS_CATALOG: 'ReadSkillsCatalog',
     READ_SKILL: 'ReadSkill',
-    UPDATE_SKILL: 'UpdateSkill',
+    UPDATE_SKILL: SKILL_MANAGEMENT_TOOLS.UPDATE_SKILL,
     SAVE_SKILL_FILE: 'SaveSkillFile',
-    GENERATE_SKILL: 'GenerateSkill',
-    DELETE_SKILL: 'DeleteSkill',
+    GENERATE_SKILL: SKILL_MANAGEMENT_TOOLS.GENERATE_SKILL,
+    DELETE_SKILL: SKILL_MANAGEMENT_TOOLS.DELETE_SKILL,
 };
 
 // ============================================================
 // 工具定义
 // ============================================================
 export const TOOL_DEFINITIONS = [
+    withPagedToolResult(READ_LOGS_TOOL),
+    INSPECT_PAGE_TOOL,
+    CARD_TOOL,
     {
         type: 'function',
         function: {
             name: TOOL_NAMES.LS,
             description: [
-                'List files and directories inside a directory path.',
-                'Returns first-level entries only; does not recurse and does not read file contents.',
-                'Best for directory-level discovery and structural narrowing by path.',
-                'Default scope is project source code only; `local/` workspace lookup requires `scope: "local"`.',
-                'When `scope: "local"` is used, keep writing the real path as `local/...`; for example `scope: "local"` + `path: "local/"` is valid.',
+                'List the first-level files and directories of a directory.',
+                'Returns items, total and nextOffset for the following page; nextOffset is null at the end.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    path: { type: 'string', description: 'Site-root-relative tool path without `public/`, for example scripts/extensions/third-party/ or scripts/extensions/third-party/LittleWhiteBox/modules/.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to list only the `local/` workspace tree.' },
-                    offset: { type: 'number', description: 'Optional 1-based entry offset for paging. Default 1.' },
-                    limit: { type: 'number', description: 'Maximum number of first-level entries to return. Default 100, max 300.' },
+                    path: { type: 'string', description: 'Directory to list.' },
+                    scope: lookupScopeParameter(),
+                    offset: { type: 'number', description: '1-based entry offset. Default 1.' },
+                    limit: { type: 'number', description: 'Entries per page. Default 100, max 300.' },
                 },
                 required: ['path'],
                 additionalProperties: false,
@@ -65,19 +88,15 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.GLOB,
             description: [
-                'Fast file pattern matching tool for project code and `local/` workspace files.',
-                'Matches file paths only; does not inspect file contents.',
-                'Default scope is project source code only; use `scope: "local"` to search only the session workspace.',
-                'When `scope: "local"` is used, workspace paths still use the normal `local/...` form.',
-                'Best for file discovery and path-level narrowing when you know a directory, extension, or naming pattern.',
-                'Supports a path scope so you can search inside one directory instead of the full selected scope.',
+                'Find files whose paths match a glob pattern.',
+                'Returns up to 100 matching paths with total; when truncated is true, narrow the pattern or path.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    pattern: { type: 'string', description: 'Glob path pattern without `public/`, for example scripts/extensions/third-party/LittleWhiteBox/modules/**/*.js.' },
-                    path: { type: 'string', description: 'Optional directory or exact file path inside the selected lookup scope. Project paths omit `public/`.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to search only `local/` files.' },
+                    pattern: { type: 'string', description: 'Glob pattern for file paths, e.g. `scripts/extensions/third-party/LittleWhiteBox/modules/**/*.js`.' },
+                    path: { type: 'string', description: 'Optional directory or exact file that limits the search.' },
+                    scope: lookupScopeParameter(),
                 },
                 required: ['pattern'],
                 additionalProperties: false,
@@ -89,29 +108,25 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.GREP,
             description: [
-                'Fast content search tool for project code and `local/` workspace files.',
-                'It first builds a candidate set from the selected scope, then searches the current live contents of those candidate files.',
-                'When `scope: "local"` is used, workspace paths still use the normal `local/...` form.',
-                'Uses regex search by default and returns matching files with line-level match details.',
-                'Best for content-level narrowing by keyword, symbol name, error text, or regex before reading files.',
-                'Supports both directory scope and file-pattern filtering so you can narrow searches before reading files.',
+                'Search current file contents line by line, case-insensitively, by regular expression or literal text.',
+                'Returns items in the chosen outputMode and nextOffset for the following page. searchComplete is false when results were truncated or some files could not be read; totals then cover only the scanned part.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    pattern: { type: 'string', description: 'grep/rg-style search pattern. Treated as regex by default.' },
-                    path: { type: 'string', description: 'Optional directory or exact file path inside the selected lookup scope. Project paths omit `public/`.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to search only `local/` files.' },
-                    include: { type: 'string', description: 'Optional file path glob filter, for example **/*.js or modules/assistant/**/*.js.' },
+                    pattern: { type: 'string', description: 'JavaScript regular expression, or literal text when useRegex is false.' },
+                    path: { type: 'string', description: 'Optional directory or exact file that limits the search.' },
+                    scope: lookupScopeParameter(),
+                    include: { type: 'string', description: 'Optional glob filter for file paths, e.g. `**/*.js`.' },
                     outputMode: {
                         type: 'string',
                         enum: ['content', 'files_with_matches', 'count'],
-                        description: 'Output mode. content returns matched lines and context; files_with_matches returns matching files only; count returns match counts per file. Default is content.',
+                        description: 'content = matching lines with optional context; files_with_matches = matching files; count = match count per file. Default content.',
                     },
-                    limit: { type: 'number', description: 'Maximum number of results to return. Default 100, max 100. Can be used with offset for paging.' },
-                    offset: { type: 'number', description: 'Skip this many results before returning matches. Default 0.' },
-                    contextLines: { type: 'number', description: 'How many context lines to show before and after each match. Default 0, max 5.' },
-                    useRegex: { type: 'boolean', description: 'Whether to treat pattern as a regex. Default true; use false for literal search.' },
+                    limit: { type: 'number', description: 'Results per page. Default 100, max 100.' },
+                    offset: { type: 'number', description: 'Results to skip. Default 0.' },
+                    contextLines: { type: 'number', description: 'Lines shown before and after each match in content mode. Default 0, max 5.' },
+                    useRegex: { type: 'boolean', description: 'Default true; false searches for the literal text.' },
                 },
                 required: ['pattern'],
                 additionalProperties: false,
@@ -123,35 +138,32 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.READ,
             description: [
-                'Read a text file or directory using the current instance\'s live contents.',
-                'Default scope is project source code only; use `scope: "local"` to read only `local/...` workspace paths.',
-                'When `scope: "local"` is used, `filePath` still needs the full `local/...` path.',
-                'For some explicit public file paths, direct live reads may still work even if the path is not in the index.',
-                'Returns numbered lines for files and plain entry names for directories; large reads include continuation hints.',
-                'Use `tail` only when you need the last N lines of a file; otherwise omit it entirely.',
+                'Read the current contents of a text file as numbered lines, or list a directory.',
+                'Returns up to 2000 lines or entries with nextOffset for the following range; nextOffset is null at the end.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    filePath: { type: 'string', description: 'Site-root-relative tool path without `public/`, for example scripts/extensions/third-party/LittleWhiteBox/index.js or local/.' },
-                    scope: { type: 'string', enum: ['project', 'local'], description: 'Lookup scope. Default is project. Use local to read only `local/` workspace files or directories.' },
-                    offset: { type: 'number', description: 'Optional line offset (1-based). Default 1.' },
-                    limit: { type: 'number', description: 'Optional maximum number of lines or directory entries to return. Default 2000.' },
-                    tail: { type: 'number', description: 'Optional number of final file lines to return. Use by itself; cannot be combined with offset, limit, startLine, or endLine. Omit the field entirely when unused; do not send `tail: 0`.' },
+                    filePath: { type: 'string', description: 'File or directory to read.' },
+                    scope: lookupScopeParameter('filePath'),
+                    offset: { type: 'number', description: '1-based line or entry offset. Default 1.' },
+                    limit: { type: 'number', description: 'Lines or entries to return. Default 2000, max 2000.' },
+                    tail: { type: 'number', description: 'Return the last N lines of a file, max 2000. Use alone, without offset or limit.' },
                 },
                 required: ['filePath'],
                 additionalProperties: false,
             },
         },
     },
-    getWebSearchToolDefinition(),
+    withPagedToolResult(getWebSearchToolDefinition()),
+    withPagedToolResult(getWebFetchToolDefinition()),
+    getToolResultReadDefinition(),
     {
         type: 'function',
         function: {
             name: TOOL_NAMES.WRITE,
             description: [
                 'Write a `local/` text file. Use for new files or whole-file rewrites.',
-                'Can only write `local/` paths and never writes back to the user\'s original disk files.',
                 'Can directly create a new `local/...` file path, including `local/file.txt` or `local/<root>/file.txt`.',
             ].join('\n'),
             parameters: {
@@ -192,7 +204,6 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.DELETE,
             description: [
                 'Delete a `local/` file or directory.',
-                'Can only delete `local/` paths and never deletes the user\'s original disk files.',
                 'Supports deleting a single file or a directory with all files under it.',
             ].join('\n'),
             parameters: {
@@ -211,7 +222,6 @@ export const TOOL_DEFINITIONS = [
             name: TOOL_NAMES.MOVE,
             description: [
                 'Move or rename a `local/` file or directory.',
-                'Can only operate on `local/` paths and never moves the user\'s original disk files.',
                 'Supports renaming files, moving files, and moving whole directories; existing destinations require explicit overwrite permission.',
             ].join('\n'),
             parameters: {
@@ -250,25 +260,23 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.RUN_JAVASCRIPT_API,
             description: [
-                'Execute documented public SillyTavern frontend JavaScript APIs.',
+                'Run JavaScript against the live SillyTavern frontend.',
                 'Use this when STscript or slash commands do not provide the needed entry point and you need to inspect, read, or operate on public frontend objects and state such as chatMetadata, saveMetadata, or public extension exports.',
-                'This is not arbitrary JS execution; only documented public APIs are allowed.',
-                'Code can directly use injected `ctx` and `st`; `ctx` comes from getContext(), and `st` only exposes public script / extensions / slash namespaces. Simple destructuring, simple arrow callbacks, `if`, `for...of`, `try/catch`, and constrained read-only inspection are supported.',
-                'Request modes: use `inspect` for unknown structures, `read` for known fields, and `effect` only for side-effectful calls.',
-                'Typical `inspect` usage: Object.keys(ctx.chatMetadata), typeof ctx.someField, Array.isArray(ctx.chat), or small JSON/stringified samples.',
-                'Typical `read` usage: directly return a known field such as ctx.chatMetadata.LittleWhiteBox.summary.',
-                'Typical `effect` usage: calls such as ctx.saveMetadata() or other state-changing frontend APIs.',
-                '`apiPaths` may be omitted for read-only inspection and precise reads, or kept at container level; side-effect requests must declare exact paths. `safety` is explanatory only, not the security boundary. Code must explicitly return the final result.',
+                'Code runs as an async function with normal JavaScript syntax and top-level await. Injected `ctx` and `getContext()` expose the documented context; `st` contains public script / extensions / slash namespaces, `st.state3` (ReadSkill builtin-state3), and `st.iframeRenderer` (ReadSkill builtin-live-page). The API reference lists available entry points; nested data is read from the live instance.',
+                'The script itself returns the result; a return inside a callback only returns to that callback. Use return null when there is no data to return.',
+                'The tool classifies the code automatically as inspect, read, effect, or unknown. The Permission Mode section describes whether confirmation is required.',
+                'Returns ok, output, execution diagnostics, and any truncation flags. usedApis and calledApis describe references found in the code, not an execution trace. Return a focused result rather than an entire chat or metadata tree.',
+                'Cancellation stops waiting and checks for cancellation as the script resumes. Already-started saves or network requests are not undone. After a cancellation or execution error, inspect the affected state before retrying a modification.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    code: { type: 'string', description: 'Execute JavaScript carefully and safely. Code must explicitly return the final result.' },
+                    code: { type: 'string', description: 'Async JavaScript function body, including a return for the final result.' },
                     purpose: { type: 'string', description: 'What this code is intended to do.' },
                     apiPaths: {
                         type: 'array',
                         items: { type: 'string' },
-                        description: 'Optional public API path declarations. For inspect/read this may be omitted or kept at container level such as ctx.chatMetadata; for effect requests exact paths are required.',
+                        description: 'Optional API references for explaining the request to the user, such as ctx.chatMetadata or ctx.saveMetadata. These do not grant permissions or replace code analysis.',
                     },
                     safety: { type: 'string', description: 'Optional safety note, for example read-only or which objects/state may be modified. Mainly used for explanation and approval copy.' },
                     expectedOutput: { type: 'string', description: 'What result is expected to be returned.' },
@@ -479,7 +487,7 @@ export const TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.READ_SKILL,
-            description: 'Read the full body of one skill. Prefer id; filename is also allowed. At least one of the two must be provided.',
+            description: 'Read one skill and enable its listed tools for subsequent requests in this conversation. Returns ok, id, content and skill metadata; built-in skills also return builtin and tools. Prefer id; filename is also allowed. Successful reads remain enabled after history summarization and reopening; clearing the conversation resets the selection.',
             parameters: {
                 type: 'object',
                 properties: {
@@ -579,6 +587,17 @@ export const TOOL_DEFINITIONS = [
     },
 ];
 
+export function isWebTool(name) {
+    return name === TOOL_NAMES.WEB_SEARCH || name === TOOL_NAMES.WEB_FETCH;
+}
+
+/** @param {{ providerConfig?: object, jsApiEnabled?: boolean, skillIds?: string[], role?: string }} options */
+export function getAssistantToolDefinitions({ providerConfig = {}, jsApiEnabled = false, skillIds = [], role = 'main' } = {}) {
+    const webEnabled = isWebConfigured(providerConfig);
+    return filterSkillTools(TOOL_DEFINITIONS, skillIds, { role }).filter(({ function: { name } }) =>
+        (jsApiEnabled || name !== TOOL_NAMES.RUN_JAVASCRIPT_API) && (webEnabled || !isWebTool(name)));
+}
+
 function safeJsonParse(text, fallback = null) {
     try {
         return JSON.parse(text || 'null');
@@ -611,6 +630,12 @@ function truncateInlineText(value = '', limit = 220) {
 
 export function describeToolCall(name, args = {}) {
     switch (name) {
+        case TOOL_NAMES.READ_LOGS:
+            return LOG_TOOL_COPY.label;
+        case TOOL_NAMES.INSPECT_PAGE:
+            return INSPECTION_COPY.label;
+        case TOOL_NAMES.CARD_FILES:
+            return args.action === 'save' ? CARD_COPY.save : CARD_COPY.open;
         case TOOL_NAMES.LS:
             return `查看目录 ${args.path || ''}${args.offset ? `:${args.offset}` : ''}`.trim();
         case TOOL_NAMES.GLOB:
@@ -621,6 +646,10 @@ export function describeToolCall(name, args = {}) {
             return `读取文件 ${(args.filePath || args.path || '')}${args.tail ? ` tail:${args.tail}` : args.offset ? `:${args.offset}` : args.startLine ? `:${args.startLine}` : ''}`.trim();
         case TOOL_NAMES.WEB_SEARCH:
             return `联网搜索 ${args.query || ''}`.trim();
+        case TOOL_NAMES.WEB_FETCH:
+            return ACTIVITY_COPY.webFetch(Array.isArray(args.urls) ? args.urls : []);
+        case TOOL_NAMES.TOOL_RESULT_READ:
+            return ACTIVITY_COPY.readResultPage;
         case TOOL_NAMES.WRITE:
             return `写入文件 ${args.filePath || args.path || ''}`.trim();
         case TOOL_NAMES.APPLY_PATCH:
@@ -849,6 +878,13 @@ export function formatToolResultDisplay(message) {
         };
     }
 
+    if (message.toolName === TOOL_NAMES.INSPECT_PAGE) {
+        return {
+            summary: parsed.ok === false ? parsed.message : [INSPECTION_COPY.result, parsed.next ? INSPECTION_COPY.continued : ''].filter(Boolean).join(' · '),
+            details: [parsed.frame ? JSON.stringify(parsed.frame, null, 2) : '', parsed.content || ''].filter(Boolean).join('\n\n'),
+        };
+    }
+
     const delegateToolResult = formatDelegateToolResult(message, parsed);
     if (delegateToolResult) return delegateToolResult;
 
@@ -867,6 +903,31 @@ export function formatToolResultDisplay(message) {
                 parsed.error ? `错误：${parsed.error}` : '',
                 ...rules.map((rule) => `- ${rule}`),
             ].filter(Boolean).join('\n'),
+        };
+    }
+
+    if ((isWebTool(message.toolName) || message.toolName === TOOL_NAMES.READ_LOGS || message.toolName === TOOL_NAMES.TOOL_RESULT_READ)
+        && parsed.data?.reference && typeof parsed.data.text === 'string') {
+        return { summary: ACTIVITY_COPY.resultPage(parsed.data.offset, parsed.data.totalChars), details: parsed.data.text };
+    }
+
+    if (message.toolName === TOOL_NAMES.READ_LOGS && parsed.ok === true && Array.isArray(parsed.logs)) {
+        return { summary: LOG_TOOL_COPY.result, details: JSON.stringify(parsed, null, 2) };
+    }
+
+    if (message.toolName === TOOL_NAMES.WEB_FETCH) {
+        const results = Array.isArray(parsed.results) ? parsed.results : [];
+        const failures = Array.isArray(parsed.failures) ? parsed.failures : [];
+        return {
+            summary: [
+                results.length ? ACTIVITY_COPY.webFetched(results.length) : '',
+                failures.length ? ACTIVITY_COPY.webFetchFailed(failures.length) : '',
+                parsed.ok === false ? parsed.message || parsed.error : '',
+            ].filter(Boolean).join('\n'),
+            details: [
+                ...results.map(item => [item.title, item.url, item.text].filter(Boolean).join('\n')),
+                ...failures.map(item => [item.url, item.code, item.httpStatus, item.message].filter(Boolean).join(' · ')),
+            ].join('\n\n'),
         };
     }
 
@@ -1190,7 +1251,7 @@ export function formatToolResultDisplay(message) {
         const status = parsed.skipped === true
             ? '已跳过'
             : execution.isAborted === true
-                ? '已中止'
+                ? ACTIVITY_COPY.statuses.unconfirmed
                 : parsed.ok === false
                     ? '失败'
                     : '成功';
@@ -1202,7 +1263,7 @@ export function formatToolResultDisplay(message) {
                     ? '执行操作'
                     : '未知';
         const lines = [
-            `已执行 JS API：${parsed.code || ''}`,
+            `JS API 请求：${parsed.code || ''}`,
             `请求性质：${requestKind}`,
             `状态：${status}`,
         ];
@@ -1210,7 +1271,7 @@ export function formatToolResultDisplay(message) {
             lines.push(`错误：${execution.errorMessage}`);
         }
         if (Array.isArray(parsed.calledApis) && parsed.calledApis.length) {
-            lines.push(`实际调用：${parsed.calledApis.join(', ')}`);
+            lines.push(`代码涉及的调用：${parsed.calledApis.join(', ')}`);
         } else if (Array.isArray(parsed.usedApis) && parsed.usedApis.length) {
             lines.push(`使用 API：${parsed.usedApis.join(', ')}`);
         }

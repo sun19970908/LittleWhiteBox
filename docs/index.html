@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>小白X 文档</title>
+</head>
+<body>
+<div class="docs-shell">
+  <nav class="docs-nav" aria-label="文档目录"></nav>
+  <main class="docs-main"><article class="docs-article" aria-live="polite"><p class="docs-state">正在加载</p></article></main>
+</div>
+<script type="module">
+import { loadBuildEntry, reportBuildFailure } from '../core/build-assets.js';
+loadBuildEntry('apps/docs').catch(reportBuildFailure);
+</script>
+</body>
+</html>

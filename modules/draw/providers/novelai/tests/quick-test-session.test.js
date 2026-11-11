@@ -4,7 +4,8 @@ import { parseHTML } from 'linkedom';
 import { createQuickTestSession, QuickTestSaveError } from '../quick-test-session.js';
 import { createQuickTestView } from '../quick-test-view.js';
 
-// Acceptance: see scene-planner-design.md, paid result retention and URL ownership.
+// Acceptance: a generated (paid) image stays retrievable when caching fails; repeated clicks never
+// regenerate or double-write it, and each view releases only the URLs it owns.
 const record = { imgId: 'paid', base64: 'aGVsbG8=', slotId: 'novelai-quick-test' };
 
 test('paid output survives a failed write, duplicate generation and duplicate save retry', async () => {

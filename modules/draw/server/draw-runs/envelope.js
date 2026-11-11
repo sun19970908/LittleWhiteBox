@@ -1,6 +1,7 @@
 'use strict';
 
 const { MAX_TIMEOUT_MS } = require('../providers/upstream.js');
+const vertexContract = require('../../../agent-core/vertex-contract.cjs');
 
 const { MAX_ENVELOPE_BYTES } = require('../../../../server-plugin/littlewhitebox-server/runtime-contract.js');
 const MAX_IMAGE_ITEMS = 20;
@@ -13,6 +14,7 @@ const AGENT_CHANNELS = new Set([
     'openai-responses',
     'anthropic',
     'google',
+    'google-vertex',
     'sillytavern-openai-compatible',
     'sillytavern-claude',
     'sillytavern-google',
@@ -144,7 +146,7 @@ function validatePlanner(value, runtime) {
     }
     const planner = assertExactKeys(
         value,
-        ['prompt', 'tool', 'validationContext', 'presentCharacters', 'retry', 'customToolSources'],
+        ['prompt', 'tool', 'validationContext', 'presentCharacters', 'retry', 'customToolSources', 'refine'],
         'planner',
         ['prompt', 'tool', 'validationContext', 'presentCharacters'],
     );
@@ -210,8 +212,14 @@ function validatePlanner(value, runtime) {
             baseDelayMs: requireInteger(source.baseDelayMs, 'planner.retry.baseDelayMs', 100, 30_000),
         };
     }
+    if (planner.refine !== undefined) {
+        // 页面随规划数据送来的收尾设置（补没写的衣着、去重）：形状不对就拒收，不带病执行。
+        try { runtime.assertScenePlanRefine(planner.refine); } catch (error) { throw invalid(error.message); }
+        assertSafeJson(planner.refine, 'planner.refine');
+    }
     return {
         ...(retry ? { retry } : {}),
+        ...(planner.refine ? { refine: cloneJson(planner.refine) } : {}),
         ...(planner.customToolSources ? { customToolSources: cloneJson(planner.customToolSources) } : {}),
         prompt: cloneJson(prompt),
         tool: cloneJson(planner.tool),
@@ -234,6 +242,7 @@ function validateAgent(value) {
         'currentPresetName', 'provider', 'baseUrl', 'model', 'apiKey',
         'temperature', 'sendTemperature', 'maxTokens', 'timeoutMs',
         'toolMode', 'reasoning', 'sampling',
+        ...(channel === 'google-vertex' ? ['vertex'] : []),
     ];
     const config = assertExactKeys(agent.providerConfig, allowedConfigFields, 'agent.providerConfig', [
         'provider', 'baseUrl', 'model', 'maxTokens', 'timeoutMs', 'toolMode', 'reasoning',
@@ -243,6 +252,14 @@ function validateAgent(value) {
         requireString(config.currentPresetName, 'agent.providerConfig.currentPresetName', { allowEmpty: true });
     }
     requireString(config.model, 'agent.providerConfig.model');
+    if (channel === 'google-vertex') {
+        const vertex = assertExactKeys(config.vertex, Object.keys(vertexContract.defaults), 'agent.providerConfig.vertex');
+        for (const [key, value] of Object.entries(vertex)) {
+            if (typeof vertexContract.defaults[key] === 'boolean') requireBoolean(value, `agent.providerConfig.vertex.${key}`);
+            else requireString(value, `agent.providerConfig.vertex.${key}`, { allowEmpty: true });
+        }
+        if (!vertexContract.authModes.some(mode => mode.value === vertex.authMode)) throw invalid('agent.providerConfig.vertex.authMode is invalid');
+    }
     requireString(config.baseUrl, 'agent.providerConfig.baseUrl', { allowEmpty: true });
     if (Object.hasOwn(config, 'apiKey')) {
         requireString(config.apiKey, 'agent.providerConfig.apiKey', { allowEmpty: true });

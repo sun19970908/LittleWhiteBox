@@ -44,7 +44,7 @@ LittleWhiteBox/
 ├── core/                        # 与业务无关的事件、存储、命令、路径、消息通信原语
 ├── shared/                      # 跨模块共享的宿主 LLM 与通用工具
 ├── libs/                        # 随插件分发的第三方库与 wasm
-├── docs/                        # 许可证、版权与第三方声明
+├── docs/                        # 许可证、版权与第三方声明；user/ 是随插件分发的用户文档（功能说明、写卡与脚本接口），index.html 为查看页
 └── modules/                     # 业务模块
     ├── agent-core/              # 多 Agent App 的共享配置、适配器、协议、工具原语
     │   ├── README.md            # agent-core 的所有权边界

@@ -1,8 +1,12 @@
 import { pluginAsset } from '../../../core/build-assets.js';
 import { analyzeJavaScriptApiRequest } from '../runtime-src/jsapi-runtime.js';
+import { JSAPI_CANCEL_NOTICE } from '../shared/jsapi-contract.js';
+import { withAssistantJsApiManifest } from '../shared/extension-jsapi-manifest.ts';
 import { createDelegateRunner } from '../../agent-core/runtime/delegate-runner.js';
 import { agentErrorGuidance } from '../../agent-core/runtime/error-guidance.js';
-import { runWebSearchTool } from '../../agent-core/web/tools.js';
+import { runWebSearchTool, runWebFetchTool } from '../../agent-core/web/tools.js';
+import { isWebTool } from './tooling.js';
+import { createWebResults } from '../../agent-core/runtime/web-results.js';
 import {
     buildProviderMessagesFromHistory,
     filterThoughtsForTurn,
@@ -15,6 +19,8 @@ import { createHostToolRequestController } from './runtime/host-tool-requests.js
 import { createHistoryCompactionController, splitMessagesIntoTurns } from './runtime/history-compaction.js';
 import { createStreamingMessageController } from './runtime/streaming-messages.js';
 import { settleAssistantRunFailure } from './runtime/run-failure.js';
+import { callReadableWorkspaceTool } from '../shared/workspace-tool-paths.js';
+import { filterSkillTools, isSkillTool, loadedSkillIds } from '../shared/skill-tools.js';
 
 const JSAPI_MANIFEST_URL = pluginAsset('modules/assistant/st-jsapi-manifest.json');
 let jsApiManifestPromise = null;
@@ -23,8 +29,8 @@ function normalizeJsApiRequestKind(value) {
     return ['inspect', 'read', 'effect', 'unknown'].includes(value) ? value : 'unknown';
 }
 
-function shouldRequireJsApiApproval(requestKind = 'unknown') {
-    return ['effect', 'unknown'].includes(normalizeJsApiRequestKind(requestKind));
+function shouldRequireJsApiApproval(requestKind = 'unknown', permissionMode = 'default') {
+    return permissionMode !== 'full' && ['effect', 'unknown'].includes(normalizeJsApiRequestKind(requestKind));
 }
 
 function buildJsApiAnalysisFallback(error) {
@@ -46,7 +52,7 @@ async function loadJsApiManifest() {
             if (!response.ok) {
                 throw new Error(`jsapi_manifest_load_failed:${response.status}`);
             }
-            return await response.json();
+            return withAssistantJsApiManifest(await response.json());
         }).catch((error) => {
             jsApiManifestPromise = null;
             throw error;
@@ -105,7 +111,7 @@ export function createAssistantRuntime(deps) {
         if (!activity) return null;
         if (state.activeRun === activity.run && !activity.run.controller.signal.aborted) return activity.phase;
         if (activity.phase !== 'running') return 'not-executed';
-        return call.name === TOOL_NAMES.GREP ? 'stopped' : 'unconfirmed';
+        return call.name === TOOL_NAMES.GREP || isWebTool(call.name) || call.name === TOOL_NAMES.TOOL_RESULT_READ ? 'stopped' : 'unconfirmed';
     }
     function advanceToolActivity(call, run, phase) {
         if (toolActivity.has(call)) {
@@ -115,10 +121,12 @@ export function createAssistantRuntime(deps) {
     }
 
     function resolveToolDefinitions(options = {}) {
-        if (typeof getToolDefinitions === 'function') {
-            return getToolDefinitions(options);
-        }
-        return TOOL_DEFINITIONS;
+        const role = options.role === 'delegate' ? 'delegate' : 'main';
+        const skillIds = loadedSkillIds(options.messages || (role === 'main' ? state.messages : []), role === 'main' ? state.archivedSkillIds : []);
+        const definitions = typeof getToolDefinitions === 'function'
+            ? getToolDefinitions({ ...options, role, skillIds })
+            : TOOL_DEFINITIONS;
+        return filterSkillTools(definitions, skillIds, { role });
     }
 
     function isJsApiToolEnabled() {
@@ -143,6 +151,7 @@ export function createAssistantRuntime(deps) {
 
     function resetCompactionState() {
         state.historySummary = '';
+        state.archivedSkillIds = [];
         state.archivedTurnCount = 0;
         state.contextStats = {
             usedTokens: 0,
@@ -270,7 +279,9 @@ export function createAssistantRuntime(deps) {
     function cancelActiveRun(notice = '本轮请求已终止。') {
         const run = state.activeRun;
         if (!run) return;
-        run.cancelNotice = notice;
+        const pendingJs = [...pendingToolCalls.values()].some(entry =>
+            entry.runId === run.id && entry.toolName === TOOL_NAMES.RUN_JAVASCRIPT_API && entry.dispatched);
+        run.cancelNotice = pendingJs ? `${notice} ${JSAPI_CANCEL_NOTICE}` : notice;
         state.progressLabel = '终止中';
         run.controller.abort();
         clearPendingToolCalls(run.id, new Error('tool_aborted'));
@@ -424,31 +435,28 @@ export function createAssistantRuntime(deps) {
         return toolResult;
     }
 
-    let delegateRunner = null;
-
-    function getDelegateRunner() {
-        if (!delegateRunner) {
-            delegateRunner = createDelegateRunner({
-                createAdapter,
-                getActiveProviderConfig,
-                getDelegateProviderConfig,
-                getSystemPrompt: resolveSystemPrompt,
-                resolveToolDefinitions: () => resolveToolDefinitions({ role: 'delegate' }),
-                safeJsonParse,
-                isAbortError,
-                TOOL_NAMES,
-                executeToolCall: async (toolCall, parsedArguments, run) => await executeAssistantToolCall(toolCall, parsedArguments, run, {
-                    allowDelegate: false,
-                    trackToolErrors: false,
-                    role: 'delegate',
-                }),
-            });
-        }
-        return delegateRunner;
+    function createAssistantDelegateRunner(webResults) {
+        return createDelegateRunner({
+            createAdapter,
+            getActiveProviderConfig,
+            getDelegateProviderConfig,
+            getSystemPrompt: resolveSystemPrompt,
+            resolveToolDefinitions: ({ messages } = {}) => resolveToolDefinitions({ role: 'delegate', messages }),
+            safeJsonParse,
+            isAbortError,
+            TOOL_NAMES,
+            executeToolCall: async (toolCall, parsedArguments, run, context = {}) => await executeAssistantToolCall(toolCall, parsedArguments, run, {
+                allowDelegate: false,
+                trackToolErrors: false,
+                role: 'delegate',
+                messages: context.messages,
+                webResults,
+            }),
+        });
     }
 
     async function runDelegateTool(args, run) {
-        return await getDelegateRunner().runDelegate(args, run);
+        return await createAssistantDelegateRunner(createWebResults(createRequestId)).runDelegate(args, run);
     }
 
     async function executeAssistantToolCall(toolCall, parsedArguments, run, options = {}) {
@@ -458,9 +466,17 @@ export function createAssistantRuntime(deps) {
         const isJsApiRun = toolCall.name === TOOL_NAMES.RUN_JAVASCRIPT_API;
         const trackToolErrors = options.trackToolErrors !== false;
         let jsApiAnalysis = null;
+        let jsApiApproved = false;
         let toolResult = null;
 
         try {
+            if (isSkillTool(toolCall.name)) {
+                const available = options.allowedToolNames || new Set(resolveToolDefinitions(options).map(definition => definition.function.name));
+                if (!available.has(toolCall.name)) {
+                    return { ok: false, error: 'skill_tool_not_available', toolName: toolCall.name };
+                }
+            }
+
             if (toolCall.name === TOOL_NAMES.RUN_SLASH_COMMAND && shouldRequireSlashCommandApproval(slashCommand)) {
                 state.progressLabel = '确认中';
                 advanceToolActivity(toolCall, run, 'approval');
@@ -494,9 +510,10 @@ export function createAssistantRuntime(deps) {
 
                 const jsApiNeedsApproval = !(
                     jsApiAnalysis
+                    && !jsApiAnalysis.analysisError
                     && Array.isArray(jsApiAnalysis.validationErrors)
                     && jsApiAnalysis.validationErrors.length > 0
-                ) && shouldRequireJsApiApproval(jsApiAnalysis?.requestKind || 'unknown');
+                ) && shouldRequireJsApiApproval(jsApiAnalysis?.requestKind || 'unknown', state.config?.permissionMode);
 
                 if (jsApiNeedsApproval) {
                     state.progressLabel = '确认中';
@@ -505,6 +522,7 @@ export function createAssistantRuntime(deps) {
                         runId: run.id,
                         signal: run.controller.signal,
                     });
+                    jsApiApproved = approved;
                     if (!approved) {
                         toolResult = buildJsApiApprovalResult(
                             parsedArguments,
@@ -548,21 +566,31 @@ export function createAssistantRuntime(deps) {
                         advanceToolActivity(toolCall, run, 'running');
                         toolResult = await runDelegateTool(parsedArguments, run);
                     }
-                } else if (toolCall.name === TOOL_NAMES.WEB_SEARCH) {
+                } else if (toolCall.name === TOOL_NAMES.TOOL_RESULT_READ) {
+                    run.controller.signal.throwIfAborted();
+                    toolResult = options.webResults.read(parsedArguments);
+                } else if (isWebTool(toolCall.name)) {
                     const providerConfig = options.role === 'delegate'
                         ? getDelegateProviderConfig?.(run)
                         : getActiveProviderConfig();
                     advanceToolActivity(toolCall, run, 'running');
-                    toolResult = await runWebSearchTool(providerConfig || {}, parsedArguments, {
+                    const executeWebTool = toolCall.name === TOOL_NAMES.WEB_SEARCH ? runWebSearchTool : runWebFetchTool;
+                    toolResult = await executeWebTool(providerConfig || {}, parsedArguments, {
                         signal: run.controller.signal,
                         isAbortError,
                     });
+                    run.controller.signal.throwIfAborted();
+                    toolResult = options.webResults.project(toolResult);
                 } else {
-                    toolResult = await callHostTool(toolCall.name, parsedArguments, {
+                    toolResult = await callReadableWorkspaceTool(toolCall.name, parsedArguments, hostArguments => callHostTool(toolCall.name, hostArguments, {
                         runId: run.id,
                         signal: run.controller.signal,
                         onDispatched: () => advanceToolActivity(toolCall, run, 'running'),
-                    });
+                    }));
+                    if (toolCall.name === TOOL_NAMES.READ_LOGS) {
+                        run.controller.signal.throwIfAborted();
+                        toolResult = options.webResults.project(toolResult);
+                    }
                 }
             }
 
@@ -574,12 +602,8 @@ export function createAssistantRuntime(deps) {
             }
 
             if (
-                isJsApiRun
+                jsApiApproved
                 && toolResult?.ok !== false
-                && jsApiAnalysis
-                && Array.isArray(jsApiAnalysis.validationErrors)
-                && jsApiAnalysis.validationErrors.length === 0
-                && shouldRequireJsApiApproval(jsApiAnalysis.requestKind || 'unknown')
             ) {
                 toolResult = {
                     ...toolResult,
@@ -622,12 +646,14 @@ export function createAssistantRuntime(deps) {
     }
 
     async function runAssistantLoop(run) {
+        const webResults = createWebResults(createRequestId);
         const adapter = createAdapter();
         let rounds = 0;
         let pendingToolResponses = null;
         let pendingFinalAnswerReminderText = '';
         let sawToolExecution = false;
         let finalAnswerReminderSent = false;
+        let previousToolSignature = '';
         const providerMessageOptions = {
             userContextSnapshotText: String(run?.userContextSnapshotText || '').trim(),
             finalAnswerReminderText: '',
@@ -661,11 +687,14 @@ export function createAssistantRuntime(deps) {
                 scheduleStreamRender();
             };
 
+            const requestTools = resolveToolDefinitions({ role: 'main' });
+            const allowedToolNames = new Set(requestTools.map(definition => definition.function.name));
+            const toolSignature = JSON.stringify([...allowedToolNames].sort());
             let result;
             try {
                 const requestTask = {
                     systemPrompt: resolveSystemPrompt(),
-                    tools: resolveToolDefinitions({ role: 'main' }),
+                    tools: requestTools,
                     toolChoice: 'auto',
                     temperature: providerConfig.temperature,
                     maxTokens: providerConfig.maxTokens,
@@ -679,8 +708,10 @@ export function createAssistantRuntime(deps) {
                     ...providerMessageOptions,
                     finalAnswerReminderText: pendingFinalAnswerReminderText || providerMessageOptions.finalAnswerReminderText,
                 });
-                // A session must restart from the compacted replay when old turns were removed.
-                const continueSession = adapter?.supportsSessionToolLoop && historyBeforeBudget === state.messages;
+                // Provider sessions retain their initial tools, so both history and tools must still match.
+                const continueSession = adapter?.supportsSessionToolLoop
+                    && historyBeforeBudget === state.messages
+                    && previousToolSignature === toolSignature;
                 if (Array.isArray(pendingToolResponses) && pendingToolResponses.length && continueSession) {
                     requestTask.toolResponses = pendingToolResponses;
                 } else if (pendingFinalAnswerReminderText && continueSession) {
@@ -706,6 +737,7 @@ export function createAssistantRuntime(deps) {
                     messageCount: Array.isArray(requestTask.messages) ? requestTask.messages.length : 0,
                 });
                 result = await adapter.chat(requestTask);
+                previousToolSignature = toolSignature;
                 console.info('[Assistant][ModelRequest] round:result', {
                     round: rounds,
                     provider: String(providerConfig?.provider || ''),
@@ -764,7 +796,7 @@ export function createAssistantRuntime(deps) {
                     const parsedArguments = safeJsonParse(toolCall.arguments, {});
                     state.progressLabel = '工具中';
                     advanceToolActivity(toolCall, run, 'preparing');
-                    const toolResult = await executeAssistantToolCall(toolCall, parsedArguments, run);
+                    const toolResult = await executeAssistantToolCall(toolCall, parsedArguments, run, { webResults, allowedToolNames });
                     pushMessage(buildToolResultMessage({
                         toolCallId: toolCall.id,
                         toolName: toolCall.name,

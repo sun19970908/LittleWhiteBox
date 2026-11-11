@@ -3,14 +3,24 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import { runInNewContext } from 'node:vm';
 import { parseHTML } from 'linkedom';
+import MarkdownIt from 'markdown-it';
 
 // Acceptance (leaked Blob URLs / late UI updates): leaving a card cancels its request,
 // releases displayed media, and prevents late progress, success or partial results from undoing cleanup.
 // Cancelling in a live card must still display paid partial images; restoring a cached page must allow new work.
-const docs = parseHTML(readFileSync(new URL('../../../../docs/media-api.html', import.meta.url), 'utf8')).document;
+// The examples are the copyable fences tagged `html draw-example` / `html tts-example` in the user doc.
+const fences = new MarkdownIt()
+    .parse(readFileSync(new URL('../../../../docs/user/media-api.md', import.meta.url), 'utf8'), {})
+    .filter(token => token.type === 'fence');
+
+function exampleSource(kind) {
+    const matches = fences.filter(token => token.info.trim().split(/\s+/).join(' ') === `html ${kind}-example`);
+    assert.equal(matches.length, 1, `docs/user/media-api.md must contain exactly one \`html ${kind}-example\` fence`);
+    return matches[0].content;
+}
 
 function example(kind) {
-    const { document, window } = parseHTML(`<html><body>${docs.querySelector(`#${kind}-example`).textContent}</body></html>`);
+    const { document, window } = parseHTML(`<html><body>${exampleSource(kind)}</body></html>`);
     const requests = [];
     const urls = new Set();
     let created = 0;

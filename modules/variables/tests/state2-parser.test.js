@@ -72,7 +72,7 @@ $schema 数据
     assert.deepEqual(unindentedSchema.ops, []);
     assert.deepEqual(
         unindentedSchema.rules.map(item => item.path),
-        ['数据', '数据.背包', '数据.背包.[*]', '数据.背包.[*].名称', '数据.背包.[*].数量'],
+        ['数据', '数据.背包', '数据.背包[*]', '数据.背包[*].名称', '数据.背包[*].数量'],
     );
 });
 

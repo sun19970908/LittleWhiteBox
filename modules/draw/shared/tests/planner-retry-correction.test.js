@@ -73,9 +73,7 @@ async function runPlanner(responses, maxRetries) {
     const requests = [];
     const settings = {
         currentPresetName: '主预设',
-        presets: { 主预设: { provider: 'openai-compatible', modelConfigs: { 'openai-compatible': {
-            baseUrl: 'https://main.example/v1', model: 'gpt-4o', apiKey: 'k', toolMode: 'tagged-json',
-        } } } },
+        presets: { 主预设: { provider: 'openai-compatible', baseUrl: 'https://main.example/v1', model: 'gpt-4o', apiKey: 'k', toolMode: 'tagged-json' } },
     };
     const run = generateAndParseScenePlan({
         messageText: '阿璃推开门。',

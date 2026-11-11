@@ -124,7 +124,7 @@ for (const outcome of ['success', 'error', 'throw']) {
         });
         const originals = Object.fromEntries(['document', 'window', 'CustomEvent'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
         Object.assign(globalThis, { document, window, CustomEvent: window.CustomEvent });
-        let stored = { currentPresetName: 'A', presets: { A: { provider: 'openai-compatible', modelConfigs: { 'openai-compatible': { model: 'saved-model' } } } } };
+        let stored = { currentPresetName: 'A', presets: { A: { provider: 'openai-compatible', model: 'saved-model' } } };
         let finishSave;
         let finishRefresh;
         let loads = 0;
@@ -172,7 +172,7 @@ for (const outcome of ['success', 'error', 'throw']) {
             await surface.refresh({ background: true });
             assert.equal(loads, 2);
         } else {
-            assert.equal(stored.presets.A.modelConfigs['openai-compatible'].model, 'newer-model');
+            assert.equal(stored.presets.A.model, 'newer-model');
         }
         assert.equal(root.querySelector('#xb-assistant-model').value, 'newer-model');
         assert.equal(surface.getState().configDraft.model, 'newer-model');

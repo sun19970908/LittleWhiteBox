@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { parse } from 'acorn';
 import { scanGarbledText, VERIFIED_REPLACEMENT_CHARACTERS } from './garbled-text.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -44,6 +45,30 @@ test('the review fingerprint checks bytes rather than already decoded text', () 
     ]);
     assert.equal(corrupted.toString('utf8'), content);
     assert.equal(scanGarbledText(reviewed.file, corrupted).length, reviewed.offsets.length);
+});
+
+// 构建产物契约：只识别已核实的二进制内容，旁边的文本、源码以及改动后的二进制仍须检查。
+test('verified WASM bytes do not exempt surrounding text or changed payloads', () => {
+    const dependency = fs.readFileSync(path.join(root, 'node_modules/@jitl/quickjs-singlefile-cjs-release-sync/dist/emscripten-module.cjs'), 'utf8');
+    const pending = [parse(dependency, { ecmaVersion: 'latest' })];
+    let payload;
+    while (pending.length && !payload) {
+        const node = pending.pop();
+        const value = node.type === 'Literal' ? node.value
+            : node.type === 'TemplateLiteral' && !node.expressions.length ? node.quasis[0].value.cooked : null;
+        if (typeof value === 'string' && value.startsWith('\0asm')) payload = value;
+        for (const child of Object.values(node).flat()) {
+            if (child && typeof child === 'object' && typeof child.type === 'string') pending.push(child);
+        }
+    }
+    assert.ok(payload);
+    const fixture = value => `const bytes=${JSON.stringify(value)};const notice="${'?'.repeat(3)}";`;
+    const source = fixture(payload), artifactPath = 'dist/worker.js';
+    const hits = scanGarbledText(artifactPath, Buffer.from(source));
+    assert.deepEqual(hits.map(hit => hit.offset), [source.lastIndexOf('?'.repeat(3))]);
+    assert.ok(scanGarbledText('modules/example.js', Buffer.from(source)).length > hits.length);
+    const changed = payload.slice(0, 100) + String.fromCharCode(payload.charCodeAt(100) ^ 1) + payload.slice(101);
+    assert.ok(scanGarbledText(artifactPath, Buffer.from(fixture(changed))).length > hits.length);
 });
 
 // 契约：真实检查入口必须继续扫描源码和构建产物，不能由文件收集阶段绕过；代价是检查覆盖缺失。

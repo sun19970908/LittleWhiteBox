@@ -1,11 +1,18 @@
 export const LOOKUP_SCOPE_PROJECT = 'project';
 export const LOOKUP_SCOPE_LOCAL = 'local';
+export const LOOKUP_SCOPES = Object.freeze([LOOKUP_SCOPE_PROJECT, LOOKUP_SCOPE_LOCAL]);
+export const INVALID_LOOKUP_SCOPE = 'invalid_lookup_scope';
+
+export function describeInvalidLookupScope(rawScope) {
+    const received = rawScope === undefined ? '' : `收到的 scope 是 ${JSON.stringify(rawScope)}。`;
+    return `${received}scope 选择文件来源：${LOOKUP_SCOPE_PROJECT} 是项目源码，${LOOKUP_SCOPE_LOCAL} 是 local/ 工作区。目录或文件路径放在 path（Read 使用 filePath）中，读取或搜索卡文件时使用 scope: "${LOOKUP_SCOPE_LOCAL}"，并保留路径的 local/ 前缀。`;
+}
 
 export function normalizeLookupScope(rawScope = '') {
     const normalized = String(rawScope || '').trim().toLowerCase();
     if (!normalized) return LOOKUP_SCOPE_PROJECT;
-    if (normalized === LOOKUP_SCOPE_PROJECT || normalized === LOOKUP_SCOPE_LOCAL) return normalized;
-    throw new Error('invalid_lookup_scope');
+    if (LOOKUP_SCOPES.includes(normalized)) return normalized;
+    throw new Error(INVALID_LOOKUP_SCOPE);
 }
 
 export function isLocalLookupTarget(rawPath = '') {

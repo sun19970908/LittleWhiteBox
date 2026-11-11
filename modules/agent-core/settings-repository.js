@@ -1,4 +1,5 @@
 import { normalizeWebSettings } from './web/settings.js';
+import { upgradeAgentSettings } from './settings-migration.js';
 import {
     AGENT_SETTINGS_CONFIG_VERSION,
     normalizeAgentSettings,
@@ -25,11 +26,12 @@ async function resolveStorage(storage) {
     return await assistantStoragePromise;
 }
 
-async function readSettingsValue(storage) {
-    if (typeof storage?.getStrict === 'function') {
-        return await storage.getStrict(SHARED_AGENT_SETTINGS_KEY, null);
-    }
-    return await storage.get(SHARED_AGENT_SETTINGS_KEY, null);
+export async function readSharedAgentSettings(options = {}) {
+    const storage = await resolveStorage(options.storage);
+    const saved = typeof storage?.getStrict === 'function'
+        ? await storage.getStrict(SHARED_AGENT_SETTINGS_KEY, null)
+        : await storage.get(SHARED_AGENT_SETTINGS_KEY, null);
+    return upgradeAgentSettings(saved || {});
 }
 
 export function mergeSharedAgentSettings(current = {}, patch = {}, options = {}) {
@@ -67,8 +69,7 @@ export function mergeSharedAgentSettings(current = {}, patch = {}, options = {})
 }
 
 export async function loadSharedAgentSettings(options = {}) {
-    const storage = await resolveStorage(options.storage);
-    const saved = await readSettingsValue(storage);
+    const saved = await readSharedAgentSettings(options);
     return normalizeAgentSettings(saved || {}, options.normalizeOptions || {});
 }
 
@@ -93,7 +94,7 @@ export async function saveSharedAgentSettings(patch = {}, options = {}) {
     const normalizeOptions = options.normalizeOptions || {};
     let current;
     try {
-        current = await readSettingsValue(storage);
+        current = await readSharedAgentSettings({ storage });
     } catch (error) {
         return {
             ok: false,

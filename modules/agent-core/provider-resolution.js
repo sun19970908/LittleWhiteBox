@@ -1,13 +1,13 @@
 import {
     DEFAULT_PRESET_NAME,
     buildDefaultPreset,
-    cloneDefaultModelConfigs,
     normalizeAgentConfig,
     normalizeMaxTokens,
     normalizePresetName,
 } from './config.js';
 import { normalizeWebSettings } from './web/settings.js';
-import { supportsModelListAuth } from './model-list-auth.js';
+import { normalizeModelListAuth, supportsModelListAuth } from './model-list-auth.js';
+import { VERTEX_PROVIDER, VERTEX_LABEL, vertexRuntimeFields } from './vertex-config.js';
 import {
     resolveRuntimeReasoning,
 } from './reasoning-capabilities.js';
@@ -27,6 +27,7 @@ export const PROVIDER_OPTIONS = Object.freeze([
     { value: 'sillytavern-google', label: '酒馆 Google AI' },
     { value: 'anthropic', label: 'Anthropic' },
     { value: 'google', label: 'Google AI' },
+    { value: VERTEX_PROVIDER, label: VERTEX_LABEL },
 ]);
 
 export function isSillyTavernProvider(provider = '') {
@@ -73,8 +74,7 @@ export function resolveActiveProviderConfig(configValue = {}, options = {}) {
     const config = normalizeAgentConfig(configValue || {});
     if (options.role === 'delegate' && config.delegateConfig) {
         const provider = config.delegateConfig.provider || 'openai-compatible';
-        const modelConfigs = config.delegateConfig.modelConfigs || cloneDefaultModelConfigs();
-        const providerConfig = modelConfigs[provider] || cloneDefaultModelConfigs()[provider] || {};
+        const providerConfig = config.delegateConfig;
         const context = {
             provider,
             baseUrl: String(providerConfig.baseUrl || ''),
@@ -87,7 +87,8 @@ export function resolveActiveProviderConfig(configValue = {}, options = {}) {
             baseUrl: String(providerConfig.baseUrl || ''),
             model: String(providerConfig.model || ''),
             apiKey: String(providerConfig.apiKey || ''),
-            ...(supportsModelListAuth(provider) ? { modelListAuth: providerConfig.modelListAuth } : {}),
+            ...vertexRuntimeFields(provider, providerConfig),
+            ...(supportsModelListAuth(provider) ? { modelListAuth: normalizeModelListAuth(providerConfig.modelListAuth, provider) } : {}),
             ...normalizeWebSettings(config),
             temperature: resolveTemperature(providerConfig),
             sendTemperature: shouldSendTemperature(providerConfig),
@@ -109,8 +110,7 @@ export function resolveActiveProviderConfig(configValue = {}, options = {}) {
         : (config.presets?.[config.currentPresetName] ? config.currentPresetName : DEFAULT_PRESET_NAME);
     const currentPreset = config.presets?.[activePresetName] || buildDefaultPreset();
     const provider = currentPreset.provider || config.provider || 'openai-compatible';
-    const modelConfigs = currentPreset.modelConfigs || config.modelConfigs || cloneDefaultModelConfigs();
-    const providerConfig = modelConfigs[provider] || cloneDefaultModelConfigs()[provider] || {};
+    const providerConfig = currentPreset;
     const context = {
         provider,
         baseUrl: String(providerConfig.baseUrl || ''),
@@ -123,7 +123,8 @@ export function resolveActiveProviderConfig(configValue = {}, options = {}) {
         baseUrl: String(providerConfig.baseUrl || ''),
         model: String(providerConfig.model || ''),
         apiKey: String(providerConfig.apiKey || ''),
-        ...(supportsModelListAuth(provider) ? { modelListAuth: providerConfig.modelListAuth } : {}),
+        ...vertexRuntimeFields(provider, providerConfig),
+        ...(supportsModelListAuth(provider) ? { modelListAuth: normalizeModelListAuth(providerConfig.modelListAuth, provider) } : {}),
         ...normalizeWebSettings(config),
         temperature: resolveTemperature(providerConfig),
         sendTemperature: shouldSendTemperature(providerConfig),

@@ -1,0 +1,26 @@
+// 角色任务正文：triggerTiming=character_init，interval=0。
+// 仅初始化新聊天；需要开场白已存在。不在每次面板挂载时执行。
+const api = window.LWB_StateV2;
+if (!api) throw new Error('请先开启小白X变量核心并选择变量 2.0。');
+const result = await api.applyText(`<state>
+$schema cardRest
+  体力: 0
+  背包:
+    "*": 0
+$range=[0,100] cardRest.体力
+cardRest:
+  体力: 80
+  背包: {}
+</state>`);
+if (result.errors.length) {
+  const message = '休息面板初始化未完成：' + result.errors.join('；');
+  window.toastr?.error(message);
+  throw new Error(message);
+}
+const raw = window.SillyTavern.getContext().variables.local.get('cardRest');
+const state = typeof raw === 'string' && raw !== '' ? JSON.parse(raw) : raw;
+if (!state || typeof state.体力 !== 'number' || !state.背包) {
+  throw new Error('初始化后未读到完整状态，请查看变量 2.0 错误记录。');
+}
+// skipped 表示同楼相同文本已提交；确认状态可读后正常结束，不重发。
+return { skipped: result.skipped, state };

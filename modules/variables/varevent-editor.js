@@ -7,7 +7,7 @@ import { getContext } from "../../../../../extensions.js";
 import { getLocalVariable, setLocalVariable } from "../../../../../variables.js";
 import { createModuleEvents } from "../../core/event-manager.js";
 import { executeSlashCommand } from '../../core/slash-command.js';
-import { replaceXbGetVarInString, replaceXbGetVarYamlInString, replaceXbGetVarYamlIdxInString } from "./var-commands.js";
+import { replaceXbGetVarInString, replaceXbGetVarYamlInString, replaceXbGetVarYamlIdxInString, projectedVariableRead } from "./var-commands.js";
 import { observeBackgroundTask } from '../../shared/common/async-errors.js';
 import { conditionGroups, executeCondition, joinConditions, macroExpression, parseCondition } from './varevent/condition.js';
 import { createEventDocument, findVareventBlocks, newEvent, newEventGroup, parseVareventEvents, serializeEventDocument } from './varevent/document.js';
@@ -152,7 +152,7 @@ function reportEventError(kind, event, error) {
 }
 
 export function evaluateCondition(expr, event = {}) {
-    try { return executeCondition(parseCondition(expr), getContext, getLocalVariable); }
+    try { return executeCondition(parseCondition(expr), getContext, getLocalVariable, projectedVariableRead); }
     catch (error) { reportEventError(VAREVENT_COPY.conditionError, event, error); return false; }
 }
 
@@ -262,8 +262,8 @@ function installWIHiddenTagStripper() {
 async function replacePromptVariables(text, dryRun, sourceInfo, finalRequest = false, enqueue) {
     // Expansion is not enrollment. Request-ready hooks capture selections on the
     // actual payload; only GENERATE_AFTER_DATA can attach them to a reply run.
-    if (!dryRun && finalRequest) text = await expandEvents(text, false, false, enqueue, sourceInfo);
-    else if (!dryRun) {
+    if (dryRun || finalRequest) text = await expandEvents(text, dryRun, false, enqueue, sourceInfo);
+    else {
         // Preserve script source until selection; prompt macros inside scripts must
         // not be captured early or rewritten by an unrelated assembly request.
         let output = '', cursor = 0;

@@ -478,6 +478,9 @@ function buildConversation(messages) {
                 parts: [
                     ...(message.content ? [buildTextPart(message.content)] : []),
                     ...message.tool_calls.map((toolCall) => ({
+                        // Hand-built or cross-provider history has no Gemini signature.
+                        // Genuine Google responses use preservedContents above.
+                        thoughtSignature: 'skip_thought_signature_validator',
                         functionCall: {
                             ...(() => {
                                 const providerId = Object.prototype.hasOwnProperty.call(toolCall, 'providerToolCallId')
@@ -538,14 +541,18 @@ function mergeStreamText(previous, incoming) {
 }
 
 export class GoogleAdapter {
-    constructor(config) {
+    constructor(config, connection = {}) {
         this.config = config;
-        this.auth = resolveAgentAuth('google', config.apiKey);
+        this.provider = connection.provider || 'google';
+        this.requestModel = connection.model || config.model;
+        this.requestUrl = connection.url;
+        this.prepareRequest = connection.prepareRequest;
+        this.auth = connection.auth || resolveAgentAuth('google', config.apiKey);
         this.supportsSessionToolLoop = true;
         this.activeChat = null;
         this.sessionReasoning = null;
         this.toolCallResponseSequence = 0;
-        this.client = new GoogleGenAI({
+        this.client = connection.client || new GoogleGenAI({
             ...this.auth.sdkOptions,
             httpOptions: {
                 headers: this.auth.headers,
@@ -558,7 +565,7 @@ export class GoogleAdapter {
 
     buildChatPayload(
         task,
-        effectiveReasoning = resolveTaskReasoning('google', this.config, task.reasoning),
+        effectiveReasoning = resolveTaskReasoning(this.provider, this.config, task.reasoning),
     ) {
         const reasoning = effectiveReasoning;
         const conversation = buildConversation(task.messages);
@@ -615,11 +622,11 @@ export class GoogleAdapter {
             };
         }
 
-        const samplingParams = buildSamplingParameters('google', this.config.sampling);
+        const samplingParams = buildSamplingParameters(this.provider, this.config.sampling);
         Object.assign(config, samplingParams);
 
         const createPayload = {
-            model: this.config.model,
+            model: this.requestModel,
             history: conversation.history,
             config,
         };
@@ -633,14 +640,14 @@ export class GoogleAdapter {
 
     inspectRequest(task, options = {}) {
         const effectiveReasoning = options.effectiveReasoning
-            || resolveTaskReasoning('google', this.config, task.reasoning);
+            || resolveTaskReasoning(this.provider, this.config, task.reasoning);
         const payload = options.payload || this.buildChatPayload(task, effectiveReasoning);
         const baseUrl = this.config.resolvedBaseUrl || resolveApiBaseUrl(this.config.baseUrl || 'https://generativelanguage.googleapis.com', '/v1beta');
         return buildSdkRequestInspection({
-            provider: 'google',
+            provider: this.provider,
             model: this.config.model,
             transport: 'google-genai-sdk',
-            url: `${baseUrl}/models/${encodeURIComponent(this.config.model || '')}:generateContent`,
+            url: this.requestUrl || `${baseUrl}/models/${encodeURIComponent(this.config.model || '')}:generateContent`,
             headers: {
                 'Content-Type': 'application/json',
                 ...this.auth.headers,
@@ -667,10 +674,10 @@ export class GoogleAdapter {
     inspectSendRequest(sendPayload, task, effectiveReasoning) {
         const baseUrl = this.config.resolvedBaseUrl || resolveApiBaseUrl(this.config.baseUrl || 'https://generativelanguage.googleapis.com', '/v1beta');
         return buildSdkRequestInspection({
-            provider: 'google',
+            provider: this.provider,
             model: this.config.model,
             transport: 'google-genai-sdk',
-            url: `${baseUrl}/models/${encodeURIComponent(this.config.model || '')}:generateContent`,
+            url: this.requestUrl || `${baseUrl}/models/${encodeURIComponent(this.config.model || '')}:generateContent`,
             headers: {
                 'Content-Type': 'application/json',
                 ...this.auth.headers,
@@ -715,12 +722,15 @@ export class GoogleAdapter {
         let text;
         let finalFunctionCalls = [];
         const internalIdPrefix = `google-tool-${++this.toolCallResponseSequence}`;
-        const streamFunctionCalls = createStreamFunctionCallAccumulator(internalIdPrefix);
+        const streamFunctionCalls = this.createStreamAccumulator?.(internalIdPrefix)
+            || createStreamFunctionCallAccumulator(internalIdPrefix);
         let streamedGoogleContent = null;
-        const requestConfig = task.signal
+        const prepared = await this.prepareRequest?.(task.signal);
+        const requestConfig = task.signal || prepared
             ? {
                 ...(this.sessionConfig || {}),
-                abortSignal: task.signal,
+                ...prepared,
+                ...(task.signal ? { abortSignal: task.signal } : {}),
             }
             : undefined;
         const requestPayload = {
@@ -746,7 +756,7 @@ export class GoogleAdapter {
                 lastChunk = chunk;
                 if (chunk?.candidates?.[0]?.finishReason) { finishReason = chunk.candidates[0].finishReason; }
                 const chunkContent = chunk?.candidates?.[0]?.content;
-                if (chunkContent?.parts?.length) {
+                if (chunkContent?.parts?.length && !streamFunctionCalls.finish) {
                     streamedContents.push(chunkContent);
                 }
                 if (isReasoningOutputVisible(effectiveReasoning)) {
@@ -777,7 +787,9 @@ export class GoogleAdapter {
                 ...(lastChunk || {}),
                 functionCalls: finalFunctionCalls,
             };
-            streamedGoogleContent = buildRepairedStreamedContent(streamedContents, streamedText)
+            const assembled = streamFunctionCalls.finish?.();
+            if (assembled) finalFunctionCalls = assembled.toolCalls;
+            streamedGoogleContent = assembled?.content || buildRepairedStreamedContent(streamedContents, streamedText)
                 || response?.candidates?.[0]?.content
                 || null;
             thoughts = Array.from(thoughtMap.values())
@@ -797,7 +809,19 @@ export class GoogleAdapter {
         const normalizedToolCalls = shouldUseStreaming
             ? finalFunctionCalls
             : extractFunctionCalls(response, internalIdPrefix);
-        const historyModelContents = getNewModelContentsFromHistory(chat, historyLengthBeforeSend);
+        let historyModelContents = getNewModelContentsFromHistory(chat, historyLengthBeforeSend);
+        if (shouldUseStreaming && streamFunctionCalls.finish && streamedGoogleContent) {
+            // Store the assembled turn, never partialArgs or empty terminators,
+            // in both the active session and the payload used for cold replay.
+            const history = getChatHistory(chat);
+            const inputContents = history.slice(historyLengthBeforeSend).filter(content => content.role === 'user');
+            this.activeChat = this.client.chats.create({
+                model: this.requestModel,
+                config: this.sessionConfig,
+                history: [...history.slice(0, historyLengthBeforeSend), ...inputContents, streamedGoogleContent],
+            });
+            historyModelContents = [streamedGoogleContent];
+        }
 
         return {
             text,
@@ -805,7 +829,7 @@ export class GoogleAdapter {
             thoughts,
             ...readResponseCompletion('google', finishReason),
             model: response.modelVersion || this.config.model,
-            provider: 'google',
+            provider: this.provider,
             providerPayload: buildProviderPayloadFromContents(historyModelContents)
                 || buildProviderPayloadFromContent(streamedGoogleContent)
                 || buildProviderPayload(response),
@@ -824,7 +848,7 @@ export class GoogleAdapter {
     }
 
     async chat(task) {
-        const requestedReasoning = resolveTaskReasoning('google', this.config, task.reasoning);
+        const requestedReasoning = resolveTaskReasoning(this.provider, this.config, task.reasoning);
         const continuingSession = (Array.isArray(task.toolResponses) && task.toolResponses.length)
             || String(task.finalAnswerReminderText || '').trim();
         const effectiveReasoning = continuingSession && this.sessionReasoning

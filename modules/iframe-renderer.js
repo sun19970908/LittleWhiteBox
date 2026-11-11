@@ -8,12 +8,16 @@ import { default_user_avatar, default_avatar } from "../../../../../script.js";
 import { getIframeBaseScript, getWrapperScript } from "../core/wrapper-inline.js";
 import { postToIframe, getIframeTargetOrigin, getTrustedOrigin } from "../core/iframe-messaging.js";
 import { observeBackgroundTask } from '../shared/common/async-errors.js';
+import { instrumentPageHtml } from './live-page-inspection/instrument.ts';
+import { startLivePageInspection, clearLivePageInspection, stopLivePageInspection } from './live-page-inspection/service.ts';
 
 const MODULE_ID = 'iframeRenderer';
 const events = createModuleEvents(MODULE_ID);
 
 let isGenerating = false;
-const winMap = new Map();
+// Reformatting a message removes its old iframe without calling our renderer.
+// The mapping must not keep that detached window and document alive.
+let winMap = new WeakMap();
 let lastHeights = new WeakMap();
 const blobUrls = new WeakMap();
 const hashToBlobUrl = new Map();
@@ -263,6 +267,7 @@ function releaseLeasedRuntimeMessageListener() {
 }
 
 function createRenderIframe() {
+    startLivePageInspection();
     const iframe = document.createElement('iframe');
     iframe.id = generateUniqueId();
     iframe.className = 'xiaobaix-iframe';
@@ -306,7 +311,7 @@ function releaseRuntimePlaceholder(wrapper, iframe) {
 }
 
 function setIframeContent(iframe, html, settings) {
-    const full = buildWrappedHtml(html);
+    const full = instrumentPageHtml(buildWrappedHtml(html));
     if (settings.useBlob) {
         setIframeBlobHTML(iframe, full, djb2(html));
     } else {
@@ -723,6 +728,7 @@ export function invalidateMessage(messageId) {
 }
 
 export function invalidateAll() {
+    clearLivePageInspection();
     document.querySelectorAll('.xiaobaix-iframe-wrapper').forEach(w => {
         w.querySelectorAll('.xiaobaix-iframe').forEach(ifr => {
             try { ifr.src = 'about:blank'; } catch (e) { console.warn({ source: import.meta.url, operation: "invalidateAll" }, e); }
@@ -740,7 +746,7 @@ export function invalidateAll() {
         pre.style.display = '';
     });
     clearBlobCaches();
-    winMap.clear();
+    winMap = new WeakMap();
     lastHeights = new WeakMap();
 }
 
@@ -949,6 +955,7 @@ export function cleanupRenderer() {
     });
     
     invalidateAll();
+    stopLivePageInspection();
     isGenerating = false;
     pendingHeight = null;
     pendingRec = null;

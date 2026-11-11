@@ -3,14 +3,71 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import { EventEmitter } from 'node:events';
+import { parseHTML } from 'linkedom';
 import { createHarness, readStoredValue } from './helpers/state2-harness.js';
 
 // Execute the guide's runnable examples as inputs, not a source spelling checklist.
 // This catches examples that drift from their initialization schema or public API.
-const guide = readFileSync(new URL('../state2/README.md', import.meta.url), 'utf8');
+const guide = readFileSync(new URL('../../../docs/user/variables-v2.md', import.meta.url), 'utf8');
 const examples = [...guide.matchAll(/^```(\w*)\r?\n([\s\S]*?)^```/gm)]
     .map(([, language, body]) => ({ language, body }));
 const initializer = examples.find(({ body }) => body.trimStart().startsWith('<<taskjs>>'));
+
+// Acceptance: an open example panel follows external writes and restored values,
+// including the same value after a missing root. Otherwise it misreports state.
+// Reading must not submit another change, and disposal must release its timer.
+test('skill panel follows external state and recovers after its root disappears', async () => {
+    const harness = await createHarness();
+    const timers = new Map();
+    const lifecycle = new EventEmitter();
+    try {
+        const context = harness.env.state.ctx;
+        context.chat.push({ mes: '开场', is_user: false, swipe_id: 0 });
+        context.variables = { local: { get: root => context.chatMetadata.variables[root] ?? '' } };
+        const api = harness.executor.createStateApi();
+        const host = { SillyTavern: { getContext: () => context }, LWB_StateV2: api };
+        const folder = new URL('../state2/skill/references/examples/state2-direct/', import.meta.url);
+        await runScript(readFileSync(new URL('init.task.js.txt', folder), 'utf8'), api, context, { window: host });
+        const html = readFileSync(new URL('panel.html.txt', folder), 'utf8');
+        const { document } = parseHTML(html);
+        const frame = {
+            parent: host,
+            setInterval: callback => { timers.set(1, callback); return 1; },
+            clearInterval: id => timers.delete(id),
+            addEventListener: (event, callback) => lifecycle.once(event, callback),
+        };
+        runInNewContext(html.match(/<script>([\s\S]*?)<\/script>/)[1], { window: frame, document });
+        const view = document.getElementById('state');
+        const initialDisplay = view.textContent;
+        assert.equal(timers.size, 1);
+        const tick = timers.get(1);
+        const stored = structuredClone(context.chatMetadata);
+        tick(); tick();
+        assert.deepEqual(context.chatMetadata, stored, 'polling only reads');
+        assert.equal(view.textContent, initialDisplay);
+
+        api.apply({ ops: [{ op: 'set', path: 'cardRest.体力', value: 37 }] });
+        tick();
+        assert.notEqual(view.textContent, initialDisplay, 'external write reaches the existing panel without a chat event');
+        const changedDisplay = view.textContent;
+        const changedRoot = context.chatMetadata.variables.cardRest;
+        delete context.chatMetadata.variables.cardRest;
+        tick();
+        assert.notEqual(view.textContent, changedDisplay, 'missing state does not leave a stale value visible');
+        context.chatMetadata.variables.cardRest = changedRoot;
+        tick();
+        assert.equal(view.textContent, changedDisplay, 'restoring the same value replaces the error display');
+
+        context.chatMetadata.variables = structuredClone(stored.variables);
+        tick();
+        assert.equal(view.textContent, initialDisplay, 'restored current state replaces a later result');
+        lifecycle.emit('pagehide');
+        assert.equal(timers.size, 0);
+    } finally {
+        lifecycle.emit('pagehide');
+        harness.cleanup();
+    }
+});
 
 async function runScript(body, api, context, globals = {}) {
     const diagnostics = [];

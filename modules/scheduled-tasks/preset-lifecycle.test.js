@@ -121,7 +121,7 @@ function harness(t, { taskStorage, initialSettings = {}, accountState = {}, date
     const win = new EventTarget();
     Object.assign(win, { document, probes: {}, starts: {}, stops: {}, signals: {}, fetch: () => 'original' });
     const emitter = new EventEmitter();
-    const event_types = Object.fromEntries(['OAI_PRESET_CHANGED_AFTER', 'PRESET_CHANGED', 'MAIN_API_CHANGED', 'APP_READY', 'OAI_PRESET_IMPORT_READY', 'PRESET_DELETED'].map(key => [key, key]));
+    const event_types = Object.fromEntries(['OAI_PRESET_CHANGED_AFTER', 'PRESET_CHANGED', 'MAIN_API_CHANGED', 'APP_READY', 'OAI_PRESET_IMPORT_READY', 'PRESET_DELETED', 'CHARACTER_EDITED', 'CHAT_CHANGED', 'CHAT_CREATED', 'GENERATION_ENDED', 'USER_MESSAGE_RENDERED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED'].map(key => [key, key]));
     const context = { mainApi: 'openai', chatId: 'chat' };
     const liveSettings = { prompt_order: [{ character_id: 100000, order: [{ identifier: 'style', enabled: true }] }] };
     let selected = 'A';
@@ -239,7 +239,11 @@ function harness(t, { taskStorage, initialSettings = {}, accountState = {}, date
         } },
         '../../../../../utils.js': { uuidv4: randomUUID, debounce: fn => fn, download: data => downloads.push(JSON.parse(data)), getFileText: async file => file },
         '../../core/constants.js': { EXT_ID: 'test' },
-        '../../core/event-manager.js': { createModuleEvents: () => ({ cleanup() {} }), event_types },
+        '../../core/event-manager.js': { createModuleEvents: () => {
+            const owned = [];
+            return { on(event, handler) { owned.push([event, handler]); emitter.on(event, handler); },
+                cleanup() { for (const [event, handler] of owned.splice(0)) emitter.off(event, handler); } };
+        }, event_types },
         '../../core/debug-core.js': { CacheRegistry: { register() {} }, xbLog: runtimeConsole },
         '../../core/server-storage.js': { TasksStorage: storage },
         '../../../../extensions.js': { getContext: () => context },
@@ -252,6 +256,7 @@ function harness(t, { taskStorage, initialSettings = {}, accountState = {}, date
     };
     const box = vm.createContext({
         window: win, document, $, console: runtimeConsole, Date: date, AbortController, AbortSignal, CustomEvent, structuredClone, Headers, Request, Response, URL, TextEncoder, TextDecoder, Uint8Array, ArrayBuffer,
+        MutationObserver: class { observe() {} disconnect() {} },
         SillyTavern: { getContext: () => context },
         localStorage: { getItem: () => null },
         toastr: { error: error => errors.push(error), warning: warning => warnings.push(warning), success() {}, info() {} },
@@ -398,7 +403,7 @@ test('guide scripts can start, respond, and clean up using the documented inject
     Object.assign(h.context, { chat: h.host.chat, eventSource: h.chatEvents, eventTypes: { CHAT_CHANGED: 'CHAT_CHANGED' } });
     h.host.chat.push({ is_user: false }, { is_user: true }, { is_user: false });
     const baselineSubscriptions = h.chatEvents.events.CHAT_CHANGED.length;
-    const guide = fs.readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+    const guide = fs.readFileSync(new URL('../../docs/user/tasks.md', import.meta.url), 'utf8');
     const examples = [...guide.matchAll(/^```text\r?\n(<<taskjs>>[\s\S]*?<<\/taskjs>>)\r?\n```/gm)];
     for (const [index, [, commands]] of examples.entries()) {
         const name = `guide-${index}`;
@@ -429,7 +434,7 @@ test('guide scripts can start, respond, and clean up using the documented inject
 test('guide import JSON and preset-entry field fragment preserve their intended timings', async t => {
     const h = harness(t);
     h.preset('A', []);
-    const guide = fs.readFileSync(new URL('./README.md', import.meta.url), 'utf8');
+    const guide = fs.readFileSync(new URL('../../docs/user/tasks.md', import.meta.url), 'utf8');
     const objects = [...guide.matchAll(/^```json\r?\n([\s\S]*?)^```/gm)].map(([, json]) => JSON.parse(json));
     const file = objects.find(value => Array.isArray(value.tasks));
     await h.api.importGlobalTasks(JSON.stringify(file));
@@ -2976,4 +2981,146 @@ test('quick execution replaces a request still waiting for its script read', asy
     assert.equal(h.win.starts.loading, 1);
     assert.equal(h.api.__taskRunMap.size, 1);
     assert.equal(h.intervals.size, 1);
+});
+
+// Character identity acceptance (cost: unusable controls, lost edits or wrong-card writes):
+// - An old card gains durable task IDs without changing its scripts or existing IDs.
+// - Linking a lorebook/reloading the card preserves editing, toggling and deletion after reload.
+// - Replacement host objects cannot split one card's write queue or receive another card's result.
+// - Failed ID backfill preserves task content and ordinary saving can persist the same IDs.
+async function emitCharacterEdited(h) {
+    for (const listener of h.emitter.listeners(h.event_types.CHARACTER_EDITED)) {
+        await listener({ detail: { id: h.host.this_chid, character: h.host.characters[h.host.this_chid] } });
+    }
+    await settle();
+}
+
+test('old character task IDs survive lorebook edits, controls and cold reload', async t => {
+    const h = harness(t);
+    const old = { ...task('old card task', 'unchanged script'), disabled: true, authorData: { keep: true } };
+    delete old.id;
+    const known = { ...task('known task', 'other script'), disabled: true };
+    h.character(old);
+    const initial = h.host.characters[0];
+    initial.data.extensions['xiaobaix-tasks'].tasks.push(known);
+    initial.data.extensions.other = { keep: true };
+    initial.json_data = JSON.stringify({ data: structuredClone(initial.data) });
+    Object.assign(h.savedCharacter('test.png'), structuredClone(initial));
+    await h.api.initTasks();
+    t.after(() => h.api.cleanup());
+    await emitCharacterEdited(h);
+    const saved = h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks;
+    assert.ok(saved[0].id, 'the identity must be in the saved card, not just its rendered row');
+    assert.equal(saved[1].id, known.id);
+    assert.notEqual(saved[0].id, saved[1].id);
+    assert.deepEqual(saved[0], { ...old, id: saved[0].id });
+    const id = saved[0].id;
+    assert.equal(JSON.parse(h.host.characters[0].json_data).data.extensions['xiaobaix-tasks'].tasks[0].id, id);
+    for (let reload = 0; reload < 2; reload++) {
+        const reloaded = structuredClone(h.savedCharacter('test.png'));
+        reloaded.data.extensions.world = `world-${reload}`;
+        reloaded.json_data = JSON.stringify({ data: reloaded.data });
+        h.host.characters[0] = reloaded;
+        const writes = h.requests.length;
+        await emitCharacterEdited(h);
+        assert.equal(h.requests.length, writes, 'already identified cards must not save merely on editing a lorebook');
+        assert.equal(h.win.XBTasks.find('old card task', 'character').task.id, id);
+        await h.saveInEditor(h.win.XBTasks.find('old card task', 'character').task, 'character', `edited ${reload}`);
+        assert.equal(h.popup().closed, true);
+        await h.toggle('character', id, false).completion;
+        assert.equal(h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks[0].disabled, false);
+    }
+    await h.api.deleteTask(0, 'character');
+    h.host.characters[0] = structuredClone(h.savedCharacter('test.png'));
+    await emitCharacterEdited(h);
+    assert.deepEqual((await h.win.XBTasks.dump('character')).map(task => task.id), [known.id]);
+    assert.deepEqual(h.host.characters[0].data.extensions.other, { keep: true });
+});
+
+test('character save queue survives host object replacement without losing a queued toggle or writing another card', async t => {
+    const h = harness(t), gate = deferred(), sent = deferred();
+    t.after(() => gate.resolve());
+    h.character({ ...task('panel', 'old'), disabled: false }, 'first.png');
+    const original = h.host.characters[0];
+    const transport = h.transport.character;
+    let writes = 0;
+    h.transport.character = async (avatar, data) => {
+        if (avatar === 'first.png' && ++writes === 1) { sent.resolve(); await gate.promise; }
+        await transport(avatar, data);
+    };
+    const replacement = { ...task('panel', 'new'), disabled: false };
+    const saving = h.api.saveCharacterTasks([replacement]);
+    await sent.promise;
+    h.host.characters[0] = structuredClone(original);
+    h.host.characters[0].data.extensions.world = 'new-world';
+    h.host.characters[0].json_data = JSON.stringify({ data: h.host.characters[0].data });
+    const toggling = h.toggle('character', 'panel', true);
+    await settle();
+    assert.equal(writes, 1, 'a refreshed JS object is still the same card and must wait for its write');
+    h.character(task('other', 'untouched'), 'other.png', 1);
+    const otherBefore = structuredClone(h.host.characters[1]);
+    gate.resolve(); await saving; await toggling.completion;
+    const saved = h.savedCharacter('first.png').data.extensions['xiaobaix-tasks'].tasks[0];
+    assert.equal(saved.commands, replacement.commands);
+    assert.equal(saved.disabled, true);
+    assert.equal(h.host.characters[0].data.extensions['xiaobaix-tasks'].tasks[0].commands, replacement.commands);
+    assert.equal(h.host.characters[0].data.extensions.world, 'new-world');
+    assert.equal(JSON.parse(h.host.characters[0].json_data).data.extensions['xiaobaix-tasks'].tasks[0].disabled, true);
+    assert.deepEqual(h.host.characters[1], otherBefore);
+});
+
+test('a lorebook save overlapping old-card preparation carries the same task IDs', async t => {
+    const h = harness(t), gate = deferred(), sent = deferred();
+    t.after(() => gate.resolve());
+    const old = { ...task('old card task', 'keep script'), disabled: true };
+    delete old.id;
+    h.character(old);
+    h.host.characters[0].json_data = JSON.stringify({ data: h.host.characters[0].data });
+    const transport = h.transport.character;
+    let writes = 0;
+    h.transport.character = async (avatar, data) => {
+        writes++;
+        sent.resolve(); await gate.promise;
+        await transport(avatar, data);
+    };
+    await h.api.initTasks();
+    t.after(() => h.api.cleanup());
+    await sent.promise;
+    // ST serializes this JSON into the character edit, then replaces its object.
+    const formData = JSON.parse(h.host.characters[0].json_data);
+    const id = formData.data.extensions['xiaobaix-tasks'].tasks[0].id;
+    assert.ok(id, 'an overlapping host save must already carry the task identity');
+    formData.data.extensions.world = 'linked-while-saving';
+    const reloaded = { ...h.host.characters[0], data: formData.data, json_data: JSON.stringify(formData) };
+    Object.assign(h.savedCharacter('test.png'), structuredClone(reloaded));
+    h.host.characters[0] = reloaded;
+    const edited = emitCharacterEdited(h);
+    gate.resolve(); await edited;
+    assert.equal(writes, 1);
+    assert.deepEqual(h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks[0], { ...old, id });
+    assert.equal(h.savedCharacter('test.png').data.extensions.world, 'linked-while-saving');
+    assert.equal(h.win.XBTasks.find(old.name, 'character').task.id, id);
+});
+
+test('failed character ID backfill keeps old task content and the next save persists the same identity', async t => {
+    const h = harness(t);
+    const old = { ...task('old card task', 'keep script'), disabled: true };
+    delete old.id;
+    h.character(old);
+    h.host.characters[0].json_data = JSON.stringify({ data: h.host.characters[0].data });
+    const fetch = h.getFetch();
+    h.setFetch((url, options) => url === '/api/characters/merge-attributes'
+        ? Promise.resolve(Response.json({}, { status: 503 })) : fetch(url, options));
+    await h.api.initTasks();
+    t.after(() => h.api.cleanup());
+    await assert.rejects(emitCharacterEdited(h));
+    const current = h.win.XBTasks.find('old card task', 'character').task;
+    assert.ok(current.id);
+    assert.equal(current.commands, old.commands);
+    assert.equal(current.disabled, old.disabled);
+    assert.equal(h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks[0].id, undefined);
+    h.setFetch(fetch);
+    await h.saveInEditor(current, 'character', old.commands);
+    assert.equal(h.popup().closed, true);
+    assert.equal(h.savedCharacter('test.png').data.extensions['xiaobaix-tasks'].tasks[0].id, current.id);
 });

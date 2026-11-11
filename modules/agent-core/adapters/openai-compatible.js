@@ -101,11 +101,17 @@ function normalizeToolCallsForReplay(toolCalls = [], fallbackPrefix = 'openai-to
         .filter(Boolean);
 }
 
+const THOUGHT_SIGNATURE_ID_MARKER = '__thought__';
+
 function hasThoughtSignatureMatching(value, predicate) {
     if (Array.isArray(value)) {
         return value.some((item) => hasThoughtSignatureMatching(item, predicate));
     }
     if (!isPlainObject(value)) return false;
+    // Some relays carry the signature only in the ID; keep both its bytes and
+    // the complete parallel batch opaque, just like an explicit signature field.
+    const signedIdOffset = typeof value.id === 'string' ? value.id.indexOf(THOUGHT_SIGNATURE_ID_MARKER) : -1;
+    if (signedIdOffset >= 0 && predicate(value.id.slice(signedIdOffset + THOUGHT_SIGNATURE_ID_MARKER.length))) return true;
     return Object.entries(value).some(([key, nestedValue]) => {
         const normalizedKey = String(key || '').replace(/[_-]/g, '').toLowerCase();
         if (normalizedKey === 'thoughtsignature') return predicate(nestedValue);
@@ -332,6 +338,38 @@ export function isClaudeLikeModel(model = '') {
     return /claude/i.test(String(model || ''));
 }
 
+const PROMPT_CACHE_CONTROL = Object.freeze({ type: 'ephemeral' });
+
+function markCacheBreakpoint(message) {
+    if (typeof message.content === 'string') {
+        if (!message.content.trim()) return false;
+        message.content = [{ type: 'text', text: message.content, cache_control: { ...PROMPT_CACHE_CONTROL } }];
+        return true;
+    }
+    const index = Array.isArray(message.content)
+        ? message.content.findLastIndex(item => item?.type === 'text' && String(item.text || '').trim())
+        : -1;
+    if (index < 0) return false;
+    // Content arrays can be shared with the caller's history; mark a copy.
+    message.content = message.content.map((item, position) => (position === index
+        ? { ...item, cache_control: { ...PROMPT_CACHE_CONTROL } }
+        : item));
+    return true;
+}
+
+// Claude caches only at explicit cache_control breakpoints; relays forwarding to Anthropic
+// (OpenRouter's documented form) read them on text parts. Tools precede system in Claude's
+// prefix, so the system breakpoint also covers tool definitions. A trailing assistant
+// prefill changes every turn and is not a breakpoint.
+export function applyClaudePromptCaching(messages = []) {
+    const marked = messages.map(message => ({ ...message }));
+    const system = marked.find(message => message.role === 'system');
+    if (system) markCacheBreakpoint(system);
+    const last = marked.findLast(message => message.role !== 'assistant' && message.role !== 'system');
+    if (last) markCacheBreakpoint(last);
+    return marked;
+}
+
 function usesMaxCompletionTokens(model = '') {
     return resolveModelFamily(model) === 'openai';
 }
@@ -373,17 +411,59 @@ export function normalizeFinalClaudeLikeMessageRole(messages = [], model = '') {
     ));
 }
 
-function ensureReasoningContentForToolCalls(message, model = '') {
-    if (!isPlainObject(message)) return message;
-    if (!shouldForceDeepSeekReasoningContent(model)) return message;
-    if (!Array.isArray(message.tool_calls) || !message.tool_calls.length) return message;
-    if (Object.prototype.hasOwnProperty.call(message, 'reasoning_content')) {
-        return message;
-    }
+// Google's documented marker for function calls that carry no model-issued signature.
+// https://ai.google.dev/gemini-api/docs/thought-signatures
+const GOOGLE_UNSIGNED_CALL_SIGNATURE = 'skip_thought_signature_validator';
+
+export const TOOL_HISTORY_REASONING_MISSING = Object.freeze({
+    code: 'AGENT_TOOL_HISTORY_REASONING_MISSING',
+    message: 'DeepSeek 思考模式下调用工具时，历史里每次工具调用都必须带非空思考内容；'
+        + '有一条工具调用既无思考也无说明文字。请为该条助手消息补上说明文字，或关闭思考。',
+});
+
+/**
+ * A Gemini batch is signed as a whole: real replies sign only the first parallel call.
+ * Only a batch without any signature (caller-built or another model's) gets the marker.
+ */
+function signUnsignedGeminiToolCalls(message, model = '') {
+    if (resolveModelFamily(model) !== 'gemini' || !message.tool_calls?.length
+        || message.tool_calls.some((toolCall) => hasThoughtSignatureField(toolCall))) return message;
     return {
         ...message,
-        reasoning_content: '',
+        tool_calls: message.tool_calls.map((toolCall) => ({
+            ...toolCall,
+            extra_content: {
+                ...toolCall.extra_content,
+                // Google OpenAI-compatible uses snake_case; Gemini relay conversions also use camelCase.
+                // Both carry the same marker. Real signed batches never pass through this projection.
+                google: { ...toolCall.extra_content?.google,
+                    thought_signature: GOOGLE_UNSIGNED_CALL_SIGNATURE,
+                    thoughtSignature: GOOGLE_UNSIGNED_CALL_SIGNATURE },
+            },
+        })),
     };
+}
+
+/**
+ * DeepSeek thinking with tools rejects replayed tool calls without non-empty reasoning.
+ * Reasoning a model returned is replayed verbatim. A call without any states its intent in
+ * the message text, its only truthful reasoning. A caller-built call without text cannot be
+ * sent under thinking; a reply this protocol returned (`nativeReply`) without reasoning or
+ * text came from a turn that did not think and is replayed as returned.
+ */
+function completeToolCallReasoning(message, model, { thinkingWithTools, nativeReply }) {
+    if (!message.tool_calls?.length || !shouldForceDeepSeekReasoningContent(model)) return message;
+    if (typeof message.reasoning_content === 'string' && message.reasoning_content) return message;
+    if (!thinkingWithTools) return { ...message, reasoning_content: '' };
+    const text = typeof message.content === 'string' ? message.content : '';
+    if (!text.trim() && !nativeReply) {
+        throw Object.assign(new Error(TOOL_HISTORY_REASONING_MISSING.message), { code: TOOL_HISTORY_REASONING_MISSING.code });
+    }
+    return { ...message, reasoning_content: text.trim() ? text : '' };
+}
+
+function projectToolCallReplay(message, model, options) {
+    return completeToolCallReasoning(signUnsignedGeminiToolCalls(message, model), model, options);
 }
 
 const APPENDABLE_STRING_FIELDS = new Set([
@@ -546,12 +626,12 @@ export function buildNativeMessages(task, model = '', { preserveReasoningContent
         // normally keep only content/tool calls; the direct DeepSeek thinking adapter
         // separately retains reasoning_content below, including text-only replies.
         if (shouldReplayFullNativeMessage(preserved, index, lastUserIndex)) {
-            collectedMessages.push(ensureReasoningContentForToolCalls({
+            collectedMessages.push(projectToolCallReplay({
                 ...preserved,
                 ...(topLevelToolCalls.length && !hasPreservedSignedToolCalls ? {
                     tool_calls: topLevelToolCalls,
                 } : {}),
-            }, model));
+            }, model, { thinkingWithTools: preserveReasoningContent, nativeReply: true }));
             return;
         }
 
@@ -574,7 +654,8 @@ export function buildNativeMessages(task, model = '', { preserveReasoningContent
             baseMessage.tool_calls = topLevelToolCalls;
         }
 
-        collectedMessages.push(ensureReasoningContentForToolCalls(baseMessage, model));
+        collectedMessages.push(projectToolCallReplay(baseMessage, model,
+            { thinkingWithTools: preserveReasoningContent, nativeReply: !!preserved }));
     });
 
     // 原生模式工具走独立 tools 字段，工具说明占位标记不能泄漏给服务端；先剔除再合并 system。
@@ -1017,11 +1098,12 @@ export class OpenAICompatibleAdapter {
             { ...this.config, provider: 'openai-compatible' }, nativeTools, reasoning,
         );
         const samplingParams = buildSamplingParameters('openai-compatible', this.config.sampling);
+        const messages = isTaggedMode ? buildTaggedMessages(task, this.config.model) : buildNativeMessages(task, this.config.model, {
+            preserveReasoningContent: deepSeekThinkingWithTools,
+        });
         const body = {
             model: this.config.model,
-            messages: isTaggedMode ? buildTaggedMessages(task, this.config.model) : buildNativeMessages(task, this.config.model, {
-                preserveReasoningContent: deepSeekThinkingWithTools,
-            }),
+            messages: resolveModelFamily(this.config.model) === 'claude' ? applyClaudePromptCaching(messages) : messages,
             ...(nativeTools ? { tools: nativeTools, tool_choice: task.toolChoice || 'auto' } : {}),
             ...(task.maxTokens
                 ? (usesMaxCompletionTokens(this.config.model)

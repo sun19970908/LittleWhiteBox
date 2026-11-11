@@ -1,0 +1,59 @@
+{
+  "format": 1,
+  "updates": ["after"],
+  "name": "营地休息",
+  "schema": {
+    "type": "object",
+    "required": ["camp"],
+    "additionalProperties": false,
+    "properties": {
+      "camp": {
+        "type": "object",
+        "required": ["stamina", "maxStamina", "location", "people", "inventory"],
+        "additionalProperties": false,
+        "properties": {
+          "stamina": {"type": "number", "minimum": 0},
+          "maxStamina": {"type": "number", "exclusiveMinimum": 0},
+          "location": {"type": "string"},
+          "people": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["present", "mood"],
+              "additionalProperties": false,
+              "properties": {"present": {"type": "boolean"}, "mood": {"type": "number"}}
+            }
+          },
+          "inventory": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    }
+  },
+  "initial": {"camp": {"stamina": 80, "maxStamina": 100, "location": "营地", "people": {}, "inventory": []}},
+  "access": [
+    {"path": ["camp", "stamina"], "write": ["rest"], "description": "Current stamina.", "update": "A panel rest has already settled; its narrative recap is not another rest. Submit rest only for a separate new rest explicitly completed in the passage."},
+    {"path": ["camp", "maxStamina"], "write": [], "description": "Maximum stamina."},
+    {"path": ["camp", "location"], "write": ["direct"], "description": "Current location.", "update": "Change on actual travel; use a short place name, including newly visited places."},
+    {"path": ["camp", "people"], "write": ["direct"], "description": "People keyed by stable name; present means in this scene and mood is their current emotional tendency.", "update": "Create a new person's complete object before editing its fields. Record only established changes."},
+    {"path": ["camp", "inventory"], "write": ["direct"], "description": "An ordered list of carried items; duplicate items occupy separate entries.", "update": "Use the current array indices. Removal shifts later indices."}
+  ],
+  "rules": [
+    {"id": "stamina-cap", "kind": "correct", "path": ["camp", "stamina"], "description": "Stamina cannot exceed its current maximum.", "value": {"op": "min", "args": [{"get": ["camp", "stamina"]}, {"get": ["camp", "maxStamina"]}]}}
+  ],
+  "actions": [
+    {
+      "id": "rest",
+      "title": "休息",
+      "description": "One completed rest restores 15 stamina, capped at the current maximum.",
+      "parameters": {"type": "object", "properties": {}, "additionalProperties": false},
+      "conversions": [],
+      "requires": {"literal": true},
+      "effects": [{"path": ["camp", "stamina"], "value": {"op": "add", "args": [{"get": ["camp", "stamina"]}, {"literal": 15}]}}]
+    }
+  ],
+  "constraints": [
+    {"id": "stamina-valid", "description": "Stamina must not exceed its maximum.", "test": {"op": "lte", "args": [{"get": ["camp", "stamina"]}, {"get": ["camp", "maxStamina"]}]}}
+  ],
+  "functions": {},
+  "views": {"camp": {"description": "Current camp, resources and companions.", "paths": [["camp"]]}}
+}

@@ -1,0 +1,36 @@
+.xb-variable-settings { box-sizing:border-box; width:min(920px,calc(100vw - 32px)); max-height:calc(100dvh - 40px); padding:0; border:1px solid var(--SmartThemeBorderColor,#718096); border-radius:12px; background:var(--SmartThemeBlurTintColor,#202634); color:var(--SmartThemeBodyColor,#edf2f7); box-shadow:0 20px 70px #0006; text-align:left; font:inherit; }
+.xb-variable-settings::backdrop { background:#0006; }
+.xb-variable-settings * { box-sizing:border-box; }
+.xb-variable-settings header { display:flex; align-items:center; gap:12px; padding:16px 22px; border-bottom:1px solid var(--SmartThemeBorderColor,#718096); }
+.xb-variable-settings header h2 { font-size:20px; margin:0; flex:1; }
+.xb-variable-settings nav { display:flex; gap:6px; padding:12px 22px 0; }
+.xb-variable-settings button { font:inherit; cursor:pointer; color:inherit; background:transparent; border:1px solid var(--SmartThemeBorderColor,#718096); border-radius:6px; padding:7px 12px; }
+.xb-variable-settings button:disabled { opacity:.45; cursor:wait; }
+.xb-variable-settings button:focus-visible,.xb-variable-settings select:focus-visible { outline:2px solid #58b6f2; outline-offset:2px; }
+.xb-variable-settings button[data-selected=true],.xb-variable-settings .xb-variable-primary { background:#2479ae; border-color:#2479ae; color:white; }
+.xb-variable-settings main { padding:20px 22px; overflow:auto; max-height:calc(100dvh - 210px); }
+.xb-variable-settings .xb-variable-row { display:flex; gap:16px; align-items:center; flex-wrap:wrap; margin-bottom:16px; }
+.xb-variable-settings label { display:flex; flex:1; min-width:180px; flex-direction:column; gap:7px; font-size:14px; }
+.xb-variable-settings select { font:inherit; border:1px solid var(--SmartThemeBorderColor,#718096); border-radius:5px; background:var(--black30a,#0003); color:inherit; padding:8px; width:100%; }
+.xb-variable-settings select option { background:var(--SmartThemeBlurTintColor,#202634); color:var(--SmartThemeBodyColor,#edf2f7); }
+.xb-variable-settings details { border-top:1px solid var(--SmartThemeBorderColor,#718096); padding-top:12px; margin-top:14px; }
+.xb-variable-settings summary { cursor:pointer; padding-bottom:12px; }
+.xb-variable-settings pre { white-space:pre-wrap; overflow-wrap:anywhere; font:12px/1.6 ui-monospace,Consolas,monospace; margin:0; max-height:360px; overflow:auto; }
+.xb-variable-settings output { display:block; white-space:pre-wrap; overflow-wrap:anywhere; font-size:14px; }
+.xb-variable-settings footer { padding:10px 22px 16px; }
+.xb-variable-settings [data-error=true] { color:var(--warning,#f5b880); }
+.xb-variable-settings main > h3 { font-size:16px; margin:0 0 12px; }
+.xb-variable-settings .xb-variable-check { flex-direction:row; align-items:center; margin-bottom:12px; }
+.xb-variable-settings main > label { margin-bottom:12px; }
+.xb-variable-settings .xb-variable-help { font-size:14px; line-height:1.65; }
+.xb-variable-settings .xb-variable-help h3 { font-size:inherit; margin:20px 0 8px; }
+.xb-variable-settings .xb-variable-help p { margin:8px 0; }
+.xb-variable-settings .xb-variable-change { padding:10px 0; border-bottom:1px solid var(--SmartThemeBorderColor,#718096); }
+.xb-variable-settings .xb-variable-change p { margin:6px 0; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.65; }
+.xb-variable-settings .xb-variable-change strong { font-weight:600; }
+.xb-variable-settings .xb-variable-annotations { border:0; margin:6px 0 0; padding:0; font-size:13px; }
+.xb-variable-settings .xb-variable-annotations summary { padding:4px 0; opacity:.8; }
+.xb-variable-settings .xb-variable-annotations dl { display:grid; grid-template-columns:fit-content(30%) minmax(0,1fr); gap:5px 12px; margin:6px 0; }
+.xb-variable-settings .xb-variable-annotations dt,.xb-variable-settings .xb-variable-annotations dd { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+.xb-variable-settings .xb-variable-error { color:var(--warning,#f5b880); }
+@media(max-width:640px) { .xb-variable-settings { width:calc(100vw - 12px); max-height:calc(100dvh - 12px); } .xb-variable-settings header,.xb-variable-settings main { padding:14px; } .xb-variable-settings nav { padding:10px 14px 0; flex-wrap:wrap; } .xb-variable-settings main { max-height:calc(100dvh - 180px); } }

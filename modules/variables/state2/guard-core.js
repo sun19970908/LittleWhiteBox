@@ -1,11 +1,16 @@
+import { parsePath, formatPath, sameSegment, isArrayIndex } from './path.js';
+
 let rulesTable = {};
+let patterns = new Map();
 
 export function getRulesSnapshot() {
     return { ...rulesTable };
 }
 
 export function replaceRules(rules) {
-    rulesTable = { ...(rules || {}) };
+    rulesTable = {};
+    patterns = new Map();
+    for (const [path, rule] of Object.entries(rules || {})) setRule(path, rule);
 }
 
 export function getRuleNode(absPath) {
@@ -13,21 +18,27 @@ export function getRuleNode(absPath) {
 }
 
 export function setRule(path, rule) {
-    rulesTable[path] = { ...(rulesTable[path] || {}), ...rule };
+    const parts = parsePath(path, { pattern: true });
+    const key = formatPath(parts);
+    rulesTable[key] = { ...(rulesTable[key] || {}), ...rule };
+    patterns.set(key, parts);
 }
 
 export function clearRule(path) {
-    delete rulesTable[path];
+    const key = formatPath(parsePath(path, { pattern: true }));
+    delete rulesTable[key];
+    patterns.delete(key);
 }
 
 export function clearAllRules() {
     rulesTable = {};
+    patterns.clear();
 }
 
 export function getParentPath(absPath) {
-    const parts = String(absPath).split('.').filter(Boolean);
+    const parts = parsePath(absPath);
     if (parts.length <= 1) return '';
-    return parts.slice(0, -1).join('.');
+    return formatPath(parts.slice(0, -1));
 }
 
 /**
@@ -36,36 +47,25 @@ export function getParentPath(absPath) {
  * 例如：data.背包.0.名称 可以匹配 data.背包.[*].名称
  */
 function matchRuleWithWildcard(absPath) {
-    if (Object.hasOwn(rulesTable, absPath)) return rulesTable[absPath];
-
-    const segs = String(absPath).split('.').filter(Boolean);
-    const candidates = [];
-
-    function backtrack(idx, path, score) {
-        if (idx === segs.length) {
-            candidates.push({ path: path.join('.'), score });
-            return;
+    const parts = parsePath(absPath);
+    let best = null, bestScore = -1, bestOrder = '';
+    for (const [key, pattern] of patterns) {
+        if (pattern.length !== parts.length) continue;
+        let score = 0, order = '', matches = true;
+        for (let i = 0; i < pattern.length; i++) {
+            const token = pattern[i];
+            const rank = token?.wildcard === 'key' ? 1
+                : token?.wildcard === 'index' ? (isArrayIndex(parts[i]) ? 2 : 0)
+                    : sameSegment(token, parts[i]) ? 3 : 0;
+            if (!rank) { matches = false; break; }
+            score += rank; order += rank;
         }
-
-        const seg = segs[idx];
-        backtrack(idx + 1, [...path, seg], score + 3);
-
-        if (/^\d+$/.test(seg)) {
-            backtrack(idx + 1, [...path, '[*]'], score + 2);
+        // Preserve the old specificity and left-to-right tie break, without joining segments.
+        if (matches && (score > bestScore || (score === bestScore && order > bestOrder))) {
+            best = rulesTable[key]; bestScore = score; bestOrder = order;
         }
-
-        backtrack(idx + 1, [...path, '*'], score + 1);
     }
-
-    backtrack(0, [], 0);
-    candidates.sort((a, b) => b.score - a.score);
-
-    for (const candidate of candidates) {
-        if (candidate.path === absPath) continue;
-        if (Object.hasOwn(rulesTable, candidate.path)) return rulesTable[candidate.path];
-    }
-
-    return null;
+    return best;
 }
 
 function getValueType(v) {
@@ -79,7 +79,7 @@ function isPlainObject(v) {
 }
 
 function normalizeChildPath(parentPath, childKey) {
-    return parentPath ? `${parentPath}.${childKey}` : String(childKey);
+    return [...parsePath(parentPath), childKey];
 }
 
 function valueAt(value, key) {
@@ -255,12 +255,12 @@ function safeJSONForCompare(value) {
  * @returns {{ allow: boolean, value?: any, reason?: string, note?: string }}
  */
 export function validate(op, absPath, payload, currentValue) {
+    absPath = parsePath(absPath);
     const node = getRuleNode(absPath);
-    const parentPath = getParentPath(absPath);
-    const parentNode = parentPath ? getRuleNode(parentPath) : null;
+    const parentNode = absPath.length > 1 ? getRuleNode(absPath.slice(0, -1)) : null;
     const isNewKey = currentValue === undefined;
 
-    const lastSeg = String(absPath).split('.').pop() || '';
+    const lastSeg = String(absPath.at(-1));
 
     // ===== 1. $schema 白名单检查 =====
     if (parentNode?.allowedKeys && Array.isArray(parentNode.allowedKeys)) {

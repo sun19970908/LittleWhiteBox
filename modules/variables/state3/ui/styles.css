@@ -1,0 +1,45 @@
+.lwb-state3-dialog{box-sizing:border-box;width:min(960px,94vw);max-height:90dvh;border:1px solid var(--SmartThemeBorderColor,#666);border-radius:12px;background:var(--SmartThemeBlurTintColor,#222);color:var(--SmartThemeBodyColor,#eee);padding:18px;overflow:auto;text-align:left;font:inherit}
+.lwb-state3-dialog *{box-sizing:border-box}
+.lwb-state3-dialog::backdrop{background:#0009}
+.lwb-state3-dialog header,.lwb-state3-dialog nav,.lwb-state3-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.lwb-state3-dialog header{justify-content:space-between;margin-bottom:16px}
+.lwb-state3-dialog h2{margin:0;font-size:20px}
+.lwb-state3-dialog button{width:auto;min-width:fit-content;white-space:nowrap;flex:0 0 auto;font:inherit;color:inherit;background:var(--black30a,#0002);border:1px solid var(--SmartThemeBorderColor,#666);cursor:pointer}
+.lwb-state3-dialog button{padding:8px 12px;border-radius:7px}
+.lwb-state3-dialog button:disabled{opacity:.5;cursor:wait}
+.lwb-state3-dialog button:focus-visible{outline:2px solid var(--SmartThemeQuoteColor,#9cf);outline-offset:2px}
+.lwb-state3-dialog nav{margin-bottom:16px}
+.lwb-state3-dialog nav [aria-selected=true]{outline:2px solid var(--SmartThemeQuoteColor,#9cf)}
+.lwb-state3-dialog label{display:block;margin:12px 0}
+.lwb-state3-dialog .lwb-state3-check{display:flex;gap:8px;align-items:center}
+.lwb-state3-dialog section>h3{font-size:16px;margin:0 0 8px}
+.lwb-state3-dialog main>section+section{margin-top:20px}
+.lwb-state3-intro,.lwb-state3-intro p{line-height:1.7;margin:0 0 10px}
+.lwb-state3-dialog input:not([type=checkbox]):not([hidden]){display:block;max-width:100%;width:100%;margin-top:6px;padding:8px;border:1px solid var(--SmartThemeBorderColor,#666);border-radius:5px;font:inherit;color:inherit;background:var(--SmartThemeBlurTintColor,#222)}
+.lwb-state3-help,.lwb-state3-source-description{margin:6px 0;line-height:1.6;overflow-wrap:anywhere}
+.lwb-state3-help{font-size:.92em;opacity:.9}
+.lwb-state3-change-group>summary{font-weight:600;padding:6px 0;overflow-wrap:anywhere}
+.lwb-state3-dialog select,.lwb-state3-dialog textarea{display:block;width:100%;margin-top:6px;background:var(--SmartThemeBlurTintColor,#222);color:inherit;border:1px solid var(--SmartThemeBorderColor,#666);border-radius:5px;padding:8px}
+.lwb-state3-definition{min-height:34dvh;font-family:monospace;tab-size:2}
+.lwb-state3-dialog pre,.lwb-state3-dialog dd{white-space:pre-wrap;overflow-wrap:anywhere}
+.lwb-state3-dialog pre{padding:10px;background:#0002;border-radius:6px}
+.lwb-state3-dialog output{display:block;margin-top:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+.lwb-state3-dialog details{margin-top:14px}
+.lwb-state3-dialog summary{cursor:pointer}
+.lwb-state3-result-dialog{width:min(820px,94vw);padding:0}
+.lwb-state3-result-dialog[open]{display:flex;flex-direction:column}
+.lwb-state3-result-dialog header{padding:16px 20px;margin:0;border-bottom:1px solid var(--SmartThemeBorderColor,#666);flex:none}
+.lwb-state3-result-dialog main{overflow:auto;padding:0 20px 16px;min-height:0}
+.lwb-state3-result-dialog main h3{display:none}
+.lwb-state3-result-dialog output{padding:0 20px 12px;margin:0;flex:none}
+.lwb-state3-result-dialog output:empty{padding:0}
+.lwb-state3-status{font-weight:600;margin:14px 0}
+.lwb-state3-change{padding:12px 0;border-bottom:1px solid #8883;overflow-wrap:anywhere;line-height:1.6}
+.lwb-state3-change strong{display:block;font-size:.9em;opacity:.85}
+.lwb-state3-change small{display:block;opacity:.8}
+.lwb-state3-reason{margin:4px 0 0;font-size:.92em}
+.lwb-state3-dialog dl{display:grid;grid-template-columns:fit-content(30%) minmax(0,1fr);gap:6px 12px}
+.lwb-state3-dialog dt,.lwb-state3-dialog dd{margin:0}
+.lwb-state3-result-dialog .lwb-state3-actions{margin-top:16px}
+.lwb-state3-dialog [data-error=true]{color:var(--SmartThemeQuoteColor,#f9b)}
+@media(max-width:600px){.lwb-state3-dialog{padding:12px;width:calc(100vw - 12px);max-height:calc(100dvh - 20px)}.lwb-state3-actions button{flex:1 1 auto}.lwb-state3-result-dialog{padding:0}.lwb-state3-result-dialog header{padding:12px}.lwb-state3-result-dialog main{padding:0 12px 12px}.lwb-state3-result-dialog output{padding-inline:12px}.lwb-state3-dialog h2{font-size:18px}}

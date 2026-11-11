@@ -1,39 +1,38 @@
-import { splitPath } from './executor.js';
+import { parsePath, formatPath, pathStartsWith, isArrayIndex } from './path.js';
+import { operationMessage } from './diagnostics.js';
 
 export const INPUT_ERROR = Object.freeze({
     INVALID_JSON: 'invalid_json',
     INVALID_INPUT: 'invalid_input',
     INVALID_OPERATION: 'invalid_operation',
     MISSING_FIELD: 'missing_field',
-    UNEXPECTED_FIELD: 'unexpected_field',
     INVALID_PATH: 'invalid_path',
     INVALID_DELTA: 'invalid_delta',
     CONFLICTING_OPERATIONS: 'conflicting_operations',
 });
 const MESSAGES = {
     [INPUT_ERROR.INVALID_JSON]: '状态 JSON 无法解析',
-    [INPUT_ERROR.INVALID_INPUT]: '输入须为仅含 ops 数组的 JSON 对象，值不能含函数、访问器、循环引用或非有限数字',
+    [INPUT_ERROR.INVALID_INPUT]: '输入须为含 ops 数组的 JSON 对象，值不能含函数、访问器、循环引用或非有限数字',
     [INPUT_ERROR.INVALID_OPERATION]: 'op 必须是支持的操作名称字符串',
     [INPUT_ERROR.MISSING_FIELD]: '缺少必填字段',
-    [INPUT_ERROR.UNEXPECTED_FIELD]: '此操作不接受该字段',
     [INPUT_ERROR.INVALID_PATH]: '路径须使用点路径或方括号路径，根名称两端不能有空白，也不能访问原型链特殊键',
     [INPUT_ERROR.INVALID_DELTA]: 'delta 必须是有限数字，不能是数字字符串',
     [INPUT_ERROR.CONFLICTING_OPERATIONS]: '同批下标删除与另一操作的目标重叠或会使其下标移动；本批未执行。请去掉重复删除，或拆成两次提交：先修改，再删除',
 };
 // The input/output boundary owns public names. Persisted requests and events keep executor names.
 const OPERATIONS = Object.freeze({
-    set: { op: 'set', fields: ['value'] },
-    inc: { op: 'inc', fields: ['delta'] },
-    push: { op: 'push', fields: ['value'] },
-    remove: { op: 'pop', fields: ['value'] },
-    del: { op: 'del', fields: [] },
+    set: { op: 'set', fields: ['value'], description: 'Assign value at path.' },
+    inc: { op: 'inc', fields: ['delta'], description: 'Change the number at path by signed delta.' },
+    push: { op: 'push', fields: ['value'], description: 'Append value to the array at path. An array value appends its elements.' },
+    remove: { op: 'pop', fields: ['value'], description: 'Remove the first array element equal to value; other matches stay. Path points to the array. An array value removes one match for each supplied element.' },
+    del: { op: 'del', fields: [], description: 'Delete the field or array element at path. For an array element such as 物品[0], later elements shift forward. For a field such as 角色.称号, the field is removed.' },
 });
 const PUBLIC_NAMES = Object.freeze(Object.fromEntries(Object.entries(OPERATIONS).map(([name, { op }]) => [op, name])));
 
 /** The public command schema is derived from the same operation table as validation. */
 export function getStateInputSchema() {
     const fields = {
-        path: { type: 'string', description: 'Path within a managed variable, using dots or brackets.' },
+        path: { type: 'string', description: 'Path within a managed variable: 角色.金币, 物品[0], 角色["Lv.3"]. Quoted keys stay strings, including ["00"]. Existing containers keep their type; a missing container is created as an array before an unquoted numeric segment, otherwise as an object.' },
         value: { description: 'JSON value for set, push or remove.' },
         delta: { type: 'number', description: 'Signed change for inc.' },
     };
@@ -46,18 +45,19 @@ export function getStateInputSchema() {
                 items: {
                     anyOf: Object.entries(OPERATIONS).map(([name, definition]) => ({
                         type: 'object',
+                        description: definition.description,
                         properties: {
                             op: { type: 'string', enum: [name] },
                             ...Object.fromEntries(['path', ...definition.fields].map(field => [field, { ...fields[field] }])),
                         },
                         required: ['op', 'path', ...definition.fields],
-                        additionalProperties: false,
+                        additionalProperties: true,
                     })),
                 },
             },
         },
         required: ['ops'],
-        additionalProperties: false,
+        additionalProperties: true,
     };
 }
 
@@ -65,17 +65,17 @@ export function publicOperationName(op) {
     return PUBLIC_NAMES[op] ?? op;
 }
 const UNSAFE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
-const PATH_PATTERN = /^[^.[\]]+(?:(?:\.[^.[\]]+)|(?:\[(?:\d+|"[^"]+"|'[^']+')\]))*$/;
 const pointerTo = (parent, key) => `${parent}/${String(key).replaceAll('~', '~0').replaceAll('/', '~1')}`;
 
 export class StateInputError extends Error {
     constructor(code, index, details = {}) {
-        const location = details.pointer ? `${details.pointer}: ` : '';
-        const choices = details.allowed ? `；允许：${details.allowed.join(', ')}` : '';
-        super(`${location}${MESSAGES[code]}${choices}`);
+        const match = /^\/ops\/(\d+)(?:\/|$)/.exec(details.pointer || '');
+        index ??= match ? Number(match[1]) : undefined;
+        const field = details.field || (match && details.pointer === `/ops/${index}` ? ''
+            : details.pointer ? details.pointer.split('/').filter(Boolean).at(-1) : '');
+        super(operationMessage(index, details.path, field, MESSAGES[code], details));
         this.code = code;
         this.details = details;
-        const match = /^\/ops\/(\d+)(?:\/|$)/.exec(details.pointer || '');
         if (index !== undefined || match) this.index = index ?? Number(match[1]);
     }
 
@@ -114,29 +114,29 @@ function copyJson(value, ancestors = new Set(), pointer = '') {
     return result;
 }
 
-const isPrefix = (prefix, path) => prefix.length <= path.length && prefix.every((segment, index) => segment === path[index]);
+const isPrefix = (prefix, path) => pathStartsWith(path, prefix);
 
 /** Reject ambiguous new JSON batches without reinterpreting text or stored historical requests. */
 export function validateJsonBatch(ops) {
     if (!ops.some(item => item.source === 'json')) return;
-    const paths = ops.map(item => splitPath(item.path));
+    const paths = ops.map(item => parsePath(item.path));
     for (let deleted = 0; deleted < ops.length; deleted++) {
         const path = paths[deleted];
-        if (ops[deleted].op !== 'del' || path.length < 2 || typeof path.at(-1) !== 'number') continue;
+        if (ops[deleted].op !== 'del' || path.length < 2 || !isArrayIndex(path.at(-1))) continue;
         const parent = path.slice(0, -1);
         for (let other = 0; other < ops.length; other++) {
             if (deleted === other || (ops[deleted].source !== 'json' && ops[other].source !== 'json')) continue;
             const target = paths[other];
             const siblingDelete = ops[other].op === 'del' && target.length === path.length
-                && isPrefix(parent, target) && typeof target.at(-1) === 'number';
-            if (siblingDelete && target.at(-1) !== path.at(-1)) continue; // Protected by descending deletion.
-            const movedTarget = isPrefix(parent, target) && typeof target[parent.length] === 'number'
-                && target[parent.length] >= path.at(-1);
+                && isPrefix(parent, target) && isArrayIndex(target.at(-1));
+            if (siblingDelete && Number(target.at(-1)) !== Number(path.at(-1))) continue; // Protected by descending deletion.
+            const movedTarget = isPrefix(parent, target) && isArrayIndex(target[parent.length])
+                && Number(target[parent.length]) >= Number(path.at(-1));
             const ancestorWrite = isPrefix(target, parent) && ['set', 'del'].includes(ops[other].op);
             if (movedTarget || ancestorWrite) {
                 const index = Math.max(deleted, other);
                 throw new StateInputError(INPUT_ERROR.CONFLICTING_OPERATIONS, index, {
-                    pointer: `/ops/${index}/path`, conflictsWith: Math.min(deleted, other),
+                    pointer: `/ops/${index}/path`, path: formatPath(paths[index]), conflictsWith: Math.min(deleted, other),
                 });
             }
         }
@@ -152,12 +152,13 @@ export function parseJsonInput(input) {
     }
     const data = copyJson(decoded);
     if (!data || Array.isArray(data) || typeof data !== 'object'
-        || Object.keys(data).length !== 1 || !Array.isArray(data.ops)) {
+        || !Array.isArray(data.ops)) {
         throw new StateInputError(INPUT_ERROR.INVALID_INPUT);
     }
     const ops = data.ops.map((item, index) => {
         const invalid = (code, field, details = {}) => {
-            throw new StateInputError(code, index, { pointer: field ? pointerTo(`/ops/${index}`, field) : `/ops/${index}`, ...details });
+            throw new StateInputError(code, index, { pointer: field ? pointerTo(`/ops/${index}`, field) : `/ops/${index}`,
+                path: item?.path, field, ...(field && item && Object.hasOwn(item, field) ? { actual: item[field] } : {}), ...details });
         };
         if (!item || typeof item !== 'object' || Array.isArray(item)) invalid(INPUT_ERROR.INVALID_OPERATION);
         if (typeof item.op !== 'string' || !Object.hasOwn(OPERATIONS, item.op)) {
@@ -167,15 +168,15 @@ export function parseJsonInput(input) {
         for (const field of fields) {
             if (!Object.hasOwn(item, field)) invalid(INPUT_ERROR.MISSING_FIELD, field, { required: fields });
         }
-        for (const field of Object.keys(item)) {
-            if (!fields.includes(field)) invalid(INPUT_ERROR.UNEXPECTED_FIELD, field, { allowed: fields });
-        }
-        const path = typeof item.path === 'string' ? item.path.trim() : '';
-        const parts = splitPath(path);
-        if (!path || !PATH_PATTERN.test(path) || String(parts[0]) !== String(parts[0]).trim()
-            || parts.some(part => !String(part).trim() || UNSAFE_KEYS.has(String(part)))) invalid(INPUT_ERROR.INVALID_PATH, 'path');
+        let path;
+        if (typeof item.path !== 'string') invalid(INPUT_ERROR.INVALID_PATH, 'path');
+        try { path = parsePath(item.path); }
+        catch { invalid(INPUT_ERROR.INVALID_PATH, 'path'); }
         if (item.op === 'inc' && (typeof item.delta !== 'number' || !Number.isFinite(item.delta))) invalid(INPUT_ERROR.INVALID_DELTA, 'delta');
-        return { ...item, op: OPERATIONS[item.op].op, path, source: 'json' };
+        // Annotations are not commands or persisted state. Project only the
+        // operation's operands; callers cannot supply internal ownership/source.
+        return { op: OPERATIONS[item.op].op, path,
+            ...Object.fromEntries(OPERATIONS[item.op].fields.map(field => [field, item[field]])), source: 'json' };
     });
     validateJsonBatch(ops);
     return ops;

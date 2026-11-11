@@ -7,12 +7,22 @@ import { WORKSPACE_COPY as W } from '../workspace/workspace-copy.js';
 export function buildAppMarkup(state) {
     const markup = `
         <div class="xb-assistant-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}">
+            <header class="xb-assistant-topbar">
+                <button id="xb-assistant-sidebar-toggle" type="button" class="xb-assistant-chrome-button" aria-expanded="${!state.sidebarCollapsed}" aria-label="${C.settingsToggle(state.sidebarCollapsed)}" title="${C.settingsToggle(state.sidebarCollapsed)}">
+                    ${chromeIcon(state.sidebarCollapsed ? 'settings' : 'collapse')}
+                </button>
+                <section class="xb-assistant-toolbar">
+                    <div class="xb-assistant-toolbar-cluster">
+                        <button id="xb-assistant-open-workspace" type="button" class="xb-assistant-chrome-button" aria-controls="xb-assistant-workspace" aria-expanded="${!!state.isWorkspaceOpen}" aria-label="${W.toggle(state.isWorkspaceOpen)}" title="${W.toggle(state.isWorkspaceOpen)}">${chromeIcon('workspace')}</button>
+                        ${contextMeterMarkup()}
+                        <button id="xb-assistant-clear" type="button" class="xb-assistant-chrome-button" aria-label="${C.clearConversation}" title="${C.clearConversation}">${chromeIcon('clear')}</button>
+                    </div>
+                </section>
+                <button id="xb-assistant-mobile-close" type="button" class="xb-assistant-chrome-button xb-assistant-mobile-close" aria-label="${C.closeAssistant}" title="${C.closeAssistant}">${chromeIcon('close')}</button>
+            </header>
             <aside class="xb-assistant-sidebar ${state.sidebarCollapsed ? 'is-collapsed' : ''}">
                 <div class="xb-assistant-sidebar-header">
                     <div class="xb-assistant-badge">API配置</div>
-                    <button id="xb-assistant-sidebar-toggle" type="button" class="xb-assistant-chrome-button" aria-expanded="${!state.sidebarCollapsed}" aria-label="${C.settingsToggle(state.sidebarCollapsed)}" title="${C.settingsToggle(state.sidebarCollapsed)}">
-                        ${chromeIcon(state.sidebarCollapsed ? 'settings' : 'collapse')}
-                    </button>
                 </div>
                 <div class="xb-assistant-sidebar-content" ${state.sidebarCollapsed ? 'hidden' : ''}>
                     ${buildAgentSettingsPanelMarkup({
@@ -28,17 +38,6 @@ export function buildAppMarkup(state) {
             </aside>
             <div class="xb-assistant-mobile-backdrop" id="xb-assistant-mobile-backdrop" ${state.sidebarCollapsed ? 'hidden' : ''}></div>
             <main class="xb-assistant-main">
-                <div class="xb-assistant-mobile-topbar">
-                    <section class="xb-assistant-toolbar">
-                            <div class="xb-assistant-toolbar-cluster">
-                                <button id="xb-assistant-open-workspace" type="button" class="xb-assistant-chrome-button" aria-controls="xb-assistant-workspace" aria-expanded="${!!state.isWorkspaceOpen}" aria-label="${W.toggle(state.isWorkspaceOpen)}" title="${W.toggle(state.isWorkspaceOpen)}">${chromeIcon('workspace')}</button>
-                                ${contextMeterMarkup()}
-                                <button id="xb-assistant-clear" type="button" class="xb-assistant-chrome-button" aria-label="${C.clearConversation}" title="${C.clearConversation}">${chromeIcon('clear')}</button>
-                            </div>
-                        <button id="xb-assistant-mobile-settings" type="button" class="xb-assistant-chrome-button xb-assistant-mobile-settings" aria-label="${C.settingsToggle(state.sidebarCollapsed)}" title="${C.settingsToggle(state.sidebarCollapsed)}">${chromeIcon('settings')}</button>
-                    </section>
-                    <button id="xb-assistant-mobile-close" type="button" class="xb-assistant-chrome-button xb-assistant-mobile-close" aria-label="${C.closeAssistant}" title="${C.closeAssistant}">${chromeIcon('close')}</button>
-                </div>
                 <div class="xb-assistant-main-body ${state.isWorkspaceOpen ? 'workspace-open' : ''}">
                     <section class="xb-assistant-conversation">
                         <section class="xb-assistant-chat-wrap">

@@ -6,9 +6,18 @@ import { runWithAbortDeadline } from '../../shared/common/abort-utils.js';
 import { HOST_PROVIDER, assertPreset } from './model.js';
 import { TEXT_API_COPY as COPY } from './copy.js';
 import { CONNECTION_TEST_PROMPT } from './prompts.js';
+import { VERTEX_PROVIDER, vertexRuntimeFields, vertexSecrets } from '../agent-core/vertex-config.js';
 
 export function resolveConnection(preset, { modelList = false } = {}) {
     const config = structuredClone(assertPreset(preset));
+    if (preset.provider === VERTEX_PROVIDER) {
+        Object.assign(config, vertexRuntimeFields(preset.provider, preset));
+        if (config.vertex.authMode === 'relay' && preset.prefixMode === 'custom') {
+            config.resolvedBaseUrl = resolveApiBaseUrl(preset.baseUrl, preset.customPrefix);
+        }
+        config.reasoning = resolveRuntimeReasoning(config, preset.reasoning);
+        return config;
+    }
     const prefix = preset.prefixMode === 'custom' ? preset.customPrefix
         : modelList ? getModelListApiPrefix(preset)
             : getDefaultApiPrefix(['google', 'sillytavern-google'].includes(preset.provider) ? 'google' : 'openai');
@@ -22,7 +31,7 @@ export function resolveConnection(preset, { modelList = false } = {}) {
 export async function listTextModels(preset, { signal, timeoutMs = 30000 } = {}) {
     if (preset.provider === HOST_PROVIDER) return [];
     const config = resolveConnection(preset, { modelList: true });
-    if (!config.baseUrl) throw new Error(COPY.urlRequired);
+    if (config.provider !== VERTEX_PROVIDER && !config.baseUrl) throw new Error(COPY.urlRequired);
     const controller = new AbortController();
     const abort = () => controller.abort(signal.reason);
     if (signal?.aborted) abort();
@@ -38,8 +47,11 @@ export async function listTextModels(preset, { signal, timeoutMs = 30000 } = {})
 
 export function connectionError(error, preset) {
     const key = String(preset?.apiKey || '').trim();
-    const message = String(error?.message || COPY.requestFailed);
-    const safe = new Error(key ? message.split(key).join('[redacted]').split(encodeURIComponent(key)).join('[redacted]') : message);
+    let message = String(error?.message || COPY.requestFailed);
+    for (const secret of [key, ...vertexSecrets(preset?.vertex?.serviceAccountJson)].filter(Boolean)) {
+        for (const value of [secret, encodeURIComponent(secret), JSON.stringify(secret).slice(1, -1)]) message = message.split(value).join('[redacted]');
+    }
+    const safe = new Error(message);
     safe.name = error?.name || 'Error';
     if (error?.code) safe.code = error.code;
     return safe;
@@ -60,7 +72,7 @@ export async function generateText(preset, { messages, signal, onDelta, timeoutM
             }
             const config = resolveConnection(snapshot);
             if (!config.model.trim()) throw new Error(COPY.modelRequired);
-            if (!config.baseUrl.trim()) throw new Error(COPY.urlRequired);
+            if (config.provider !== VERTEX_PROVIDER && !config.baseUrl.trim()) throw new Error(COPY.urlRequired);
             const adapter = (dependencies.createAdapter || createAgentAdapter)({ ...config, timeoutMs });
             let previous = '';
             const result = await adapter.chat({

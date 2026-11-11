@@ -13,6 +13,17 @@ import { isTrustedIframeEvent, postToIframe } from "../../core/iframe-messaging.
 import { AssistantStorage } from "../../core/server-storage.js";
 import { createAssistantHostWindow } from "./assistant-host-window.js";
 import { TOOL_NAMES } from "./app-src/tooling.js";
+import { BUILTIN_SKILLS, skillCatalogLine } from './shared/skill-tools.js';
+import { CARD_SKILL, cardSkillContent } from '../card-workspace/assistant-contract.js';
+import { readableCardWorkspacePath, readableCardWorkspaceRelativePath } from '../card-workspace/paths.js';
+import { STATE3_SKILL, state3SkillContent, cardWorkspaceRequest } from '../variables/state3/skill/contract.js';
+import { STATE2_SKILL, state2SkillContent } from '../variables/state2/skill/contract.js';
+import { LIVE_PAGE_SKILL, livePageSkillContent } from '../live-page-inspection/tool-contract.ts';
+import { state3JsApiNamespace } from '../variables/state3/skill/public-api.js';
+import { withAssistantJsApiManifest } from './shared/extension-jsapi-manifest.ts';
+import { iframeRendererJsApiNamespace } from '../iframe-renderer/assistant-api.ts';
+import { processMessageById } from '../iframe-renderer.js';
+import { isTauriTavernChatSurfaceManaged } from '../../integrations/tauritavern/environment.js';
 import { normalizeSlashSkillTrigger } from "./app-src/slash-command-policy.js";
 import { applyPatchUpdateToText, parseApplyPatch } from "../agent-core/tools/apply-patch.js";
 import { buildPatchFailureResult, runPatchValidationAndApply } from "../agent-core/tools/apply-patch-execution.js";
@@ -34,7 +45,6 @@ import {
     AGENT_SETTINGS_CONFIG_VERSION,
     DEFAULT_PRESET_NAME,
     buildDefaultPreset,
-    cloneDefaultModelConfigs,
     normalizeJsApiPermission,
     normalizePermissionMode,
     normalizeAssistantSettings,
@@ -124,6 +134,7 @@ let editorContextCache = null;
 let localSourcesToolRuntime = null;
 let assistantFrameReady = false;
 let pendingOpenSettingsReveal = false;
+let pendingDraftMessage = '';
 const planLedger = createPlanLedger({ plansTable: assistantPlansTable });
 
 function summarizeLocalSourcesForDebug(localSources) {
@@ -134,10 +145,6 @@ function summarizeLocalSourcesForDebug(localSources) {
         fileCount: files.length,
         samplePaths: files.slice(0, 6).map((file) => String(file?.publicPath || file?.path || '')).filter(Boolean),
     };
-}
-
-function uniqueSorted(items) {
-    return Array.from(new Set(Array.from(items || []).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'en'));
 }
 
 function trimEditorContextText(text = '', limit = 1200) {
@@ -257,11 +264,12 @@ function buildRuntimeConfig() {
     const settings = getAssistantSettings();
     const currentPreset = settings.presets?.[settings.currentPresetName] || buildDefaultPreset();
     return {
+        ...currentPreset,
+        configVersion: CONFIG_VERSION,
         updatedAt: Number(settings.updatedAt) || 0,
         provider: currentPreset.provider || 'openai-compatible',
         workspaceFileName: settings.workspaceFileName || DEFAULT_WORKSPACE_FILE,
         jsApiPermission: normalizeJsApiPermission(settings.jsApiPermission),
-        modelConfigs: currentPreset.modelConfigs || cloneDefaultModelConfigs(),
         permissionMode: normalizePermissionMode(currentPreset.permissionMode),
         currentPresetName: settings.currentPresetName || DEFAULT_PRESET_NAME,
         delegatePresetName: settings.delegatePresetName || settings.currentPresetName || DEFAULT_PRESET_NAME,
@@ -430,7 +438,7 @@ async function loadJsApiManifest(signal) {
     if (!response.ok) {
         throw new Error(`jsapi_manifest_load_failed:${response.status}`);
     }
-    jsApiManifestCache = await response.json();
+    jsApiManifestCache = withAssistantJsApiManifest(await response.json());
     return jsApiManifestCache;
 }
 
@@ -512,6 +520,8 @@ function buildDocumentedJsApiNamespace(manifest = {}, documentedContext) {
     };
 
     return Object.freeze({
+        state3: state3JsApiNamespace(globalThis.LWB_StateV3),
+        iframeRenderer: iframeRendererJsApiNamespace(processMessageById, isTauriTavernChatSurfaceManaged()),
         script: cloneDocumentedNamespace(
             scriptModule,
             createAllowedPathTree(Array.isArray(manifest.allowedPaths) ? manifest.allowedPaths : [], 'st.script.'),
@@ -528,102 +538,6 @@ function buildDocumentedJsApiNamespace(manifest = {}, documentedContext) {
             createAllowedPathTree(Array.isArray(manifest.allowedPaths) ? manifest.allowedPaths : [], 'st.slash.'),
         ),
     });
-}
-
-function collectAvailableJsApiPaths(value, prefix, target, seen = new WeakSet()) {
-    if (!prefix || !target) return;
-    target.add(prefix);
-
-    if (!value || (typeof value !== 'object' && typeof value !== 'function')) {
-        return;
-    }
-    if (typeof value === 'object' || typeof value === 'function') {
-        if (seen.has(value)) return;
-        seen.add(value);
-    }
-
-    Object.keys(value).forEach((key) => {
-        if (!key) return;
-        collectAvailableJsApiPaths(value[key], `${prefix}.${key}`, target, seen);
-    });
-}
-
-function doesJsApiPathExist(pathText, ctx, st) {
-    const segments = String(pathText || '').split('.').filter(Boolean);
-    if (!segments.length) return false;
-
-    let current = null;
-    if (segments[0] === 'ctx') {
-        current = ctx;
-    } else if (segments[0] === 'st') {
-        current = st;
-    } else {
-        return false;
-    }
-
-    for (let index = 1; index < segments.length; index += 1) {
-        const segment = segments[index];
-        if (current == null || !(segment in current)) {
-            return false;
-        }
-        current = current[segment];
-    }
-
-    return true;
-}
-
-function buildRuntimeJsApiManifest(manifest = {}, documentedContext, st) {
-    const availablePaths = new Set();
-    collectAvailableJsApiPaths(documentedContext, 'ctx', availablePaths);
-    collectAvailableJsApiPaths(st, 'st', availablePaths);
-
-    const staticAllowedPaths = Array.isArray(manifest.allowedPaths) ? manifest.allowedPaths : [];
-    const runtimeAllowedPaths = uniqueSorted(staticAllowedPaths.filter((item) => availablePaths.has(item)));
-    const runtimeAllowedSet = new Set(runtimeAllowedPaths);
-    const runtimeCallablePaths = uniqueSorted(
-        (Array.isArray(manifest.callablePaths) ? manifest.callablePaths : [])
-            .filter((item) => runtimeAllowedSet.has(item) && doesJsApiPathExist(item, documentedContext, st)),
-    );
-    const runtimeCallableSet = new Set(runtimeCallablePaths);
-    const sourceSemantics = manifest && typeof manifest.apiSemantics === 'object' && manifest.apiSemantics
-        ? manifest.apiSemantics
-        : {};
-
-    return {
-        ...manifest,
-        allowedPaths: runtimeAllowedPaths,
-        callablePaths: runtimeCallablePaths,
-        apiSemantics: Object.fromEntries(
-            Object.entries(sourceSemantics)
-                .filter(([key, value]) => runtimeCallableSet.has(key) && value),
-        ),
-        namespaces: {
-            ctx: uniqueSorted(
-                ((manifest.namespaces && Array.isArray(manifest.namespaces.ctx)) ? manifest.namespaces.ctx : [])
-                    .filter((item) => runtimeAllowedSet.has(item)),
-            ),
-            st: {
-                script: uniqueSorted(
-                    (((manifest.namespaces || {}).st && Array.isArray(manifest.namespaces.st.script))
-                        ? manifest.namespaces.st.script
-                        : [])
-                        .filter((item) => runtimeAllowedSet.has(item)),
-                ),
-                extensions: uniqueSorted(
-                    (((manifest.namespaces || {}).st && Array.isArray(manifest.namespaces.st.extensions))
-                        ? manifest.namespaces.st.extensions
-                        : [])
-                        .filter((item) => runtimeAllowedSet.has(item)),
-                ),
-                slash: uniqueSorted(
-                    (((manifest.namespaces || {}).st && Array.isArray(manifest.namespaces.st.slash))
-                        ? manifest.namespaces.st.slash
-                        : [])
-                        .filter((item) => runtimeAllowedSet.has(item)),
-                ),
-            },
-        },
-    };
 }
 
 function normalizeWorkspaceName(input) {
@@ -1139,9 +1053,10 @@ function compileGlobPattern(pattern) {
 }
 
 function matchesGlob(publicPath, relativePath, matcher) {
-    const fullPath = normalizePathForMatch(publicPath);
-    const shortPath = normalizePathForMatch(relativePath);
-    if (matcher.regex.test(fullPath) || matcher.regex.test(shortPath)) {
+    const fullPath = normalizePathForMatch(readableCardWorkspacePath(publicPath));
+    const shortPath = normalizePathForMatch(readableCardWorkspaceRelativePath(publicPath, relativePath));
+    if (matcher.regex.test(fullPath) || matcher.regex.test(shortPath)
+        || matcher.regex.test(normalizePathForMatch(publicPath)) || matcher.regex.test(normalizePathForMatch(relativePath))) {
         return true;
     }
     if (matcher.basenameRegex) {
@@ -2206,20 +2121,29 @@ async function readSkillsCatalogTool(_args = {}, options = {}) {
             details: String(result.content || ''),
         };
     }
+    const builtins = BUILTIN_SKILLS.map(skill => ({ ...skill, content: undefined, builtin: true }));
+    const skills = [...result.catalog.skills, ...builtins];
     return {
         ok: true,
         name: result.name,
         version: result.catalog.version,
-        total: result.catalog.skills.length,
-        enabledCount: result.catalog.skills.filter((item) => item.enabled !== false).length,
-        skills: result.catalog.skills,
-        summaryText: result.summaryText,
-        content: result.content,
+        total: result.catalog.skills.length + builtins.length,
+        enabledCount: result.catalog.skills.filter((item) => item.enabled !== false).length + builtins.length,
+        skills,
+        summaryText: [result.summaryText, ...builtins.map(skillCatalogLine)].filter(Boolean).join('\n'),
+        content: JSON.stringify({ ...result.catalog, skills }, null, 2),
     };
 }
 
 async function readSkillTool(args = {}, options = {}) {
     const byId = String(args.id || '').trim();
+    const builtin = BUILTIN_SKILLS.find(skill => byId === skill.id || (!byId && args.filename === `${extensionFolderPath}/${skill.path}`));
+    if (builtin) {
+        const filename = `${extensionFolderPath}/${builtin.path}`;
+        const body = await readTextFile(filename, options);
+        const render = { [CARD_SKILL.id]: cardSkillContent, [STATE3_SKILL.id]: state3SkillContent, [STATE2_SKILL.id]: state2SkillContent, [LIVE_PAGE_SKILL.id]: livePageSkillContent }[builtin.id];
+        return { ok: true, ...builtin, filename, content: render ? render(body, extensionFolderPath) : body.trim(), builtin: true };
+    }
     const byFilename = normalizeSkillFileName(args.filename || '');
     if (!byId && !byFilename) {
         return {
@@ -2816,7 +2740,7 @@ async function readSkillsRuntimeData(options = {}) {
     if (!catalogResult.ok) {
         return {
             skillsCatalog: normalizeSkillsCatalog(EMPTY_SKILLS_CATALOG),
-            skillsPromptSummary: '',
+            skillsPromptSummary: BUILTIN_SKILLS.map(skillCatalogLine).join('\n'),
             skillsCatalogError: catalogResult.message,
             skillFiles: [],
         };
@@ -2911,7 +2835,7 @@ async function readSkillsRuntimeData(options = {}) {
 
     return {
         skillsCatalog: catalogResult.catalog,
-        skillsPromptSummary: catalogResult.summaryText,
+        skillsPromptSummary: [catalogResult.summaryText, ...BUILTIN_SKILLS.map(skillCatalogLine)].filter(Boolean).join('\n'),
         skillsCatalogError: '',
         skillFiles,
     };
@@ -3137,18 +3061,17 @@ async function runJavaScriptApi(args = {}, options = {}) {
         const rawContext = getContext();
         const documentedContext = buildDocumentedJsApiContext(rawContext, manifest);
         const st = buildDocumentedJsApiNamespace(manifest, documentedContext);
-        const runtimeManifest = buildRuntimeJsApiManifest(manifest, documentedContext, st);
         const result = await runtimeModule.runJavaScriptApi({
             code,
             purpose,
             apiPaths,
             safety,
             expectedOutput,
-            manifest: runtimeManifest,
+            manifest,
             ctx: documentedContext,
             st,
+            signal: options.signal,
         });
-        ensureNotAborted(options.signal);
         const shapedOutput = shapeJavaScriptApiOutputForTransport(result?.output);
         const shapedNote = shapedOutput.charLimited
             ? [
@@ -3159,6 +3082,7 @@ async function runJavaScriptApi(args = {}, options = {}) {
         return buildJavaScriptApiToolResult({
             ...result,
             ...shapedOutput,
+            truncated: result?.truncated === true || shapedOutput.truncated,
             note: shapedNote,
         });
     } catch (error) {
@@ -3181,13 +3105,29 @@ async function runJavaScriptApi(args = {}, options = {}) {
             calledApis: [],
             note: [code, purpose, expectedOutput].every(Boolean)
                 ? ''
-                : '必须至少提供 code、purpose、expectedOutput；effect 请求还需要精确 apiPaths。',
+                : '必须提供 code、purpose、expectedOutput。',
         });
     }
 }
 
 async function executeToolCall(name, args, options = {}) {
     switch (name) {
+        case TOOL_NAMES.READ_LOGS: {
+            const { readLogs } = await import('../debug-panel/log-tool.js');
+            return readLogs();
+        }
+        case TOOL_NAMES.INSPECT_PAGE: {
+            const { runLivePageInspection } = await import('../live-page-inspection/service.ts');
+            return runLivePageInspection(args);
+        }
+        case TOOL_NAMES.CARD_FILES: {
+            const { runCardFiles } = await import('../card-workspace/service.js');
+            const result = await runCardFiles(args, options);
+            const { localSources } = await workspaceRepository.readWorkspace();
+            await getLocalSourcesToolRuntime().hydrateLocalSources(localSources);
+            options.onLocalSourcesUpdated?.(localSources, getLocalSourcesToolRuntime().getWorkspaceState());
+            return result;
+        }
         case TOOL_NAMES.LS:
             return await listDirectory(args, options);
         case TOOL_NAMES.GLOB:
@@ -3269,12 +3209,35 @@ function getAssistantHostWindow() {
     return hostWindow;
 }
 
-function openAssistant() {
-    if (!getAssistantHostWindow().open()) return;
+function revealDraftMessage() {
+    if (!pendingDraftMessage || !assistantFrameReady) return;
+    postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:compose', payload: { text: pendingDraftMessage } });
+    pendingDraftMessage = '';
+}
+
+/** @param {{ variables?: boolean, version?: string }} [options] */
+export async function openCardWorkspace({ variables = false, version } = {}) {
+    if (!window.xiaobaixAssistant) await initAssistant();
+    const card = await executeToolCall(TOOL_NAMES.CARD_FILES, { action: 'open' });
+    const request = cardWorkspaceRequest(card, { variables, version, variablesMode: extensionsModule.extension_settings?.LittleWhiteBox?.variablesMode });
+    setAssistantEditorContext({ source: 'card-files', note: `角色卡：${card.name}。工作区：${readableCardWorkspacePath(card.root)}。ReadSkill id: ${request.skillId}` });
+    const workspace = await workspaceRepository.readWorkspace();
+    await workspaceRepository.saveWorkspaceUiState({ ...workspace, isWorkspaceOpen: true, workspacePanelMode: 'workspace',
+        selectedFilePath: request.selectedFilePath,
+        fileSearchQuery: '', showModifiedOnly: false, mobileWorkspacePane: 'viewer' });
+    openAssistant({ draftMessage: request.draftMessage });
+    if (assistantFrameReady) postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:card-workspace', payload: { path: request.state3 ? request.selectedFilePath : `${card.root}card.json`, localSources: workspace.localSources } });
+    return card;
+}
+
+function openAssistant(options = {}) {
+    if (typeof options.draftMessage === 'string') pendingDraftMessage = options.draftMessage;
+    if (!getAssistantHostWindow().open()) { revealDraftMessage(); return; }
     settingsLoaded = false;
 
     // eslint-disable-next-line no-restricted-syntax -- Guarded inside handleIframeMessage via isTrustedIframeEvent.
     window.addEventListener('message', handleIframeMessageEvent);
+    revealDraftMessage();
 }
 
 async function pushAssistantConfigToIframe(options = {}) {
@@ -3349,6 +3312,7 @@ function closeAssistant() {
     getLocalSourcesToolRuntime().clearLocalSources();
     assistantFrameReady = false;
     pendingOpenSettingsReveal = false;
+    pendingDraftMessage = '';
 }
 
 async function handleIframeMessage(event) {
@@ -3363,6 +3327,7 @@ async function handleIframeMessage(event) {
             assistantFrameReady = true;
             await pushAssistantConfigToIframe();
             postEditorContextToIframe();
+            revealDraftMessage();
             if (pendingOpenSettingsReveal) {
                 revealAssistantSettings();
             }

@@ -1,5 +1,6 @@
 import jsyaml from '../../../libs/js-yaml.mjs';
 import { parseJsonInput } from './json-input.js';
+import { parsePath, formatPath, appendPath, pathStartsWith, KEY_WILDCARD, INDEX_WILDCARD } from './path.js';
 
 /**
  * Robust <state> block matcher (no regex)
@@ -148,7 +149,7 @@ function parseSchemaBlock(basePath, schemaLines) {
                     path: curPath,
                     rule: { typeLock: 'array', arrayGrow: true },
                 });
-                walk(obj[0], curPath ? `${curPath}.[*]` : '[*]');
+                walk(obj[0], appendPath(curPath, INDEX_WILDCARD));
             }
             return;
         }
@@ -184,12 +185,12 @@ function parseSchemaBlock(basePath, schemaLines) {
 
             const wildcardTemplate = obj['*'];
             if (wildcardTemplate !== undefined) {
-                walk(wildcardTemplate, curPath ? `${curPath}.*` : '*');
+                walk(wildcardTemplate, appendPath(curPath, KEY_WILDCARD));
             }
 
             for (const k of keys) {
                 if (k === '*') continue;
-                const childPath = curPath ? `${curPath}.${k}` : k;
+                const childPath = curPath ? appendPath(curPath, k) : formatPath([k]);
                 walk(obj[k], childPath);
             }
             return;
@@ -201,7 +202,7 @@ function parseSchemaBlock(basePath, schemaLines) {
         });
 
         for (const k of keys) {
-            const childPath = curPath ? `${curPath}.${k}` : k;
+            const childPath = curPath ? appendPath(curPath, k) : formatPath([k]);
             walk(obj[k], childPath);
         }
     }
@@ -261,7 +262,7 @@ function looksLikeDataOpForSchemaPath(line, schemaPath) {
     if (colonIdx === -1) return false;
 
     const path = line.slice(0, colonIdx).trim();
-    return path === schemaPath || path.startsWith(`${schemaPath}.`) || path.startsWith(`${schemaPath}[`);
+    return pathStartsWith(parsePath(path), parsePath(schemaPath));
 }
 
 export function parseStateBlock(content) {

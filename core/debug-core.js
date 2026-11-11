@@ -15,7 +15,7 @@ async function getEventCenter() {
     return await eventCenterPromise;
 }
 
-const DEFAULT_MAX_LOGS = 200;
+const DEFAULT_MAX_LOGS = 100;
 
 function now() {
     return Date.now();
@@ -119,17 +119,17 @@ class LoggerCore {
         return this._buffer.slice();
     }
 
+    snapshot() {
+        return {
+            version: 1,
+            exportedAt: now(),
+            maxSize: this._maxSize,
+            logs: this.getAll(),
+        };
+    }
+
     export() {
-        return JSON.stringify(
-            {
-                version: 1,
-                exportedAt: now(),
-                maxSize: this._maxSize,
-                logs: this.getAll(),
-            },
-            null,
-            2
-        );
+        return JSON.stringify(this.snapshot(), null, 2);
     }
 
     _push(entry) {
@@ -313,9 +313,6 @@ class LoggerCore {
         }
     }
 
-    ensureConsoleFilters() {
-        this._mountConsoleHooks();
-    }
 }
 
 const logger = new LoggerCore();
@@ -329,11 +326,12 @@ export const xbLog = {
     warn: (moduleId, ...args) => logger.warn(moduleId, ...args),
     error: (moduleId, message, err) => logger.error(moduleId, message, err),
     getAll: () => logger.getAll(),
+    snapshot: () => logger.snapshot(),
     clear: () => logger.clear(),
     export: () => logger.export(),
 };
 
-logger.ensureConsoleFilters();
+logger.enable();
 
 export const CacheRegistry = (() => {
     const _registry = new Map();
@@ -406,14 +404,6 @@ export function disableDebugMode() {
     getEventCenter().then((EventCenter) => {
         EventCenter.disableDebug();
     }).catch(reportLoggerFailure);
-}
-
-export function enablePersistentDebugLogging() {
-    xbLog.enable();
-}
-
-export function disablePersistentDebugLogging(options = {}) {
-    xbLog.disable(options);
 }
 
 if (typeof window !== "undefined") {

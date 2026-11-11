@@ -25,9 +25,7 @@ function buildSettings(toolMode) {
         presets: {
             主预设: {
                 provider: 'openai-compatible',
-                modelConfigs: {
-                    'openai-compatible': { baseUrl: 'https://main.example/v1', model: 'tool-model', apiKey: 'k', toolMode, reasoning: { mode: 'off' } },
-                },
+                baseUrl: 'https://main.example/v1', model: 'tool-model', apiKey: 'k', toolMode, reasoning: { mode: 'off' },
             },
         },
     };

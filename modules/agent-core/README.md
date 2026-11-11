@@ -2,8 +2,10 @@
 
 `agent-core` 是小白 X 各 Agent App 共用的业务无关能力层；共享配置表单原语可以在这里，具体 App 的界面与宿主装配不属于这里。
 
-浏览器消费者由插件统一构建，纯配置解析从 `provider-resolution.js` 导入；真正需要发起模型请求时，懒加载源码 `browser-entry.js`，由统一依赖图提取 SDK。原生动态入口通过构建清单的 `runtime/agent-core` 装载，不直接请求带裸包 import 的源码。浏览器入口只导出通用配置、Adapter factory、请求脱敏和
+浏览器消费者由插件统一构建，纯配置解析从 `provider-resolution.js` 导入；真正需要发起模型请求时，懒加载源码 `browser-entry.js`，由统一依赖图提取 SDK。原生动态入口通过构建清单的 `runtime/agent-core` 装载，不直接请求带裸包 import 的源码。浏览器入口只导出通用配置、Adapter factory、公共调用工厂、请求脱敏和
 SillyTavern 请求头注入，不得反向依赖任何具体功能模块。
+
+预设和任务脚本使用 `window.xiaobaixAgent`；主／副配置快照、调用方持有历史的工具往返及独立联网入口见 [公共 API](../../docs/user/agent-api.md)。公共工厂提供单轮模型请求、协议回放和显式联网入口；调用方仍拥有工具执行和业务循环。会话内联网复用小白助手的长结果分页，独立联网入口保留原始结果。
 
 可以放这里：
 
@@ -33,9 +35,15 @@ createPlanLedger({ plansTable });
 
 不要让 `agent-core` 默认绑定某个 App 的数据库。
 
+## 预设与渠道
+
+共享 Agent 预设由 `config.js` 定义、`settings-repository.js` 存储；每个命名预设只有一份全字段（渠道、模型、URL、Key、采样、思考、工具模式及 Vertex 专属选项）。主配置与分身配置仍独立。切换渠道只修改 `provider`，不替换模型、不填入渠道默认值、不清除当前渠道不使用的字段。表单草稿只在当前页面内存中，保存仍走既有保存回执；协议适配器只投影当前请求需要的参数，不回写预设。不支持的组合在实际请求时明确报错，不擅自改值。
+
+持久化格式 v2 不含 `modelConfigs`。读取旧设置时，`settings-migration.js` 在仓库入口按冻结的 v1 规则转换：每个预设保留原来选中渠道的完整配置，Vertex 专属选项保留在同一预设的 `vertex` 字段；不同预设的名称和选择不变。旧数据不会进入日常表单和运行时读写，下一次保存只写当前格式。删除预设沿用原删除入口；移除 Vertex 时仅清理 `vertex` 字段与注册，不删除共享的 URL、Key、模型。
+
 ## API Key 与免密反代
 
-共享主配置与分身配置的 API Key 均可留空。空值、空白或未提供的 Key 表示不提供模型密码；填写 Key 时按所选 Provider 鉴权。设置和请求共用 CORE 的鉴权规则，各 App 不再以空 Key 判断模型未配置。
+共享主配置与分身配置的 API Key 均可留空。空值、空白或未提供的 Key 表示不提供模型密码；填写 Key 时按所选 Provider 鉴权。设置和请求共用 CORE 的鉴权规则；模型是否已配置不取决于 Key 是否为空。
 
 OpenAI 兼容、Responses、Anthropic 的免密请求不发送认证头；Google 受当前 SDK 约束发送空 `x-goog-api-key`。SDK 内部适配不保存占位密钥，也不把占位值或 Node 环境凭据发给反代。模型拉取和实际请求均保留供应商鉴权错误，不切换身份重试。
 
@@ -45,11 +53,37 @@ Claude 和 Google 的模型列表鉴权与生成鉴权分开：预设中的 `mod
 
 直连反代必须允许浏览器跨域。酒馆托管渠道仍遵守宿主协议：SillyTavern 1.18.0 的 Claude 转发强制要求密码，免密 Claude 反代应选择直连 Anthropic，不会自动替用户切换渠道。官方 API、联网渠道和图片生成供应商自身的鉴权要求不变。
 
+## Google Vertex AI
+
+选择独立的 **Google Vertex AI** 渠道，不读取酒馆主连接。此渠道面向 Vertex 上的 Gemini 3.8 / 4 Argon GenerateContent 文本、图片输入与工具调用；不包含 Claude 等 Model Garden 合作模型，也不把 OpenAI 兼容接口当作 Vertex 原生协议。
+
+- **中转（默认）**：填写中转地址、API Key 和中转提供的模型名称。使用 Gemini 原生的 `/v1beta/models/{model}:generateContent` / `streamGenerateContent?alt=sse` 路由，以 `x-goog-api-key` 鉴权；地址已带版本时不重复追加，文本 API 入口也支持自定义前缀。中转负责把请求路由到 Vertex。模型别名作为不透明标识编码传输，不靠 `gemini-*` 白名单判断能力；模型列表保留别名。不会读取云项目或发起 OAuth。
+- **服务账号 JSON（Google Cloud 项目）**：为服务账号授予目标项目的 Vertex AI User（`roles/aiplatform.user`）权限，下载 JSON 后导入。项目 ID 留空时使用 JSON 的 `project_id`；跨项目调用时填写目标项目。区域默认 `global`，也可填写模型支持的区域或多区域 `us` / `eu`。模型填写短 ID，如 `gemini-3.8-flash`。
+- **API Key（Express）**：填写 Vertex Express 创建的 API Key 和模型 ID，不需要服务账号 JSON、项目 ID 或区域。AI Studio 的 Key 不能当作 Vertex Key 使用；Google Cloud 的其他 Key 也不能仅凭字符串判断为 Express 凭据。
+
+服务账号认证通过浏览器原生 Web Crypto 签名，需 HTTPS 或 localhost；不需新增本地服务。JSON 含私钥，与现有 API Key 一样保存在用户自己的模型预设中，不是加密保险箱；不要分享或上传含凭据的配置，也不要在不信任的酒馆实例或扩展环境中导入。删除凭据可清空对应 JSON / Key 后保存，或删除预设；撤销访问需在 Google Cloud 删除相应密钥。切换认证模式保留编辑值，但运行时只传递当前模式所需凭据。
+
+按 [3.8 官方协议](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash)和 [4 Argon 官方协议](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)，思考强度提供 LOW / MEDIUM / HIGH；跟随默认时不发送强度，开启但未指定时使用 MEDIUM。不能发送 MINIMAL、`thinkingBudget` 或显式关闭思考。此渠道不发送已被忽略的温度 / Top P / Top K，以及会被拒绝的频率 / 存在惩罚；不根据中转模型别名切换这些规则。
+
+流式工具请求默认开启 `streamFunctionCallArguments`；中转不透传此字段时可关闭，仍接受完整 `functionCall.args`。按 [Vertex 分片协议](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#streaming_function_call_arguments)处理 `partialArgs` 的路径、类型、字符串续片和两层 `willContinue`，同名调用保持独立。只有参数完整才返回可执行工具；签名和真实调用 ID 保留，无 ID 不伪造供应商 ID。当前会话及保存后重放都使用完整调用，不回传参数碎片。
+
+`vertex-config.js` 定义连接配置与端点，`google-vertex.js` 拥有 Vertex 请求规则，`vertex-transport.js` 发送原生 JSON / SSE 并保留供应商错误，`vertex-stream.js` 只组装当前响应，`vertex-auth.js` 只负责认证；消息构造、图片和工具回放复用 `GoogleAdapter`。工具声明使用 `parametersJsonSchema` 原样传递 JSON Schema。访问令牌与签名密钥只在当前 Adapter 内存中按需续期。JSON 的 `token_uri` 不作为目的地，OAuth 固定发送至 Google 官方端点。配置归属及删除路径遵循上面的预设规则，不新增数据库。
+
+模型发现失败明确报错，不替换内置列表。4 Argon 的 `CONTINUATION` 长解码结束状态按未完成返回，不自动发起续段或扩大用户预算；本渠道不提供 Interactions / Live API。官方认证说明：[服务账号 OAuth](https://developers.google.com/identity/protocols/oauth2/service-account)、[Vertex API Key](https://cloud.google.com/vertex-ai/generative-ai/docs/start/api-keys)。
+
+## Gemini 的 OpenAI 兼容工具历史
+
+共享 OpenAI 兼容适配器为识别为 Gemini 的模型，在整批历史工具调用都没有签名时添加 Google 的占位标记。`extra_content.google` 同时携带官方兼容接口使用的 `thought_signature` 和部分中转使用的 `thoughtSignature`，两者引用同一标记。此处理由直连和酒馆托管 OpenAI 路径共用，变量更新与绘图规划无需各自补字段。它不修改模型选择、请求协议或用户历史，不增加重试。
+
+模型返回的真实签名按不透明回执保存：支持签名字段和 LiteLLM `id` 中的 `__thought__` 后缀。签名保护整批并行调用，只有首项带签名时，其余项仍原样保留；回放优先使用原始调用的编号、参数字节及签名，调用方重建的字段不能覆盖它们。签名缺损或参数不完整按既有工具回放校验处理。Google／Vertex 原生协议不套用 OpenAI 字段投影，模型别名无法识别为 Gemini 时也不猜测能力。
+
 ## 原生 Anthropic 提示缓存
 
 直连 Anthropic Messages 适配器对共享模型识别规则确认的 Claude 家族，统一在最后一个工具定义、系统提示块、最后一个可缓存的对话内容块上发送 `cache_control: { type: 'ephemeral' }`，使用供应商默认的 5 分钟缓存。DeepSeek 等其他 Anthropic 兼容模型及无法识别的模型别名保持原请求，不根据接口形状猜测缓存能力。思考块和签名不改动，输入历史不携带新增的断点状态；断点每次按最终请求构造，不存本地缓存、不增加重试、不改提示内容。
 
 缓存标记可在 `requestInspection.request.body` 中检查。流式与非流式结果都保留供应商原始 `usage`，各消费者的控制台统一输出 `[AgentCore][AnthropicUsage]`：`cache_creation_input_tokens` 是写入，`cache_read_input_tokens` 是命中读取，`input_tokens` 是不含缓存的输入。缺失字段保持缺失，不伪装成零或命中；日志不包含提示词、回复正文或密钥。
+
+OpenAI 兼容适配器对同一规则识别为 Claude 的模型（含 `anthropic/claude-*` 这类中转名），在系统消息和最后一条非 assistant 消息的末个文本块上发送同样的 `cache_control`，字符串内容转成单个文本块；这是 OpenRouter 等中转转发给 Anthropic 的格式。Claude 的前缀顺序是工具、系统、消息，系统断点同时覆盖工具定义。末尾的 assistant 预填每轮变化，不设断点。其他模型的请求不变；GPT、DeepSeek 等由服务端按相同前缀自动缓存。
 
 发送标记不等于命中或省钱：重复前缀、模型最低长度与缓存有效期均须满足，首次缓存写入可能比普通输入贵。以 [Anthropic 缓存文档](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) 和供应商返回的实际用量为准，不根据本地分词估算账单。
 

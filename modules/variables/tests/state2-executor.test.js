@@ -37,13 +37,13 @@ middle
     assert.deepEqual(readStoredValue(ctx, '数据'), {
         背包: [{ 名称: '蓝药', 数量: 5 }],
     });
-    assert.deepEqual(ctx.chatMetadata.LWB_RULES_V2['数据.背包.[*].数量'], { typeLock: 'number' });
+    assert.deepEqual(ctx.chatMetadata.LWB_RULES_V2['数据.背包[*].数量'], { typeLock: 'number' });
 
     const record = ctx.chat[1].extra.LittleWhiteBox_state2;
-    assert.equal(record.v, 1);
+    assert.equal(record.v, 2);
     assert.equal(record.entries.length, 1);
     assert.equal(record.entries[0].rules.length, 5);
-    assert.deepEqual(record.entries[0].ops, [{ op: 'push', path: '数据.背包', value: { 名称: '蓝药', 数量: '5' }, source: 'text' }]);
+    assert.deepEqual(record.entries[0].ops, [{ op: 'push', path: ['数据', '背包'], value: { 名称: '蓝药', 数量: '5' }, source: 'text' }]);
     const second = harness.executor.applyStateForMessage(1, `
 before
 <state>
@@ -77,7 +77,7 @@ $schema 数据
 `);
 
     assert.equal(result.errors.length, 0);
-    assert.deepEqual(ctx.chatMetadata.LWB_RULES_V2['数据.背包.[*].数量'], { typeLock: 'number' });
+    assert.deepEqual(ctx.chatMetadata.LWB_RULES_V2['数据.背包[*].数量'], { typeLock: 'number' });
     assert.deepEqual(ctx.chatMetadata.LWB_RULES_V2['数据.同行者.*.HP'], { typeLock: 'number' });
     assert.equal(ctx.chatMetadata.LWB_RULES_V2['数据.背包.*.数量'], undefined);
 });

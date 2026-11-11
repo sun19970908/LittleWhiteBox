@@ -17,14 +17,18 @@
 
 ## 主要功能
 
-- 剧情总结与记忆：整理剧情，辅助长对话中的记忆召回；支持[记忆包导入导出](./modules/story-summary/docs/summary-memory-packages.md)。
+- 剧情总结与记忆：整理剧情，辅助长对话中的记忆召回；支持记忆包导入导出。
 - 变量与任务：管理角色状态、委托和任务进展。
 - 绘图与语音：生成剧情插图，播放角色语音。
 - 小白 OS：集中使用地图、私人通讯、语言学习、钱包和游戏等应用。
 
+## 文档
+
+安装后在 **扩展设置 → 小白X → 功能文档** 打开随插件附带的文档，内容与已安装版本一致。在 GitHub 上也可以直接阅读 [docs/user](./docs/user/index.md)。
+
 ## 开发构建
 
-执行 `npm run build` 构建整个插件，`npm run check` 完成整体验收。完整规则见 [构建与发布资源](./docs/plugin-build.md)。
+执行 `npm run build` 构建整个插件，`npm run check` 完成整体验收。完整规则见 [构建与发布资源](./scripts/build/README.md)。
 
 ## 许可证
 

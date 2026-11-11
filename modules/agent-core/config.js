@@ -2,14 +2,17 @@ import { normalizeWebApiKey, normalizeWebBaseUrl, normalizeWebSettings } from '.
 import { normalizeReasoningConfig } from './reasoning-config.js';
 import { normalizeSampling } from './sampling.js';
 import { normalizeAgentApiKey } from './provider-auth.js';
-import { DEFAULT_MODEL_LIST_AUTH, normalizeModelListAuth, supportsModelListAuth } from './model-list-auth.js';
+import { DEFAULT_MODEL_LIST_AUTH } from './model-list-auth.js';
+import { normalizeVertexConfig } from './vertex-config.js';
 
 export const DEFAULT_PROVIDER = 'openai-compatible';
 export const DEFAULT_PRESET_NAME = '默认';
 export const DEFAULT_PERMISSION_MODE = 'default';
 export const DEFAULT_JSAPI_PERMISSION = 'deny';
+export const AGENT_PERMISSION_MODE_LABEL = '执行权限';
+export const AGENT_JSAPI_PERMISSION_LABEL = 'JavaScript API 权限';
 export const DEFAULT_MAX_TOKENS = 32000;
-export const AGENT_SETTINGS_CONFIG_VERSION = 1;
+export const AGENT_SETTINGS_CONFIG_VERSION = 2;
 export const AGENT_PERMISSION_MODE_OPTIONS = Object.freeze([
     { value: 'default', label: '默认权限' },
     { value: 'full', label: '完全权限' },
@@ -19,94 +22,15 @@ export const AGENT_JSAPI_PERMISSION_OPTIONS = Object.freeze([
     { value: 'allow', label: '允许' },
 ]);
 
-export const DEFAULT_MODEL_CONFIGS = {
-    'openai-responses': {
-        baseUrl: 'https://api.openai.com/v1',
-        model: 'gpt-4.1-mini',
-        apiKey: '',
-        temperature: 1,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        sendTemperature: true,
-        sampling: {},
-    },
-    'openai-compatible': {
-        baseUrl: 'https://api.openai.com/v1',
-        model: 'gpt-4o-mini',
-        apiKey: '',
-        temperature: 1,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        sendTemperature: true,
-        toolMode: 'tagged-json',
-        sampling: {},
-    },
-    'sillytavern-openai-compatible': {
-        baseUrl: '',
-        model: 'gpt-4o-mini',
-        apiKey: '',
-        temperature: 1,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        sendTemperature: true,
-        toolMode: 'tagged-json',
-        sampling: {},
-    },
-    'sillytavern-claude': {
-        baseUrl: '',
-        model: 'claude-sonnet-4-0',
-        apiKey: '',
-        modelListAuth: DEFAULT_MODEL_LIST_AUTH,
-        temperature: 1,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        sendTemperature: true,
-        sampling: {},
-    },
-    'sillytavern-google': {
-        baseUrl: '',
-        model: 'gemini-2.5-pro',
-        apiKey: '',
-        temperature: 1,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        sendTemperature: true,
-        sampling: {},
-    },
-    anthropic: {
-        baseUrl: 'https://api.anthropic.com',
-        model: 'claude-sonnet-4-0',
-        apiKey: '',
-        modelListAuth: DEFAULT_MODEL_LIST_AUTH,
-        temperature: 1,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        sendTemperature: true,
-        sampling: {},
-    },
-    google: {
-        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
-        model: 'gemini-2.5-pro',
-        apiKey: '',
-        temperature: 1,
-        maxTokens: DEFAULT_MAX_TOKENS,
-        sendTemperature: true,
-        sampling: {},
-    },
-};
-
-export function cloneDefaultModelConfigs() {
-    return JSON.parse(JSON.stringify(DEFAULT_MODEL_CONFIGS));
-}
-
 export function buildDefaultPreset() {
-    return {
-        provider: DEFAULT_PROVIDER,
-        modelConfigs: cloneDefaultModelConfigs(),
-        permissionMode: DEFAULT_PERMISSION_MODE,
-    };
+    return normalizeAgentPreset();
 }
 
 export function buildDefaultDelegateConfig(sourcePreset = buildDefaultPreset()) {
     const preset = sourcePreset && typeof sourcePreset === 'object' ? sourcePreset : buildDefaultPreset();
-    return {
-        provider: normalizeProvider(preset.provider),
-        modelConfigs: normalizeModelConfigs(preset.modelConfigs || {}),
-    };
+    const config = normalizeAgentPreset(preset);
+    delete config.permissionMode;
+    return config;
 }
 
 export function normalizePermissionMode(value) {
@@ -133,31 +57,24 @@ export function normalizePresetName(value) {
     return normalized || DEFAULT_PRESET_NAME;
 }
 
-export function normalizeModelConfigs(modelConfigs = {}) {
-    const next = cloneDefaultModelConfigs();
-    Object.keys(DEFAULT_MODEL_CONFIGS).forEach((provider) => {
-        const source = (modelConfigs && typeof modelConfigs[provider] === 'object')
-            ? modelConfigs[provider]
-            : {};
-        const defaults = DEFAULT_MODEL_CONFIGS[provider];
-        next[provider] = {
-            baseUrl: String(source.baseUrl ?? defaults.baseUrl ?? ''),
-            model: String(source.model ?? defaults.model ?? ''),
-            apiKey: normalizeAgentApiKey(source.apiKey ?? defaults.apiKey),
-            ...(supportsModelListAuth(provider) ? { modelListAuth: normalizeModelListAuth(source.modelListAuth, provider) } : {}),
-            temperature: source.temperature ?? defaults.temperature,
-            maxTokens: normalizeMaxTokens(source.maxTokens, defaults.maxTokens),
-            sendTemperature: typeof source.sendTemperature === 'boolean'
-                ? source.sendTemperature
-                : defaults.sendTemperature,
-            ...('toolMode' in defaults
-                ? { toolMode: String(source.toolMode || defaults.toolMode || 'native') }
-                : {}),
-            reasoning: normalizeReasoningConfig(source.reasoning),
-            sampling: normalizeSampling(source.sampling),
-        };
-    });
-    return next;
+// A preset owns one complete set of fields. Provider selection never supplies
+// replacement values; adapters project only the fields their protocol accepts.
+export function normalizeAgentPreset(source = {}) {
+    return {
+        provider: normalizeProvider(source.provider),
+        baseUrl: String(source.baseUrl ?? 'https://api.openai.com/v1'),
+        model: String(source.model ?? 'gpt-4o-mini'),
+        apiKey: normalizeAgentApiKey(source.apiKey),
+        vertex: normalizeVertexConfig(source.vertex),
+        modelListAuth: String(source.modelListAuth ?? DEFAULT_MODEL_LIST_AUTH),
+        temperature: source.temperature ?? 1,
+        maxTokens: normalizeMaxTokens(source.maxTokens),
+        sendTemperature: source.sendTemperature !== false,
+        toolMode: String(source.toolMode ?? 'tagged-json'),
+        reasoning: normalizeReasoningConfig(source.reasoning),
+        sampling: normalizeSampling(source.sampling),
+        permissionMode: normalizePermissionMode(source.permissionMode),
+    };
 }
 
 function normalizeProvider(provider) {
@@ -168,13 +85,9 @@ function buildPresetSource(input = {}, legacyPresetName) {
     if (input && typeof input.presets === 'object' && input.presets) {
         return input.presets;
     }
-    if (input?.modelConfigs) {
+    if (input?.provider) {
         return {
-            [legacyPresetName]: {
-                provider: input.provider || DEFAULT_PROVIDER,
-                modelConfigs: input.modelConfigs,
-                permissionMode: input.permissionMode,
-            },
+            [legacyPresetName]: input,
         };
     }
     return {};
@@ -187,11 +100,7 @@ function normalizePresets(input = {}, legacyPresetName) {
     Object.entries(presetSource).forEach(([rawName, rawPreset]) => {
         if (!rawPreset || typeof rawPreset !== 'object') return;
         const name = normalizePresetName(rawName);
-        presets[name] = {
-            provider: normalizeProvider(rawPreset.provider),
-            modelConfigs: normalizeModelConfigs(rawPreset.modelConfigs || {}),
-            permissionMode: normalizePermissionMode(rawPreset.permissionMode),
-        };
+        presets[name] = normalizeAgentPreset(rawPreset);
     });
 
     if (!Object.keys(presets).length) {
@@ -216,10 +125,7 @@ function resolveDelegatePresetName(presets, requestedName, fallbackName) {
 function normalizeDelegateConfig(input = {}, fallbackPreset = buildDefaultPreset()) {
     const fallback = buildDefaultDelegateConfig(fallbackPreset);
     const source = input && typeof input === 'object' ? input : {};
-    return {
-        provider: normalizeProvider(source.provider || fallback.provider),
-        modelConfigs: normalizeModelConfigs(source.modelConfigs || fallback.modelConfigs),
-    };
+    return buildDefaultDelegateConfig({ ...fallback, ...source });
 }
 
 function resolveDelegateConfigured(input = {}, presets = {}, currentPresetName = DEFAULT_PRESET_NAME, delegatePresetName = currentPresetName) {
@@ -234,8 +140,7 @@ function resolveDelegateConfigured(input = {}, presets = {}, currentPresetName =
     if (!source || typeof source !== 'object' || Array.isArray(source)) {
         return false;
     }
-    const hasExplicitSource = (typeof source.provider === 'string' && source.provider.trim())
-        || (source.modelConfigs && typeof source.modelConfigs === 'object' && Object.keys(source.modelConfigs).length);
+    const hasExplicitSource = Object.keys(source).length > 0;
     if (!hasExplicitSource) return false;
     if (input?.delegateConfigured === true) return true;
 
@@ -343,6 +248,8 @@ export function normalizeAgentConfig(config = {}) {
     const webSettings = normalizeWebSettings(config, resolveGlobalTavilySettings(config, legacyPresetName, currentPresetName));
 
     return {
+        ...currentPreset,
+        configVersion: AGENT_SETTINGS_CONFIG_VERSION,
         workspaceFileName: String(config.workspaceFileName || ''),
         updatedAt: Number(config.updatedAt) || 0,
         jsApiPermission: normalizeJsApiPermission(config.jsApiPermission),
@@ -353,9 +260,6 @@ export function normalizeAgentConfig(config = {}) {
         presetDraftName: normalizePresetName(config.presetDraftName || currentPresetName),
         presetNames: Object.keys(presets),
         presets,
-        provider: currentPreset.provider,
-        modelConfigs: currentPreset.modelConfigs,
-        permissionMode: normalizePermissionMode(currentPreset.permissionMode),
         ...webSettings,
     };
 }

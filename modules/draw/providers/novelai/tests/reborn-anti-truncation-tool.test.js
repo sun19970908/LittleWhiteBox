@@ -65,7 +65,7 @@ test('if the model follows the instruction and puts everything into game_content
     const layout = setBlocksEnabled(imported.layout, [imported.layout.blocks.find(hasTool).id], true);
     const settings = {
         currentPresetName: '主预设',
-        presets: { 主预设: { provider: 'openai-compatible', modelConfigs: { 'openai-compatible': { baseUrl: 'https://x.example/v1', model: 'm', apiKey: 'k', toolMode: 'native', reasoning: { mode: 'off' } } } } },
+        presets: { 主预设: { provider: 'openai-compatible', baseUrl: 'https://x.example/v1', model: 'm', apiKey: 'k', toolMode: 'native', reasoning: { mode: 'off' } } },
     };
     const replies = [
         { choices: [{ message: { role: 'assistant', content: '', tool_calls: [{ id: 'a', type: 'function', function: { name: 'game_content', arguments: JSON.stringify({ content: '阿璃推开门。（整段规划写进了这里）' }) } }] }, finish_reason: 'tool_calls' }] },

@@ -2,6 +2,7 @@ import {
     TOOL_DEFINITIONS,
     TOOL_NAMES,
     formatToolResultDisplay,
+    getAssistantToolDefinitions,
 } from './tooling.js';
 import { createAssistantRuntime } from './runtime.js';
 import { settleAssistantRunFailure } from './runtime/run-failure.js';
@@ -12,13 +13,14 @@ import {
     createAgentAdapter,
 } from '../../agent-core/provider-config.js';
 import { buildWorkspaceUserContextTextForState } from './context/current-context.js';
+import { readableCardWorkspacePath } from '../../card-workspace/paths.js';
+import { INVALID_LOOKUP_SCOPE, describeInvalidLookupScope } from '../shared/lookup-scope.js';
 import { normalizeMemoryFiles } from './memory/memory-files.js';
 import {
     DEFAULT_PRESET_NAME,
     normalizeJsApiPermission,
     normalizeAssistantConfig,
 } from '../../agent-core/config.js';
-import { isWebConfigured } from '../../agent-core/web/tools.js';
 import {
     normalizeSlashCommand,
     normalizeSlashSkillTrigger,
@@ -28,6 +30,8 @@ import { createSessionStore } from './state/session-store.js';
 import { createWorkspaceStore } from './workspace/workspace-store.js';
 import { closeAssistantWorkspace } from './workspace/workspace-lifecycle.js';
 import { ACTIVITY_COPY } from './ui/activity-copy.js';
+import { locateFile } from '../../card-workspace/files.js';
+import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
 import { createAttachmentsManager } from './attachments.js';
 import { renderAppChrome, renderContextHint, resolveWorkspaceWidth } from './ui/app-chrome.js';
 import { bindContextMeter, renderContextMeter } from './ui/context-meter.js';
@@ -40,7 +44,6 @@ import { createLocalSourcesManager } from './workspace/local-sources.js';
 import { buildWorkspaceTree } from './workspace/local-workspace-tree.js';
 import { WORKSPACE_COPY } from './workspace/workspace-copy.js';
 import {
-    destroyWorkspaceEditorCache,
     renderWorkspace as renderWorkspaceUi,
 } from './workspace/local-workspace-ui.js';
 import { injectAssistantStyles } from './styles.js';
@@ -87,6 +90,7 @@ const state = {
     messages: [],
     historySummary: '',
     archivedTurnCount: 0,
+    archivedSkillIds: [],
     contextStats: {
         usedTokens: 0,
         budgetTokens: MAX_CONTEXT_TOKENS,
@@ -558,6 +562,16 @@ async function saveSkillFile(targetPath = '') {
     }
 }
 
+async function editCardFiles(path = '') {
+    try {
+        if (!await flushPendingWorkspaceChanges()) return;
+        const result = await requestHostTool(TOOL_NAMES.CARD_FILES, path ? { action: 'save', paths: [path] } : { action: 'open' });
+        if (path) showToast(result.ok ? (result.results.some(item => item.hasUnsavedEdits) ? CARD_COPY.savedLater : CARD_COPY.saved)
+            : result.results.filter(item => !item.saved).map(item => item.error).join('\n'));
+        else openWorkspacePanelTarget(`${result.root}card.json`);
+    } catch (error) { showToast(describeError(error)); }
+}
+
 function renderWorkspacePanel(container, options = {}) {
     if (state.workspacePanelMode === 'memory') {
         ensureSkillSelection({ fallbackToFirst: false });
@@ -668,17 +682,18 @@ function renderWorkspacePanel(container, options = {}) {
         showRestoreButton: true,
         showRenameButton: true,
         showDeleteButton: true,
-        showSaveButton: false,
+        showSaveButton: !!locateFile(state.selectedFilePath || ''),
+        saveLabel: CARD_COPY.save,
+        canSaveFile: file => !!locateFile(file.path),
+        onSaveFile: path => observeBackgroundTask(editCardFiles(path), { source: import.meta.url, operation: 'saveCardFile' }),
+        extraNavActions: [{ action: 'open-card', icon: 'file', label: CARD_COPY.open,
+            onClick: () => observeBackgroundTask(editCardFiles(), { source: import.meta.url, operation: 'openCardFiles' }) }],
     });
 }
 
 function renderWorkspacePanelWhenOpen(container, options = {}) {
     if (!container) return;
     if (!state.isWorkspaceOpen) {
-        if (container.childNodes.length || container.__xbWorkspaceEditorCache) {
-            destroyWorkspaceEditorCache(container);
-            container.replaceChildren();
-        }
         return;
     }
     renderWorkspacePanel(container, options);
@@ -1000,7 +1015,7 @@ function describeError(error) {
     if (lowered === 'local_path_required') return '这个工具只能操作 `local/` 下的会话内临时工作区文件。';
     if (lowered === 'workspace_scope_local_required') return '要读取或搜索 `local/` 工作区，请显式传 `scope: "local"`。';
     if (lowered === 'workspace_scope_local_only') return '当前已切到 `local` 工作区作用域，因此这里只能读取或搜索 `local/` 路径。';
-    if (lowered === 'invalid_lookup_scope') return '`scope` 只支持 `project` 或 `local`。';
+    if (lowered === INVALID_LOOKUP_SCOPE) return describeInvalidLookupScope();
     if (lowered === 'unsupported_text_file') return '目前只支持文本类工作区文件。';
     if (lowered === 'local_source_not_found') return '源 `local/` 路径不存在，无法完成这次移动。';
     if (lowered === 'local_file_not_found') return '目标 `local/` 文件不存在；可以先用 Write 新建。';
@@ -1021,6 +1036,8 @@ function describeError(error) {
     if (lowered === 'directory_path_required') return '还没有提供要查看的目录路径。';
     if (lowered === 'glob_pattern_required') return '还没有提供 glob 路径模式。';
     if (lowered === 'empty_query') return '搜索词是空的，换一个明确点的关键词就行。';
+    if (lowered === 'tool_result_expired') return ACTIVITY_COPY.resultExpired;
+    if (lowered === 'tool_result_range_invalid') return ACTIVITY_COPY.resultRangeInvalid;
     return raw;
 }
 
@@ -1051,14 +1068,8 @@ function isJsApiPermissionEnabled() {
 
 function getEnabledToolDefinitions(options = {}) {
     const role = options.role === 'delegate' ? 'delegate' : 'main';
-    let definitions = isJsApiPermissionEnabled()
-        ? TOOL_DEFINITIONS
-        : TOOL_DEFINITIONS.filter((tool) => tool?.function?.name !== TOOL_NAMES.RUN_JAVASCRIPT_API);
     const providerConfig = getActiveProviderConfig(role === 'delegate' ? { role: 'delegate' } : {});
-    if (!isWebConfigured(providerConfig)) {
-        definitions = definitions.filter((tool) => tool?.function?.name !== TOOL_NAMES.WEB_SEARCH);
-    }
-    return definitions;
+    return getAssistantToolDefinitions({ providerConfig, jsApiEnabled: isJsApiPermissionEnabled(), role, skillIds: options.skillIds || [] });
 }
 
 const chatUi = createChatUi({
@@ -1235,18 +1246,19 @@ function buildWorkspaceUserContextText() {
 function buildExternalEditorContextText() {
     const context = normalizeExternalEditorContext(state.externalEditorContext);
     if (!context) return '';
+    const filePath = readableCardWorkspacePath(context.filePath);
 
     const lines = ['[Current context]'];
     if (context.filePath) {
-        lines.push(`用户当前打开了文件：${context.filePath}`);
+        lines.push(`用户当前打开了文件：${filePath}`);
     }
     if (context.lineStart) {
         lines.push(
             context.filePath
                 ? (
                     context.lineEnd && context.lineEnd !== context.lineStart
-                        ? `用户当前选中了 ${context.filePath} 的第 ${context.lineStart} 到 ${context.lineEnd} 行：`
-                        : `用户当前选中了 ${context.filePath} 的第 ${context.lineStart} 行：`
+                        ? `用户当前选中了 ${filePath} 的第 ${context.lineStart} 到 ${context.lineEnd} 行：`
+                        : `用户当前选中了 ${filePath} 的第 ${context.lineStart} 行：`
                 )
                 : (
                     context.lineEnd && context.lineEnd !== context.lineStart
@@ -1665,12 +1677,8 @@ function bindEvents(root) {
 
     root.querySelector('#xb-assistant-sidebar-toggle')?.addEventListener('click', () => {
         state.sidebarCollapsed = !state.sidebarCollapsed;
-        render();
-    });
-
-    root.querySelector('#xb-assistant-mobile-settings')?.addEventListener('click', () => {
-        state.sidebarCollapsed = !state.sidebarCollapsed;
-        render();
+        if (!state.sidebarCollapsed && state.isWorkspaceOpen && window.matchMedia('(max-width: 900px)').matches) closeWorkspace();
+        else render();
     });
 
     root.querySelector('#xb-assistant-mobile-close')?.addEventListener('click', () => {
@@ -1678,6 +1686,7 @@ function bindEvents(root) {
     });
 
     root.querySelector('#xb-assistant-open-workspace')?.addEventListener('click', () => {
+        if (!state.isWorkspaceOpen && window.matchMedia('(max-width: 900px)').matches) state.sidebarCollapsed = true;
         toggleWorkspacePanel();
     });
 
@@ -2042,6 +2051,11 @@ window.addEventListener('message', (event) => {
         return;
     }
     const data = event.data || {};
+    if (data.type === 'xb-assistant:card-workspace') {
+        observeBackgroundTask(applyExternalLocalSources(data.payload.localSources).then(() => openWorkspacePanelTarget(data.payload.path)),
+            { source: import.meta.url, operation: 'openCardWorkspace' });
+        return;
+    }
     if (data.type === 'xb-assistant:prepare-close') {
         observeBackgroundTask(closeAssistantAfterWorkspaceFlush(), { source: import.meta.url, operation: "callback" });
         return;
@@ -2071,6 +2085,16 @@ window.addEventListener('message', (event) => {
             applyConfig(data.payload.config);
         } else {
             render();
+        }
+        return;
+    }
+
+    if (data.type === 'xb-assistant:compose') {
+        const input = document.querySelector('#xb-assistant-input');
+        if (input && !input.value.trim()) {
+            input.value = String(data.payload?.text || '');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.focus();
         }
         return;
     }

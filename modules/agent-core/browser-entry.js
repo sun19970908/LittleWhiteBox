@@ -28,4 +28,5 @@ export {
     buildProviderToolResultMessage,
     resolveResultToolCalls,
 } from './runtime/protocol.js';
+export { createPublicAgentApi } from './public-api.js';
 export { setHostChatCompletionsRequestHeadersProvider } from '../../shared/host-llm/chat-completions/client.js';

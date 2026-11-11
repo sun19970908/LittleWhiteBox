@@ -1,4 +1,5 @@
 import { describeMemoryFile, findMemoryFileByPath } from '../memory/memory-files.js';
+import { readableCardWorkspacePath } from '../../../card-workspace/paths.js';
 
 function trimContextSnippet(text, limit = 600) {
     const value = String(text || '');
@@ -30,11 +31,11 @@ export function buildWorkspaceUserContextTextForState(inputState = {}) {
 
     const lines = ['[Current context]'];
     if (selectedTreePath && String(selectedTreePath).endsWith('/') && (!selectedFilePath || selectedTreePath !== selectedFilePath)) {
-        lines.push(`用户当前在工作区聚焦了目录：${selectedTreePath}`);
+        lines.push(`用户当前在工作区聚焦了目录：${readableCardWorkspacePath(selectedTreePath)}`);
         if (!selectedFilePath) {
             lines.push('用户当前还没有在代码区锁定具体文件。');
         } else {
-            lines.push(`代码区当前显示的是：${selectedFilePath}，但树上的当前焦点仍是这个目录。`);
+            lines.push(`代码区当前显示的是：${readableCardWorkspacePath(selectedFilePath)}，但树上的当前焦点仍是这个目录。`);
         }
     } else if (selectedFilePath) {
         if (isMemoryPanel) {
@@ -42,7 +43,7 @@ export function buildWorkspaceUserContextTextForState(inputState = {}) {
             const memoryDescriptor = describeMemoryFile(file, selectedFilePath);
             lines.push(`用户当前打开了记忆区${memoryDescriptor.kindLabel}：${memoryDescriptor.displayName}`);
         } else {
-            lines.push(`用户当前打开了工作区文件：${selectedFilePath}`);
+            lines.push(`用户当前打开了工作区文件：${readableCardWorkspacePath(selectedFilePath)}`);
         }
         if (sourceState.viewerMode) {
             lines.push(`当前查看模式：${String(sourceState.viewerMode || '').trim()}`);
@@ -54,7 +55,7 @@ export function buildWorkspaceUserContextTextForState(inputState = {}) {
         const memoryDescriptor = isMemoryPanel ? describeMemoryFile(file, selectedFilePath) : null;
         const selectedTargetLabel = isMemoryPanel
             ? `这个${memoryDescriptor.kindLabel}`
-            : selection.filePath;
+            : readableCardWorkspacePath(selection.filePath);
         if (selection.lineStart) {
             lines.push(
                 selection.text

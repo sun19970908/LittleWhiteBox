@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { pullModelsForProvider } from '../model-list.js';
 import { createAgentAdapter } from '../provider-config.js';
 import { setHostChatCompletionsRequestHeadersProvider } from '../../../shared/host-llm/chat-completions/client.js';
-import { normalizeModelConfigs } from '../config.js';
+import { normalizeAgentPreset } from '../config.js';
 import { resolveActiveProviderConfig } from '../provider-resolution.js';
 
 // Google discovery contracts (credential disclosure/protocol failure): selected
@@ -101,8 +101,8 @@ test('hosted Google Bearer discovery stops on failures or cancellation without c
 test('Google model-list auth survives Agent settings and resolved provider config', () => {
     for (const provider of ['google', 'sillytavern-google']) {
         for (const modelListAuth of [undefined, 'x-goog-api-key', 'bearer']) {
-            const modelConfigs = normalizeModelConfigs({ [provider]: { modelListAuth } });
-            const config = resolveActiveProviderConfig({ provider, modelConfigs });
+            const preset = normalizeAgentPreset({ provider, modelListAuth });
+            const config = resolveActiveProviderConfig(preset);
             assert.equal(config.modelListAuth, modelListAuth === 'bearer' ? 'bearer' : 'x-goog-api-key');
         }
     }

@@ -1,5 +1,5 @@
 import { basicSetup } from 'codemirror';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState, Transaction } from '@codemirror/state';
 import { EditorView } from '@codemirror/view';
 import { html } from '@codemirror/lang-html';
 import { css } from '@codemirror/lang-css';
@@ -14,6 +14,9 @@ import { getPathExtension } from '../../../agent-core/tools/text-file-types.js';
 import { buildCodeRows, buildDiffRows } from './local-workspace-diff.js';
 import { updateChromeIcon } from '../ui/chrome-icons.js';
 import { WORKSPACE_COPY as C } from './workspace-copy.js';
+import { displayCardWorkspacePath } from '../../../card-workspace/paths.js';
+import { describeCardWorkspaceFiles } from '../../../card-workspace/display.js';
+import { updateWorkspaceChildren } from './workspace-dom.js';
 
 function createActionButton({ action, icon, label, onClick, disabled = false, pressed, className = '' }) {
     const button = document.createElement('button');
@@ -28,7 +31,7 @@ function createActionButton({ action, icon, label, onClick, disabled = false, pr
         button.classList.toggle('is-active', pressed);
     }
     updateChromeIcon(button, icon);
-    button.addEventListener('click', onClick);
+    button.onclick = onClick;
     return button;
 }
 
@@ -93,6 +96,7 @@ function mountWorkspaceEditor(container, options = {}) {
         path = '',
         value = '',
         disabled = false,
+        editability = new Compartment(),
         callbacks = {
             onChange: () => {},
             onSelectionChange: () => {},
@@ -120,11 +124,10 @@ function mountWorkspaceEditor(container, options = {}) {
                 basicSetup,
                 keymap.of([indentWithTab]),
                 workspaceEditorTheme,
-                EditorState.readOnly.of(!!disabled),
-                EditorView.editable.of(!disabled),
+                editability.of([EditorState.readOnly.of(!!disabled), EditorView.editable.of(!disabled)]),
                 resolveWorkspaceEditorLanguage(path),
                 EditorView.updateListener.of((update) => {
-                    if (update.docChanged) {
+                    if (update.docChanged && !update.transactions.some(transaction => transaction.annotation(Transaction.remote))) {
                         callbacks.onChange(update.state.doc.toString());
                     }
                     if (update.docChanged || update.selectionSet) {
@@ -159,17 +162,24 @@ function ensureWorkspaceEditor(container, mountPoint, options = {}) {
     const cache = container?.__xbWorkspaceEditorCache || null;
     const normalizedDisabled = !!options.disabled;
     const nextValue = String(options.value || '');
-    if (cache && cache.path === options.path && cache.disabled === normalizedDisabled) {
+    if (cache && cache.path === options.path) {
         cache.callbacks.onChange = options.onChange || (() => {});
         cache.callbacks.onSelectionChange = options.onSelectionChange || (() => {});
         cache.callbacks.onBlur = options.onBlur || (() => {});
         const currentValue = cache.view.state.doc.toString();
-        if (currentValue !== nextValue) {
+        if (cache.disabled !== normalizedDisabled) {
+            cache.view.dispatch({ effects: cache.editability.reconfigure([
+                EditorState.readOnly.of(normalizedDisabled), EditorView.editable.of(!normalizedDisabled),
+            ]) });
+            cache.disabled = normalizedDisabled;
+        }
+        if (currentValue !== nextValue && !cache.view.composing && !cache.view.hasFocus) {
             cache.view.dispatch({
                 changes: { from: 0, to: currentValue.length, insert: nextValue },
+                annotations: Transaction.remote.of(true),
             });
         }
-        mountPoint.appendChild(cache.view.dom);
+        if (cache.view.dom.parentNode !== mountPoint) mountPoint.appendChild(cache.view.dom);
         return cache.view;
     }
 
@@ -179,15 +189,18 @@ function ensureWorkspaceEditor(container, mountPoint, options = {}) {
         onSelectionChange: options.onSelectionChange || (() => {}),
         onBlur: options.onBlur || (() => {}),
     };
+    const editability = new Compartment();
     const view = mountWorkspaceEditor(mountPoint, {
         path: options.path,
         value: nextValue,
         disabled: normalizedDisabled,
         callbacks,
+        editability,
     });
     container.__xbWorkspaceEditorCache = {
         view,
         callbacks,
+        editability,
         path: options.path,
         disabled: normalizedDisabled,
     };
@@ -251,15 +264,18 @@ function renderWorkspaceTreeNodes(container, nodes = [], options = {}) {
         const isSelected = node.path === (selectedTreePath || selectedFilePath);
         const row = document.createElement('div');
         row.className = `xb-assistant-workspace-tree-row type-${node.type}${node.modified ? ' is-modified' : ''}${isSelected ? ' is-selected' : ''}`;
+        row.dataset.nodeKey = node.key;
 
         const button = document.createElement('button');
         button.type = 'button';
         button.className = `xb-assistant-workspace-tree-button type-${node.type}`;
         button.style.paddingLeft = `${12 + (depth * 16)}px`;
+        button.title = node.path ? displayCardWorkspacePath(node.path) : node.label;
+        if (node.type !== 'file') button.setAttribute('aria-expanded', String(expandedKeys.has(node.key)));
 
         const caret = document.createElement('span');
         caret.className = 'xb-assistant-workspace-tree-caret';
-        caret.textContent = node.type === 'dir'
+        caret.textContent = node.type !== 'file'
             ? (expandedKeys.has(node.key) ? '▾' : '▸')
             : '';
         button.appendChild(caret);
@@ -276,19 +292,19 @@ function renderWorkspaceTreeNodes(container, nodes = [], options = {}) {
             button.appendChild(badge);
         }
 
-        button.addEventListener('click', () => {
-            if (node.type === 'dir') {
-                onSelectNode(node.path);
+        button.onclick = () => {
+            if (node.type !== 'file') {
+                if (node.type === 'dir') onSelectNode(node.path);
                 onToggleNode(node.key);
                 return;
             }
             onSelectFile(node.path);
-        });
+        };
 
         row.appendChild(button);
         container.appendChild(row);
 
-        if (node.type === 'dir' && expandedKeys.has(node.key) && Array.isArray(node.children) && node.children.length) {
+        if (node.type !== 'file' && expandedKeys.has(node.key) && Array.isArray(node.children) && node.children.length) {
             renderWorkspaceTreeNodes(container, node.children, {
                 ...options,
                 depth: depth + 1,
@@ -321,7 +337,7 @@ function renderSaveNotice(viewer, { editorDraft, savedFileExists, onResolveConfl
         button.type = 'button';
         button.textContent = label;
         button.dataset.conflictAction = action;
-        button.addEventListener('click', () => onResolveConflict(action));
+        button.onclick = () => onResolveConflict(action);
         notice.appendChild(button);
     }
     viewer.insertBefore(notice, viewer.querySelector('.xb-assistant-workspace-code-wrap'));
@@ -371,36 +387,13 @@ export function renderWorkspace(container, options = {}) {
         showRenameButton = true,
         showDeleteButton = true,
         showSaveButton = false,
+        saveLabel = C.save,
+        extraNavActions = [],
     } = options;
 
     if (!container) return;
     const shouldRenderEditor = !!selectedMatch && workspaceState.viewerMode === 'current';
-    const existingEditorCache = container.__xbWorkspaceEditorCache || null;
-    const shouldPreserveFocusedEditor = !!(
-        shouldRenderEditor
-        && existingEditorCache?.view
-        && existingEditorCache.path === selectedMatch?.file?.path
-        && existingEditorCache.disabled === !!disabled
-        && (existingEditorCache.view.hasFocus || existingEditorCache.view.composing)
-    );
-    if (shouldPreserveFocusedEditor) {
-        existingEditorCache.callbacks.onChange = onUpdateFileContent
-            ? (nextValue) => {
-                onUpdateFileContent(selectedMatch.file.path, nextValue, { render: false, flush: false });
-            }
-            : (() => {});
-        existingEditorCache.callbacks.onSelectionChange = onEditorSelectionChange || (() => {});
-        existingEditorCache.callbacks.onBlur = onUpdateFileContent
-            ? (nextValue) => {
-                onUpdateFileContent(selectedMatch.file.path, nextValue, { render: true, flush: true });
-            }
-            : (() => {});
-        renderSaveNotice(existingEditorCache.view.dom.closest('.xb-assistant-workspace-viewer'), {
-            editorDraft, savedFileExists, onResolveConflict,
-        });
-        return;
-    }
-    container.replaceChildren();
+    const nextPanel = document.createElement('div');
 
     const body = document.createElement('div');
     body.className = 'xb-assistant-workspace-body';
@@ -428,6 +421,7 @@ export function renderWorkspace(container, options = {}) {
     const navActions = document.createElement('div');
     navActions.className = 'xb-assistant-workspace-action-group';
     if (!hideNavActions) {
+        for (const action of extraNavActions) navActions.appendChild(createActionButton({ ...action, disabled }));
         navActions.append(
             createActionButton({
                 action: 'download-all', icon: 'download', label: C.downloadAll,
@@ -453,7 +447,7 @@ export function renderWorkspace(container, options = {}) {
     searchInput.placeholder = C.search;
     searchInput.setAttribute('aria-label', C.search);
     searchInput.value = workspaceState.fileSearchQuery || '';
-    searchInput.addEventListener('input', (event) => onSearchChange(event.target.value));
+    searchInput.oninput = (event) => onSearchChange(event.target.value);
     const modifiedToggle = createActionButton({
         action: 'modified-only', icon: 'filter', label: C.modifiedOnly,
         pressed: !!workspaceState.showModifiedOnly,
@@ -470,6 +464,7 @@ export function renderWorkspace(container, options = {}) {
         ? (activePath || 'local/')
         : (activePath ? `${activePath.split('/').slice(0, -1).join('/')}/` : 'local/');
     const isWorkspaceRootDirectory = currentDirectoryPath === 'local/';
+    const displayDirectoryPath = displayCardWorkspacePath(currentDirectoryPath);
     if (!hideTreeActions) {
         const treeActions = document.createElement('div');
         treeActions.className = 'xb-assistant-workspace-tree-actions';
@@ -477,11 +472,11 @@ export function renderWorkspace(container, options = {}) {
         createActions.className = 'xb-assistant-workspace-action-group';
         createActions.append(
             createActionButton({
-                action: 'new-file', icon: 'newFile', label: C.directoryAction(C.newFile, currentDirectoryPath),
+                action: 'new-file', icon: 'newFile', label: C.directoryAction(C.newFile, displayDirectoryPath),
                 onClick: () => onCreateFile(currentDirectoryPath),
             }),
             createActionButton({
-                action: 'new-directory', icon: 'newDirectory', label: C.directoryAction(C.newDirectory, currentDirectoryPath),
+                action: 'new-directory', icon: 'newDirectory', label: C.directoryAction(C.newDirectory, displayDirectoryPath),
                 onClick: () => onCreateDirectory(currentDirectoryPath),
             }),
         );
@@ -489,11 +484,11 @@ export function renderWorkspace(container, options = {}) {
         directoryActions.className = 'xb-assistant-workspace-action-group';
         directoryActions.append(
             createActionButton({
-                action: 'rename-directory', icon: 'rename', label: C.directoryAction(C.renameDirectory, currentDirectoryPath),
+                action: 'rename-directory', icon: 'rename', label: C.directoryAction(C.renameDirectory, displayDirectoryPath),
                 disabled: isWorkspaceRootDirectory, onClick: () => onRenamePath(currentDirectoryPath),
             }),
             createActionButton({
-                action: 'delete-directory', icon: 'clear', label: C.directoryAction(C.deleteDirectory, currentDirectoryPath),
+                action: 'delete-directory', icon: 'clear', label: C.directoryAction(C.deleteDirectory, displayDirectoryPath),
                 disabled: isWorkspaceRootDirectory, onClick: () => onDeletePath(currentDirectoryPath),
             }),
         );
@@ -531,7 +526,8 @@ export function renderWorkspace(container, options = {}) {
         emptyViewer.appendChild(emptyViewerTitleEl);
         viewer.appendChild(emptyViewer);
         body.appendChild(viewer);
-        container.appendChild(body);
+        nextPanel.appendChild(body);
+        updateWorkspaceChildren(container, nextPanel);
         return;
     }
 
@@ -548,8 +544,10 @@ export function renderWorkspace(container, options = {}) {
     viewerInfo.appendChild(mobileBackButton);
 
     const viewerPath = document.createElement('strong');
-    viewerPath.textContent = selectedMatch.file.path;
-    viewerPath.title = selectedMatch.file.path;
+    const description = describeCardWorkspaceFiles((options.localSources || [selectedMatch.source]).flatMap(source => source?.files || [])).get(selectedMatch.file.path);
+    const displayPath = description?.title || displayCardWorkspacePath(selectedMatch.file.path);
+    viewerPath.textContent = displayPath;
+    viewerPath.title = displayCardWorkspacePath(selectedMatch.file.path);
     viewerInfo.appendChild(viewerPath);
     if (isModifiedFile(selectedMatch.file)) {
         const modifiedIndicator = document.createElement('span');
@@ -579,7 +577,7 @@ export function renderWorkspace(container, options = {}) {
     fileActions.className = 'xb-assistant-workspace-action-group';
     const path = selectedMatch.file.path;
     const actions = [
-        { action: 'save-file', icon: 'save', label: C.save, show: showSaveButton, disabled: disabled || !canSaveFile(selectedMatch.file), callback: onSaveFile },
+        { action: 'save-file', icon: 'save', label: saveLabel, show: showSaveButton, disabled: disabled || !canSaveFile(selectedMatch.file), callback: onSaveFile },
         { action: 'download-file', icon: 'download', label: C.download, show: showDownloadButton, callback: onDownloadFile },
         { action: 'restore-file', icon: 'restore', label: C.restore, show: showRestoreButton, disabled: !hasOriginalSnapshot(selectedMatch.file), callback: onRestoreFile },
         { action: 'rename-file', icon: 'rename', label: C.rename, show: showRenameButton, callback: onRenamePath },
@@ -597,23 +595,13 @@ export function renderWorkspace(container, options = {}) {
 
     const codeWrap = document.createElement('div');
     codeWrap.className = 'xb-assistant-workspace-code-wrap';
+    codeWrap.dataset.viewKey = `${selectedMatch.file.path}:${workspaceState.viewerMode}`;
     if (workspaceState.viewerMode === 'current') {
         const editorMount = document.createElement('div');
         editorMount.className = 'xb-assistant-workspace-editor';
-        editorMount.setAttribute('aria-label', C.edit(selectedMatch.file.path));
+        editorMount.setAttribute('data-workspace-editor', '');
+        editorMount.setAttribute('aria-label', C.edit(displayPath));
         codeWrap.appendChild(editorMount);
-        ensureWorkspaceEditor(container, editorMount, {
-            path: selectedMatch.file.path,
-            value: selectedMatch.file.content || '',
-            disabled: !!disabled,
-            onChange: (nextValue) => {
-                onUpdateFileContent(selectedMatch.file.path, nextValue, { render: false, flush: false });
-            },
-            onSelectionChange: onEditorSelectionChange,
-            onBlur: (nextValue) => {
-                onUpdateFileContent(selectedMatch.file.path, nextValue, { render: false, flush: true });
-            },
-        });
     } else {
         destroyWorkspaceEditorCache(container);
         const code = document.createElement('div');
@@ -629,11 +617,16 @@ export function renderWorkspace(container, options = {}) {
         }
     }
 
-    if (!shouldRenderEditor) {
-        destroyWorkspaceEditorCache(container);
-    }
-
     viewer.appendChild(codeWrap);
     body.appendChild(viewer);
-    container.appendChild(body);
+    nextPanel.appendChild(body);
+    updateWorkspaceChildren(container, nextPanel);
+    if (shouldRenderEditor) ensureWorkspaceEditor(container, container.querySelector('[data-workspace-editor]'), {
+        path: selectedMatch.file.path,
+        value: selectedMatch.file.content || '',
+        disabled: !!disabled,
+        onChange: nextValue => onUpdateFileContent(selectedMatch.file.path, nextValue, { render: false, flush: false }),
+        onSelectionChange: onEditorSelectionChange,
+        onBlur: nextValue => onUpdateFileContent(selectedMatch.file.path, nextValue, { render: false, flush: true }),
+    });
 }

@@ -1,5 +1,7 @@
 import { AnthropicAdapter } from './adapters/anthropic.js';
 import { GoogleAdapter } from './adapters/google.js';
+import { GoogleVertexAdapter } from './adapters/google-vertex.js';
+import { VERTEX_PROVIDER } from './vertex-config.js';
 import { OpenAICompatibleAdapter } from './adapters/openai-compatible.js';
 import { OpenAIResponsesAdapter } from './adapters/openai-responses.js';
 import { SillyTavernClaudeAdapter } from './adapters/sillytavern-claude.js';
@@ -23,6 +25,8 @@ function createSillyTavernAdapter(Adapter, providerConfig, options) {
 export function createAgentAdapter(providerConfig = {}, options = {}) {
     assertRuntimeReasoning(providerConfig.reasoning || {});
     switch (providerConfig.provider) {
+        case VERTEX_PROVIDER:
+            return new GoogleVertexAdapter(providerConfig);
         case 'sillytavern-openai-compatible':
             return createSillyTavernAdapter(SillyTavernOpenAICompatibleAdapter, providerConfig, options);
         case 'sillytavern-claude':

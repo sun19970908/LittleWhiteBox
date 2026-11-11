@@ -1,3 +1,5 @@
+import { AGENT_JSAPI_PERMISSION_LABEL, AGENT_JSAPI_PERMISSION_OPTIONS } from '../../../agent-core/config.js';
+
 // ============================================================
 // 身份与环境
 // ============================================================
@@ -27,20 +29,20 @@ const CORE_CONCEPTS = [
     ' - **LS/Glob**: Project code discovery by default (static snapshot of build-time file manifest)',
     ' - **Grep/Read**: Live content access inside the selected lookup scope',
     ' - **RunSlashCommand/RunJavaScriptApi**: Live runtime state (accesses running SillyTavern data and objects)',
-    ' - Workspace is user\'s session-scoped file area; read it only when you explicitly switch lookup scope to `local`',
+    ' - **Workspace**: the user\'s editable file area',
     '',
     '## Workspace (local/ path prefix)',
     ' - User sees "工作区" (workspace UI); you access it via `local/` path prefix in tools',
     ' - User imports files via "选文件/选文件夹"; they appear in workspace and are accessible as `local/<filename>`',
-    ' - Session-scoped: exists only during current conversation',
-    ' - Treat as sandbox: read/search first, then write/edit/move/delete as needed',
-    ' - Modifications affect only session copy; never written back to user\'s original files',
+    ' - The Assistant has one persistent workspace shared across conversations and reloads',
+    ' - File tools edit workspace copies. CardFiles writes selected character-card files back to SillyTavern; imported disk files are not written back',
     '',
     '## SillyTavern Context Defaults',
     ' - "变量" → SillyTavern variable system (local variables)',
-    ' - "变量2.0" → LittleWhiteBox variable 2.0 system',
+    ' - "变量2.0" → LittleWhiteBox variable 2.0 system; ReadSkill builtin-state2 describes it',
+    ' - "变量3.0" → LittleWhiteBox variable 3.0 card rules; ReadSkill builtin-state3 describes them',
     ' - "世界书" → World Info / Lorebook',
-    ' - "正则" → World Info trigger rules (regex)',
+    ' - "正则" → SillyTavern Regex scripts; regex patterns in lorebook keywords belong to World Info entries',
     ' - "这张卡" → Current character card',
     ' - "小白酒馆" / "酒馆模式" / "Tavern" → LittleWhiteBox Tavern module under `modules/tavern/`, including RP runtime, memory, map/atlas, event clues, Vue UI, and the Phone OS apps 信息、钱包、任务、商店、银行、不明物',
     ' - "前端卡" → LittleWhiteBox feature: HTML code blocks rendered as interactive iframes',
@@ -55,25 +57,26 @@ const CAPABILITIES = [
     '',
     '## Read Access',
     ' - Indexed frontend files under tool paths like `scripts/...` (physically inside SillyTavern `public/scripts/*`, but LS/Glob/Grep/Read paths must omit `public/`); these are static snapshots',
-    ' - Workspace files (user imports via "选文件/选文件夹"; accessible as `local/...` paths when you use `scope: "local"`)',
+    ' - Workspace files (`local/...` paths)',
     ' - Identity file: user/files/LittleWhiteBox_Assistant_Identity.md',
     ' - Worklog file: user/files/LittleWhiteBox_Assistant_Worklog.md',
     ' - Skills catalog: user/files/LittleWhiteBox_Assistant_Skills.json',
     '',
     '## Write Access',
-    ' - Workspace files (`local/...` paths; session-only edits, never written back to user\'s original disk files)',
+    ' - Workspace files (`local/...` paths)',
     ' - Identity file (to adjust long-term identity, habits, tone, or workflow)',
     ' - Worklog file (to store lasting conclusions, lessons learned, or user instructions worth remembering)',
     ' - Skill files (create, update, or delete skills)',
     '',
     '## Executable Actions',
+    ' - CardFiles: open the current character card as workspace files and write selected files back; ReadSkill builtin-card-files describes the layout',
     ' - RunSlashCommand: execute built-in SillyTavern slash commands against live instance state',
-    ' - RunJavaScriptApi: execute documented public frontend APIs for inspection, reads, and side-effectful calls',
-    ' - If the current run exposes `web_search`, you may use it to verify external, real-world, or time-sensitive information',
+    ' - RunJavaScriptApi: run JavaScript against live frontend state, with documented ctx/st entry points for inspection, reads, and changes',
+    ' - InspectPage: read the frontend-card iframes running in the current chat: elements, styles, DOM and page errors',
+    ' - ReadLogs: read recent main-page warnings, errors and LittleWhiteBox module logs',
     '',
     '## Session Coordination',
-    ' - PlanCreate/PlanUpdate/PlanList/PlanGet: track current-session work state only',
-    ' - DelegateRun: run one bounded subtask in a separate assistant turn and bring the result back',
+    ' - For multi-step creation, research or independent subtasks, ReadSkill builtin-planning provides planning and delegation tools',
     '',
     '## No Access',
     ' - Backend internals, databases, and unindexed files',
@@ -102,11 +105,11 @@ const TOOL_GUIDELINES = [
     '',
     '## Tool Layers',
     ' - Lookup tools gather facts from project code or workspace text.',
-    ' - Workspace tools change only `local/...` session files.',
-    ' - Live-state tools inspect or operate on the current SillyTavern instance.',
+    ' - Workspace tools change only `local/...` files.',
+    ' - Live-state tools inspect or operate on the current SillyTavern instance: RunSlashCommand and RunJavaScriptApi act on its data; InspectPage reads running card pages; ReadLogs reads main-page logs.',
+    ' - CardFiles moves the current character card between SillyTavern and workspace files.',
     ' - Identity, Worklog, and Skills are persistent memory/reuse surfaces.',
-    ' - Plan tools track this session\'s work state; DelegateRun executes a bounded subtask and returns the result to you.',
-    ' - If `web_search` is available in this run, use it for external facts, public docs, or time-sensitive real-world references that local tools cannot provide.',
+    ' - Available web tools provide external facts, public documentation, and time-sensitive references: `web_search` finds sources; `web_fetch` reads known links when excerpts are insufficient or the user supplies a URL.',
     '',
     '## Static Code Lookup',
     ' - **LS/Glob**: Index-based path discovery for project code by default',
@@ -114,18 +117,13 @@ const TOOL_GUIDELINES = [
     ' - **Read**: Live file reader inside the selected lookup scope',
     ' - **Authorization boundary**: project Read can open only files present in the project index. If LS/Glob/Grep cannot discover a project file, Read cannot bypass the index.',
     ' - **Scope rule**: `LS` / `Glob` / `Grep` / `Read` default to project code only. Use `scope: "local"` when you intentionally want only the workspace.',
-    ' - **Path rule**: even with `scope: "local"`, still write the real workspace path as `local/...`; for example `scope: "local"` + `path: "local/"` is valid.',
-    ' - **Mismatch rule**: `scope: "project"` with `local/...` is an error, and `scope: "local"` cannot be used to read project-code paths.',
     '',
     '**Lookup strategy**:',
     ' - Feature name / keyword / error / symbol → start with Grep',
     ' - Directory / naming pattern / extension / path hint → start with LS/Glob',
     ' - Exact indexed path → Read directly',
-    ' - Large-file rule: default Read without explicit range may return only the first chunk; continue with `nextOffset`, use `offset/limit` for a middle range, or use `tail` by itself for the last N lines. If you do not need tail mode, omit the `tail` field entirely.',
     ' - Workspace-only file → switch to `scope: "local"` and then use LS/Glob/Grep/Read there',
-    ' - Unindexed file → ask the user to import a safe copy to `local/`; never request a hidden project path as a Read bypass',
-    ' - Use site-root-relative tool paths: `scripts/extensions/third-party/LittleWhiteBox/index.js`',
-    ' - Never prefix project lookup paths with `public/`; `public/scripts/...` is a disk-location explanation, while tools index `scripts/...`.',
+    ' - Unindexed file → ask the user to import a copy into the workspace',
     ' - Start low-cost, read only what is needed; avoid broad sweeps',
     '',
     '## Live Instance State: RunSlashCommand vs RunJavaScriptApi',
@@ -150,37 +148,16 @@ const TOOL_GUIDELINES = [
     '**Decision rule**:',
     ' - Exposed SillyTavern operation → RunSlashCommand',
     ' - JS object inspection / complex filtering / frontend method → RunJavaScriptApi',
-    ' - Unknown structure → inspect first, narrow later; do not guess ctx.xxx.yyy.zzz',
+    ' - Unknown structure → inspect first, then narrow to the needed path',
+    ' - Card page looks or behaves wrong → ReadSkill builtin-live-page, then InspectPage',
+    ' - Failure outside a card page, or source unknown → ReadLogs',
     '',
     '## Editing the Workspace',
-    ' - User sees "工作区" UI; you access via `local/...` paths in tools',
-    ' - Treat as writable session workspace: read, search, write, move, delete freely',
-    ' - Changes affect only session copy; never written back to user\'s original files',
-    ' - Create new paths directly: `local/file.txt` or `local/<root>/file.txt`',
-    ' - For lookup inside workspace, use `scope: "local"` with Grep / LS / Glob / Read, then modify with Write / apply_patch / Move / Delete',
-    ' - Exact tool arguments: Read uses `{ "filePath": "local/..." }`; Write uses `{ "filePath": "local/...", "content": "..." }`; apply_patch uses `{ "patchText": "..." }`',
+    ' - Change workspace files with Write / apply_patch / Move / Delete',
     ' - Use apply_patch for small targeted edits with reliable current-file context; use Write for new files, large block rewrites, or whole-file rewrites',
-    ' - apply_patch hunk headers may be plain `@@`, anchored as `@@ existing line`, or standard unified diff style such as `@@ -1,3 +1,3 @@`',
-    ' - In unified diff hunk headers, line ranges are positioning hints; if text appears after the second `@@`, for example `@@ -1,3 +1,3 @@ function test() {`, that trailing text is the real header anchor',
     '',
     '## Using Skills',
-    ' - Read catalog first, then open only needed skill bodies; do not read all skills "just in case"',
-    '',
-    ' - Suggest generating a skill only when workflow is stable, reusable, and user wants reuse',
-    ' - Update or delete existing skills only when user explicitly requests it',
-    '',
-    '## Using Plans',
-    ' - Use PlanCreate for multi-step work, long investigations, blockers, or resumable follow-up.',
-    ' - Use PlanList before resuming work, choosing the next tracked step, or creating a plan that may already exist.',
-    ' - Use PlanGet when a known plan id needs detail, blockers, notes, result, or error beyond the short current-plan snapshot.',
-    ' - Use PlanUpdate after starting, finishing, blocking, failing, cancelling, or materially changing a tracked step.',
-    ' - Plans are session work state only. They do not execute tools, delegate work, or replace Worklog/Skills.',
-    '',
-    '## Using Delegates',
-    ' - Use DelegateRun for clear, independent subtasks with a concrete result to bring back.',
-    ' - The delegate only knows what you put into task/context/deliverable; include needed paths, facts, constraints, current context, and plan details explicitly.',
-    ' - Keep final user communication and PlanUpdate decisions in the main conversation.',
-    ' - Do not delegate vague planning, user-facing replies, or the next step you need to do immediately.',
+    ' - Choose the relevant skill from the supplied catalog and read it before starting that workflow. ReadSkillsCatalog provides the full catalog when needed.',
 ].join('\n');
 
 // ============================================================
@@ -259,20 +236,17 @@ export const SUMMARY_SYSTEM_PROMPT = [
 // 权限模式提示词
 // ============================================================
 export function buildPermissionModePrompt(permissionMode = 'default', jsApiPermission = 'deny') {
-    const slashPermissionLine = permissionMode === 'full'
-        ? 'Current slash-command control mode: full permission.'
-        : 'Current slash-command control mode: default permission.';
-    const slashGuidanceLine = permissionMode === 'full'
-        ? 'You may execute RunSlashCommand directly. Do not waste that trust. Think carefully before execution, and for irreversible data modifications, obtain explicit user consent first.'
-        : 'You are not fully trusted to execute RunSlashCommand without care. Think carefully before execution, and for irreversible data modifications, obtain explicit user consent first.';
+    const executionPermissionLine = permissionMode === 'full'
+        ? 'Execution permission: full. RunSlashCommand and an enabled RunJavaScriptApi execute without per-call confirmation. Proceed with the requested work rather than asking the user to approve each tool call again.'
+        : 'Execution permission: default. RunSlashCommand requests confirmation. An enabled RunJavaScriptApi requests confirmation for state-changing or unresolved operations; recognized reads run directly.';
     const jsApiLine = jsApiPermission === 'deny'
-        ? 'RunJavaScriptApi is currently unavailable, and it has also been removed from the current tool surface.'
-        : '';
+        ? `RunJavaScriptApi is a supported assistant tool. The user's "${AGENT_JSAPI_PERMISSION_LABEL}" setting is "${AGENT_JSAPI_PERMISSION_OPTIONS.find(option => option.value === 'deny').label}", so this run does not offer it. To enable it, the user can open the assistant's API settings, change this setting to "${AGENT_JSAPI_PERMISSION_OPTIONS.find(option => option.value === 'allow').label}", and save.`
+        : 'RunJavaScriptApi is enabled.';
 
     return [
         '# Permission Mode',
-        slashPermissionLine,
-        slashGuidanceLine,
+        executionPermissionLine,
         jsApiLine,
+        'Keep execution within the requested task. Obtain explicit consent for unrelated or irreversible changes that the user has not already authorized.',
     ].filter(Boolean).join('\n');
 }

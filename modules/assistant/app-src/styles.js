@@ -1,6 +1,9 @@
+import { ASSISTANT_HEADER_HEIGHT, ASSISTANT_WINDOW_CONTROLS_WIDTH, ASSISTANT_WINDOW_MODE_PARAM } from '../shared/window-layout.js';
+
 const STYLE_DATA_ATTRIBUTE = 'data-xb-assistant-styles';
 
 export function injectAssistantStyles(rootId) {
+    document.documentElement.dataset.hostDesktop = String(new URLSearchParams(window.location.search).get(ASSISTANT_WINDOW_MODE_PARAM) === 'desktop');
     if (document.head.querySelector(`style[${STYLE_DATA_ATTRIBUTE}="true"]`)) {
         return;
     }
@@ -49,6 +52,7 @@ export function injectAssistantStyles(rootId) {
             position: relative;
             display: grid;
             grid-template-columns: 340px minmax(0, 1fr);
+            grid-template-rows: ${ASSISTANT_HEADER_HEIGHT}px minmax(0, 1fr);
             height: 100%;
             width: 100%;
             max-width: 100%;
@@ -56,9 +60,11 @@ export function injectAssistantStyles(rootId) {
             box-sizing: border-box;
             transition: grid-template-columns 0.22s ease;
         }
-        .xb-assistant-shell.sidebar-collapsed { grid-template-columns: 56px minmax(0, 1fr); }
+        .xb-assistant-shell.sidebar-collapsed { grid-template-columns: 0 minmax(0, 1fr); }
         .xb-assistant-sidebar {
             position: relative;
+            grid-column: 1;
+            grid-row: 2;
             display: grid;
             grid-template-rows: auto minmax(0, 1fr);
             padding: 22px 18px;
@@ -68,8 +74,6 @@ export function injectAssistantStyles(rootId) {
             box-sizing: border-box;
             transition: padding 0.22s ease;
         }
-        .xb-assistant-mobile-settings,
-        .xb-assistant-mobile-close,
         .xb-assistant-mobile-backdrop {
             display: none;
         }
@@ -80,6 +84,7 @@ export function injectAssistantStyles(rootId) {
             gap: 12px;
         }
         .xb-assistant-sidebar.is-collapsed {
+            visibility: hidden;
             padding: 10px;
             background: transparent;
             border-right-color: transparent;
@@ -484,7 +489,9 @@ export function injectAssistantStyles(rootId) {
         }
         .xb-assistant-main {
             display: grid;
-            grid-template-rows: auto minmax(0, 1fr);
+            grid-column: 2;
+            grid-row: 2;
+            grid-template-rows: minmax(0, 1fr);
             padding: 0;
             gap: 0;
             min-height: 0;
@@ -516,19 +523,26 @@ export function injectAssistantStyles(rootId) {
             overflow: hidden;
             background: transparent;
         }
-        .xb-assistant-mobile-topbar {
+        .xb-assistant-topbar {
+            position: relative;
+            z-index: 50;
+            background: var(--xb-assistant-surface);
+            grid-column: 1 / -1;
+            grid-row: 1;
             display: flex;
             align-items: center;
             gap: 8px;
             padding: 8px 20px 8px 12px;
-            min-height: 56px;
+            min-height: ${ASSISTANT_HEADER_HEIGHT}px;
             box-sizing: border-box;
             border-bottom: 1px solid var(--xb-assistant-border);
         }
-        .xb-assistant-mobile-topbar .xb-assistant-toolbar { flex: 1; }
+        .xb-assistant-topbar .xb-assistant-toolbar { flex: 1; }
+        .xb-assistant-topbar .xb-assistant-toolbar-cluster { flex: 0 1 auto; }
+        :root[data-host-desktop="true"] .xb-assistant-topbar { padding-right: ${ASSISTANT_WINDOW_CONTROLS_WIDTH}px; }
+        :root[data-host-desktop="true"] .xb-assistant-mobile-close { display: none; }
         #xb-assistant-open-workspace {
             position: relative;
-            margin-right: auto;
             border: none;
             border-radius: 6px;
         }
@@ -602,12 +616,11 @@ export function injectAssistantStyles(rootId) {
         .xb-assistant-context-track { stroke: var(--xb-assistant-border); }
         .xb-assistant-context-fill { stroke: currentColor; stroke-dasharray: var(--context-fill, 0) 100; }
         .xb-assistant-context summary.is-warning { color: #c47529; }
-        .xb-assistant-context-busy { position: absolute; font-size: 13px; font-weight: 700; }
         .xb-assistant-context-popover {
             position: absolute;
             z-index: 10;
             top: calc(100% + 12px);
-            right: 0;
+            left: 0;
             width: 272px;
             max-width: calc(100vw - 32px);
             max-height: calc(100dvh - 90px);
@@ -1457,7 +1470,7 @@ export function injectAssistantStyles(rootId) {
         .xb-assistant-process-text:first-child { margin-top: 0; }
         .xb-assistant-operation {
             display: grid;
-            grid-template-columns: 7px minmax(0, 1fr) auto;
+            grid-template-columns: 7px minmax(0, 1fr);
             align-items: baseline;
             gap: 0 8px;
             padding: 5px 0;
@@ -1467,14 +1480,11 @@ export function injectAssistantStyles(rootId) {
         }
         .xb-assistant-operation-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
         .xb-assistant-operation-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .xb-assistant-operation-status { white-space: nowrap; }
         .xb-assistant-operation-note { grid-column: 2 / -1; overflow-wrap: anywhere; color: #a34236; font: inherit; }
-        .xb-assistant-operation[data-status="succeeded"] .xb-assistant-operation-dot,
-        .xb-assistant-operation[data-status="succeeded"] .xb-assistant-operation-status { color: #277866; }
-        .xb-assistant-operation[data-status="failed"] .xb-assistant-operation-dot,
-        .xb-assistant-operation[data-status="failed"] .xb-assistant-operation-status { color: #a34236; }
-        .xb-assistant-operation[data-status="unconfirmed"] .xb-assistant-operation-status,
-        .xb-assistant-operation[data-status="partial"] .xb-assistant-operation-status { color: #966317; }
+        .xb-assistant-operation[data-status="succeeded"] .xb-assistant-operation-dot { color: #277866; }
+        .xb-assistant-operation[data-status="failed"] .xb-assistant-operation-dot { color: #a34236; }
+        .xb-assistant-operation[data-status="unconfirmed"] .xb-assistant-operation-dot,
+        .xb-assistant-operation[data-status="partial"] .xb-assistant-operation-dot { color: #966317; }
         .xb-assistant-operation[data-status="running"] .xb-assistant-operation-dot { animation: xb-assistant-operation-pulse 1.2s ease-in-out infinite; }
         @keyframes xb-assistant-operation-pulse { 50% { opacity: .35; } }
         @media (prefers-reduced-motion: reduce) { .xb-assistant-operation-dot { animation: none !important; } }
@@ -1801,13 +1811,13 @@ export function injectAssistantStyles(rootId) {
         @media (max-width: 900px) {
             .xb-assistant-shell {
                 grid-template-columns: minmax(0, 1fr);
-                grid-template-rows: minmax(0, 1fr);
                 height: 100%;
             }
             .xb-assistant-shell.sidebar-collapsed { grid-template-columns: 1fr; }
             .xb-assistant-sidebar {
                 position: absolute;
-                inset: 12px;
+                grid-area: 1 / 1 / -1 / -1;
+                inset: ${ASSISTANT_HEADER_HEIGHT + 8}px 12px 12px;
                 z-index: 30;
                 padding: 16px;
                 grid-template-rows: auto minmax(0, 1fr);
@@ -1835,7 +1845,7 @@ export function injectAssistantStyles(rootId) {
             .xb-assistant-mobile-backdrop {
                 display: block;
                 position: absolute;
-                inset: 0;
+                inset: ${ASSISTANT_HEADER_HEIGHT}px 0 0;
                 z-index: 20;
                 background: rgba(15, 23, 35, 0.24);
                 backdrop-filter: blur(4px);
@@ -1843,14 +1853,10 @@ export function injectAssistantStyles(rootId) {
             .xb-assistant-mobile-backdrop[hidden] {
                 display: none;
             }
-            .xb-assistant-toolbar .xb-assistant-mobile-settings {
-                display: inline-flex;
-                flex: 0 0 auto;
-            }
             .xb-assistant-sidebar-content {
                 padding-right: 2px;
             }
-            .xb-assistant-mobile-topbar {
+            .xb-assistant-topbar {
                 padding: 8px 12px;
                 gap: 8px;
             }
@@ -1881,6 +1887,7 @@ export function injectAssistantStyles(rootId) {
                 min-height: 42px;
             }
             .xb-assistant-main {
+                grid-column: 1;
                 padding: 0;
                 min-height: 0;
                 height: 100%;
@@ -1927,7 +1934,11 @@ export function injectAssistantStyles(rootId) {
             .xb-assistant-chrome-button,
             .xb-assistant-toolbar .xb-assistant-chrome-button,
             .xb-assistant-context summary { width: 40px; min-width: 40px; height: 40px; min-height: 40px; padding: 0; }
-            .xb-assistant-context-popover { position: fixed; top: 64px; right: 12px; }
+            .xb-assistant-context-popover { position: fixed; top: 64px; left: auto; right: 12px; }
+            :root[data-host-desktop="true"] .xb-assistant-topbar { gap: 6px; padding-left: 8px; }
+            :root[data-host-desktop="true"] .xb-assistant-topbar .xb-assistant-toolbar-cluster { gap: 6px; }
+            :root[data-host-desktop="true"] .xb-assistant-topbar .xb-assistant-chrome-button,
+            :root[data-host-desktop="true"] .xb-assistant-context summary { width: 36px; min-width: 36px; height: 36px; min-height: 36px; }
             .xb-assistant-chat { padding: 14px 12px 10px; min-height: 0; }
             .xb-assistant-bubble { width: 100%; max-width: 100%; }
             .xb-assistant-bubble.role-user { width: fit-content; max-width: 92%; }
@@ -1949,7 +1960,7 @@ export function injectAssistantStyles(rootId) {
             .xb-assistant-workspace-backdrop {
                 display: block;
                 position: fixed;
-                inset: 0;
+                inset: ${ASSISTANT_HEADER_HEIGHT}px 0 0;
                 background: rgba(15, 23, 35, 0.24);
                 backdrop-filter: blur(3px);
                 opacity: 0;
@@ -1963,7 +1974,7 @@ export function injectAssistantStyles(rootId) {
             }
             .xb-assistant-workspace {
                 position: fixed;
-                top: 0;
+                top: ${ASSISTANT_HEADER_HEIGHT}px;
                 right: 0;
                 bottom: 0;
                 width: 100%;

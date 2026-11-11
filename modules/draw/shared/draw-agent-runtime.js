@@ -8,9 +8,7 @@ import {
     isScenePlannerCorrectionError,
 } from './scene-plan-contract.js';
 import { redactRequestSecrets } from '../../agent-core/adapters/request-inspection.js';
-import { GOOGLE_SYNTHETIC_HISTORY_SIGNATURE } from './scene-planner-messages.js';
-import { projectScenePlannerDeepSeekHistory, projectScenePlannerHostClaudeHistory } from './scene-planner-handoff.js';
-import { shouldPreserveHistoricalReasoning } from '../../agent-core/adapters/openai-compatible-replay-policy.js';
+import { projectScenePlannerHostClaudeHistory } from './scene-planner-handoff.js';
 import {
     MAX_CUSTOM_TOOL_CALLS,
     TOOL_RECORD_MAX_CHARS,
@@ -556,12 +554,9 @@ export async function callDrawScenePlannerAgentRuntime(options = {}) {
     }
 
     const sourceMessages = Array.isArray(task.messages) ? task.messages : [];
-    let messages = [...sourceMessages];
-    if (providerConfig.provider === 'sillytavern-claude') {
-        messages = projectScenePlannerHostClaudeHistory(sourceMessages);
-    } else if (shouldPreserveHistoricalReasoning(providerConfig, task.tools)) {
-        messages = projectScenePlannerDeepSeekHistory(sourceMessages);
-    }
+    const messages = providerConfig.provider === 'sillytavern-claude'
+        ? projectScenePlannerHostClaudeHistory(sourceMessages)
+        : [...sourceMessages];
     const abortScope = createAbortScope(options.timeout, options.signal);
     const baseAgentTask = {
         ...task,
@@ -575,25 +570,6 @@ export async function callDrawScenePlannerAgentRuntime(options = {}) {
     delete baseAgentTask.onStreamProgress;
     delete baseAgentTask.onToolProtocolFallback;
 
-    // Google's OpenAI endpoint uses a different signature field for artificial history.
-    // Keep this projection out of the stored prompt and out of other providers' requests.
-    if (providerConfig.toolMode !== 'tagged-json'
-        && ['openai-compatible', 'sillytavern-openai-compatible'].includes(providerConfig.provider)
-        && /gemini/i.test(String(providerConfig.model || ''))) {
-        messages.forEach((message, index) => {
-            const synthetic = message.providerPayload?.googleContent?.parts?.some(part => (
-                part.functionCall && part.thoughtSignature === GOOGLE_SYNTHETIC_HISTORY_SIGNATURE
-            ));
-            if (!synthetic) return;
-            messages[index] = {
-                ...message,
-                tool_calls: message.tool_calls.map(call => ({
-                    ...call,
-                    extra_content: { google: { thought_signature: GOOGLE_SYNTHETIC_HISTORY_SIGNATURE } },
-                })),
-            };
-        });
-    }
     const corrections = [];
     const validationFailures = [];
     const attempts = [];

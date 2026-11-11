@@ -1,4 +1,4 @@
-import { describeToolCall, TOOL_NAMES } from '../tooling.js';
+import { describeToolCall, isWebTool, TOOL_NAMES } from '../tooling.js';
 import { ACTIVITY_COPY } from './activity-copy.js';
 
 const shortText = value => String(value ?? '').replace(/\s+/gu, ' ').trim().slice(0, 160);
@@ -16,15 +16,24 @@ function parseRecord(text) {
 export function toolOutcome(result, toolName = result?.toolName) {
     if (!result) return { status: 'unconfirmed', note: '' };
     if (result.error === 'tool_timeout' || result.error === 'tool_aborted') {
+        if (isWebTool(toolName) || toolName === TOOL_NAMES.INSPECT_PAGE || toolName === TOOL_NAMES.READ_LOGS) {
+            return { status: result.error === 'tool_aborted' ? 'stopped' : 'failed', note: shortText(result.message) };
+        }
         if (toolName === TOOL_NAMES.GREP) {
             return result.error === 'tool_timeout'
                 ? { status: 'failed', note: ACTIVITY_COPY.searchTimeout }
                 : { status: 'stopped', note: '' };
         }
-        return { status: 'unconfirmed', note: '' };
+        return { status: 'unconfirmed', note: toolName === TOOL_NAMES.RUN_JAVASCRIPT_API ? shortText(result.message) : '' };
     }
     if (result.skipped === true || result.approved === false) return { status: 'skipped', note: '' };
-    if (result.execution?.isAborted === true) return { status: 'stopped', note: shortText(result.execution.abortReason) };
+    if (result.execution?.isAborted === true) return {
+        status: toolName === TOOL_NAMES.RUN_JAVASCRIPT_API ? 'unconfirmed' : 'stopped',
+        note: shortText(result.execution.abortReason),
+    };
+    if (toolName === TOOL_NAMES.WEB_FETCH && result.ok === false && (result.results?.length > 0 || result.status === 'partial')) {
+        return { status: 'partial', note: shortText(result.message) };
+    }
     if (result.ok === false || result.execution?.isError === true) {
         return { status: 'failed', note: shortText(result.message || result.execution?.errorMessage || result.error) };
     }

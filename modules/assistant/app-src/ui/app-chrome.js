@@ -2,6 +2,8 @@ import { describeMemoryFile, findMemoryFileByPath } from '../memory/memory-files
 import { ACTIVITY_COPY as C } from './activity-copy.js';
 import { updateChromeIcon } from './chrome-icons.js';
 import { WORKSPACE_COPY as W } from '../workspace/workspace-copy.js';
+import { displayCardWorkspacePath } from '../../../card-workspace/paths.js';
+import { describeCardWorkspaceFiles } from '../../../card-workspace/display.js';
 
 function appendSvgPath(svg, d) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -68,7 +70,7 @@ export function collectContextHintItems(state = {}) {
 
     if (state.isWorkspaceOpen) {
         if (selectedTreePath && String(selectedTreePath).endsWith('/') && (!selectedFilePath || selectedTreePath !== selectedFilePath)) {
-            const parts = [`工作区目录：${selectedTreePath}`];
+            const parts = [`工作区目录：${displayCardWorkspacePath(selectedTreePath)}`];
             if (!selectedFilePath) {
                 parts.push('未锁定具体文件');
             }
@@ -76,9 +78,10 @@ export function collectContextHintItems(state = {}) {
         } else if (selectedFilePath) {
             const memoryFile = isMemoryPanel ? findMemoryFileByPath(state.skillFiles, selectedFilePath) : null;
             const memoryDescriptor = isMemoryPanel ? describeMemoryFile(memoryFile, selectedFilePath) : null;
+            const cardDescriptor = isMemoryPanel ? null : describeCardWorkspaceFiles((state.localSources || []).flatMap(source => source.files)).get(selectedFilePath);
             const parts = [isMemoryPanel
                 ? `记忆区${memoryDescriptor.kindLabel}：${memoryDescriptor.displayName}`
-                : `工作区文件：${selectedFilePath}`];
+                : `工作区文件：${cardDescriptor?.title || displayCardWorkspacePath(selectedFilePath)}`];
             if (workspaceSelection.filePath === selectedFilePath && (workspaceSelection.text || workspaceSelection.lineStart)) {
                 if (workspaceSelection.lineStart) {
                     parts.push(
@@ -242,7 +245,6 @@ export function renderAppChrome(root, state, options = {}) {
     const sidebar = root.querySelector('.xb-assistant-sidebar');
     const sidebarToggle = root.querySelector('#xb-assistant-sidebar-toggle');
     const sidebarContent = root.querySelector('.xb-assistant-sidebar-content');
-    const mobileSettingsButton = root.querySelector('#xb-assistant-mobile-settings');
     const mobileBackdrop = root.querySelector('#xb-assistant-mobile-backdrop');
     const isMobile = window.matchMedia('(max-width: 900px)').matches;
     shell?.classList.toggle('sidebar-collapsed', !!state.sidebarCollapsed);
@@ -254,11 +256,6 @@ export function renderAppChrome(root, state, options = {}) {
         sidebarToggle.setAttribute('aria-label', C.settingsToggle(state.sidebarCollapsed));
         sidebarToggle.title = C.settingsToggle(state.sidebarCollapsed);
         updateChromeIcon(sidebarToggle, state.sidebarCollapsed ? 'settings' : 'collapse');
-    }
-    if (mobileSettingsButton) {
-        mobileSettingsButton.setAttribute('aria-expanded', state.sidebarCollapsed ? 'false' : 'true');
-        mobileSettingsButton.title = C.settingsToggle(state.sidebarCollapsed);
-        mobileSettingsButton.setAttribute('aria-label', C.settingsToggle(state.sidebarCollapsed));
     }
 
     const draftGallery = root.querySelector('#xb-assistant-draft-gallery');
@@ -322,6 +319,7 @@ export function renderAppChrome(root, state, options = {}) {
     mainBody?.style.setProperty('--xb-assistant-workspace-width', `${workspaceWidth}px`);
     workspaceShell?.classList.toggle('is-open', !!state.isWorkspaceOpen);
     workspaceShell?.setAttribute('aria-hidden', state.isWorkspaceOpen ? 'false' : 'true');
+    workspaceShell?.toggleAttribute('inert', !state.isWorkspaceOpen);
     workspaceShell?.style.setProperty('--xb-assistant-workspace-width', `${workspaceWidth}px`);
     workspaceBackdrop?.classList.toggle('is-open', !!state.isWorkspaceOpen && isMobile);
     workspaceBackdrop?.toggleAttribute('hidden', !(state.isWorkspaceOpen && isMobile));

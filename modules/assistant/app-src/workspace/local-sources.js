@@ -30,6 +30,8 @@ import { buildWorkspacePreconditions, workspaceMutationScopes, WORKSPACE_CONFLIC
 import { WORKSPACE_COPY } from './workspace-copy.js';
 import { TOOL_NAMES } from '../tooling.js';
 import { buildWorkspaceTree, collectDirectoryExpansionKeys } from './local-workspace-tree.js';
+import { displayCardWorkspacePath } from '../../../card-workspace/paths.js';
+import { cardItemGroupKey } from '../../../card-workspace/display.js';
 import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 
 
@@ -613,6 +615,8 @@ export function createLocalSourcesManager(deps) {
         }
 
         const expandedKeys = new Set(Array.isArray(state.treeExpandedKeys) ? state.treeExpandedKeys : []);
+        const itemKey = cardItemGroupKey(match.file.path);
+        if (itemKey) expandedKeys.add(itemKey);
         buildExpandedKeysForWorkspaceTarget(
             match.source.sourceId,
             match.file.relativePath.split('/').slice(0, -1).join('/'),
@@ -672,10 +676,6 @@ export function createLocalSourcesManager(deps) {
             modifiedOnly: state.showModifiedOnly,
             isModifiedFile: isLocalSourceFileModified,
         });
-
-        if (!Array.isArray(state.treeExpandedKeys) || !state.treeExpandedKeys.length) {
-            state.treeExpandedKeys = Array.from(collectDirectoryExpansionKeys(workspaceTree.nodes));
-        }
 
         const hasVisibleDirectorySelection = (
             !state.selectedFilePath
@@ -1219,8 +1219,8 @@ export function createLocalSourcesManager(deps) {
 
         const confirmed = window.confirm(
             fileMatch
-                ? `确定删除 ${currentPath} 吗？`
-                : `确定删除目录 ${currentPath} 及其下 ${directoryMatch.files.length} 个文件吗？`,
+                ? `确定删除 ${displayCardWorkspacePath(currentPath)} 吗？`
+                : `确定删除目录 ${displayCardWorkspacePath(currentPath)} 及其下 ${directoryMatch.files.length} 个文件吗？`,
         );
         if (!confirmed) return false;
         const result = await callWorkspaceHostTool(TOOL_NAMES.DELETE, {
@@ -1242,7 +1242,7 @@ export function createLocalSourcesManager(deps) {
                 || selectWorkspaceFile(targetPath)
                 || selectWorkspaceDirectory(targetPath);
             if (!opened) {
-                showToast?.(`没有找到 ${targetPath}`);
+                showToast?.(`没有找到 ${displayCardWorkspacePath(targetPath)}`);
                 return false;
             }
             render?.();
@@ -1279,7 +1279,7 @@ export function createLocalSourcesManager(deps) {
         return openWorkspace(firstModified.path);
     }
 
-    function selectWorkspaceNode(targetPath) {
+    function selectWorkspaceNode(targetPath, options = {}) {
         const normalizedTargetPath = normalizeLocalSourcePath(targetPath);
         if (!normalizedTargetPath) return false;
         if (isLocalRootPath(normalizedTargetPath)) {
@@ -1297,7 +1297,7 @@ export function createLocalSourcesManager(deps) {
             }).nodes));
             onWorkspaceSelectionChanged?.();
             persistWorkspaceUiState();
-            renderWorkspaceOnly?.();
+            if (options.render !== false) renderWorkspaceOnly?.();
             return true;
         }
 
@@ -1325,7 +1325,7 @@ export function createLocalSourcesManager(deps) {
         state.mobileWorkspacePane = 'tree';
         onWorkspaceSelectionChanged?.();
         persistWorkspaceUiState();
-        renderWorkspaceOnly?.();
+        if (options.render !== false) renderWorkspaceOnly?.();
         return true;
     }
 
@@ -1344,6 +1344,12 @@ export function createLocalSourcesManager(deps) {
     function setWorkspaceSearchQuery(value) {
         state.fileSearchQuery = String(value || '');
         ensureWorkspaceSelection();
+        if (state.fileSearchQuery.trim()) {
+            const matchingTree = buildWorkspaceTree(getDisplaySources(), {
+                searchQuery: state.fileSearchQuery, modifiedOnly: state.showModifiedOnly, isModifiedFile: isLocalSourceFileModified,
+            });
+            state.treeExpandedKeys = [...new Set([...state.treeExpandedKeys, ...collectDirectoryExpansionKeys(matchingTree.nodes)])];
+        }
         persistWorkspaceUiState();
         renderWorkspaceOnly?.();
     }
@@ -1446,7 +1452,7 @@ export function createLocalSourcesManager(deps) {
                 renderWorkspaceOnly?.();
             },
             onSelectNode: (targetPath) => {
-                selectWorkspaceNode(targetPath);
+                selectWorkspaceNode(targetPath, { render: false });
             },
             onSetViewerMode: (mode) => {
                 setWorkspaceViewerMode(mode);
