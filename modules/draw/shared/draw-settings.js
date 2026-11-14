@@ -3,7 +3,7 @@ import { normalizeGroupPresetState } from './character-group-presets.js';
 import { normalizeCharacterLibrary } from './character-library.js';
 import { normalizePlannerRetry } from './planner-retry.js';
 import { API_PRESET_COPY } from './api-presets-copy.js';
-import { normalizeMessageFilterRules } from './message-filter-rules.js';
+import { DEFAULT_MESSAGE_FILTER_RULES, normalizeMessageFilterRules } from './message-filter-rules.js';
 
 const SERVER_FILE_KEY = 'settings';
 export const DEFAULT_SHARED_GALLERY_CACHE_DAYS = 3;
@@ -184,6 +184,11 @@ export function getSharedDrawSettings() {
         settingsCache = normalizeSharedDrawSettings({});
     }
     return settingsCache;
+}
+
+export function getSharedMessageFilterRules() {
+    const rules = getSharedDrawSettings().messageFilterRules;
+    return rules.length ? rules : DEFAULT_MESSAGE_FILTER_RULES;
 }
 
 // 同一存储文件的跨所有者更新也只上传一次，存储确认后才发布共享运行时视图。

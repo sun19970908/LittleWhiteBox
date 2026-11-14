@@ -1,3 +1,6 @@
+import { collectFilterRuleRanges } from './scene-source.js';
+export { collectFilterRuleRanges };
+
 export function normalizeChatMessageImageTags(value) {
     return String(value || '').trim().replace(/^(?:nsfw|sketchy)\s*:\s*/i, 'nsfw, ')
         .split(',').map(item => item.trim()).filter(Boolean).join(', ');
@@ -7,10 +10,10 @@ const TAG_PATTERN = /\[(?:img|图片)\s*:\s*([^\]]+)\]/gi;
 const OPAQUE_TAGS = new Set(['code', 'pre', 'script', 'style', 'textarea']);
 
 // Keep raw offsets; code examples, escaped tags and HTML attributes are not requests.
-export function parseChatImageTags(value) {
+export function parseChatImageTags(value, filterRules = []) {
     const source = String(value || '');
     if (source.search(TAG_PATTERN) < 0) return [];
-    const excluded = [];
+    const excluded = collectFilterRuleRanges(source, filterRules);
     let offset = 0;
     while (offset < source.length) {
         const rest = source.slice(offset);
@@ -56,7 +59,7 @@ export function parseChatImageTags(value) {
         start: match.index, end: match.index + match[0].length })).filter(item => item.tags);
 }
 
-export function findRenderedChatImageTags(root, candidates, renderedTags = new Map()) {
+export function findRenderedChatImageTags(root, candidates, renderedTags = new Map(), allowedCandidates = candidates) {
     const document = root?.ownerDocument;
     if (!document) return { matched: [], unmatched: [] };
     const walker = document.createTreeWalker(root, 5);
@@ -83,7 +86,8 @@ export function findRenderedChatImageTags(root, candidates, renderedTags = new M
     // Entries above contain the candidate as well; retain text traversal order.
     matched.sort((a, b) => visible.findIndex(item => item.node === a.node && item.offset === a.offset)
         - visible.findIndex(item => item.node === b.node && item.offset === b.offset));
-    return { matched, unmatched };
+    const allowed = new Set(allowedCandidates.map(tag => tag.start));
+    return { matched: matched.filter(item => allowed.has(item.candidate.start)), unmatched };
 }
 
 function group(items) {

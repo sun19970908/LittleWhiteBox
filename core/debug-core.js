@@ -1,5 +1,7 @@
 ﻿import { formatErrorDetails } from './error-details.js';
 
+import { createConsoleForwarder } from './console-forward.js';
+
 // Bypass our own console interceptor when reporting a logger failure.
 const originalConsoleWarn = console.warn.bind(console);
 const reportLoggerFailure = error => originalConsoleWarn({ source: import.meta.url }, error);
@@ -228,65 +230,65 @@ class LoggerCore {
 
             try {
                 if (typeof this._originalConsole.log === "function") {
-                    console.log = (...args) => {
+                    console.log = createConsoleForwarder(this._originalConsole.log, (args) => {
                         try {
                             const intercepted = getInterceptedConsoleEntry(args);
                             if (intercepted) {
                                 if (this._enabled) this.info(intercepted.moduleId, intercepted.message);
-                                return;
+                                return true;
                             }
                         } catch (caughtError) { reportLoggerFailure(caughtError); }
-                        return this._originalConsole.log(...args);
-                    };
+                        return false;
+                    });
                 }
             } catch (caughtError) { reportLoggerFailure(caughtError); }
 
             try {
                 if (typeof this._originalConsole.info === "function") {
-                    console.info = (...args) => {
+                    console.info = createConsoleForwarder(this._originalConsole.info, (args) => {
                         try {
                             const intercepted = getInterceptedConsoleEntry(args);
                             if (intercepted) {
                                 if (this._enabled) this.info(intercepted.moduleId, intercepted.message);
-                                return;
+                                return true;
                             }
                         } catch (caughtError) { reportLoggerFailure(caughtError); }
-                        return this._originalConsole.info(...args);
-                    };
+                        return false;
+                    });
                 }
             } catch (caughtError) { reportLoggerFailure(caughtError); }
 
             try {
                 if (typeof this._originalConsole.warn === "function") {
-                    console.warn = (...args) => {
+                    console.warn = createConsoleForwarder(this._originalConsole.warn, (args) => {
                         try {
                             const intercepted = getInterceptedConsoleEntry(args);
                             if (intercepted) {
                                 if (this._enabled) this.warn(intercepted.moduleId, intercepted.message);
-                                return;
+                                return true;
                             }
                             const msg = args.map(a => (typeof a === "string" ? a : safeStringify(a))).join(" ");
                             this.warn("console", msg);
                         } catch (caughtError) { reportLoggerFailure(caughtError); }
-                        return this._originalConsole.warn(...args);
-                    };
+                        return false;
+                    });
                 }
             } catch (caughtError) { reportLoggerFailure(caughtError); }
 
             try {
                 if (typeof this._originalConsole.error === "function") {
-                    console.error = (...args) => {
+                    console.error = createConsoleForwarder(this._originalConsole.error, (args) => {
                         try {
                             const intercepted = getInterceptedConsoleEntry(args);
                             if (intercepted) {
                                 if (this._enabled) this.error(intercepted.moduleId, intercepted.message, null);
-                                return;
+                                return true;
                             }
                             const msg = args.map(a => (typeof a === "string" ? a : safeStringify(a))).join(" ");
                             this.error("console", msg, null);
                         } catch (caughtError) { reportLoggerFailure(caughtError); }
-                        return this._originalConsole.error(...args);
-                    };
+                        return false;
+                    });
                 }
             } catch (caughtError) { reportLoggerFailure(caughtError); }
         }

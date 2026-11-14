@@ -1,4 +1,5 @@
 import type { Json } from '../types.js';
+import { diagnostic } from './diagnostics.js';
 import { failure, runFunctionInVm, type FunctionOptions } from './functions-vm.js';
 export { FunctionExecutionError, runFunctionInVm } from './functions-vm.js';
 
@@ -29,7 +30,9 @@ export function createFunctionRunner() {
                 waiting?.finish(failure(code, functionId ?? waiting.id, details));
             } else {waiting?.finish(null, event.data.value);}
         };
-        worker.onerror = () => waiting?.finish(failure(ready ? 'function_worker_error' : 'function_startup_failed', waiting.id));
+        worker.onerror = event => waiting?.finish(failure(ready ? 'function_worker_error' : 'function_startup_failed', waiting.id,
+            { message: event.message, filename: event.filename, line: event.lineno, column: event.colno,
+                ...(event.error ? { cause: diagnostic(event.error) } : {}) }));
         worker.onmessageerror = () => waiting?.finish(failure('function_message_error', waiting.id));
     }
     return {
@@ -57,7 +60,7 @@ export function createFunctionRunner() {
                     ticks = 0; lastTick = performance.now();
                     const request = { ...options }; delete request.signal;
                     try { worker!.postMessage(request); }
-                    catch { finish(failure('function_message_error', id)); }
+                    catch (error) { finish(failure('function_message_error', id, { cause: diagnostic(error) })); }
                 };
                 waiting = { id, send, finish };
                 signal?.addEventListener('abort', abort, { once: true });
@@ -70,7 +73,7 @@ export function createFunctionRunner() {
                 }, WATCHDOG_TICK_MS);
                 if (!worker) {
                     try { startWorker(); }
-                    catch { finish(failure('function_startup_failed', id)); return; }
+                    catch (error) { finish(failure('function_startup_failed', id, { cause: diagnostic(error) })); return; }
                 } else if (ready) {send();}
             });
         },

@@ -8,7 +8,7 @@ import { state3Selected } from './settings.js';
 import { CHAT_KEY } from '../definition/format.js';
 import { digest } from '../definition/digest.js';
 import { diagnostic, reject } from '../engine/diagnostics.js';
-import { beforeReceipt, beforeOutcome } from './before-result.js';
+import { beforeReceipt, beforeFloorOutcome } from './before-result.js';
 import { beforeProsePrompt } from '../model/prompts.js';
 import type { createState3Updater } from '../model/updater.js';
 import type { SettlementService } from './service.js';
@@ -19,10 +19,11 @@ interface Dispatch { input: { deferred: boolean; rebuild: boolean } }
 interface Dependencies {
     adapter: ReturnType<typeof createHostAdapter>; service: SettlementService; updater: ReturnType<typeof createState3Updater>;
     retain(result: Promise<Result>, index?: number): Promise<Result>; refresh(): void; report(promise: Promise<unknown>): unknown;
+    ready?(): boolean;
 }
 
 /** Owns only the current handoff to prose. Durable outcomes belong to USER receipts. */
-export function createBeforeGeneration({ adapter, service, updater, retain, refresh, report }: Dependencies) {
+export function createBeforeGeneration({ adapter, service, updater, retain, refresh, report, ready = () => true }: Dependencies) {
     const events = createModuleEvents(ID);
     let candidate: ChatMessage | undefined, eligible = false, generation = 0;
     let active: { controller: AbortController; message: ChatMessage; chatId: string; finished: Promise<void> } | undefined;
@@ -39,6 +40,7 @@ export function createBeforeGeneration({ adapter, service, updater, retain, refr
         signal.throwIfAborted();
     }
     function assertTarget(index: number) {
+        if (!ready()) {reject('commit-busy');}
         if (!supportsBefore()) {reject('stage-disabled', { stage: 'before' });}
         if (index !== latestUser() || !getContext().chat[index]?.mes?.trim()) {reject('target-missing');}
     }
@@ -69,7 +71,9 @@ export function createBeforeGeneration({ adapter, service, updater, retain, refr
             if (!result.ok && updater.status().retryIndex !== index && (!previous || previous.outcome === 'failed')) {
                 // Failure is recorded on the already-rolled-back state. Never
                 // restore a superseded USER/AI settlement when recomputation fails.
-                result = await retain(service.recordBefore(index, { inputDigest, outcome: 'failed', diagnostics: result.diagnostics }, { signal }), index);
+                const extensions = result.extensions;
+                result = await retain(service.recordBefore(index, { inputDigest, outcome: 'failed', diagnostics: result.diagnostics }, { signal })
+                    .then(recorded => extensions ? { ...recorded, extensions } : recorded), index);
             }
         } finally {
             finish();
@@ -87,8 +91,10 @@ export function createBeforeGeneration({ adapter, service, updater, retain, refr
     }
     async function intercept(_chat: unknown, _size: number, abort: (immediately: boolean) => void, type: string, dispatch: Dispatch) {
         clearPrompt();
-        if (!enabled() || ['quiet', 'impersonate'].includes(type)) {return;}
+        if (!state3Selected() || ['quiet', 'impersonate'].includes(type)) {return;}
         try {
+            if (!ready()) {reject('opening-start-required');}
+            if (!enabled()) {return;}
             if (!supportsBefore()) {return;}
             const index = latestUser(), ctx = getContext(), message = ctx.chat[index];
             if (!message) {return;}
@@ -96,7 +102,7 @@ export function createBeforeGeneration({ adapter, service, updater, retain, refr
             const receipt = receiptAt(index);
             if (receipt?.beforeUpdate) {
                 if (receipt.beforeUpdate.outcome === 'failed') {if (eligible) {abort(true); refresh();} return;}
-                const outcome = beforeOutcome(receipt);
+                const outcome = beforeFloorOutcome(adapter.capture(index), index)!;
                 if (outcome.outcome === 'rejected' || outcome.outcome === 'applied' && (outcome.actions.length || outcome.changes.length)) {
                     setExtensionPrompt(ID, beforeProsePrompt(outcome), extension_prompt_types.IN_CHAT, 0, false, extension_prompt_roles.SYSTEM);
                 }

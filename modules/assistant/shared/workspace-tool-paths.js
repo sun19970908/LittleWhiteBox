@@ -16,7 +16,7 @@ const TOOL_PATH_FIELDS = new Map([
 const RESULT_PATH_FIELDS = new Set(['path', 'publicPath', 'filePath', 'directoryPath', 'root', 'rootPath', 'searchPath', 'fromPath', 'toPath']);
 const RESULT_PATH_LISTS = new Set(['paths', 'suggestions', 'skippedPaths', 'conflictPaths']);
 const DIAGNOSTIC_FIELDS = new Set(['error', 'raw', 'message', 'suggestion', 'summary']);
-const RESULT_RECORDS = new Set(['items', 'results', 'changes', 'readErrors', 'validation']);
+const RESULT_RECORDS = new Set(['items', 'files', 'results', 'changes', 'readErrors', 'validation']);
 
 // Model/host boundary only. UI writes, repository snapshots and conflict
 // observations retain their stored paths and never enter this adapter.

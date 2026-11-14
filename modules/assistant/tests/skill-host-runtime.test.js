@@ -6,7 +6,7 @@ import { parse } from 'acorn';
 import { BUILTIN_SKILLS, skillCatalogLine } from '../shared/skill-tools.js';
 
 // Contract: memory/skill refresh payloads keep builtin skill IDs and their tool mappings,
-// including when the separate user catalog cannot be parsed (cost: hidden activation entry points).
+// including cross-referenced summaries and an unreadable user catalog (cost: hidden activation entry points).
 async function loadSkillsRuntime(catalogResult) {
     const source = await readFile(new URL('../assistant.js', import.meta.url), 'utf8');
     const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'module' });
@@ -28,14 +28,16 @@ for (const ok of [true, false]) test(`host skill refresh preserves builtin machi
         ? { ok: true, catalog, summaryText: 'user-skill-fixture' }
         : { ok: false, message: 'fixture_catalog_error' });
     const result = await readRuntime();
-    const lines = result.skillsPromptSummary.split('\n').map(line => new Set(line.match(/[A-Za-z0-9_-]+/g) || []));
+    const lines = result.skillsPromptSummary.split('\n');
     for (const skill of BUILTIN_SKILLS) {
-        const entries = lines.filter(tokens => tokens.has(skill.id));
+        const entries = lines.filter(line => line === skillCatalogLine(skill));
         assert.equal(entries.length, 1, skill.id);
-        for (const name of skill.tools) assert.ok(entries[0].has(name), `${skill.id}: ${name}`);
+        const tokens = new Set(entries[0].match(/[A-Za-z0-9_-]+/g) || []);
+        assert.ok(tokens.has(skill.id), skill.id);
+        for (const name of skill.tools) assert.ok(tokens.has(name), `${skill.id}: ${name}`);
     }
     assert.deepEqual(result.skillsCatalog, catalog);
     assert.deepEqual(result.skillFiles, []);
     assert.equal(result.skillsCatalogError, ok ? '' : 'fixture_catalog_error');
-    if (ok) assert.ok(lines.some(tokens => tokens.has('user-skill-fixture')));
+    if (ok) assert.ok(lines.includes('user-skill-fixture'));
 });

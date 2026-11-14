@@ -81,11 +81,26 @@ export function initVariableUpdater(stateApi) {
         const chat = getContext().chat;
         pendingGeneration = { chat, replacement: type === 'regenerate' && !chat.at(-1)?.is_user ? chat.at(-1) : null, length: chat.length };
     });
-    events.on(event_types.MESSAGE_RECEIVED, id => {
+    function receiveReply(id) {
         clearSwipeRecovery();
-        if (pendingGeneration?.chat === getContext().chat) pendingGeneration.message = getContext().chat[Number(id)];
+        const ctx = getContext(), message = ctx.chat[Number(id)];
+        if (pendingGeneration?.chat === ctx.chat && message && !message.is_user && !message.is_system) {
+            pendingGeneration.message = message;
+            updateWhenReady();
+        }
         refresh();
-    });
+    }
+    function updateWhenReady() {
+        const generation = pendingGeneration, ctx = getContext();
+        if (!generation?.message || generation.chat !== ctx.chat || generation.readyMessage !== generation.message) return;
+        pendingGeneration = null;
+        if (hasBodyUpdate(generation.message)) return;
+        if (enabled() && readSettings().auto) observeBackgroundTask(controller.update().catch(error => {
+            globalThis.toastr?.error(error.message, COPY.title);
+        }), { source: import.meta.url, operation: 'autoUpdate' });
+    }
+    events.on(event_types.MESSAGE_RECEIVED, receiveReply);
+    events.on(event_types.CHARACTER_MESSAGE_RENDERED, receiveReply);
     events.on(event_types.MESSAGE_DELETED, () => {
         clearSwipeRecovery();
         const chat = getContext().chat;
@@ -100,16 +115,16 @@ export function initVariableUpdater(stateApi) {
     events.on(event_types.CHAT_CHANGED, loadChat);
     events.on(event_types.MESSAGE_SWIPED, id => { cancelled(); watchSwipeRecovery(id); });
     for (const event of [event_types.MESSAGE_SWIPE_DELETED, event_types.MESSAGE_UPDATED]) events.on(event, () => { clearSwipeRecovery(); cancelled(); });
-    for (const event of [event_types.CHARACTER_MESSAGE_RENDERED, event_types.USER_MESSAGE_RENDERED, event_types.SETTINGS_UPDATED]) events.on(event, refresh);
+    for (const event of [event_types.USER_MESSAGE_RENDERED, event_types.SETTINGS_UPDATED]) events.on(event, refresh);
     runtime = {
         open: view.open,
         replyReady(id) {
-            if (!pendingGeneration?.message || pendingGeneration.message !== getContext().chat[id]) return;
-            pendingGeneration = null;
-            if (hasBodyUpdate(getContext().chat[id])) return;
-            if (enabled() && readSettings().auto) observeBackgroundTask(controller.update().catch(error => {
-                globalThis.toastr?.error(error.message, COPY.title);
-            }), { source: import.meta.url, operation: 'autoUpdate' });
+            const ctx = getContext(), message = ctx.chat[id];
+            if (!pendingGeneration || pendingGeneration.chat !== ctx.chat || !message || message.is_user || message.is_system) return;
+            // Body settlement can complete before our message listener runs.
+            // Join the two signals on this turn instead of dropping the first.
+            pendingGeneration.readyMessage = message;
+            updateWhenReady();
         },
         dispose() { events.cleanup(); clearSwipeRecovery(); controller.dispose(); cancelAnimationFrame(frame); view.dispose(); },
     };

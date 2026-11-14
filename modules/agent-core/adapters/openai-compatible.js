@@ -27,6 +27,8 @@ import {
     stripToolProtocolMarker,
 } from './tool-protocol-marker.js';
 const ERROR_SOURCE = "modules/agent-core/adapters/openai-compatible.js";
+// Per-response wire indexes only; never serialized into tool history.
+const streamToolIndexes = new WeakMap();
 
 function parseArgumentsForTaggedReplay(text) {
     try {
@@ -857,13 +859,61 @@ function appendStreamDeltaField(target, key, value) {
     appendStreamField(target, key, value);
 }
 
+function resolveStreamToolCallIndex(calls, delta, batchSize, wireIndexes) {
+    const id = delta?.id;
+    const idIndex = id ? calls.findIndex(call => call?.id === id) : -1;
+    const wireIndex = delta?.index == null ? undefined : Number(delta.index);
+    const candidates = wireIndex === undefined
+        ? calls.flatMap((call, index) => call ? [index] : [])
+        : [...(wireIndexes.get(wireIndex) || (calls[wireIndex] ? [wireIndex] : []))];
+    let index;
+    if (id) {
+        // Distinct IDs identify distinct calls even when a relay reuses index 0.
+        // Keep ordinary indexed ordering and allow an ID to arrive after its slot.
+        if (idIndex >= 0) {
+            index = idIndex;
+        } else if (wireIndex !== undefined && candidates.length === 1 && !calls[candidates[0]]?.id) {
+            index = candidates[0];
+        } else {
+            index = wireIndex !== undefined && !calls[wireIndex] ? wireIndex : calls.length;
+        }
+    } else if (candidates.length === 1 && (wireIndex !== undefined || batchSize === 1)) {
+        index = candidates[0];
+    } else if (wireIndex !== undefined && !candidates.length) {
+        index = wireIndex;
+    } else if (batchSize === 1 && typeof delta?.function?.arguments === 'string' && delta.function.arguments.trim()
+        && !delta.function.name) {
+        // Sequential calls can omit identity on argument tails. A complete JSON
+        // object cannot accept another non-whitespace argument fragment.
+        const unfinished = candidates.filter(candidate => !isRestorableToolArguments(calls[candidate]?.function?.arguments));
+        if (unfinished.length === 1) {
+            index = unfinished[0];
+        }
+    }
+    if (index === undefined && batchSize === 1 && calls.filter(Boolean).length <= 1) {
+        index = Math.max(0, calls.findIndex(Boolean));
+    }
+    if (!Number.isSafeInteger(index) || index < 0
+        || (wireIndex !== undefined && (!Number.isSafeInteger(wireIndex) || wireIndex < 0))) {
+        const error = new Error('Cannot associate a streamed tool-call fragment with a unique call.');
+        error.code = 'OPENAI_COMPATIBLE_TOOL_CALL_IDENTITY_INVALID';
+        throw error;
+    }
+    return index;
+}
+
 function appendStreamToolCalls(target, toolCalls = []) {
     if (!Array.isArray(toolCalls) || !toolCalls.length) return;
     if (!Array.isArray(target.tool_calls)) {
         target.tool_calls = [];
     }
+    let wireIndexes = streamToolIndexes.get(target.tool_calls);
+    if (!wireIndexes) {
+        wireIndexes = new Map();
+        streamToolIndexes.set(target.tool_calls, wireIndexes);
+    }
     toolCalls.forEach((toolCallDelta) => {
-        const index = Number(toolCallDelta?.index ?? 0);
+        const index = resolveStreamToolCallIndex(target.tool_calls, toolCallDelta, toolCalls.length, wireIndexes);
         const current = target.tool_calls[index] || {};
         const nextToolCall = { ...current };
 
@@ -883,6 +933,12 @@ function appendStreamToolCalls(target, toolCalls = []) {
         });
 
         target.tool_calls[index] = nextToolCall;
+        if (toolCallDelta?.index != null) {
+            const wireIndex = Number(toolCallDelta.index);
+            const slots = wireIndexes.get(wireIndex) || new Set();
+            slots.add(index);
+            wireIndexes.set(wireIndex, slots);
+        }
     });
 }
 
@@ -1234,7 +1290,7 @@ export class OpenAICompatibleAdapter {
             text: cleanedText,
             toolCalls,
             thoughts: visibleThoughts(effectiveReasoning, thoughts),
-            ...readResponseCompletion('openai', lastFinishReason, !!assistantSnapshot.refusal, describeStreamedResponse(assistantSnapshot, lastFinishReason, lastModel)),
+            ...readResponseCompletion('openai', lastFinishReason, !!assistantSnapshot.refusal, describeStreamedResponse(assistantSnapshot, lastFinishReason, lastModel), getStreamedSnapshotText(assistantSnapshot)),
             model: lastModel,
             provider: 'openai-compatible',
             providerPayload,
@@ -1337,7 +1393,7 @@ export class OpenAICompatibleAdapter {
                 thoughts: visibleThoughts(effectiveReasoning, thoughts),
                 ...readResponseCompletion('openai', lastFinishReason, !!finalMessage.refusal, finalCompletion
                     ? describeCompletionResponse(finalCompletion, finalChoice || {}, finalMessage)
-                    : describeStreamedResponse(finalMessage, lastFinishReason, lastModel)),
+                    : describeStreamedResponse(finalMessage, lastFinishReason, lastModel), getStreamedSnapshotText(finalMessage)),
                 model: lastModel,
                 provider: 'openai-compatible',
                 providerPayload,
@@ -1369,7 +1425,7 @@ export class OpenAICompatibleAdapter {
             text: cleanedText,
             toolCalls,
             thoughts: visibleThoughts(effectiveReasoning, thoughts),
-            ...readResponseCompletion('openai', choice.finish_reason, !!message.refusal, describeCompletionResponse(response, choice, message)),
+            ...readResponseCompletion('openai', choice.finish_reason, !!message.refusal, describeCompletionResponse(response, choice, message), contentText),
             model: response.model || this.config.model,
             provider: 'openai-compatible',
             providerPayload: buildProviderPayload(replayableMessage),

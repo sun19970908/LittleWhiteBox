@@ -2,6 +2,7 @@ import { analyzeJavaScriptApiRequest } from './jsapi-analysis.js';
 import { executeJavaScriptApi } from './jsapi-execution.js';
 import { JSAPI_ABORTED, JSAPI_CANCEL_NOTICE } from '../shared/jsapi-contract.js';
 import { normalizeJavaScriptApiOutput } from './jsapi-output.js';
+import { errorDetails } from '../../../shared/common/error-details.js';
 
 export { analyzeJavaScriptApiRequest } from './jsapi-analysis.js';
 
@@ -28,6 +29,6 @@ export async function runJavaScriptApi({ code = '', purpose = '', expectedOutput
         const aborted = error?.code === JSAPI_ABORTED;
         return receipt(false, { note: aborted ? JSAPI_CANCEL_NOTICE : '' }, { isAborted: aborted,
             errorCode: aborted ? JSAPI_ABORTED : 'jsapi_execution_failed', errorMessage: error?.message || String(error),
-            errorStack: error?.stack || '', abortReason: aborted ? JSAPI_CANCEL_NOTICE : '' });
+            errorStack: error?.stack || '', error: errorDetails(error), abortReason: aborted ? JSAPI_CANCEL_NOTICE : '' });
     }
 }

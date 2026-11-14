@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parse } from 'acorn';
+import { transformSync } from 'esbuild';
 import { scanGarbledText, VERIFIED_REPLACEMENT_CHARACTERS } from './garbled-text.mjs';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -45,6 +46,67 @@ test('the review fingerprint checks bytes rather than already decoded text', () 
     ]);
     assert.equal(corrupted.toString('utf8'), content);
     assert.equal(scanGarbledText(reviewed.file, corrupted).length, reviewed.offsets.length);
+});
+
+// 构建产物契约：使用实际安装的 SDK 验证清洗语义和压缩后的字面量；不绑定易变的 chunk 名。
+test('the installed SDK intentionally replaces only lone surrogates', async () => {
+    const dependency = path.join(root, 'node_modules/@anthropic-ai/sdk/lib/internal/toolsets/sanitize.mjs');
+    const { wellFormed } = await import('../node_modules/@anthropic-ai/sdk/lib/internal/toolsets/sanitize.mjs');
+    assert.equal(wellFormed('A\uD800B\uDC00C\uD83D\uDE00'), 'A\uFFFDB\uFFFDC\uD83D\uDE00');
+    const { code } = transformSync(fs.readFileSync(dependency, 'utf8'), { minify: true, charset: 'utf8', format: 'esm' });
+    assert.equal(scanGarbledText('modules/example.js', Buffer.from(code)).length, 1);
+    assert.deepEqual(scanGarbledText('dist/sdk.js', Buffer.from(code)), []);
+});
+
+const surrogatePattern = '/[\\uD800-\\uDFFF]/gu';
+const sanitizer = `function clean(value){return value.replace(${surrogatePattern},"\uFFFD")}`;
+
+// 契约：仅豁免替换字面量；同一行、其他行、注释及源码中的损坏不能随清洗器一起获得豁免。
+test('sanitizers do not exempt neighboring corrupt text or source files', () => {
+    const hoisted = `var lone=${surrogatePattern};function clean(value){return value.replace(lone,"\uFFFD")}`;
+    for (const clean of [sanitizer, hoisted]) {
+        assert.deepEqual(scanGarbledText('dist/sdk.js', Buffer.from(clean)), []);
+        for (const separator of ['', '\n']) {
+            const source = `${clean}${separator}const bad="\uFFFD${'?'.repeat(3)}";/* \uFFFD */`;
+            const expected = [...source.matchAll(/\uFFFD|\?{3}/g)].map(match => match.index).filter(offset => offset >= clean.length);
+            assert.deepEqual(scanGarbledText('dist/sdk.js', Buffer.from(source)).map(hit => hit.offset).sort((a, b) => a - b), expected);
+        }
+        for (const file of ['modules/sdk.js', 'dist/sdk.html', 'dist/sdk.css']) {
+            assert.equal(scanGarbledText(file, Buffer.from(clean)).length, 1);
+        }
+    }
+});
+
+// 契约：正则、调用或绑定发生变化即撤销豁免；未知代码不能仅凭出现相同字符绕过扫描。
+test('altered sanitizer regexes, calls and bindings fail closed', () => {
+    const changed = [
+        sanitizer.replace('/gu', '/g'),
+        sanitizer.replace('/gu', '/u'),
+        sanitizer.replace('/gu', '/giu'),
+        sanitizer.replace('D800', 'D801'),
+        sanitizer.replace('replace(', 'replaceAll('),
+        sanitizer.replace('value.replace', 'other.replace'),
+        sanitizer.replace('value.replace', 'value?.replace'),
+        sanitizer.replace('"\uFFFD"', '"x\uFFFD"'),
+        sanitizer.replace('return ', 'notify();return '),
+        `var lone=${surrogatePattern};function clean(value){return value.replace(lone,"\uFFFD")}lone=/x/g;`,
+        `var lone=${surrogatePattern};function clean(value,lone){return value.replace(lone,"\uFFFD")}`,
+        `var lone=${surrogatePattern};function clean(value){return value.replace(lone,"\uFFFD")}function other(lone){return lone}`,
+        `function outside(){var lone=${surrogatePattern};function clean(value){return value.replace(lone,"\uFFFD")}}`,
+        `const notice="\uFFFD";${sanitizer}(`,
+    ];
+    for (const source of changed) {
+        const expected = [...source.matchAll(/\uFFFD/g)].map(match => match.index);
+        assert.deepEqual(scanGarbledText('dist/sdk.js', Buffer.from(source)).map(hit => hit.offset), expected, source);
+    }
+});
+
+// 契约：UTF-8 损坏解码生成的 U+FFFD 不能因恰好落在清洗字面量内而被吞掉。
+test('invalid UTF-8 cannot acquire the sanitizer exemption', () => {
+    const source = Buffer.from(sanitizer), offset = source.indexOf(Buffer.from('\uFFFD'));
+    const corrupted = Buffer.concat([source.subarray(0, offset), Buffer.from([0xff]), source.subarray(offset + 3)]);
+    assert.equal(corrupted.toString('utf8'), sanitizer);
+    assert.equal(scanGarbledText('dist/sdk.js', corrupted).length, 1);
 });
 
 // 构建产物契约：只识别已核实的二进制内容，旁边的文本、源码以及改动后的二进制仍须检查。

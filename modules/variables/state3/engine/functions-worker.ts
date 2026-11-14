@@ -3,7 +3,7 @@ import { initializeFunctionVm, runFunctionInVm, type FunctionOptions } from './f
 
 void initializeFunctionVm().then(
     () => self.postMessage({ type: 'ready' }),
-    () => self.postMessage({ type: 'result', error: { code: 'function_startup_failed' } }),
+    error => self.postMessage({ type: 'result', error: { code: 'function_startup_failed', cause: diagnostic(error) } }),
 );
 self.onmessage = async (event: MessageEvent<FunctionOptions>) => {
     try {

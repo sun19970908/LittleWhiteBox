@@ -7,7 +7,7 @@ import { settleAssistantRunFailure } from '../app-src/runtime/run-failure.js';
 
 // Acceptance contracts (cost: lost history / duplicate paid requests):
 // - Plain-text summaries replace archived history without triggering the local fallback.
-// - API failures retain the existing local fallback, without another model call.
+// - API failures preserve history and memory, without another model call.
 // - Cancellation never archives history or adopts a late reply.
 // - Recent answers and the active tool round are retained separately (cost: lost context / broken protocol).
 // - Budget pressure may summarize every prior turn, without changing the current request/tool group.
@@ -24,7 +24,7 @@ function harness(respond, fitsAt = 5) {
     const controller = createHistoryCompactionController({ state, render() {}, persistSession() { saves++; },
         showToast: text => notices.push(text), getActiveProviderConfig: () => ({ maxTokens: 15000 }),
         formatToolResultDisplay: () => ({}), buildTextWithAttachmentSummary: text => text, trimForSummary: text => text,
-        SUMMARY_SYSTEM_PROMPT, SUMMARY_TRIGGER_TOKENS: 100,
+        SUMMARY_SYSTEM_PROMPT, compactionThreshold: () => 100, requestInputLimit: () => 100000,
         buildContextMeterLabel: () => '', toProviderMessages: messages => messages,
         updateContextStats() { state.contextStats.usedTokens = state.messages.length > fitsAt ? 200 : 1; },
     });
@@ -45,12 +45,13 @@ for (const reason of ['stop', 'length', undefined]) {
     });
 }
 
-test('assistant uses its existing local fallback for an API error without a paid retry', async () => {
+test('assistant preserves history for an API error without a paid retry', async () => {
     const h = harness(() => { throw new Error('offline provider failure'); });
-    await h.run(new AbortController().signal);
-    assert.ok(h.state.historySummary.includes('original memory'));
-    assert.ok(h.state.historySummary.includes('Remember the original request.'));
-    assert.equal(h.notices.length, 2);
+    const original = structuredClone(h.state);
+    await assert.rejects(h.run(new AbortController().signal), { code: 'assistant_summary_failed' });
+    assert.equal(h.state.historySummary, original.historySummary);
+    assert.deepEqual(h.state.messages, original.messages);
+    assert.equal(h.saves(), 0);
     assert.equal(h.requests.length, 1);
 });
 
@@ -116,6 +117,36 @@ for (const notice of ['provider failure', 'cancelled', '']) {
         assert.deepEqual(next, [{ role: 'user', content: 'continue' }]);
     });
 }
+
+test('a single overlong request summarizes its earlier tool cycles in request-sized pieces', async () => {
+    const big = 'x'.repeat(4000);
+    const requests = [];
+    const state = { messages: [{ role: 'user', content: 'build the whole card' }], archivedTurnCount: 0,
+        historySummary: '', archivedSkillIds: [], contextStats: { usedTokens: 0 } };
+    for (let i = 0; i < 6; i++) {
+        state.messages.push({ role: 'assistant', content: '', toolCalls: [{ id: `c${i}`, name: 'Write', arguments: big }] },
+            { role: 'tool', toolCallId: `c${i}`, toolName: 'Write', content: '{"ok":true}' });
+    }
+    const controller = createHistoryCompactionController({ state, render() {}, persistSession() {}, showToast() {},
+        getActiveProviderConfig: () => ({ maxTokens: 100 }),
+        formatToolResultDisplay: () => ({}), buildTextWithAttachmentSummary: text => text, trimForSummary: text => text,
+        SUMMARY_SYSTEM_PROMPT, compactionThreshold: () => 3000, requestInputLimit: () => 3000,
+        buildContextMeterLabel: () => '', toProviderMessages: messages => messages,
+        updateContextStats(messages) {
+            state.contextStats.usedTokens = messages.reduce((sum, message) => sum + String(message.content).length
+                + (message.toolCalls || []).reduce((total, call) => total + call.arguments.length, 0), 0) / 3.35;
+        } });
+    const messages = await controller.ensureContextBudget({ chat: async request => {
+        requests.push(request.messages[0].content);
+        return { text: `memory ${requests.length}` };
+    } }, new AbortController().signal);
+    assert.equal(messages[0].content, 'build the whole card');
+    assert.deepEqual(messages.slice(1).map(message => message.toolCallId || message.toolCalls[0].id), ['c4', 'c4', 'c5', 'c5']);
+    assert.equal(state.historySummary, `memory ${requests.length}`);
+    assert.ok(requests.length > 1);
+    for (const input of requests) assert.ok(new TextEncoder().encode(input).length / 3.35 <= 3000);
+    assert.ok(requests.slice(1).every((input, index) => input.includes(`memory ${index + 1}`)), 'Each piece folds into the previous summary');
+});
 
 test('failure settlement retains completed tool evidence and persists silent interruption', () => {
     const group = [{ role: 'assistant', content: 'reading', toolCalls: [{ id: 'a', name: 'Read', arguments: '{}' }] },

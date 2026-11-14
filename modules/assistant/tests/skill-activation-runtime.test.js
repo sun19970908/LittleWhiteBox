@@ -30,7 +30,7 @@ function harness(t, { steps, delegates = [], archivedSkillIds = [], results = {}
         getDelegateProviderConfig: () => ({ provider: 'openai-compatible' }),
         getToolDefinitions: () => TOOL_DEFINITIONS,
         SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000,
-        MAX_TOOL_ROUNDS: 12, REQUEST_TIMEOUT_MS: 1000,
+        REQUEST_TIMEOUT_MS: 1000,
         isAbortError: error => error.name === 'AbortError',
         createAdapter: config => {
             const role = config ? `delegate-${delegateIndex++}` : 'main';

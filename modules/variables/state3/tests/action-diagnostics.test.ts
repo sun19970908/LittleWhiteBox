@@ -11,7 +11,7 @@ function card(): Bundle {
     return { definition: {
         format: 1, updates: ['after'], name: 'Diagnostic contract', initial: { cash: 102, locked: true, bought: false },
         schema: { type: 'object', properties: { cash: { type: 'number', title: '现金' }, locked: { type: 'boolean' }, bought: { type: 'boolean' } }, additionalProperties: false },
-        access: [{ path: ['bought'], write: ['buy'], description: 'Purchase flag' }], rules: [], constraints: [], views: {},
+        access: [{ path: ['bought'], direct: false, description: 'Purchase flag' }], rules: [], constraints: [], views: {},
         functions: { route: { reads: [], description: 'Checks the selected route' } },
         actions: [{ id: 'buy', title: '购买', description: 'Purchase costs quantity times three',
             parameters: { type: 'object', required: ['quantity'], additionalProperties: false,

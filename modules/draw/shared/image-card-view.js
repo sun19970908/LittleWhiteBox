@@ -63,6 +63,9 @@ function commitCard(card, next, { replaceImage = false } = {}) {
     const editor = card.querySelector('.xb-nd-edit');
     const editing = editor && editor.style.display !== 'none';
     if (editing && editor.dataset.imgId === undefined) editor.dataset.imgId = card.dataset.imgId || '';
+    if (card.classList.contains('controls-visible') && next.querySelector('img[data-action="toggle-controls"]')) {
+        next.classList.add('controls-visible');
+    }
     syncAttributes(card, next);
     card.querySelector('[data-xb-image-view-error]')?.remove();
     const surface = card.querySelector('.xb-nd-img-wrap');

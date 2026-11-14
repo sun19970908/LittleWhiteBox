@@ -275,6 +275,23 @@ export function stripScenePointMarkers(text) {
     return restoreUserScenePointMarkers(String(text || '').replace(SCENE_POINT_MARKER_REGEX, ''));
 }
 
+// Image tags use the same block matching/order as scene planning. Even blocks
+// kept for the planner cannot contain image requests. Return original offsets.
+export function collectFilterRuleRanges(source, filterRules = []) {
+    const text = String(source || '');
+    const rules = (Array.isArray(filterRules) ? filterRules : []).map(rule => ({ ...rule, keep: false }));
+    if (!rules.length) return [];
+    const remaining = applyMappedFilterRules(createMappedText(text), rules);
+    const ranges = [];
+    let offset = 0;
+    for (const item of remaining) {
+        if (item.offset > offset) ranges.push([offset, item.offset]);
+        offset = item.offset + 1;
+    }
+    if (offset < text.length) ranges.push([offset, text.length]);
+    return ranges;
+}
+
 export function createSceneSource(sourceText, options = {}) {
     const original = String(sourceText ?? '');
     let mapped = createMappedText(original);

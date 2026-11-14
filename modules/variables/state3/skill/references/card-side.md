@@ -15,17 +15,17 @@ Use the shared [refresh guidance](<../../../../card-workspace/skill/references/x
 <a id="submission"></a>
 ## Submitting an action and interpreting the result
 
-`await api.apply(input, options)` submits an array of operations/actions. `await api.preview(input, options)` calculates the same result without changing the chat. Both accept optional `index` (the host chat-array message index), `source`, `replace` and `signal`.
+`await api.apply(input, options)` submits an array of operations/actions. `await api.preview(input, options)` calculates the same result without changing the chat. Both accept optional `index` (the host chat-array message index), `source`, `replace`, `stage` and `signal`; `preview` also accepts simulated `prepared` data.
 
 With no index, the target is the most recent non-user, non-system reply; if there is none, it is the last message. An explicit index targets that message's selected swipe. Writes and undo are limited to the latest USER or latest AI message; ordinary appends require no later recorded settlements. The iframe's visual location does not select its target.
 
-Each ordinary `apply` call appends another settlement (`source:'api'` by default). Two calls can spend or grant resources twice. `replace:true` requests replacement of the entire target floor and its suffix, including panel operations: the API rolls those changes back and confirms saving before executing the new submission. Failed execution leaves that rollback in place. Preview calculates against the rollback baseline without publishing it. The updater follows the same rollback-first journey and labels its receipts `model:before` or `model:after`. Card tasks use their own source labels. Stage assignments restrict model submissions; card-side actions without a `stage` use their normal action permissions.
+Each ordinary `apply` call appends another settlement (`source:'api'` by default). Two calls can spend or grant resources twice. `replace:true` replaces gameplay settlements on the target floor and its suffix, including panel operations, while preserving the selected opening's starting values: the API rolls those gameplay changes back and confirms saving before executing the new submission. Failed execution leaves that rollback in place. Preview calculates against the rollback baseline without publishing it. The updater follows the same rollback-first journey and labels its receipts `model:before` or `model:after`. Card tasks use their own source labels; `source:'opening'` is reserved for 3.0 opening initialization. A call without the `stage` option ignores the stage assignments of actions and fields; passing `stage` applies the same stage limits as the model. Either way, direct writes still need `direct: true`, and actions still obey their parameters, conditions, derived-value protection and final-state checks.
 
 The click journey is: read the current state → await one submission → inspect its result → reread the current native value → show feedback. Keep only the clicked operation pending while it runs; a timer refresh must not re-enable it mid-submit. The host refuses writes during story generation. Catch thrown/rejected calls as well as returned failures; not every unavailable-state error comes back as a result object.
 
 | Result | Meaning | What the panel does |
 | --- | --- | --- |
-| `ok:false`, with `diagnostics` | None of the submitted changes took effect | Show the cause; no successful subset needs resending |
+| `ok:false`, with `diagnostics` | None of the submitted changes took effect; with `replace:true`, the gameplay rollback is already published | Show the cause; no successful subset needs resending |
 | `ok:true`, `committed:true`, `saved:true` | Values changed and saving succeeded | Show actual changes, or no change when `changes` is empty |
 | `ok:true`, `committed:true`, `saved:false`, with `persistence` | Values already changed, save not confirmed | Show both facts; offer `retrySave()` instead of repeating `apply` |
 | `ok:true`, `committed:true`, no `saved` field, with a normal before receipt | Values and receipt are published for prose; SillyTavern owns the upcoming chat save | Show the outcome, not a save failure or confirmed save |
@@ -35,7 +35,7 @@ The click journey is: read the current state → await one submission → inspec
 
 `diagnostics` may also accompany a successful commit, for example a notification problem. Such a warning, a failed redraw, or a lost response is not permission to replay the action. Inspect state/history if the outcome is unknown. `retrySave()` retries the pending save for the current chat without rerunning gameplay; it can reject when the pending save no longer matches the current state. Recheck the current result in that case. Do not automatically resend on a different chat or swipe.
 
-`lastResult()` returns the current live result, or `undefined` after it is cleared. The example uses `receipt.id` (the settlement record's id) and `saved` to remove an outdated retry button when a newer result replaces it; this feedback is kept in the panel, not saved as a gameplay variable.
+`lastResult()` returns the most recent result of `apply`, `undo`, `enable`, a model update or a swipe/deletion restoration, including failures, or `undefined` after it is cleared by a chat change or rewind. Previews never replace it. Check `ok`, `committed` and `receipt` before relying on it. The example uses `receipt.id` (the settlement record's id) and `saved` to remove an outdated retry button when a newer result replaces it; this feedback is kept in the panel, not saved as a gameplay variable.
 
 If the button already settled an event, its prose summary is a recap, not a second model instruction to settle it. Explain that division in the relevant update instructions. Distinct new story events may still affect the same fields.
 
@@ -45,14 +45,16 @@ The [camp definition](<examples/camp/definition.json>) and [panel](<examples/cam
 
 The panel reads on mount; it does not call `enable` or write initial values. It uses a local busy flag and the current chat identity, and releases its own timer on `pagehide`. Initialization belongs to the chat; reopening a panel cannot grant another rest. Copy the mechanics and feedback flow, then adapt the names and appearance to the actual card.
 
+The [解铃会 card](<examples/jieling.md>) extends this to a whole game: player decisions in the panel, story facts from the update model, derived rooms, explained refusals, a season ending and a panel kept only on the latest message.
+
 <a id="effects"></a>
 ## One-time animation, sound and notifications
 
-Polling observes current values. An increase can mean a new reward, undoing damage or restoring a different swipe. Keep one-time effects out of the polling renderer. For a panel-owned action, use its own successful committed result and the relevant change/provenance once; save retry and redraw do not play the effect again.
+One-time sound, animation and notifications belong in the card's committed script, described in [extensions](<extensions.md>). It runs only for a new settlement. A panel's apply result is for showing success/failure and refreshing values; it does not duplicate that host effect.
 
-For task-owned feedback, `document` on the host page receives the native DOM event `lwb:state3:committed`, whose `event.detail` contains the result that changed the chat. It is emitted after the API result is retained, including successful enable, apply, undo and selection restoration; `saved:false` is still a commit. It is not a jQuery `stateAtomsGenerated` event and is not forwarded to the iframe's `st-event` bridge. Register in the task, remove the same listener in `onCleanup`, and send any card-specific display message to the iframe through the documented task/iframe channel.
+The host DOM event `lwb:state3:committed` is available to refresh external displays. Its detail contains the retained result, including initialization, undo and restoration, so it is not a new-action animation trigger. Register display listeners in their owning task and remove them in `onCleanup`.
 
-This notification does not cover every variable change: ordinary native-variable edits and opening a chat need not emit it, and a result may not be announced if the player switched chats or replies while it was running. Its name does not establish that a new gameplay action occurred. `actions` and `provenance` identify fresh settlement effects; undo/restoration have no freshly executed action/rule provenance, although the restored record can name an old action. If the card needs a particular reward effect, match that reward's provenance rather than a positive balance change or `receipt.actions`. Explicitly exclude initialization effects when they are not part of the intended presentation. The current-value panel still refreshes independently.
+Native manual edits and opening a chat need not emit that event; a current-value panel still follows the shared refresh guidance. A restored value is existing progress, not a newly earned reward.
 
 Sources: `runtime/api.ts`, `runtime/service.ts`, `runtime/host.ts`, `types.ts` and `index.ts` (`available`, `retain`, `retrySave`), relative to `modules/variables/state3/`.
 

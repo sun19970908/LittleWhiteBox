@@ -434,7 +434,10 @@ export function upsertLocalFileInSources(localSources = [], targetPath = '', con
         originalContent: Object.prototype.hasOwnProperty.call(options, 'originalContent')
             ? options.originalContent
             : fileExisted
-                ? existingFile?.originalContent ?? existingFile?.content ?? String(content ?? '')
+                // null = created in the workspace (no baseline); keep it through edits.
+                ? (existingFile && Object.prototype.hasOwnProperty.call(existingFile, 'originalContent')
+                    ? existingFile.originalContent
+                    : existingFile?.content ?? String(content ?? ''))
                 : null,
         ...(typeof options.originalGroupHash === 'string' || typeof existingFile?.originalGroupHash === 'string'
             ? { originalGroupHash: options.originalGroupHash ?? existingFile.originalGroupHash } : {}),
@@ -779,13 +782,10 @@ export function hasOriginalSnapshot(file) {
     return file && typeof file.originalContent === 'string';
 }
 
+// Modified means "differs from the imported or last written-back content".
+// Files created inside the workspace have no baseline and are never marked.
 export function isLocalSourceFileModified(file) {
-    if (!file) return false;
-    if (file.originalContent === null) return true;
-    if (typeof file.originalContent === 'string') {
-        return String(file.content || '') !== file.originalContent;
-    }
-    return false;
+    return typeof file?.originalContent === 'string' && String(file.content || '') !== file.originalContent;
 }
 
 export function summarizeLocalSources(localSources = []) {

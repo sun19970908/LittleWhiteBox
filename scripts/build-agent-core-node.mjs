@@ -4,6 +4,7 @@ import { stagedInputs } from './build/staged-inputs.mjs';
 import { optionalRuntimeDependencies } from './build/optional-dependencies.mjs';
 import { builtinModules } from 'node:module';
 import { signRuntime } from './build/runtime-signing.mjs';
+import { packageLicenseSupplement } from './build/license-supplements.mjs';
 import {
     mkdir,
     readFile,
@@ -103,7 +104,7 @@ function extractReadmeLicenseText(readme) {
     return '';
 }
 
-async function readLicenseFiles(packageRoot) {
+async function readLicenseFiles(packageRoot, metadata) {
     const entries = await readdir(packageRoot, { withFileTypes: true });
     const names = entries
         .filter(entry => entry.isFile() && /^(?:licen[cs]e|notice|copying)(?:[.-].*)?$/i.test(entry.name))
@@ -124,6 +125,8 @@ async function readLicenseFiles(packageRoot) {
         if (text) return [{ name: `${name}#License`, text }];
     }
 
+    const supplement = packageLicenseSupplement(metadata);
+    if (supplement) return supplement;
     throw new Error(`Bundled package does not include license text: ${relative(projectRoot, packageRoot)}`);
 }
 
@@ -143,7 +146,7 @@ async function collectBundledPackages(metafile) {
     for (const packageRoot of roots) {
         const packageJson = JSON.parse(await readFile(resolve(packageRoot, 'package.json'), 'utf8'));
         const license = normalizeLicense(packageJson.license || packageJson.licenses);
-        const licenseFiles = await readLicenseFiles(packageRoot);
+        const licenseFiles = await readLicenseFiles(packageRoot, packageJson);
         const lockKey = relative(projectRoot, packageRoot).split(sep).join('/');
         const lockedPackage = lockedPackages[lockKey];
         if (!packageJson.name || !packageJson.version || !license) {

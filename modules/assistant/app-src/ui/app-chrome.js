@@ -1,7 +1,6 @@
 import { describeMemoryFile, findMemoryFileByPath } from '../memory/memory-files.js';
 import { ACTIVITY_COPY as C } from './activity-copy.js';
-import { updateChromeIcon } from './chrome-icons.js';
-import { WORKSPACE_COPY as W } from '../workspace/workspace-copy.js';
+import { renderApiSummary } from './api-entry.js';
 import { displayCardWorkspacePath } from '../../../card-workspace/paths.js';
 import { describeCardWorkspaceFiles } from '../../../card-workspace/display.js';
 
@@ -146,6 +145,7 @@ export function renderAppChrome(root, state, options = {}) {
         getWorkspaceSummary = () => ({ fileCount: 0, modifiedFileCount: 0 }),
         renderAttachmentGallery = () => {},
         renderWorkspace = () => {},
+        apiSummary,
         onRemoveDraftAttachment = () => {},
     } = options;
 
@@ -192,18 +192,7 @@ export function renderAppChrome(root, state, options = {}) {
     const clearButton = root.querySelector('#xb-assistant-clear');
     clearButton.disabled = state.isBusy || state.isPreparingRun || state.isClearingConversation || !state.messages.length;
 
-    const workspaceButton = root.querySelector('#xb-assistant-open-workspace');
-    if (workspaceButton) {
-        workspaceButton.disabled = false;
-        updateChromeIcon(workspaceButton, 'workspace');
-        const label = W.toggle(state.isWorkspaceOpen);
-        const modifiedCount = localSourceSummary.modifiedFileCount;
-        workspaceButton.title = modifiedCount ? `${label} · ${W.modifiedFiles(modifiedCount)}` : label;
-        workspaceButton.setAttribute('aria-label', workspaceButton.title);
-        workspaceButton.setAttribute('aria-expanded', String(!!state.isWorkspaceOpen));
-        workspaceButton.classList.toggle('has-changes', modifiedCount > 0);
-        workspaceButton.classList.toggle('is-active', !!state.isWorkspaceOpen);
-    }
+    renderApiSummary(root, apiSummary);
 
     const deletePresetButton = root.querySelector('#xb-assistant-delete-preset');
     deletePresetButton.disabled = state.isBusy || (state.config?.presetNames || []).length <= 1;
@@ -244,18 +233,17 @@ export function renderAppChrome(root, state, options = {}) {
     const shell = root.querySelector('.xb-assistant-shell');
     const sidebar = root.querySelector('.xb-assistant-sidebar');
     const sidebarToggle = root.querySelector('#xb-assistant-sidebar-toggle');
-    const sidebarContent = root.querySelector('.xb-assistant-sidebar-content');
     const mobileBackdrop = root.querySelector('#xb-assistant-mobile-backdrop');
     const isMobile = window.matchMedia('(max-width: 900px)').matches;
-    shell?.classList.toggle('sidebar-collapsed', !!state.sidebarCollapsed);
-    sidebar?.classList.toggle('is-collapsed', !!state.sidebarCollapsed);
-    sidebarContent?.toggleAttribute('hidden', !!state.sidebarCollapsed);
-    mobileBackdrop?.toggleAttribute('hidden', !isMobile || !!state.sidebarCollapsed);
+    const sidebarCollapsed = !!state.sidebarCollapsed || (isMobile && state.isWorkspaceOpen);
+    shell?.classList.toggle('sidebar-collapsed', sidebarCollapsed);
+    sidebar?.classList.toggle('is-collapsed', sidebarCollapsed);
+    mobileBackdrop?.toggleAttribute('hidden', !isMobile || sidebarCollapsed);
     if (sidebarToggle) {
-        sidebarToggle.setAttribute('aria-expanded', state.sidebarCollapsed ? 'false' : 'true');
-        sidebarToggle.setAttribute('aria-label', C.settingsToggle(state.sidebarCollapsed));
-        sidebarToggle.title = C.settingsToggle(state.sidebarCollapsed);
-        updateChromeIcon(sidebarToggle, state.sidebarCollapsed ? 'settings' : 'collapse');
+        sidebarToggle.setAttribute('aria-expanded', sidebarCollapsed ? 'false' : 'true');
+        sidebarToggle.setAttribute('aria-label', C.sidebarToggle(sidebarCollapsed));
+        sidebarToggle.title = C.sidebarToggle(sidebarCollapsed);
+        sidebarToggle.classList.toggle('has-changes', localSourceSummary.modifiedFileCount > 0);
     }
 
     const draftGallery = root.querySelector('#xb-assistant-draft-gallery');
@@ -308,23 +296,29 @@ export function renderAppChrome(root, state, options = {}) {
         }
     }
 
-    const workspacePanel = root.querySelector('#xb-assistant-workspace-panel');
-    renderWorkspace(workspacePanel, { disabled: state.isBusy || state.isClosingAssistant });
-
-    const workspaceShell = root.querySelector('#xb-assistant-workspace');
-    const workspaceBackdrop = root.querySelector('#xb-assistant-workspace-backdrop');
-    const mainBody = root.querySelector('.xb-assistant-main-body');
-    const workspaceWidth = resolveWorkspaceWidth(mainBody, state.workspaceWidth);
-    mainBody?.classList.toggle('workspace-open', !!state.isWorkspaceOpen);
-    mainBody?.style.setProperty('--xb-assistant-workspace-width', `${workspaceWidth}px`);
-    workspaceShell?.classList.toggle('is-open', !!state.isWorkspaceOpen);
-    workspaceShell?.setAttribute('aria-hidden', state.isWorkspaceOpen ? 'false' : 'true');
-    workspaceShell?.toggleAttribute('inert', !state.isWorkspaceOpen);
-    workspaceShell?.style.setProperty('--xb-assistant-workspace-width', `${workspaceWidth}px`);
-    workspaceBackdrop?.classList.toggle('is-open', !!state.isWorkspaceOpen && isMobile);
-    workspaceBackdrop?.toggleAttribute('hidden', !(state.isWorkspaceOpen && isMobile));
+    renderWorkspace({ disabled: state.isBusy || state.isClosingAssistant });
+    applyWorkspaceLayout(root, state);
 
     const toggleKey = root.querySelector('#xb-assistant-toggle-key');
     const apiKeyInput = root.querySelector('#xb-assistant-api-key');
     toggleKey.textContent = apiKeyInput.type === 'password' ? '显示' : '隐藏';
+}
+
+// The viewer column exists only while a file is open (isWorkspaceOpen).
+export function applyWorkspaceLayout(root, state) {
+    const workspaceShell = root.querySelector('#xb-assistant-workspace');
+    const workspaceBackdrop = root.querySelector('#xb-assistant-workspace-backdrop');
+    const mainBody = root.querySelector('.xb-assistant-main-body');
+    if (!workspaceShell || !mainBody) return;
+    const isMobile = window.matchMedia('(max-width: 900px)').matches;
+    const open = !!state.isWorkspaceOpen;
+    const workspaceWidth = resolveWorkspaceWidth(mainBody, state.workspaceWidth);
+    mainBody.classList.toggle('workspace-open', open);
+    mainBody.style.setProperty('--xb-assistant-workspace-width', `${workspaceWidth}px`);
+    workspaceShell.classList.toggle('is-open', open);
+    workspaceShell.setAttribute('aria-hidden', open ? 'false' : 'true');
+    workspaceShell.toggleAttribute('inert', !open);
+    workspaceShell.style.setProperty('--xb-assistant-workspace-width', `${workspaceWidth}px`);
+    workspaceBackdrop?.classList.toggle('is-open', open && isMobile);
+    workspaceBackdrop?.toggleAttribute('hidden', !(open && isMobile));
 }

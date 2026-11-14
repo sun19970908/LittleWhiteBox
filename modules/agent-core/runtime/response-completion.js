@@ -13,7 +13,18 @@ const REFUSAL_REASONS = {
 };
 
 /** Transport completion is metadata, not a verdict on the received content. */
-export function readResponseCompletion(protocol, reason, refused = false, responseInfo = undefined) {
+export function readResponseCompletion(protocol, reason, refused = false, responseInfo = undefined, responseText = '') {
+    // This relay reports an upstream HTTP failure in finish_reason despite HTTP 200.
+    // Match its protocol marker, never error-like words in ordinary model prose.
+    const proxyFailure = protocol === 'openai' && typeof reason === 'string'
+        ? /^Proxy error \(HTTP ([45]\d{2})\b[^)]*\)$/i.exec(reason) : null;
+    if (proxyFailure) {
+        const error = new Error([reason, responseText].filter(Boolean).join('\n'));
+        error.code = 'AGENT_PROVIDER_ERROR';
+        error.status = Number(proxyFailure[1]);
+        if (responseInfo !== undefined) error.responseInfo = responseInfo;
+        throw error;
+    }
     if (refused || REFUSAL_REASONS[protocol]?.includes(reason)) {
         const error = new Error('Model response was refused.');
         error.code = 'AGENT_RESPONSE_REFUSED';

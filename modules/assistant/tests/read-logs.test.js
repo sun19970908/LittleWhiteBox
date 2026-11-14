@@ -28,7 +28,7 @@ for (const session of [false, true]) {
                 getActiveProviderConfig: () => ({}), getToolDefinitions: () => getAssistantToolDefinitions({ jsApiEnabled: false }),
                 isJsApiEnabled: () => false,
                 SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000,
-                MAX_TOOL_ROUNDS: 6, REQUEST_TIMEOUT_MS: 1000,
+                REQUEST_TIMEOUT_MS: 1000,
                 isAbortError: error => error.name === 'AbortError',
                 createAdapter: () => ({ supportsSessionToolLoop: session, async chat(task) {
                     requests.push(task);

@@ -13,7 +13,35 @@ export const VERIFIED_REPLACEMENT_CHARACTERS = Object.freeze({
 // 只豁免产物中解码后指纹完全一致的字节字符串，不豁免文件、行或其他文本。
 const VERIFIED_WASM_SHA256 = '105c3bed22d457e43e3d1c3c1c6959fda62a8fe06f0fc8a985303c3a2be72232';
 
-function verifiedBinaryRanges(relativePath, source) {
+// @anthropic-ai/sdk 1.8.0 src/lib/internal/toolsets/sanitize.ts:28-31 的 wellFormed。
+// u 保留有效代理对，g 替换所有孤立代理；仅认可这个单返回函数中的替换字面量。
+function isLoneSurrogateRegex(node) {
+    return node?.type === 'Literal' && node.regex?.pattern === '[\\uD800-\\uDFFF]'
+        && ['gu', 'ug'].includes(node.regex.flags);
+}
+
+function sanitizerReplacement(node, bindings, identifiers) {
+    if (node.type !== 'FunctionDeclaration' || node.async || node.generator
+        || node.params.length !== 1 || node.params[0].type !== 'Identifier' || node.body.body.length !== 1) return null;
+    const statement = node.body.body[0], parameter = node.params[0].name;
+    if (statement.type !== 'ReturnStatement') return null;
+    const call = statement.argument;
+    if (call?.type !== 'CallExpression' || call.optional || call.arguments.length !== 2) return null;
+    const member = call.callee;
+    if (member.type !== 'MemberExpression' || member.computed || member.optional
+        || member.object.type !== 'Identifier' || member.object.name !== parameter
+        || member.property.type !== 'Identifier' || member.property.name !== 'replace') return null;
+    const [pattern, replacement] = call.arguments;
+    if (replacement.type !== 'Literal' || replacement.value !== '\uFFFD') return null;
+    if (isLoneSurrogateRegex(pattern)) return replacement;
+    if (pattern.type !== 'Identifier' || pattern.name === parameter || pattern.name === node.id?.name) return null;
+    const binding = bindings.get(pattern.name), references = identifiers.get(pattern.name);
+    // 只接受顶层正则绑定，且除此声明和这一处实参外不得再出现同名标识符；拒绝重赋值、遮蔽和别名。
+    return binding && references?.length === 2 && references.includes(binding.id) && references.includes(pattern)
+        ? replacement : null;
+}
+
+function verifiedLiteralRanges(relativePath, source, validUtf8) {
     if (!relativePath.startsWith('dist/') || !relativePath.endsWith('.js')) return [];
     let tree;
     try { tree = parse(source, { ecmaVersion: 'latest', sourceType: 'module' }); }
@@ -22,9 +50,21 @@ function verifiedBinaryRanges(relativePath, source) {
         // 无法解析的文本不获得任何豁免，仍由下面的扫描完整报告。
         return [];
     }
+    const bindings = new Map(), identifiers = new Map(), functions = [];
+    for (const statement of tree.body) {
+        if (statement.type !== 'VariableDeclaration') continue;
+        for (const binding of statement.declarations) {
+            if (binding.id.type === 'Identifier' && isLoneSurrogateRegex(binding.init)) bindings.set(binding.id.name, binding);
+        }
+    }
     const ranges = [], pending = [tree];
     while (pending.length) {
         const node = pending.pop();
+        if (node.type === 'Identifier') {
+            if (!identifiers.has(node.name)) identifiers.set(node.name, []);
+            identifiers.get(node.name).push(node);
+        }
+        if (node.type === 'FunctionDeclaration') functions.push(node);
         const value = node.type === 'Literal' ? node.value
             : node.type === 'TemplateLiteral' && !node.expressions.length ? node.quasis[0].value.cooked : null;
         if (typeof value === 'string' && value.startsWith('\0asm') && [...value].every(char => char.charCodeAt(0) <= 255)
@@ -33,6 +73,12 @@ function verifiedBinaryRanges(relativePath, source) {
         }
         for (const child of Object.values(node).flat()) {
             if (child && typeof child === 'object' && typeof child.type === 'string') pending.push(child);
+        }
+    }
+    if (validUtf8) {
+        for (const node of functions) {
+            const replacement = sanitizerReplacement(node, bindings, identifiers);
+            if (replacement) ranges.push([replacement.start, replacement.end]);
         }
     }
     return ranges;
@@ -68,6 +114,6 @@ export function scanGarbledText(relativePath, bytes) {
         }
         lineOffset += line.length + 1;
     }
-    const binary = hits.length ? verifiedBinaryRanges(relativePath, source) : [];
-    return hits.filter(hit => !binary.some(([start, end]) => hit.offset >= start && hit.offset < end));
+    const verified = hits.length ? verifiedLiteralRanges(relativePath, source, Buffer.from(source).equals(bytes)) : [];
+    return hits.filter(hit => !verified.some(([start, end]) => hit.offset >= start && hit.offset < end));
 }

@@ -38,7 +38,7 @@ async function loadDraftChecker(): Promise<typeof DraftChecker> {
                     : { path: args.path, namespace: 'host-stub' };
             });
             builder.onLoad({ filter: /.*/, namespace: 'host-stub' }, () => ({ contents:
-                'export const runCardFiles=undefined,currentCard=undefined,readCharacter=undefined,replaceVariableBundle=undefined,readFiles=undefined,workspaceRepository=undefined,upsertLocalSourceFile=undefined,buildWorkspacePreconditions=undefined,INTERNAL_WORKSPACE_TOOL_NAMES=undefined;' }));
+                'export const runCardFiles=undefined,currentCard=undefined,readCharacter=undefined,replaceVariableBundle=undefined,readFiles=undefined,workspaceRepository=undefined,upsertLocalSourceFile=undefined,removeLocalSourcePath=undefined,buildWorkspacePreconditions=undefined,INTERNAL_WORKSPACE_TOOL_NAMES=undefined;' }));
         } }],
     });
     // eslint-disable-next-line no-unsanitized/method -- Execute compiled local production code, never model input.
@@ -63,11 +63,11 @@ test('V3 assistant surface preserves read/effect classification and excludes pri
 });
 
 test('V3 authoring uses its definition while V2 keeps its task routing', () => {
-    const root = 'local/card-files/example/', card = { root, name: 'Example', paths: [root + 'card.json', root + 'tasks/init.js', root + 'variables/definition.json'] };
+    const root = 'local/card-files/example/', card = { root, name: 'Example', files: ['card.json', 'tasks/init.md', 'variables/definition.json'].map(path => ({ path: root + path })) };
     assert.equal(cardWorkspaceRequest(card, { variables: true, version: '3.0' }).skillId, STATE3_SKILL.id);
     assert.equal(cardWorkspaceRequest(card, { variables: true, version: '2.0' }).skillId, STATE2_SKILL.id);
     assert.equal(cardWorkspaceRequest(card, { variables: false }).skillId, CARD_SKILL.id);
-    assert.equal(cardWorkspaceRequest(card, { variables: true, version: '2.0' }).selectedFilePath, root + 'tasks/init.js');
+    assert.equal(cardWorkspaceRequest(card, { variables: true, version: '2.0' }).selectedFilePath, root + 'tasks/init.md');
 });
 
 test('documented authoring examples execute the production checker and leave chat state unchanged', async () => {

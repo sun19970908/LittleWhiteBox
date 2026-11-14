@@ -220,6 +220,7 @@ import {
 import { invalidateLexicalIndex, warmupIndex, getLexicalIndex, addEventDocuments, addChunkDocuments, clearChunkDocuments, removeEventDocuments, removeDocumentsByFloor, removeDocumentsFromFloor, replaceEventDocuments } from "./vector/retrieval/lexical-index.js";
 import { trackVectorActivity } from './vector/runtime/vector-activity.js';
 import { checkVectorCacheConsistency, recordVectorCacheDiagnostic } from './vector/storage/package/service.js';
+import { orphanVectorIds } from './vector/utils/vector-source.js';
 import { createMessageSourceTracker } from './data/message-sources.js';
 import { filterText } from './vector/utils/text-filter.js';
 import { getChatIdentity } from './data/chat-identity.js';
@@ -944,6 +945,7 @@ async function handleAnchorGenerate() {
     } finally {
         release();
         postToFrame({ type: "ANCHOR_GEN_PROGRESS", current: -1, total: 0 });
+        if (!isChatStale(targetChatId)) await refreshVectorIntegrity();
     }
 }
 
@@ -1784,7 +1786,6 @@ async function repairMissingEventVectorsInner(targetChatId, writeSession, onProg
         if (!vectorCfg?.enabled) return { success: false, repaired: 0, code: 'disabled' };
 
         const events = structuredClone(getSummaryStore()?.json?.events || []);
-        if (!events.length) return { success: true, repaired: 0 };
 
         const fingerprint = getEngineFingerprint(vectorCfg);
         const meta = await getMeta(targetChatId);
@@ -1795,7 +1796,14 @@ async function repairMissingEventVectorsInner(targetChatId, writeSession, onProg
             return { success: false, repaired: 0, code: 'fingerprint_mismatch' };
         }
 
-        const pairs = await collectMissingEventVectorPairs(targetChatId, events, fingerprint);
+        const descriptors = await getEventVectorDescriptors(targetChatId);
+        if (!isVectorWriteSessionCurrent(writeSession)) return { success: false, cancelled: true, repaired };
+        const obsoleteIds = orphanVectorIds(descriptors, new Set(events.map(event => event.id)), 'eventId');
+        if (obsoleteIds.length) await writeSession.commit(async () => {
+            const currentIds = new Set((getSummaryStore()?.json?.events || []).map(event => event.id));
+            await deleteEventVectorsByIds(targetChatId, obsoleteIds.filter(id => !currentIds.has(id)));
+        });
+        const pairs = selectMissingEventVectorPairs(events, descriptors, fingerprint);
         activity.update({ total: pairs.length, state: 'embedding' });
         onProgress?.(0, pairs.length);
         if (!pairs.length) return { success: true, repaired: 0 };
@@ -2159,10 +2167,11 @@ async function checkVectorIntegrity({ allowEventRepair = true, allowChunkRepair 
     }
     const issues = buildVectorIntegrityIssues({
         cacheInconsistent: cacheCheck.status === 'inconsistent',
+        cacheRepairable: cacheCheck.repairable === true,
         fingerprintMismatch,
         chunkFloorGap: cacheCheck.missingChunkFloors?.length || 0,
-        incompleteL0FloorCount: Number(anchorStats.incomplete || 0)
-            + (l0VectorStatus.success ? Number(l0VectorStatus.missingFloors || 0) : 0),
+        incompleteL0AnchorFloorCount: Number(anchorStats.incomplete || 0),
+        missingL0VectorFloorCount: l0VectorStatus.success ? Number(l0VectorStatus.missingFloors || 0) : 0,
         missingEventVectorCount: missingEventPairs.length,
     });
 

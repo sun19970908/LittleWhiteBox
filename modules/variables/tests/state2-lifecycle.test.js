@@ -45,6 +45,7 @@ test.beforeEach(async () => {
     host.afterAi.hints.length = 0;
     host.afterAi.xbCalls.length = 0;
     host.afterAi.vareventCalls = 0;
+    host.afterAi.replies.length = 0;
     ctx().chat = [{ mes: text(100), swipe_id: 0 }, { mes: text(-10), swipe_id: 0 }];
     core.initVariablesCore();
     globalThis.LWB_StateV2.applyText(ctx().chat[0].mes, { floor: 0, silent: true });
@@ -159,6 +160,20 @@ test('another continuation arriving during post-turn work is applied after that 
     assert.deepEqual(record().entries.map(entry => entry.kind), ['text', 'call', 'text', 'text']);
     assert.equal(host.afterAi.xbCalls.length, 2);
     assert.equal(host.afterAi.vareventCalls, 2);
+});
+
+// A4: completion from the previous generation must not unlock a new generation's
+// independent updater (premature model request and incorrect state).
+test('old post-turn work cannot signal readiness for a newly started generation', async () => {
+    let release;
+    host.afterAi.afterTurn = () => new Promise(resolve => { release = resolve; });
+    emit('MESSAGE_RECEIVED'); await settled();
+    emit('GENERATION_STARTED', 'continue', {}, false);
+    release(); await settled();
+    assert.deepEqual(host.afterAi.replies, []);
+    host.afterAi.afterTurn = async () => {};
+    emit('MESSAGE_RECEIVED'); await settled();
+    assert.deepEqual(host.afterAi.replies, [1]);
 });
 
 test('a completion arriving immediately after post-turn settlement is not lost', async () => {

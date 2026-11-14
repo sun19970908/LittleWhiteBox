@@ -1,10 +1,16 @@
+import { inputDigest } from '../utils/vector-input-digest.js';
+import { matchesVectorSource } from '../utils/vector-source.js';
+
 export function buildEventVectorText(event) {
     return `${event?.title || ''} ${event?.summary || ''}`.trim();
 }
 
 export function selectMissingEventVectorPairs(events, vectors, fingerprint) {
-    const existingIds = new Set(vectors.filter(item => item?.fingerprint === fingerprint)
-        .map(item => item?.eventId).filter(Boolean));
-    return (events || []).filter(event => event?.id && !existingIds.has(event.id))
+    const byId = new Map(vectors.map(item => [item.eventId, item]));
+    return (events || []).filter(event => {
+        const vector = byId.get(event?.id);
+        return event?.id && (!vector || vector.fingerprint !== fingerprint
+            || !matchesVectorSource(vector, { sourceHash: inputDigest('event', buildEventVectorText(event)) }));
+    })
         .map(event => ({ id: event.id, text: buildEventVectorText(event) })).filter(pair => pair.text);
 }

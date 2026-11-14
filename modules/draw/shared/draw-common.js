@@ -97,18 +97,7 @@ export const ErrorType = {
     JOB_NOT_SUBMITTED: { code: 'job_not_submitted', label: '任务未提交', desc: '后台任务未提交成功，可重新生成' },
 };
 
-export const DEFAULT_MESSAGE_FILTER_RULES = [
-    { start: '<think>',    end: '</think>' },
-    { start: '<thinking>', end: '</thinking>' },
-    { start: '<system>',   end: '</system>' },
-    { start: '<meta>',     end: '</meta>' },
-    { start: '<options>',  end: '</options>' },
-    { start: '<WorldState>', end: '</WorldState>' },
-    { start: '<state>',    end: '</state>' },
-    { start: '<UpdateVariable>', end: '</UpdateVariable>' },
-    { start: '<—',         end: '—>' },
-    { start: '',           end: '</think>' },
-];
+export { DEFAULT_MESSAGE_FILTER_RULES } from './message-filter-rules.js';
 
 export function createPlaceholder(slotId) {
     return `[image:${slotId}]`;
@@ -236,12 +225,11 @@ export function ensureDrawImageStyles() {
 .xb-nd-nav-arrow:disabled{opacity:0.3;cursor:not-allowed}
 .xb-nd-nav-text{min-width:36px;text-align:center;font-variant-numeric:tabular-nums;padding:0 2px}
 @media(hover:none),(pointer:coarse){.xb-nd-nav-pill{opacity:0.78;padding:5px 8px}}
-/* 點擊才顯示控制鈕（僅由 NovelAI 端在 body 上掛 .xb-nd-tap-controls 時生效）：
-   張數翻動列與「⋮」選單鈕默認隱藏，點圖片叫出、再點圖片收起。 */
-.xb-nd-tap-controls .xb-nd-img .xb-nd-nav-pill,
-.xb-nd-tap-controls .xb-nd-img .xb-nd-menu-trigger{opacity:0;pointer-events:none}
-.xb-nd-tap-controls .xb-nd-img.controls-visible .xb-nd-nav-pill{opacity:0.82;pointer-events:auto}
-.xb-nd-tap-controls .xb-nd-img.controls-visible .xb-nd-menu-trigger{opacity:0.9;pointer-events:auto}
+/* 所有设备点图片显示控制钮，再点收起；键盘聚焦时也可操作。 */
+.xb-nd-img .xb-nd-nav-pill,
+.xb-nd-img .xb-nd-menu-trigger{opacity:0;pointer-events:none}
+.xb-nd-img.controls-visible .xb-nd-nav-pill,.xb-nd-img .xb-nd-nav-pill:focus-within{opacity:0.82;pointer-events:auto}
+.xb-nd-img.controls-visible .xb-nd-menu-trigger,.xb-nd-img .xb-nd-menu-trigger:focus-visible{opacity:0.9;pointer-events:auto}
 .xb-nd-menu-wrap{position:absolute;top:8px;right:8px;z-index:10}
 .xb-nd-menu-wrap.busy{pointer-events:none;opacity:0.3}
 .xb-nd-menu-trigger{width:32px;height:32px;border-radius:50%;border:none;background:var(--draw-bg-secondary);color:var(--draw-text-primary);cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center;transition:all 0.15s;opacity:0.85}
@@ -279,8 +267,8 @@ export function ensureDrawImageStyles() {
 /* 无图的空卡很矮：下拉菜单竖着展开会被 .xb-nd-img-wrap 裁掉、还盖住“重新加载”，改成在标题行里向左横排；
    也没有图片可点，点击才显示的控制钮在这里始终可见。 */
 .xb-nd-view-empty .xb-nd-dropdown{top:-5px;right:calc(100% + 6px);flex-direction:row;transform-origin:right center}
-.xb-nd-tap-controls .xb-nd-img.xb-nd-view-empty .xb-nd-nav-pill{opacity:0.82;pointer-events:auto}
-.xb-nd-tap-controls .xb-nd-img.xb-nd-view-empty .xb-nd-menu-trigger{opacity:0.9;pointer-events:auto}
+.xb-nd-img.xb-nd-view-empty .xb-nd-nav-pill{opacity:0.82;pointer-events:auto}
+.xb-nd-img.xb-nd-view-empty .xb-nd-menu-trigger{opacity:0.9;pointer-events:auto}
 .xb-nd-view-empty .xb-nd-view-notice{padding:12px 0 0}
 .xb-nd-view-empty .xb-nd-status-overlay{position:static;max-height:none}
 .xb-nd-edit{animation:nd-slide-up 0.2s ease-out;box-sizing:border-box;flex-direction:column;max-height:calc(100dvh - 32px)}
@@ -356,8 +344,8 @@ export function buildImageHtml({ slotId, imgId, url, tags, title = '', positive,
     const menuHtml = `<div class="xb-nd-menu-wrap${menuBusy}">
         <button class="xb-nd-menu-trigger" data-action="toggle-menu" title="操作">${drawIconHtml('ellipsis')}</button>
         <div class="xb-nd-dropdown">
-            <button data-action="open-gallery" title="放大">⤢</button>
             ${isPreview ? IMAGE_SAVE_BUTTON_HTML : ''}
+            <button data-action="open-gallery" title="放大">⤢</button>
             <button data-action="refresh-image" title="重新生成">${drawIconHtml('rotate')}</button>
             <button data-action="edit-tags" title="编辑TAG">${drawIconHtml('pen')}</button>
             <button data-action="delete-image" title="删除">${drawIconHtml('xmark')}</button>
@@ -365,7 +353,7 @@ export function buildImageHtml({ slotId, imgId, url, tags, title = '', positive,
     </div>`;
 
     const imageWrap = `<div class="xb-nd-img-wrap" data-total="${historyCount}">
-    <img src="${escapeHtml(url)}" style="max-width:100%;width:auto;height:auto;border-radius:10px;cursor:pointer;box-shadow:0 3px 15px rgba(0,0,0,0.25);${isBusy ? 'opacity:0.5;' : ''}" data-action="open-gallery" ${lazyAttr}>
+    <img src="${escapeHtml(url)}" style="max-width:100%;width:auto;height:auto;border-radius:10px;cursor:pointer;box-shadow:0 3px 15px rgba(0,0,0,0.25);${isBusy ? 'opacity:0.5;' : ''}" data-action="toggle-controls" ${lazyAttr}>
     ${titleMode === 'overlay' && rawTitle ? `<div class="xb-nd-title-bar" title="${escapeHtml(rawTitle)}">${escapeHtml(rawTitle)}</div>` : ''}
     ${indicator}
     ${navPill}

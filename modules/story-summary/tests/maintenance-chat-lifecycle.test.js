@@ -319,7 +319,7 @@ for (const closeDuring of ['model request', 'metadata save']) {
         const restored = reopened.document.querySelector('[data-turn-id]');
         assert.equal(restored.dataset.status, 'completed');
         assert.equal(restored.querySelector('.memory-chat-question p').textContent, 'fixture-background-question');
-        assert.equal(restored.querySelector('.memory-chat-reply > .memory-chat-answer').textContent, 'fixture-saved-answer');
+        assert.equal(restored.querySelector('.memory-chat-reply > .memory-chat-answer').textContent.trimEnd(), 'fixture-saved-answer');
         assert.equal(restored.querySelectorAll('.memory-chat-tools li[data-status="staged"]').length, 1);
         assert.equal(restored.querySelector('.memory-chat-saved').dataset.saved, '1');
         assert.equal(host.requests.length, 2);
@@ -355,12 +355,12 @@ for (const toolText of ['', ' \n\t']) {
         assert.equal(state.turns[0].answer, explanation);
         assert.deepEqual(observed, [explanation, explanation]);
         assert.equal(state.turns[0].tools.length, 2);
-        assert.equal(first.document.querySelector('.memory-chat-reply > .memory-chat-answer').textContent, explanation);
+        assert.equal(first.document.querySelector('.memory-chat-reply > .memory-chat-answer').textContent.trimEnd(), explanation);
         h.closePanel();
         const reopened = h.mount();
         await reopened.dispatch(routes.query);
         assert.equal(reopened.document.querySelector('[data-turn-id]').dataset.status, 'failed');
-        assert.equal(reopened.document.querySelector('.memory-chat-reply > .memory-chat-answer').textContent, explanation);
+        assert.equal(reopened.document.querySelector('.memory-chat-reply > .memory-chat-answer').textContent.trimEnd(), explanation);
         assert.equal(host.requests.length, 3);
         assert.equal(host.writes, 0);
     });
@@ -386,7 +386,7 @@ test('later visible stream snapshots and the final reply replace earlier text wi
     const state = h.maintenance.chat.snapshot();
     assert.equal(state.turns[0].status, 'completed');
     assert.equal(state.turns[0].answer, 'fixture-final-answer');
-    assert.equal(frame.document.querySelector('.memory-chat-reply > .memory-chat-answer').textContent, 'fixture-final-answer');
+    assert.equal(frame.document.querySelector('.memory-chat-reply > .memory-chat-answer').textContent.trimEnd(), 'fixture-final-answer');
     assert.equal(host.requests.length, 2);
     assert.equal(host.writes, 0);
 });

@@ -1,3 +1,5 @@
+import { errorDetails } from '../../../shared/common/error-details.js';
+
 const INSPECT_LIMITS = { depth: 3, items: 40, keys: 40, chars: 4000 };
 
 export function normalizeJavaScriptApiOutput(value, requestKind) {
@@ -15,7 +17,7 @@ export function normalizeJavaScriptApiOutput(value, requestKind) {
             if (typeof item === 'function') return `[Function:${item.name || 'anonymous'}]`;
             return item;
         }
-        if (item instanceof Error) return { name: item.name, message: item.message, stack: item.stack || '' };
+        if (item instanceof Error) return visit(errorDetails(item), depth);
         if (typeof Element !== 'undefined' && item instanceof Element) return `[Element:${item.tagName}]`;
         if (item instanceof Date) return item.toISOString();
         if (item instanceof RegExp) return String(item);

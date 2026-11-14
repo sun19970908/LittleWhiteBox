@@ -12,6 +12,10 @@ libs/**
 # Local verification artifacts and previews
 /output/**
 
+# A whole card in CardFiles layout: card data run by the card runtime (scripts are
+# function bodies), verified by modules/variables/state3/tests/jieling-example.test.ts.
+/modules/variables/state3/skill/references/examples/jieling/**
+
 # Local reference material (not part of the project)
 /ST-BaiBai-Image-main/**
 /st-chatu8/**

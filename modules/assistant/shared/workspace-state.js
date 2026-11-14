@@ -22,7 +22,6 @@ export function normalizeWorkspaceUiState(value = {}) {
         fileSearchQuery: String(value.fileSearchQuery || ''),
         showModifiedOnly: !!value.showModifiedOnly,
         viewerMode: String(value.viewerMode || 'current'),
-        mobileWorkspacePane: value.mobileWorkspacePane === 'viewer' ? 'viewer' : 'tree',
         treeExpandedKeys: Array.isArray(value.treeExpandedKeys) ? value.treeExpandedKeys.map(item => String(item || '')).filter(Boolean) : [],
         skillTreeExpandedKeys: Array.isArray(value.skillTreeExpandedKeys) ? value.skillTreeExpandedKeys.map(item => String(item || '')).filter(Boolean) : [],
     };

@@ -59,7 +59,6 @@ function createState() {
         fileSearchQuery: '',
         showModifiedOnly: false,
         viewerMode: 'current',
-        mobileWorkspacePane: 'tree',
         treeExpandedKeys: [],
         skillTreeExpandedKeys: [],
     };

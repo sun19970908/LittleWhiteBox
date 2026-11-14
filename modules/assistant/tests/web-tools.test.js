@@ -35,7 +35,7 @@ function runtimeHarness(t, { config = settings('tavily'), delegateConfig = setti
         getToolDefinitions: ({ role, skillIds }) => getAssistantToolDefinitions({ providerConfig: role === 'delegate' ? delegateConfig : config, jsApiEnabled, role, skillIds }),
         isJsApiEnabled: () => jsApiEnabled,
         SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000,
-        MAX_TOOL_ROUNDS: 6, REQUEST_TIMEOUT_MS: 1000,
+        REQUEST_TIMEOUT_MS: 1000,
         isAbortError: error => error.name === 'AbortError' || error.message === 'assistant_aborted',
         createAdapter: providerConfig => {
             const role = providerConfig ? 'delegate' : 'main';

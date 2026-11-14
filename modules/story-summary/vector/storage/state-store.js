@@ -109,6 +109,7 @@ export async function getStateVectorDescriptors(chatId) {
         const relationDimensionsValid = Number.isInteger(rDims) && rDims === dims;
         descriptors.push({
             atomId: record?.atomId,
+            floor: record?.floor,
             fingerprint: record?.fingerprint,
             ...(record?.sourceHash ? { sourceHash: record.sourceHash } : {}),
             ...(record?.relationHash ? { relationHash: record.relationHash } : {}),

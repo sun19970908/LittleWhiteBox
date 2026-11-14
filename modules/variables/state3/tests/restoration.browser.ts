@@ -68,7 +68,7 @@ export async function verifyCopySaved(api: State3Api) {
 export async function prepareConflict(api: State3Api) {
     const bundle = equipmentExample();
     bundle.definition = { ...bundle.definition, schema: {}, initial: { 钥匙: '无', 门: '未打开', 奖励次数: 0 },
-        access: [{ path: ['钥匙'], write: ['direct'], description: '钥匙' }, { path: ['门'], write: ['direct'], description: '门' }],
+        access: [{ path: ['钥匙'], direct: true, description: '钥匙' }, { path: ['门'], direct: true, description: '门' }],
         rules: [], actions: [], triggers: [], views: {}, constraints: [{ id: 'door-key', description: '开门必须持有钥匙',
             test: { op: 'or', args: [{ op: 'eq', args: [{ get: ['门'] }, { literal: '未打开' }] }, { op: 'eq', args: [{ get: ['钥匙'] }, { literal: '有' }] }] } }] };
     const fixture = await createFixture(); await verifyScopedSave(api, bundle); accepted(await api.enable());

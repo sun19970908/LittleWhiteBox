@@ -44,10 +44,10 @@ test('google reasoning keeps model effort separate from thought output visibilit
     });
     assert.deepEqual(flash25.buildChatPayload({
         messages: hiddenTask.messages,
-        reasoning: { mode: 'on', effort: 'minimal', output: 'hide' },
+        reasoning: { mode: 'on', budgetTokens: 2048, output: 'hide' },
     }).createPayload.config.thinkingConfig, {
         includeThoughts: false,
-        thinkingLevel: 'MINIMAL',
+        thinkingBudget: 2048,
     });
     assert.deepEqual(flash25.buildChatPayload({
         messages: hiddenTask.messages,
@@ -55,10 +55,10 @@ test('google reasoning keeps model effort separate from thought output visibilit
     }).createPayload.config.thinkingConfig, {
         includeThoughts: true,
     });
-    assert.throws(() => flash25.buildChatPayload({
+    assert.deepEqual(flash25.buildChatPayload({
         messages: hiddenTask.messages,
         reasoning: { mode: 'off', output: 'hide' },
-    }), /不支持显式关闭 Reasoning/);
+    }).createPayload.config.thinkingConfig, { includeThoughts: false, thinkingBudget: 0 });
 });
 
 test('google uses visible reasoning consistently when output is omitted', async () => {

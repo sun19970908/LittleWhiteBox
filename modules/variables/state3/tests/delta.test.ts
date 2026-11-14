@@ -10,7 +10,7 @@ import type { Bundle, Json } from '../types.js';
 
 const bundle = (initial: Bundle['definition']['initial']): Bundle => ({
     definition: { format: 1, updates: ['after'], name: 'delta contract', schema: {}, initial,
-        access: Object.keys(initial).map(key => ({ path: [key], write: ['direct'], description: key })),
+        access: Object.keys(initial).map(key => ({ path: [key], direct: true, description: key })),
         rules: [], actions: [], constraints: [], functions: {}, views: {} }, functions: {},
 });
 test('K5: receipt source labels do not replace effects unless replacement is explicitly requested', async () => {

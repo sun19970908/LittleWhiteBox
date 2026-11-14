@@ -5,7 +5,9 @@ import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { root, entries, pages } from './scripts/build/browser-entries.mjs';
 import { createSourceAssetPlugin } from './scripts/vite-source-assets.mjs';
+import { createConsoleForwardPlugin } from './scripts/vite-console-forward.mjs';
 import { outputRoot } from './scripts/build/output-root.mjs';
+import { createLicenseSupplementPlugin } from './scripts/build/license-supplements.mjs';
 
 const posix = value => value.replaceAll('\\', '/');
 const inside = value => { const resolved = path.resolve(value); return resolved === root || resolved.startsWith(`${root}${path.sep}`); };
@@ -14,7 +16,7 @@ export default defineConfig({
     root,
     base: './',
     publicDir: false,
-    plugins: [vue(), createSourceAssetPlugin({ root }), {
+    plugins: [vue(), createSourceAssetPlugin({ root }), createConsoleForwardPlugin({ root }), createLicenseSupplementPlugin(), {
         name: 'plugin-source-boundaries',
         enforce: 'pre',
         configResolved(config) {

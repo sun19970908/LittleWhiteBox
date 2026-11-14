@@ -19,6 +19,7 @@ import { logScenePlannerArgumentsRepair, logScenePlannerDiagnostic, logScenePlan
 import {
     buildProviderAssistantToolCallMessage,
     buildProviderToolResultMessage,
+    normalizeToolCalls,
     resolveResultToolCalls,
 } from '../../agent-core/runtime/protocol.js';
 
@@ -142,7 +143,11 @@ function buildToolResultTurn({ result, toolCalls, attempt, respond }) {
 
 // customNames：与 submit_scene_plan 同一批返回的自定义工具调用没有执行，回一条说明，别让它们收到纠错文本。
 function buildCorrectionTurn({ result, providerConfig, error, attempt, sessionLoop, customNames = new Set() }) {
-    const toolCalls = resolveAttemptToolCalls(result, providerConfig, attempt);
+    // Feedback acknowledges rejected calls; only actual execution uses the strict
+    // argument gate. Keep their identities and native provider payload for replay.
+    const toolCalls = normalizeToolCalls(resolveValidationToolCalls(result, providerConfig, attempt), {
+        createId: index => `scene-planner-attempt-${attempt}-${index + 1}`,
+    });
     const feedback = createScenePlannerCorrectionResult(error);
     const content = JSON.stringify(feedback);
     if (!toolCalls.length) {

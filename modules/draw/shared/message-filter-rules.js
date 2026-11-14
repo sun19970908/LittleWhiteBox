@@ -4,6 +4,24 @@
 // 存储时只有勾选了 keep 才写入 keep: true，其余规则保持 { start, end }，旧数据与旧测试不受影响。
 
 // scene-source.js 里内联了同样的判断（不能多 import 文件，原因见那边的注释）；改这里时两处一起改，message-filter-rules.test.js 会对比两者的行为。
+export const DEFAULT_MESSAGE_FILTER_RULES = [
+    { start: '<think>', end: '</think>' },
+    { start: '<thinking>', end: '</thinking>' },
+    { start: '<system>', end: '</system>' },
+    { start: '<meta>', end: '</meta>' },
+    { start: '<options>', end: '</options>' },
+    { start: '<WorldState>', end: '</WorldState>' },
+    { start: '<state>', end: '</state>' },
+    { start: '<UpdateVariable>', end: '</UpdateVariable>' },
+    { start: '<—', end: '—>' },
+    { start: '', end: '</think>' },
+    { start: '<status>', end: '</status>' },
+    { start: '<status_bar>', end: '</status_bar>' },
+    { start: '<状态栏>', end: '</状态栏>' },
+    { start: '<状态>', end: '</状态>' },
+    { start: '<mind>', end: '</mind>' },
+];
+
 export function isRuleKept(rule) {
     return rule?.keep === true;
 }

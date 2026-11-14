@@ -119,7 +119,7 @@ export const event_types = Object.fromEntries(['MESSAGE_SENT', 'MESSAGE_RECEIVED
 export const createModuleEvents = () => ({ on: (key, handler) => handlers.set(key, handler), cleanup: () => handlers.clear() });
 export const xbLog = { info() {}, warn() {} };
 export const CacheRegistry = { register() {} };
-export const afterAi = { ready: async () => true, afterTurn: async () => {}, waits: [], hints: [], handler: null, xbCalls: [], vareventCalls: 0 };
+export const afterAi = { ready: async () => true, afterTurn: async () => {}, waits: [], hints: [], handler: null, xbCalls: [], vareventCalls: 0, replies: [] };
 export const initAfterAiGate = () => {};
 export const notifyAfterAiHint = hint => afterAi.hints.push(hint);
 export const waitForAfterAiReady = (chatId, signal) => { afterAi.waits.push({ chatId, signal }); return afterAi.ready(chatId, signal); };
@@ -133,7 +133,7 @@ export const executeQueuedVareventJsAfterTurn = async () => { afterAi.vareventCa
 export const stripYamlInlineComment = value => value;
 export const initVariableUpdater = () => {};
 export const cleanupVariableUpdater = () => {};
-export const notifyVariableReplyReady = () => {};
+export const notifyVariableReplyReady = id => afterAi.replies.push(id);
 export const OP_MAP = {};
 export const TOP_OP_RE = /never/;
 export const observeAsyncCallback = callback => callback;

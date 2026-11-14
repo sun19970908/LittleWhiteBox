@@ -84,7 +84,6 @@ test('K2/K9: path schemas avoid array enums, settlement enforces permissions and
     assert.deepEqual(buildDescriptionView(compiled, ['character']).constraints, [compiled.definition.constraints[0].description]);
     const facts = equipmentExample(), get = (...path: string[]) => ({ get: path }), unchanged = { type: 'object', additionalProperties: false, properties: {} };
     facts.definition.rules = []; facts.definition.constraints = [];
-    facts.definition.access.find(entry => entry.path.join('.') === 'hero.health')!.write.push('heal');
     facts.definition.actions.push({ id: 'heal', title: 'Heal', parameters: unchanged, conversions: [], description: 'A healing spell restores 10 health.', requires: { literal: true },
         effects: [{ path: ['hero', 'health'], value: { op: 'add', args: [get('hero', 'health'), { literal: 10 }] } }] });
     facts.definition.triggers = [
@@ -110,7 +109,7 @@ test('K9: optional objects, dynamic keys, arrays and composite schemas remain wr
         people: { type: 'object', additionalProperties: { type: 'number' } },
     } };
     bundle.definition.initial = {}; bundle.definition.rules = []; bundle.definition.actions = []; bundle.definition.constraints = [];
-    bundle.definition.access = ['profile', 'bag', 'people'].map(key => ({ path: [key], write: ['direct'], description: key }));
+    bundle.definition.access = ['profile', 'bag', 'people'].map(key => ({ path: [key], direct: true, description: key }));
     const compiled = compileDefinition(bundle), validate = new Ajv({ strict: false }).compile(getInputSchema(compiled));
     const inputs = [
         [{ op: 'set', path: ['profile'], value: { name: 'Alice' } }],

@@ -16,11 +16,10 @@ const shims = {
     'modules/story-summary/data/config.js': 'export const getVectorConfig=()=>({enabled:true,embeddingApi:{}});',
     'modules/story-summary/data/store.js': 'export const getSummaryStore=()=>globalThis.__maintenanceIndexCancellationTest.store;',
     'modules/story-summary/data/memory-commit.js': 'export const assertMemoryWritable=()=>{}; export const waitForMemoryCommit=async()=>{};',
-    'modules/story-summary/vector/storage/state-store.js': 'export const getStateAtoms=()=>globalThis.__maintenanceIndexCancellationTest.atoms; export const getStateVectorDescriptors=async()=>[]; export const saveStateVectors=(...args)=>globalThis.__maintenanceIndexCancellationTest.saveStates(...args);',
-    'modules/story-summary/vector/storage/chunk-store.js': 'export const getAllEventVectors=()=>globalThis.__maintenanceIndexCancellationTest.readEvents(); export const saveEventVectors=(...args)=>globalThis.__maintenanceIndexCancellationTest.saveEvents(...args);',
+    'modules/story-summary/vector/storage/state-store.js': 'export const getStateAtoms=()=>globalThis.__maintenanceIndexCancellationTest.atoms; export const getStateVectorDescriptors=async()=>[]; export const saveStateVectors=(...args)=>globalThis.__maintenanceIndexCancellationTest.saveStates(...args); export const deleteStateVectorsByIds=async()=>{};',
+    'modules/story-summary/vector/storage/chunk-store.js': 'export const getEventVectorDescriptors=()=>globalThis.__maintenanceIndexCancellationTest.readEvents(); export const saveEventVectors=(...args)=>globalThis.__maintenanceIndexCancellationTest.saveEvents(...args); export const deleteEventVectorsByIds=async()=>{};',
     'modules/story-summary/vector/utils/embedder.js': 'export const getEngineFingerprint=()=>"fixture-fingerprint";',
     'modules/story-summary/vector/utils/vector-input-digest.js': 'export const inputDigest=(kind,text)=>kind+":"+text;',
-    'modules/story-summary/vector/pipeline/event-vector-input.js': 'export const buildEventVectorText=event=>event?.summary||"";',
     'modules/story-summary/vector/pipeline/state-vector-input.js': 'export const buildRAggregateText=atom=>atom?.semantic||"";',
     'modules/story-summary/vector/llm/siliconflow.js': 'export const embed=(...args)=>globalThis.__maintenanceIndexCancellationTest.embed(...args);',
 };

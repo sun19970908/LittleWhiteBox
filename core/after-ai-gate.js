@@ -2,6 +2,7 @@ import { getContext } from "../../../../extensions.js";
 import { xbLog } from "./debug-core.js";
 import { observeAsyncCallback } from '../shared/common/async-errors.js';
 import { waitForAbortableDelay } from '../shared/common/abort-utils.js';
+import { isGenerating } from '../shared/common/sillytavern-generation-state.js';
 
 
 const MODULE_ID = "afterAiGate";
@@ -96,12 +97,14 @@ async function hasPaintedAfterAi(chatId, isCurrent, signal) {
     return ready();
 }
 
-// Readiness has no message-signature deduplication: continuations can reuse a floor.
+// State2/3 settlement needs an idle host, not a painted page. Background tabs can
+// suspend animation frames indefinitely. The legacy display gate keeps its own
+// paint check; deduplication belongs to each caller's generation/message owner.
 export async function waitForAfterAiReady(chatId, signal) {
     const isCurrent = () => currentChatId() === String(chatId);
     try {
         while (!signal?.aborted && isCurrent()) {
-            if (await hasPaintedAfterAi(chatId, isCurrent, signal)) return true;
+            if (!isGenerating() && isHostReadyForAfterAi(chatId)) return true;
             await waitForAbortableDelay(100, signal);
         }
     } catch (error) {

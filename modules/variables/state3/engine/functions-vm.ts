@@ -1,4 +1,5 @@
 import type { Json, Path } from '../types.js';
+import { errorDetails } from '../../../../shared/common/error-details.js';
 export interface FunctionOptions { id: string; source: string; input?: Json; reads?: Path[]; state: Json; beforeState?: Json; signal?: AbortSignal }
 import { DefaultIntrinsics, newQuickJSWASMModuleFromVariant, type QuickJSHandle, type QuickJSWASMModule, type QuickJSContext } from 'quickjs-emscripten-core';
 import variant from '@jitl/quickjs-singlefile-cjs-release-sync';
@@ -77,7 +78,19 @@ const BOOTSTRAP = `(() => {
         }
         return visit(value);
     }
-    return (fn, inputJson, read, readBefore) => {
+    const describeError = error => {
+        const text = (object, key) => {
+            if (!object || typeof object !== 'object') return undefined;
+            const descriptor = getDescriptor(object, key);
+            return descriptor && typeof descriptor.value === 'string' ? descriptor.value : undefined;
+        };
+        return stringify({
+            errorName: text(error, 'name') || (error && typeof error === 'object' ? text(getPrototypeOf(error), 'name') : undefined),
+            message: typeof error === 'string' ? error : text(error, 'message'),
+            guestStack: text(error, 'stack')
+        });
+    };
+    const invoke = (fn, inputJson, read, readBefore) => {
         if (typeof fn !== 'function') throw new ErrorCtor('function_invalid_source');
         const get = path => {
             const result = parse(read(stringify(path)));
@@ -89,6 +102,7 @@ const BOOTSTRAP = `(() => {
         };
         return encode(fn(parse(inputJson), Object.freeze({ get, before })));
     };
+    return { invoke, describeError };
 })()`;
 
 /**
@@ -112,6 +126,8 @@ export async function runFunctionInVm({ id, source, input = [], reads = [], stat
     let work = 0, executing = false;
     let interrupted: string | undefined;
     let violation: FunctionExecutionError | undefined;
+    let describeError: QuickJSHandle | undefined;
+    let phase: 'source' | 'execute' = 'source';
     runtime.setInterruptHandler(() => {
         if (signal?.aborted) {interrupted = 'function_aborted';}
         else if (executing && ++work > FUNCTION_WORK_LIMIT) {interrupted = 'function_work_limit';}
@@ -122,8 +138,18 @@ export async function runFunctionInVm({ id, source, input = [], reads = [], stat
     const hold = (handle: QuickJSHandle) => { handles.push(handle); return handle; };
     const unwrap = (result: ReturnType<QuickJSContext['evalCode']>) => {
         if (result.error) {
-            result.error.dispose();
-            throw violation || failure(interrupted || 'function_exception', id);
+            let details: Record<string, unknown> = { phase };
+            try {
+                if (describeError && !violation && !interrupted) {
+                    const described = context.callFunction(describeError, context.undefined, result.error);
+                    if (described.error) {described.error.dispose();}
+                    else {
+                        try {details = { ...details, ...JSON.parse(context.getString(described.value)) };}
+                        finally {described.value.dispose();}
+                    }
+                }
+            } finally {result.error.dispose();}
+            throw violation || failure(interrupted || 'function_exception', id, details);
         }
         return hold(result.value);
     };
@@ -143,18 +169,21 @@ export async function runFunctionInVm({ id, source, input = [], reads = [], stat
         }
     }));
     try {
-        const invoke = unwrap(context.evalCode(BOOTSTRAP, 'variable3-bootstrap.js'));
+        const bootstrap = unwrap(context.evalCode(BOOTSTRAP, 'variable3-bootstrap.js'));
+        const invoke = hold(context.getProp(bootstrap, 'invoke'));
+        describeError = hold(context.getProp(bootstrap, 'describeError'));
         executing = true;
         const fn = unwrap(context.evalCode(`(${source}\n)`, `${id || 'function'}.js`));
         const inputJson = JSON.stringify(input);
         if (inputJson === undefined) {throw failure('function_invalid_input', id);}
+        phase = 'execute';
         const result = unwrap(context.callFunction(invoke, context.undefined, fn, hold(context.newString(inputJson)), bridge(state, false), bridge(beforeState, true)));
         if (violation) {throw violation;}
         if (signal?.aborted) {throw failure('function_aborted', id);}
         return JSON.parse(context.getString(result));
     } catch (error) {
         if (error instanceof FunctionExecutionError) {throw error;}
-        throw failure('function_exception', id);
+        throw failure('function_exception', id, { phase, cause: errorDetails(error) });
     } finally {
         for (let index = handles.length - 1; index >= 0; index--) {handles[index].dispose();}
         context.dispose();

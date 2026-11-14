@@ -1,0 +1,310 @@
+{
+  "format": 1,
+  "name": "解铃会",
+  "updates": ["before", "after"],
+  "schema": {
+    "type": "object",
+    "required": ["club"],
+    "additionalProperties": false,
+    "properties": {
+      "club": {
+        "type": "object",
+        "required": ["week", "funds", "reputation", "exposure", "waiting", "members", "incidents", "rooms", "phase", "lastWeek", "flags"],
+        "additionalProperties": false,
+        "properties": {
+          "week": {"type": "integer", "title": "第几周", "minimum": 1, "maximum": 13},
+          "funds": {"type": "integer", "title": "账上资金"},
+          "reputation": {"type": "integer", "title": "口碑", "minimum": 0, "maximum": 100},
+          "exposure": {"type": "integer", "title": "风声", "minimum": 0, "maximum": 100},
+          "waiting": {"type": "integer", "title": "本周待面谈", "minimum": 0},
+          "members": {
+            "type": "object",
+            "title": "会员名册",
+            "additionalProperties": {
+              "type": "object",
+              "required": ["age", "job", "kink", "wants", "is", "hates", "control", "status", "room", "note"],
+              "additionalProperties": false,
+              "properties": {
+                "age": {"type": "integer", "title": "年龄", "minimum": 18, "maximum": 90},
+                "job": {"type": "string", "title": "职业", "minLength": 1},
+                "kink": {"type": "string", "title": "性癖与处境", "minLength": 1},
+                "wants": {"$ref": "#/$defs/tag", "title": "被什么吸引", "description": "The trait this person is drawn to in someone else."},
+                "is": {"type": "array", "title": "自身特质", "description": "Traits this person shows to others; members who want one of them are drawn to this person.", "items": {"$ref": "#/$defs/tag"}, "uniqueItems": true},
+                "hates": {"type": "array", "title": "受不了", "description": "Traits this person cannot bear in someone else; never the trait in wants.", "items": {"$ref": "#/$defs/tag"}, "uniqueItems": true},
+                "control": {"type": "integer", "title": "自控", "minimum": 0, "maximum": 100},
+                "status": {"enum": ["在读", "结业", "退会"], "title": "状态"},
+                "room": {"$ref": "#/$defs/room", "title": "互助室"},
+                "note": {"type": "string", "title": "近况"}
+              }
+            }
+          },
+          "incidents": {
+            "type": "array",
+            "title": "越界事件",
+            "items": {
+              "type": "object",
+              "required": ["week", "who", "kind", "summary", "open"],
+              "additionalProperties": false,
+              "properties": {
+                "week": {"type": "integer"},
+                "who": {"type": "array", "items": {"type": "string"}, "minItems": 1},
+                "kind": {"enum": ["私下越界", "当场冲突", "外泄"]},
+                "summary": {"type": "string"},
+                "open": {"type": "boolean"}
+              }
+            }
+          },
+          "rooms": {"type": "object", "title": "互助室"},
+          "phase": {"enum": ["运营中", "季末", "资金断裂", "曝光关停"], "title": "经营状态"},
+          "lastWeek": {"type": ["object", "null"], "title": "上周结算"},
+          "flags": {
+            "type": "object",
+            "required": ["firstGraduate"],
+            "additionalProperties": false,
+            "properties": {"firstGraduate": {"type": "boolean"}}
+          }
+        }
+      }
+    },
+    "$defs": {
+      "tag": {"enum": ["年上", "年下", "支配", "被支配", "足", "露出", "窥视", "制服", "粗暴", "温柔"]},
+      "room": {"enum": ["", "一号室", "二号室", "三号室"]}
+    }
+  },
+  "initial": {
+    "club": {
+      "week": 1,
+      "funds": 6000,
+      "reputation": 30,
+      "exposure": 0,
+      "waiting": 2,
+      "members": {
+        "周秀兰": {"age": 52, "job": "退休会计", "kink": "只对二十出头的男孩子动心。丈夫走后三年压不住了，上个月在儿子的同学面前失了态，儿子半年没回家。", "wants": "年下", "is": ["年上", "温柔"], "hates": ["粗暴"], "control": 35, "status": "在读", "room": "一号室", "note": "来了五周，总坐在离门最近的位置。"},
+        "林一舟": {"age": 21, "job": "大三学生", "kink": "只对比自己大二十岁以上的女人有反应。同龄女友提分手时说他“看我的眼神像在看一张白纸”。", "wants": "年上", "is": ["年下"], "hates": [], "control": 40, "status": "在读", "room": "一号室", "note": "辅导员介绍来的，说话前会先道歉。"},
+        "陈默": {"age": 34, "job": "程序员", "kink": "需要被命令、被贬低才能放松。在公司对女上司失控过一次，差点被开除；最怕这事被人知道。", "wants": "支配", "is": ["被支配"], "hates": ["露出"], "control": 30, "status": "在读", "room": "二号室", "note": "每次都提前十分钟到，坐得笔直。"},
+        "苏曼": {"age": 29, "job": "健身教练", "kink": "支配欲很强，被人注视时才觉得自己活着。曾在私教课上让学员做越界的事，被投诉后来的。", "wants": "被支配", "is": ["支配", "露出"], "hates": [], "control": 45, "status": "在读", "room": "二号室", "note": "嫌这里节奏太慢，但没缺过一次课。"},
+        "赵建国": {"age": 47, "job": "公交司机", "kink": "窥视癖。年轻时在澡堂偷看被抓过，此后二十年靠夜班躲着人。最近又开始在车上盯着乘客。", "wants": "露出", "is": ["窥视"], "hates": ["制服"], "control": 50, "status": "在读", "room": "二号室", "note": "话最少，但会给大家带热豆浆。"},
+        "何小满": {"age": 24, "job": "外卖骑手", "kink": "恋足。送餐时偷拿过顾客门口的鞋，被报了警，派出所的民警把他介绍到这里。", "wants": "足", "is": ["年下"], "hates": [], "control": 25, "status": "在读", "room": "", "note": "刚登记，还没分室。"}
+      },
+      "incidents": [],
+      "lastWeek": null,
+      "flags": {"firstGraduate": false}
+    }
+  },
+  "openings": [
+    {},
+    {"club": {
+      "funds": 2400,
+      "exposure": 10,
+      "members": {"何小满": {"room": "一号室", "note": "刚分到一号室，今天第一次参加互助。"}},
+      "incidents": [{"week": 1, "who": ["陈默", "苏曼"], "kind": "当场冲突", "summary": "陈默与苏曼在走廊起了争执，隔壁住户过来问了两次。", "open": true}]
+    }}
+  ],
+  "access": [
+    {"path": ["club", "week"], "direct": false, "description": "The current week of the season, 1 to 12. After week 12 closes, the value is 13 and the season is over."},
+    {"path": ["club", "funds"], "direct": false, "description": "Money on hand in yuan. Each admission brings a 500 fee, each held room session brings 300 per attending member, and rent of 2000 is paid when a week closes. Below 0 the center cannot pay rent."},
+    {"path": ["club", "reputation"], "direct": false, "description": "Word of mouth among people who need this place, 0 to 100. Next week's interviews are 1 + reputation / 25, rounded down."},
+    {"path": ["club", "exposure"], "direct": false, "description": "How much the outside world has noticed, 0 to 100. At 100 the center is exposed and shut down."},
+    {"path": ["club", "waiting"], "direct": false, "description": "Applicants still waiting for an interview this week. Each admission or refusal uses one; when a week closes the count is renewed from reputation."},
+    {"path": ["club", "members"], "direct": false, "description": "The member register, keyed by full name. wants is the one thing that draws a member; is lists what the member embodies; hates lists what the member cannot bear. control (0 to 100) is how well the member lives with the fetish; at 80 the member graduates. note is the member's current situation in one or two sentences."},
+    {"path": ["club", "incidents"], "direct": false, "description": "Boundary incidents in order. An open incident adds 10 exposure every time a week closes until the center deals with it."},
+    {"path": ["club", "lastWeek"], "direct": false, "description": "The result of the most recently closed week: which rooms met or stood idle, roomMembers with each room's roster at the start of that week, income and rent, each attending member's actual control change, who graduated, who left and which incidents happened. The roomMembers rosters keep members who later graduated, quit or moved rooms. null before the first week closes."},
+    {"path": ["club", "flags"], "direct": false, "description": "Once-only events already claimed."}
+  ],
+  "rules": [
+    {"id": "rooms", "kind": "derive", "path": ["club", "rooms"], "description": "Each room lists its current members, whether it has the three members needed to meet, and how every pair in it relates: complementary when each embodies what the other wants, mirrored when both want the same thing, conflicting when one embodies something the other cannot bear, otherwise neutral. Conflict outweighs the other relations.", "value": {"call": "room_report", "args": [{"get": ["club", "members"]}]}},
+    {"id": "phase", "kind": "derive", "path": ["club", "phase"], "description": "The season ends in exposure at 100 exposure, in collapse below 0 funds, and normally after week 12 closes.", "value": {"op": "if", "args": [
+      {"op": "gte", "args": [{"get": ["club", "exposure"]}, {"literal": 100}]}, {"literal": "曝光关停"},
+      {"op": "if", "args": [
+        {"op": "lt", "args": [{"get": ["club", "funds"]}, {"literal": 0}]}, {"literal": "资金断裂"},
+        {"op": "if", "args": [{"op": "gt", "args": [{"get": ["club", "week"]}, {"literal": 12}]}, {"literal": "季末"}, {"literal": "运营中"}]}
+      ]}
+    ]}},
+    {"id": "reputation-range", "kind": "correct", "path": ["club", "reputation"], "description": "Reputation stays between 0 and 100.", "value": {"op": "max", "args": [{"literal": 0}, {"op": "min", "args": [{"literal": 100}, {"get": ["club", "reputation"]}]}]}},
+    {"id": "exposure-range", "kind": "correct", "path": ["club", "exposure"], "description": "Exposure stays between 0 and 100.", "value": {"op": "max", "args": [{"literal": 0}, {"op": "min", "args": [{"literal": 100}, {"get": ["club", "exposure"]}]}]}}
+  ],
+  "actions": [
+    {
+      "id": "assign",
+      "title": "分室",
+      "stages": ["before"],
+      "description": "Move a current member into a room, or out of every room with an empty room. A room holds at most 4 members.",
+      "parameters": {"type": "object", "required": ["member", "room"], "additionalProperties": false, "properties": {
+        "member": {"type": "string", "title": "会员", "description": "Full name as registered, for example 何小满."},
+        "room": {"$ref": "#/$defs/room", "title": "互助室", "description": "一号室, 二号室, 三号室, or an empty string to leave the member unassigned."}
+      }, "$defs": {"room": {"enum": ["", "一号室", "二号室", "三号室"]}}},
+      "conversions": [],
+      "requires": {"op": "and", "args": [
+        {"op": "eq", "args": [{"get": ["club", "phase"]}, {"literal": "运营中"}]},
+        {"op": "eq", "args": [{"call": "member_field", "args": [{"get": ["club", "members"]}, {"param": ["member"]}, {"literal": "status"}]}, {"literal": "在读"}]},
+        {"op": "gt", "args": [{"call": "seats_left", "args": [{"get": ["club", "rooms"]}, {"param": ["room"]}]}, {"literal": 0}]}
+      ]},
+      "effects": [{"path": ["club", "members"], "value": {"call": "with_field", "args": [{"get": ["club", "members"]}, {"param": ["member"]}, {"literal": "room"}, {"param": ["room"]}]}}]
+    },
+    {
+      "id": "handle",
+      "title": "处理越界",
+      "stages": ["before"],
+      "description": "Deal with one open incident: talk to those involved, pay what it takes to keep it quiet. Costs 600 and lowers exposure by 10.",
+      "parameters": {"type": "object", "required": ["incident"], "additionalProperties": false, "properties": {
+        "incident": {"type": "integer", "title": "事件", "minimum": 0, "description": "Position of the incident in the incident list, starting at 0."}
+      }},
+      "conversions": [],
+      "requires": {"op": "and", "args": [
+        {"op": "eq", "args": [{"get": ["club", "phase"]}, {"literal": "运营中"}]},
+        {"call": "incident_open", "args": [{"get": ["club", "incidents"]}, {"param": ["incident"]}]},
+        {"op": "gte", "args": [{"get": ["club", "funds"]}, {"literal": 600}]}
+      ]},
+      "effects": [
+        {"path": ["club", "incidents"], "value": {"call": "close_incident", "args": [{"get": ["club", "incidents"]}, {"param": ["incident"]}]}},
+        {"path": ["club", "funds"], "value": {"op": "subtract", "args": [{"get": ["club", "funds"]}, {"literal": 600}]}},
+        {"path": ["club", "exposure"], "value": {"op": "subtract", "args": [{"get": ["club", "exposure"]}, {"literal": 10}]}}
+      ]
+    },
+    {
+      "id": "endweek",
+      "title": "结束本周",
+      "stages": ["before"],
+      "description": "Hold this week's room sessions and pay rent. A room with at least 3 members meets: each member pays 300 and gains 1 control, plus for each partner in the room 4 when complementary, 3 when mirrored, 1 when neutral, and for a conflicting partner either 8 (a breakthrough, on a die of 4 to 6) or minus 4. A complementary pair with a member below 50 control slips into a private boundary incident on a die of 1; a conflict on a die of 1 erupts in the room. Assigned members whose room cannot meet each quit on a die of 1. A member reaching 80 control graduates and leaves the room. Then rent of 2000 is paid; reputation gains 2 per room that met, 5 per graduate, loses 3 per room standing idle and 5 per eruption; exposure gains 10 per incident already open and 5 per new incident, or eases by 5 when nothing is open; the week advances and new interviews arrive.",
+      "parameters": {"type": "object", "required": ["dice"], "additionalProperties": false, "properties": {
+        "dice": {"type": "array", "title": "骰子", "minItems": 1, "items": {"type": "integer", "minimum": 1, "maximum": 6}, "description": "Six-sided dice for the week, supplied by the card's prepare script."}
+      }},
+      "conversions": [{"path": ["dice"], "value": {"prepared": ["dice"]}}],
+      "requires": {"op": "eq", "args": [{"get": ["club", "phase"]}, {"literal": "运营中"}]},
+      "effects": [{"path": ["club"], "value": {"call": "close_week", "args": [{"get": ["club"]}, {"param": ["dice"]}]}}]
+    },
+    {
+      "id": "admit",
+      "title": "收下新会员",
+      "stages": ["after"],
+      "description": "Register an applicant the center has just accepted after an interview in the story. Uses one waiting interview and collects the 500 admission fee. The new member starts unassigned.",
+      "parameters": {"type": "object", "required": ["name", "age", "job", "kink", "wants", "is", "hates", "control", "note"], "additionalProperties": false, "properties": {
+        "name": {"type": "string", "title": "姓名", "minLength": 1, "description": "Full name as said in the story."},
+        "age": {"type": "integer", "title": "年龄", "minimum": 18, "maximum": 90},
+        "job": {"type": "string", "title": "职业", "minLength": 1},
+        "kink": {"type": "string", "title": "性癖与处境", "minLength": 1, "description": "The fetish and what it has done to the person's life, in one or two plain sentences."},
+        "wants": {"$ref": "#/$defs/tag", "title": "被什么吸引", "description": "The trait this person is drawn to in someone else."},
+        "is": {"type": "array", "title": "自身特质", "description": "Traits this person shows to others; members who want one of them are drawn to this person.", "items": {"$ref": "#/$defs/tag"}, "uniqueItems": true},
+        "hates": {"type": "array", "title": "受不了", "description": "Traits this person cannot bear in someone else; never the trait in wants.", "items": {"$ref": "#/$defs/tag"}, "uniqueItems": true},
+        "control": {"type": "integer", "title": "自控", "minimum": 0, "maximum": 60, "description": "How well the person holds the fetish in check at arrival: about 10 for someone barely holding on, about 50 for someone who manages but is tired."},
+        "note": {"type": "string", "title": "近况", "description": "One sentence about how the person came across in the interview."}
+      }, "$defs": {"tag": {"enum": ["年上", "年下", "支配", "被支配", "足", "露出", "窥视", "制服", "粗暴", "温柔"]}}},
+      "conversions": [],
+      "requires": {"op": "and", "args": [
+        {"op": "eq", "args": [{"get": ["club", "phase"]}, {"literal": "运营中"}]},
+        {"op": "gte", "args": [{"get": ["club", "waiting"]}, {"literal": 1}]},
+        {"op": "eq", "args": [{"call": "member_field", "args": [{"get": ["club", "members"]}, {"param": ["name"]}, {"literal": "status"}]}, {"literal": null}]}
+      ]},
+      "effects": [
+        {"path": ["club", "members"], "value": {"call": "add_member", "args": [{"get": ["club", "members"]}, {"param": ["name"]}, {"param": ["age"]}, {"param": ["job"]}, {"param": ["kink"]}, {"param": ["wants"]}, {"param": ["is"]}, {"param": ["hates"]}, {"param": ["control"]}, {"param": ["note"]}]}},
+        {"path": ["club", "waiting"], "value": {"op": "subtract", "args": [{"get": ["club", "waiting"]}, {"literal": 1}]}},
+        {"path": ["club", "funds"], "value": {"op": "add", "args": [{"get": ["club", "funds"]}, {"literal": 500}]}}
+      ]
+    },
+    {
+      "id": "decline",
+      "title": "婉拒申请人",
+      "stages": ["after"],
+      "description": "The center has just turned an applicant away after an interview in the story. Uses one waiting interview.",
+      "parameters": {"type": "object", "required": [], "additionalProperties": false, "properties": {}},
+      "conversions": [],
+      "requires": {"op": "and", "args": [
+        {"op": "eq", "args": [{"get": ["club", "phase"]}, {"literal": "运营中"}]},
+        {"op": "gte", "args": [{"get": ["club", "waiting"]}, {"literal": 1}]}
+      ]},
+      "effects": [{"path": ["club", "waiting"], "value": {"op": "subtract", "args": [{"get": ["club", "waiting"]}, {"literal": 1}]}}]
+    },
+    {
+      "id": "note",
+      "title": "记录近况",
+      "stages": ["after"],
+      "description": "Replace a member's note with what the story has just shown about them: a confession, a setback, a change in how they treat someone.",
+      "parameters": {"type": "object", "required": ["member", "note"], "additionalProperties": false, "properties": {
+        "member": {"type": "string", "title": "会员", "description": "Full name as registered."},
+        "note": {"type": "string", "title": "近况", "minLength": 1, "description": "One or two sentences that stay true until the next change."}
+      }},
+      "conversions": [],
+      "requires": {"op": "ne", "args": [{"call": "member_field", "args": [{"get": ["club", "members"]}, {"param": ["member"]}, {"literal": "status"}]}, {"literal": null}]},
+      "effects": [{"path": ["club", "members"], "value": {"call": "with_field", "args": [{"get": ["club", "members"]}, {"param": ["member"]}, {"literal": "note"}, {"param": ["note"]}]}}]
+    },
+    {
+      "id": "leave",
+      "title": "退会",
+      "stages": ["after"],
+      "description": "A current member quits or is asked to leave in the story. The member leaves their room and stays in the register.",
+      "parameters": {"type": "object", "required": ["member"], "additionalProperties": false, "properties": {
+        "member": {"type": "string", "title": "会员", "description": "Full name as registered."}
+      }},
+      "conversions": [],
+      "requires": {"op": "eq", "args": [{"call": "member_field", "args": [{"get": ["club", "members"]}, {"param": ["member"]}, {"literal": "status"}]}, {"literal": "在读"}]},
+      "effects": [{"path": ["club", "members"], "value": {"call": "with_field", "args": [
+        {"call": "with_field", "args": [{"get": ["club", "members"]}, {"param": ["member"]}, {"literal": "status"}, {"literal": "退会"}]},
+        {"param": ["member"]}, {"literal": "room"}, {"literal": ""}
+      ]}}]
+    },
+    {
+      "id": "report",
+      "title": "记下越界",
+      "stages": ["after"],
+      "description": "Record a boundary incident that has just happened in the story outside the weekly sessions: members meeting privately, a fight, or word getting out to family, work or the neighbourhood. Adds 10 exposure, or 25 when word gets out. Incidents produced by closing a week are already recorded.",
+      "parameters": {"type": "object", "required": ["who", "kind", "summary"], "additionalProperties": false, "properties": {
+        "who": {"type": "array", "title": "涉及会员", "minItems": 1, "items": {"type": "string"}, "description": "Full names of the members involved."},
+        "kind": {"enum": ["私下越界", "当场冲突", "外泄"], "title": "类型"},
+        "summary": {"type": "string", "title": "经过", "minLength": 1, "description": "One sentence on what happened."}
+      }},
+      "conversions": [],
+      "requires": {"op": "eq", "args": [{"get": ["club", "phase"]}, {"literal": "运营中"}]},
+      "effects": [
+        {"path": ["club", "incidents"], "value": {"call": "add_incident", "args": [{"get": ["club", "incidents"]}, {"get": ["club", "week"]}, {"param": ["who"]}, {"param": ["kind"]}, {"param": ["summary"]}]}},
+        {"path": ["club", "exposure"], "value": {"op": "add", "args": [{"get": ["club", "exposure"]}, {"op": "if", "args": [{"op": "eq", "args": [{"param": ["kind"]}, {"literal": "外泄"}]}, {"literal": 25}, {"literal": 10}]}]}}
+      ]
+    }
+  ],
+  "triggers": [
+    {
+      "id": "first-graduate",
+      "timing": "action",
+      "description": "When the first member graduates, their family sends a 2000 donation and word spreads: reputation rises by 10. Happens once per season.",
+      "when": {"op": "and", "args": [
+        {"op": "not", "args": [{"get": ["club", "flags", "firstGraduate"]}]},
+        {"op": "gte", "args": [{"call": "count_status", "args": [{"get": ["club", "members"]}, {"literal": "结业"}]}, {"literal": 1}]}
+      ]},
+      "effects": [
+        {"path": ["club", "flags", "firstGraduate"], "value": {"literal": true}},
+        {"path": ["club", "funds"], "value": {"op": "add", "args": [{"get": ["club", "funds"]}, {"literal": 2000}]}},
+        {"path": ["club", "reputation"], "value": {"op": "add", "args": [{"get": ["club", "reputation"]}, {"literal": 10}]}}
+      ]
+    },
+    {
+      "id": "new-interviews",
+      "description": "When a week closes, next week's interview count is renewed from the final reputation, including the first graduate's word of mouth.",
+      "when": {"op": "ne", "args": [{"get": ["club", "week"]}, {"before": ["club", "week"]}]},
+      "effects": [{"path": ["club", "waiting"], "value": {"call": "interview_count", "args": [{"get": ["club", "reputation"]}]}}]
+    }
+  ],
+  "constraints": [],
+  "functions": {
+    "room_report": {"reads": [], "description": "Lists each room's current members, whether it can meet (3 or more), and the relation of every pair in it."},
+    "close_week": {"reads": [], "description": "Settles one week of sessions, departures, incidents, rent, reputation and exposure from the center's state and the week's dice."},
+    "interview_count": {"reads": [], "description": "How many applicants the final reputation brings for a new week."},
+    "seats_left": {"reads": [], "description": "Free places left in a room (a room holds 4); leaving every room always has a place."},
+    "member_field": {"reads": [], "description": "One field of a registered member, or null when no member has that name."},
+    "with_field": {"reads": [], "description": "The register with one field of one member replaced."},
+    "add_member": {"reads": [], "description": "The register with a new unassigned current member added."},
+    "incident_open": {"reads": [], "description": "Whether the incident at that position exists and is still open."},
+    "close_incident": {"reads": [], "description": "The incident list with that incident marked as dealt with."},
+    "add_incident": {"reads": [], "description": "The incident list with a new open incident appended."},
+    "count_status": {"reads": [], "description": "How many registered members have the given status."}
+  },
+  "views": {
+    "club": {
+      "description": "The 解铃会 peer-support center this season: money, standing, the members and their rooms, open incidents and last week's result.",
+      "paths": [["club"]]
+    }
+  },
+  "extensions": {
+    "scripts": {
+      "prepare": {"title": "本周骰子", "description": "Rolls the six-sided dice that decide this week's breakthroughs, slips and departures.", "enabled": true}
+    }
+  }
+}

@@ -55,6 +55,7 @@ function cleanTextForToolMode(content, standardToolCalls = [], streaming = false
 }
 
 function isMalformedNativeToolHostError(error) {
+    if (error?.code === 'AGENT_PROVIDER_ERROR') return false;
     const message = String(error?.message || error || '');
     return /Cannot read properties of null \(reading ['"]function['"]\)/i.test(message)
         || /reading ['"]function['"]/i.test(message)
@@ -213,7 +214,7 @@ export class SillyTavernOpenAICompatibleAdapter {
             text: cleanedText,
             toolCalls: [...standardToolCalls, ...taggedToolCalls],
             thoughts: isReasoningOutputVisible(effectiveReasoning) ? thoughts : [],
-            ...readResponseCompletion('openai', lastFinishReason, !!assistantSnapshot.refusal),
+            ...readResponseCompletion('openai', lastFinishReason, !!assistantSnapshot.refusal, undefined, getStreamedSnapshotText(assistantSnapshot)),
             model: lastModel,
             provider: 'sillytavern-openai-compatible',
             providerPayload: buildProviderPayload(assistantSnapshot),
@@ -241,7 +242,7 @@ export class SillyTavernOpenAICompatibleAdapter {
             text: cleanedText,
             toolCalls: [...standardToolCalls, ...taggedToolCalls],
             thoughts: isReasoningOutputVisible(effectiveReasoning) ? thoughts : [],
-            ...readResponseCompletion('openai', choice.finish_reason, !!message.refusal),
+            ...readResponseCompletion('openai', choice.finish_reason, !!message.refusal, undefined, contentText),
             model: response.model || this.config.model,
             provider: 'sillytavern-openai-compatible',
             providerPayload: buildProviderPayload(replayableMessage),

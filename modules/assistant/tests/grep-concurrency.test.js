@@ -159,7 +159,7 @@ for (const name of [TOOL_NAMES.GREP, TOOL_NAMES.WRITE]) {
             buildUserContentParts: message => message.content,
             getActiveProviderConfig: () => ({ provider: 'openai-compatible', model: 'test' }),
             getToolDefinitions: () => [], SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000,
-            MAX_TOOL_ROUNDS: 2, REQUEST_TIMEOUT_MS: 180000,
+            REQUEST_TIMEOUT_MS: 180000,
             isAbortError: error => error.message === 'tool_aborted',
             createAdapter: () => ({ async chat() { return { text: '', toolCalls: [
                 { id: 'first', name, arguments: argumentsJson }, { id: 'second', name, arguments: argumentsJson },

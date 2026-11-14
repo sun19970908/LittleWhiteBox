@@ -1,10 +1,12 @@
 import { getTools } from './tools.js';
 import { buildUpdateView } from './views.js';
 import { buildHandoff } from '../../updater/handoff.js';
-import type { Compiled, Json, UpdateStage } from '../types.js';
+import type { Compiled, Json, JsonObject, UpdateStage } from '../types.js';
 import type { AgentChatInput } from '../../../agent-core/public-api.js';
+import { activeTools, TOOL_CALL_LIMIT } from '../extensions/definition.js';
 
 export function buildUpdateTask(compiled: Compiled, state: Json, context: unknown, stage: UpdateStage = 'after'): AgentChatInput {
+    const custom = activeTools(compiled.bundle, stage);
     return buildHandoff({
         systemPrompt: [
             stage === 'before'
@@ -14,11 +16,13 @@ export function buildUpdateTask(compiled: Compiled, state: Json, context: unknow
             'read_writing_guide supplies the state at this update, writable fields and actions assigned to this stage, and the shared rules and triggers.',
             ...(stage === 'after' ? ['When beforeUpdate is supplied with the manuscript, it describes this turn’s already settled player action. Its effects are already in the supplied state. Apply only additional events in the story reply.'] : []),
             'Each field description explains its meaning; its update text, when present, says when and how to change it. Action descriptions explain complete behaviours.',
-            'Actions apply their described effects; settlement computes derived values, corrections and trigger effects automatically. Submit each event through its action or direct edits, leaving those automatic effects to settlement. Separate events may change the same field.',
+            'Actions apply their described effects; settlement computes derived values, corrections and trigger effects automatically. Submit an event through its matching action. Direct edits are available only for the fields listed in writable, for changes not already handled by that action or the automatic rules. If an event has neither a matching action nor an allowed direct edit in this stage, leave it out of this submission. Separate events may change the same field.',
             'For numeric changes or changes requiring judgement, add a short reason identifying the supporting passage event. Straightforward factual updates need no restatement. Include old only when explicitly comparing the prior value helps explain the change; copying whole objects or arrays adds no useful comparison.',
             'After request_write_approval returns approval, call write once with only the changes caused by the marked passage.',
+            ...(custom.length ? [`The additional tools can query or process information for this update. Use them when needed, then submit write in a separate call. At most ${TOOL_CALL_LIMIT} additional tool calls are available. A failed submission receives one correction opportunity.`] : []),
         ].join('\n\n'),
-        manuscript: context, guide: buildUpdateView(compiled, state, stage), tools: getTools(compiled, stage),
+        manuscript: context, guide: buildUpdateView(compiled, state, stage), tools: [...getTools(compiled, stage),
+            ...custom.map(([name, entry]) => ({ type: 'function' as const, function: { name, description: entry.description, parameters: entry.parameters as JsonObject } }))],
     });
 }
 

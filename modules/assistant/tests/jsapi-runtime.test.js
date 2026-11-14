@@ -7,12 +7,15 @@ import * as runtimeModule from '../runtime-src/jsapi-runtime.js';
 import { JSAPI_ABORTED, JSAPI_CANCEL_NOTICE } from '../shared/jsapi-contract.js';
 import { toolOutcome } from '../app-src/ui/tool-activity.js';
 import { createHostToolRequestController } from '../app-src/runtime/host-tool-requests.js';
+import { executeJavaScriptApi } from '../runtime-src/jsapi-execution.js';
+import { parseJavaScriptApi } from '../runtime-src/jsapi-analysis.js';
 
 // 验收契约（只覆盖高代价边界）：
 // 正常读写与原生 JS 语义一致，真正修改不冒充只读；代价：协议错误、越权修改。
 // 取消异步等待后不继续保存；已发出的操作不谎称撤销；代价：重复写入、数据损坏。
 // 返回值、循环和截断如实反馈，没返回不冒充成功；代价：证据失真、盲目重试修改。
 // 宿主传递取消信号且不扫描聊天来检查 API；代价：取消失效、大聊天卡死。
+// API 抛出和返回的错误保留结构化原因，不携带请求配置；代价：错误修复、凭据泄露。
 const manifest = JSON.parse(await readFile(new URL('../st-jsapi-manifest.json', import.meta.url), 'utf8'));
 const args = code => ({ code, purpose: 'Check live state', expectedOutput: 'Evidence' });
 const run = (code, options = {}) => runtimeModule.runJavaScriptApi({ ...args(code), manifest, ...options });
@@ -22,6 +25,39 @@ const deferred = () => {
     const promise = new Promise((yes, no) => { resolve = yes; reject = no; });
     return { promise, resolve, reject };
 };
+
+test('typed host errors keep their diagnostics across throw, return and JSON transport', async () => {
+    const details = { fields: [{ path: ['inventory'], keyword: 'required' }] };
+    details.self = details;
+    const error = Object.assign(new TypeError('invalid inventory'), { code: 'INVALID_INVENTORY', status: 422, details,
+        cause: new Error('missing row'), request: { headers: { authorization: 'private-token' } } });
+    for (const throws of [true, false]) {
+        const result = await run('return await ctx.loadWorldInfo("fixture");', { ctx: { loadWorldInfo() { if (throws) throw error; return error; } } });
+        const issue = throws ? result.execution.error : result.output;
+        assert.equal(result.ok, !throws);
+        assert.equal(issue.code, error.code); assert.equal(issue.errorName, error.name); assert.equal(issue.status, 422);
+        assert.deepEqual(issue.fields, details.fields); assert.equal(issue.cause.message, error.cause.message);
+        assert.equal(issue.self, '[Circular]');
+        assert.equal(issue.request, undefined); assert.equal(JSON.stringify(result).includes('private-token'), false);
+        assert.deepEqual(JSON.parse(JSON.stringify(issue)), issue);
+    }
+});
+
+test('syntax failures retain the location in the authored body', () => {
+    assert.throws(() => parseJavaScriptApi('const a = 1;\nconst b = ;'), error => {
+        assert.equal(error.loc.line, 2); assert.equal(error.loc.column, 10);
+        assert.equal(error.pos, 23); return true;
+    });
+});
+
+test('script exceptions preserve null and undefined instead of replacing them with wrapper failures', async () => {
+    for (const value of [null, undefined, 42]) {
+        let caught = false;
+        try {await executeJavaScriptApi('throw ctx.value;', {ctx:{value},st:{}});}
+        catch(error) {caught=true; assert.equal(error,value);}
+        assert.equal(caught,true);
+    }
+});
 
 test('ordinary data access, creation and JavaScript syntax have native results', async () => {
     const samples = [

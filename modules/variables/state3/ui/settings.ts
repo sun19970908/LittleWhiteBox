@@ -2,14 +2,17 @@ import { observeBackgroundTask } from '../../../../shared/common/async-errors.js
 import styleText from './styles.css?inline';
 import controlsCss from '../../shared/update-controls.css?inline';
 import { COPY, errorText } from './copy.js';
-import { element, resultLabel } from './result.js';
+import { element, resultLabel, showDiagnostics } from './result.js';
 import { createResultDialog, type FloorResult } from './result-dialog.js';
 import { notifyInfo } from './notifications.js';
-import { DEFINITION_FILE, FUNCTION_DIRECTORY } from '../definition/format.js';
+import { DEFINITION_FILE } from '../definition/format.js';
 import type { State3Api } from '../runtime/api.js';
 import type { Draft } from '../definition/authoring.js';
 import type { UpdateStage, Definition } from '../types.js';
 import type { UpdaterSettings } from '../runtime/settings.js';
+import { createAuthorExtensions } from './author-extensions.js';
+import { EXTENSION_COPY as EC } from '../extensions/copy.js';
+import { fieldName } from '../definition/schema-fields.js';
 
 type Action = (signal: AbortSignal) => unknown | Promise<unknown>;
 export function createState3Page(api: State3Api) {
@@ -18,6 +21,8 @@ export function createState3Page(api: State3Api) {
     const resultDialog = createResultDialog(api);
     notice.setAttribute('role', 'status');
     let page: 'play' | 'author' = 'play', draft: Draft | undefined, working = new Map<string, string>(), selectedFile = '';
+    let authorTab: 'rules' | 'extensions' = 'rules', sourceOpen = false;
+    const editing = new Map<string, { draft: Draft; working: Map<string, string>; selectedFile: string }>();
     let controller: AbortController | undefined, generation = 0;
     let latestAiIndex = -1, latestUserIndex = -1;
     const button = (label: string, action: Action) => {
@@ -40,12 +45,45 @@ export function createState3Page(api: State3Api) {
         return { ...draft, files: [...working].map(([path, content]) => ({ ...draft!.files.find(file => file.path === path), path, content })) };
     }
     async function loadDraft() {
-        draft = await api.openDraft(); working = new Map(draft.files.map(file => [file.path, file.content]));
+        const opened = await api.openDraft(), retained = editing.get(opened.avatar);
+        if (retained) {
+            ({ draft, working, selectedFile } = retained); editing.delete(opened.avatar); return;
+        }
+        draft = opened; working = new Map(draft.files.map(file => [file.path, file.content]));
         selectedFile = draft.root + DEFINITION_FILE;
         if (!working.has(selectedFile)) {working.set(selectedFile, '');}
     }
+    async function saveWorking() {
+        const baseline = currentDraftBaseline(), submitted = new Map(working);
+        const saved = await api.saveDraft(baseline, [...submitted].map(([path, content]) => ({ path, content })));
+        if (draft?.avatar !== baseline.avatar) {return;}
+        const next = new Map(saved.files.map(file => [file.path, file.content]));
+        for (const path of new Set([...submitted.keys(), ...working.keys()])) {
+            if (submitted.get(path) !== working.get(path)) {
+                if (working.has(path)) {next.set(path, working.get(path)!);} else {next.delete(path);}
+            }
+        }
+        draft = saved; working = next;
+    }
+    async function syncDraft() {
+        if (!draft) {return;}
+        if (!hasEdits()) {await loadDraft();}
+    }
+    const hasEdits = () => Boolean(draft && (working.size !== draft.files.length || draft.files.some(file => working.get(file.path) !== file.content)));
+    const authorExtensions = createAuthorExtensions({ draft: currentDraft,
+        update(path, content) { if (content === undefined) {working.delete(path);} else {working.set(path, content);} }, button,
+        async assistant(path, message) {
+            await saveWorking();
+            await api.openAssistant({ path, message }); dialog.close();
+        } });
     async function renderAuthor() {
         if (!draft) {await loadDraft();}
+        const tabs = element('nav', undefined, 'lwb-state3-author-tabs');
+        for (const key of ['rules', 'extensions'] as const) {
+            const tab = button(EC.tabs[key], async () => { authorTab = key; await render(); });
+            tab.setAttribute('aria-selected', String(authorTab === key)); tabs.append(tab);
+        }
+        main.append(tabs);
         const rootPath = draft!.root;
         const select = element('select'), editor = element('textarea', undefined, 'lwb-state3-definition');
         editor.spellcheck = false; editor.setAttribute('aria-label', COPY.draft);
@@ -57,32 +95,48 @@ export function createState3Page(api: State3Api) {
         select.addEventListener('change', () => { selectedFile = select.value; editor.value = working.get(selectedFile) || ''; });
         editor.addEventListener('input', () => working.set(selectedFile, editor.value));
         choose();
-        const intro = element('section', undefined, 'lwb-state3-intro');
-        for (const text of COPY.authorHelp) {intro.append(element('p', text));}
-        intro.append(row(button(COPY.assistant, async () => { await api.openAssistant(); dialog.close(); })));
-        main.append(intro, label(COPY.file, select), editor);
-        main.append(row(
-            button(COPY.check, async signal => { resultDialog.showCheck(await api.checkDraft(currentDraft(), [], { signal })); }),
-            button(COPY.saveDraft, async () => { draft = await api.saveDraft(currentDraftBaseline(), [...working].map(([path, content]) => ({ path, content }))); notice.textContent = COPY.savedDraft; }),
+        const primary = row(button(COPY.assistant, async () => {
+            await saveWorking();
+            await api.openAssistant(); dialog.close();
+        }), button(COPY.check, async signal => {
+            resultDialog.showCheck(await api.checkDraft(currentDraft(), [], { signal, checkOnly: true }),
+                () => api.checkDraft(currentDraft(), [], { checkOnly: true }), async () => { await saveWorking(); dialog.close(); return currentDraftBaseline(); });
+        }),
             button(COPY.saveCard, async () => {
-                draft = await api.saveDraft(currentDraftBaseline(), [...working].map(([path, content]) => ({ path, content })));
-                const result = await api.saveCardDraft(draft);
+                await saveWorking();
+                const result = await api.saveCardDraft(currentDraftBaseline());
                 if (!('ok' in result) || !result.ok) {throw new Error('results' in result ? result.results.filter((item: { saved: boolean }) => !item.saved).map((item: { error: string }) => item.error).join('\n') : COPY.failed);}
                 draft = await api.openDraft(); notice.textContent = COPY.savedCard;
-            }),
-            button(COPY.newFunction, () => {
-                const name = globalThis.prompt(COPY.functionName);
-                if (!name || !/^[a-zA-Z0-9_-]+$/.test(name)) {return;}
-                selectedFile = rootPath + FUNCTION_DIRECTORY + name + '.js';
-                if (!working.has(selectedFile)) {working.set(selectedFile, '(input, { get, before }) => null');}
-                choose();
-            }),
-        ));
+            }));
+        primary.classList.add('lwb-state3-primary'); main.append(primary);
+        if (api.lastResult()) {main.append(button(EC.authorResult, () => resultDialog.showAuthor(api.lastResult()!, async () => {await saveWorking(); dialog.close(); return currentDraftBaseline();})));}
+        if (authorTab === 'extensions') {
+            const content = element('section'); main.append(content); authorExtensions.renderExtensions(content); return;
+        }
+        const summary = element('section', undefined, 'lwb-state3-rule-summary');
+        try {
+            const definition = JSON.parse(working.get(rootPath + DEFINITION_FILE) || '{}') as Definition;
+            summary.append(element('h3', definition.name || COPY.noRules));
+            for (const [title, items] of [[COPY.fields, definition.access?.map(item => fieldName(definition.schema, item.path))],
+                [COPY.actions, definition.actions?.map(item => item.title)]] as const) {
+                if (!items?.length) {continue;}
+                const list = element('ul'); for (const text of items) {list.append(element('li', text));}
+                summary.append(element('strong', title), list);
+            }
+        } catch {summary.append(element('p', EC.rulesInvalid));}
+        main.append(summary);
+        main.append(element('p', COPY.openingHelp));
+        const code = element('details'); code.open = sourceOpen;
+        code.addEventListener('toggle', () => {sourceOpen = code.open;});
+        code.append(element('summary', COPY.editSource), label(COPY.file, select), editor,
+            row(button(COPY.saveDraft, async () => {await saveWorking(); notice.textContent = COPY.savedDraft;}),
+                button(COPY.newFunction, async () => {await saveWorking(); await api.openAssistant({ path: rootPath + DEFINITION_FILE, message: COPY.functionRequest }); dialog.close();})));
+        main.append(code);
         const request = element('pre'); request.hidden = true;
         const requestStage = element('select');
         for (const stage of ['before', 'after'] as const) { const option = element('option', COPY.stageNames[stage]); option.value = stage; requestStage.append(option); }
         requestStage.value = 'after';
-        main.append(row(button(COPY.previewRequest, async signal => {
+        code.append(row(button(COPY.previewRequest, async signal => {
             request.textContent = JSON.stringify(await api.previewRequest({ signal, stage: requestStage.value as UpdateStage }), null, 2); request.hidden = false;
         }), requestStage), request);
     }
@@ -90,6 +144,8 @@ export function createState3Page(api: State3Api) {
     async function renderPlay() {
         const status = await api.inspect();
         if (!status.ok) {
+            const last = api.lastResult();
+            if (last && !last.ok) {showDiagnostics(main, last.diagnostics);}
             main.append(element('p', COPY.notEnabled), button(COPY.enable, async signal => { const result = await api.enable({ signal }); await render(); resultDialog.show(result); }));
             return;
         }
@@ -106,6 +162,12 @@ export function createState3Page(api: State3Api) {
         if (hasAfter) {settings.append(autoLabel, element('p', COPY.afterHelp, 'lwb-state3-help'));}
         settings.append(label(COPY.model, source), element('p', COPY.pluginUpdateHelp, 'lwb-state3-help'), element('p', COPY.playHelp, 'lwb-state3-help'));
         main.append(settings);
+        const trust = api.extensionTrust();
+        if (trust !== 'unused') {
+            main.append(element('p', trust === 'allowed' ? EC.trustAllowed : EC.trustRequired), trust === 'allowed'
+                ? button(EC.revoke, async () => { api.revokeExtensionTrust(); await render(); notice.textContent = EC.revoked; })
+                : button(EC.authorize, async signal => {await api.authorizeExtensions({ signal }); await render();}));
+        }
     }
     async function render() {
         main.replaceChildren(); nav.replaceChildren();
@@ -125,21 +187,30 @@ export function createState3Page(api: State3Api) {
                 notice.textContent = COPY.importedRules;
             }, importButton), { source: import.meta.url, operation: 'importRules' });
         });
-        main.append(row(importButton,
+        const sharing = element('details'); sharing.append(element('summary', COPY.sharing), element('p', COPY.packageHelp, 'lwb-state3-help'));
+        sharing.append(row(importButton,
             button(COPY.exportRules, async signal => {
                 const bundle = await api.exportRules({ signal });
                 const url = URL.createObjectURL(new Blob([JSON.stringify(bundle, null, 2)], { type: 'application/json' }));
                 const link = element('a'); link.href = url; link.download = 'variables-3.0.json'; link.click();
                 setTimeout(() => URL.revokeObjectURL(url), 0);
                 notice.textContent = COPY.exportedRules;
-            })), picker);
+            })), picker); main.append(sharing);
     }
     header.append(element('h2', COPY.title), button(COPY.close, () => dialog.close()));
     dialog.addEventListener('close', cancel); dialog.addEventListener('cancel', cancel);
     dialog.append(header, nav, main, notice); document.head.append(style); document.body.append(dialog);
     return {
-        async open(nextPage: 'play' | 'author' = 'play') { page = nextPage; await render(); if (!dialog.open) {dialog.showModal();} },
-        targetChanged() { cancel(); latestAiIndex = latestUserIndex = -1; resultDialog.clear(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();} },
+        async open(nextPage: 'play' | 'author' = 'play', tab?: typeof authorTab, path?: string) {
+            page = nextPage; await syncDraft();
+            if (tab) {authorTab = tab;}
+            if (path) {selectedFile = path; sourceOpen = true; authorExtensions.select(path);}
+            await render(); if (!dialog.open) {dialog.showModal();}
+        },
+        targetChanged() {
+            if (draft && hasEdits()) {editing.set(draft.avatar, { draft, working, selectedFile });}
+            cancel(); authorExtensions.clear(); latestAiIndex = latestUserIndex = -1; resultDialog.clear(); draft = undefined; working = new Map(); if (dialog.open) {dialog.close();}
+        },
         mountControl(index: number, results: FloorResult[], { updates, beforeIndex, lastReceiptIndex, definition }: { updates: UpdateStage[]; beforeIndex: number; lastReceiptIndex: number; definition?: Definition }) {
             document.querySelectorAll('.lwb-state3-controls').forEach(node => node.remove());
             latestAiIndex = index; latestUserIndex = beforeIndex;
@@ -153,7 +224,7 @@ export function createState3Page(api: State3Api) {
                     const item = results.find(item => item.index === floor), last = item?.result;
                     const isBefore = floor === beforeIndex;
                     const busy = status.busy && floor === busyIndex;
-                    const unsettled = isBefore && (!last || last.ok && !last.receipt?.beforeUpdate);
+                    const unsettled = !last || last.ok && !last.receipt;
                     const group = element('div', undefined, 'lwb-state3-controls lwb-variable-controls');
                     group.dataset.floor = String(floor);
                     const current = () => group.isConnected && floor === (isBefore ? latestUserIndex : latestAiIndex);
@@ -170,12 +241,11 @@ export function createState3Page(api: State3Api) {
                         group.append(calculate(COPY.retryCalculation));
                         if (isBefore) {group.append(skip());}
                     }
-                    else if (isBefore && (last?.ok ? last.receipt?.beforeUpdate?.outcome === 'failed' : last)) {
-                        group.append(calculate(COPY.retryBefore), skip());
+                    else if (last && (!last.ok || last.receipt?.beforeUpdate?.outcome === 'failed')) {
+                        group.append(calculate(COPY.retryCalculation)); if (isBefore) {group.append(skip());}
                     } else if (unsettled) {
-                        group.append(calculate(COPY.settleBefore), skip());
-                    } else if (isBefore && item?.edited) {group.append(calculate(COPY.recompute));}
-                    else if (!isBefore && updates.includes('after')) {group.append(calculate(last?.ok && last.receipt ? COPY.retry : COPY.update));}
+                        group.append(calculate(COPY.settle)); if (isBefore) {group.append(skip());}
+                    } else {group.append(calculate(COPY.recompute));}
                     if (last) {group.append(control(COPY.result, () => resultDialog.open(floor)));}
                     group.append(control(COPY.settings, () => this.open()));
                     const statusLabel = element('span', [COPY.stageNames[isBefore ? 'before' : 'after'],

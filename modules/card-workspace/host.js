@@ -7,6 +7,7 @@ import { allowScopedScripts } from '../../../../../extensions/regex/engine.js';
 import { COPY } from './copy.js';
 import { equalJson, equalText } from './comparison.js';
 import { CARD_FIELDS, projectCard, projectItem, json } from './files.js';
+import { itemDocumentValue, ITEM_KINDS } from './item-document.js';
 import { CARD_EXTENSION } from '../variables/state3/definition/format.js';
 import { projectVariableFiles } from '../variables/state3/definition/card-files.js';
 import { variableCardHost } from '../variables/state3/definition/card-host.js';
@@ -51,6 +52,7 @@ function parseSettings(content) {
 }
 
 export function assertUnchanged(file, actual, settings = false) {
+    if (ITEM_KINDS[settings] && actual !== null && file.originalContent == null) throw new Error(COPY.conflict);
     if (equalText(actual, file.content, settings)) return false;
     if (actual === null) return true;
     if (!equalText(actual, file.originalContent, settings)) throw new Error(COPY.conflict);
@@ -92,7 +94,7 @@ export async function readTarget(target, signal) {
 
 export async function saveFile(target, file, signal, companions = []) {
     assertCard(target.avatar);
-    if (target.kind === 'world') return saveWorldFile(target, file, signal, companions);
+    if (target.kind === 'world') return saveWorldFile(target, file, signal);
     if (target.kind === 'variables') return variableFiles.save(target, file, signal, companions);
     const card = (await readCharacter(target.avatar, signal)).data;
     if (['card', 'field', 'greeting'].includes(target.kind)) {
@@ -121,15 +123,8 @@ export async function saveFile(target, file, signal, companions = []) {
     const field = target.kind === 'regex' ? 'regex_scripts' : 'xiaobaix-tasks';
     const list = target.kind === 'regex' ? [...(card.extensions?.[field] || [])] : [...(card.extensions?.[field]?.tasks || [])];
     const index = list.findIndex(item => item.id === target.id), previous = list[index] || null;
-    const edits = [{ target, file }, ...companions];
-    const changes = edits.map(item => assertUnchanged(item.file, projectItem(item.target, previous), item.target.settings));
-    if (!changes.some(Boolean)) return { contents: edits.map(item => projectItem(item.target, previous)), unchanged: true };
-    const textKey = target.kind === 'regex' ? 'replaceString' : 'commands';
-    const edit = Object.assign({}, ...edits.map(item => {
-        const value = item.target.settings ? parseSettings(item.file.content) : { [textKey]: item.file.content };
-        if (item.target.settings && ['id', 'uid', textKey].some(key => Object.hasOwn(value, key))) throw new Error(COPY.identity);
-        return value;
-    }));
+    if (!assertUnchanged(file, projectItem(target, previous), target.kind)) return { content: projectItem(target, previous), unchanged: true };
+    const edit = itemDocumentValue(target.kind, file.content);
     const defaults = target.kind === 'regex'
         ? { scriptName: target.id, findRegex: '', replaceString: '', trimStrings: [], placement: [2], disabled: false, markdownOnly: true, promptOnly: false, runOnEdit: true, substituteRegex: 0, minDepth: null, maxDepth: null }
         : { name: target.id, commands: '', disabled: false, interval: 1, floorType: 'all', triggerTiming: 'chat_changed' };
@@ -147,21 +142,38 @@ export async function saveFile(target, file, signal, companions = []) {
     }
     const saved = (await readCharacter(target.avatar, signal)).data.extensions?.[field];
     const savedItem = (target.kind === 'regex' ? saved : saved?.tasks)?.find(item => item.id === target.id);
-    if (!savedItem || !edits.every(item => equalText(projectItem(item.target, savedItem), projectItem(item.target, next), item.target.settings))) throw new Error(COPY.unconfirmed);
-    return { contents: edits.map(item => projectItem(item.target, next)) };
+    if (!savedItem || !equalJson(savedItem, next)) throw new Error(COPY.unconfirmed);
+    return { content: projectItem(target, next) };
 }
 
-async function saveWorldFile(target, file, signal, companions) {
+// SillyTavern's leading decorator block supports fallback decorators after an
+// unknown decorator. The host parser is private; only activation is inspected here.
+function hasActivationDecorator(content) {
+    let fallback = false;
+    for (let line of String(content || '').split('\n')) {
+        if (!line.startsWith('@@')) break;
+        if (line.startsWith('@@@')) {
+            if (!fallback) continue;
+            line = line.slice(1);
+        }
+        if (line === '@@activate') return true;
+        fallback = !['@@activate', '@@dont_activate'].some(decorator => line.startsWith(decorator));
+    }
+    return false;
+}
+
+function worldSaveReceipt(entry, target, unchanged = false) {
+    const missingActivationConfig = !entry.disable && !entry.constant && !entry.vectorized
+        && !(entry.key || []).some(key => String(key).trim()) && !hasActivationDecorator(entry.content);
+    return { content: projectItem(target, entry), ...(unchanged ? { unchanged } : {}),
+        ...(missingActivationConfig ? { missingActivationConfig } : {}) };
+}
+
+async function saveWorldFile(target, file, signal) {
     const existing = await readBook(target.book, signal), book = existing || { entries: {} };
     const previous = book.entries[target.id] || null;
-    const edits = [{ target, file }, ...companions];
-    const changes = edits.map(item => assertUnchanged(item.file, projectItem(item.target, previous), item.target.settings));
-    if (!changes.some(Boolean)) return { contents: edits.map(item => projectItem(item.target, previous)), unchanged: true };
-    const edit = Object.assign({}, ...edits.map(item => {
-        const value = item.target.settings ? parseSettings(item.file.content) : { content: item.file.content };
-        if (item.target.settings && ['uid', 'id', 'content'].some(key => Object.hasOwn(value, key))) throw new Error(COPY.identity);
-        return value;
-    }));
+    if (!assertUnchanged(file, projectItem(target, previous), target.kind)) return worldSaveReceipt(previous, target, true);
+    const edit = itemDocumentValue(target.kind, file.content);
     const next = { ...structuredClone(newWorldInfoEntryTemplate), ...previous, ...edit, uid: target.id };
     book.entries[target.id] = next;
     if (book.originalData?.entries) {
@@ -186,5 +198,5 @@ async function saveWorldFile(target, file, signal, companions) {
     const ctx = getContext();
     await ctx.eventSource.emit(ctx.eventTypes.WORLDINFO_UPDATED, target.book, saved);
     await updateWorldInfoList();
-    return { contents: edits.map(item => projectItem(item.target, next)) };
+    return worldSaveReceipt(next, target);
 }

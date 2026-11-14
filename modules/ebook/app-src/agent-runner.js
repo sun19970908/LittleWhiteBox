@@ -485,7 +485,6 @@ export function createEbookAgentRunner(deps = {}) {
         safeJsonParse,
         isAbortError,
         TOOL_NAMES: EBOOK_TOOL_NAMES,
-        maxRounds: 16,
     });
 
     async function runDelegate(args = {}, parentRun = {}) {

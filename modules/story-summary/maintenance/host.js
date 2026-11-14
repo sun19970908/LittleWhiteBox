@@ -104,7 +104,8 @@ export function createMemoryMaintenanceHost({ isEnabled, invalidateRecall, refre
             let index;
             try {
                 const inspection = await inspectMaintenanceIndexes(chatId, impact);
-                index = { status: inspection.status, count: inspection.events.length + inspection.atoms.length };
+                index = { status: inspection.status, count: inspection.events.length + inspection.atoms.length
+                    + (inspection.obsoleteEventIds?.length || 0) + (inspection.obsoleteAtomIds?.length || 0) };
             } catch (error) { index = { status: 'pending', code: error.code || 'index_read_failed' }; }
             // Index inspection may yield while a newer progress frame is published.
             const status = owner === getChatIdentity(getContext()) ? readStatus(publishedState()) : null;

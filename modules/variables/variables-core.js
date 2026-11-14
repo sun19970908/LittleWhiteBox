@@ -2338,7 +2338,7 @@ function notifyStateAfterAi(chatId, messageId, message) {
                 job.lastText = unchanged ? readMessageText(message) : text;
                 job.lastGeneration = generation;
                 await executeQueuedVareventJsAfterTurn();
-                if (isCurrent()) notifyVariableReplyReady(messageId);
+                if (isCurrent() && generation === stateAfterAiGeneration) notifyVariableReplyReady(messageId);
             }
         } finally {
             job.pending = false;

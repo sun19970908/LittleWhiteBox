@@ -2,6 +2,8 @@
 
 This reference complements the definition format. Use the card's actual names and mechanics rather than adopting an example's categories.
 
+Every structure choice below answers one question first: why does this value need to be stored? A field earns its place when a later rule reads it, a choice depends on it, or the narrator must keep it true across turns — and it cannot be computed from other fields. Write that reason into the field's `access[].description` in terms the models can act on. When the reason is "the panel shows it", check whether the panel can derive it instead. The [解铃会 card](<examples/jieling.md#why-each-variable-exists>) lists the reason for each of its fields and the values it deliberately derives.
+
 ## Stable addresses, people and inventory
 
 Root names and paths are shared addresses for the updater, macros, rules and panels. Keep them stable while maintaining a card; renaming a definition field does not migrate an existing chat's values.
@@ -24,7 +26,9 @@ The following batch works with the camp definition:
 
 Every path segment is a string: `"0"` indexes an array, while `"00"` can be an object key. `"Lv.3"` above is one literal key, not two levels. Array writes can address an existing index or the current length to append; they do not create gaps. `remove` deletes the field or the indexed element, not an element found by its value.
 
-Permissions follow literal subtree prefixes. Granting `direct` at `["camp","people"]` covers dynamically named descendants, subject to any more specific restrictions. `"*"` is a literal key here, not a wildcard. Replacing a parent is also checked for changes to protected children. The same literal-path rule applies to rule outputs and function read declarations; a calculation over dynamic members can read the collection and use a pure function.
+Permissions follow literal subtree prefixes. Setting `direct:true` at `["camp","people"]` covers dynamically named descendants, subject to any more specific restrictions. `"*"` is a literal key here, not a wildcard. Replacing a parent is also checked for changes to protected children. The same literal-path rule applies to rule outputs and function read declarations; a calculation over dynamic members can read the collection and use a pure function.
+
+For changing collections, the executable [member rules example](<examples/member-rules.ts>) shows three independent choices: a constraint compares retained members' identities with `before`; a correction function clamps each member's mood separately; a `max(current,before)` correction makes reputation rise only. New members are accepted with their complete schema. A static `direct:false` child path cannot protect the same property under every future member key.
 
 Submission paths and macro paths have different notation. The member above is addressed by `{{xbgetvar::camp.people["Lv.3"].mood}}`; an array item uses `{{xbgetvar::camp.inventory[0]}}`. Whole-root `{{xbgetvar::camp}}` avoids reconstructing a path for every field. Verify the actual expansion after initialization, including keys with punctuation. Native `{{getvar::name}}` addresses a native variable by name, not a nested path.
 
@@ -37,6 +41,7 @@ Choose the consequence of an invalid value before choosing a constraint:
 | Reject an invalid final number or finite choice | JSON Schema bounds/types/`enum`, or a cross-field `constraint` | The whole submission fails; chat values stay unchanged |
 | Cap a valid change at a fixed or changing limit | A `correct` rule, such as `min(current, maximum)` | The corrected value and its source appear in the result |
 | Calculate a value such as maximum health | A `derive` rule | Inputs change its dependencies; the rule computes the result |
+| Keep a base price, travel duration or other value fixed | A `derive` rule with a `literal` value, as in the camp's maximum stamina | Actions and direct edits cannot change it; the literal is defined only in the rule, not repeated in `initial` |
 | Limit how fast a relationship can change | Decide whether this is advice, a per-action limit or a per-batch rule, then express that choice | An absolute range alone does not limit one turn's change |
 
 Use `enum` for genuinely finite choices such as a fixed quest stage. Locations, nicknames and evolving situations often need free text: an unlisted value would reject the batch. Give such fields a writing convention in `access[].update` and let the panel display unfamiliar values, rather than silently substituting a known location. For hierarchical locations, a panel can locate recognized segments and display an unfamiliar trailing segment literally.
@@ -48,16 +53,32 @@ Sources: `definition/compile.ts`, `engine/data.ts`, `engine/input.ts`, `engine/s
 <a id="alternate-openings"></a>
 ## Alternate greetings and initial state
 
-A card has one `initial` object. Enabling a chat fills missing native roots from it, retains existing roots and settles the result. These values are the chat's starting point; initialization is not recorded separately for each greeting. Selecting a different greeting restores that swipe's recorded settlements, if any; it does not select a different `initial` from the greeting text. Reopening a chat does not initialize it again. Calling `enable()` on an enabled chat fails rather than resetting it.
+Start by listing each greeting's location, equipment, resources, people and active objectives. Put their common starting values in `initial` in `variables/definition.json`; optional `openings` entries contain only each greeting's differences.
 
-Start by listing each greeting's location, equipment, resources, people and active objectives:
+The list follows native greeting swipe order. With a filled main greeting, `openings[0]` pairs with `message/0.md` (the main greeting), `openings[1]` with `message/1.md` (the first alternate), and so on. If the main greeting is empty, SillyTavern omits it, so `openings[0]` pairs with the first greeting actually displayed. Keep these entries together with their greetings when reordering the card. Greeting text is the story, not the selector; the selected swipe's position chooses its values.
 
-- If the openings share those facts, one baseline is sufficient. Each greeting can differ in prose without inventing a second initialization task.
-- If the openings require different facts, the card needs an explicit opening-selection design. One option is a common pre-choice state with a player-selected opening action that sets all opening-dependent fields together. If the native greeting swipe itself must select the state, that needs a card task connecting the selected greeting to its opening action; the definition alone does not provide that connection.
-- A native-swipe task must initialize only before subsequent turns, await the chat being enabled, associate changes with greeting floor `0` and its selected swipe, and recognize an already-recorded selection. It must serialize or cancel stale work when the selection changes, release its event subscription on task cleanup, and leave progressed/reopened chats intact. `apply` appends by default; repeatedly calling it on every mount is not initialization. The [submission reference](<card-side.md#submission>) explains explicit indices and named replacement. Test the complete task in the host before offering it as a working multi-opening card.
+Fields inside objects inherit the common values unless that opening supplies a replacement. Arrays, scalar values and `null` replace the whole value at that field. An empty entry `{}`, an absent entry or no `openings` list uses `initial` unchanged. All openings use the same `schema`, permissions, actions, calculations, triggers and constraints. Their top-level roots must already exist in `initial`.
 
-Changing `initial` while visiting another greeting edits the card's shared definition; it is not a per-greeting switch. Plain native-variable assignment also bypasses settlement history. Neither implements the opening journey above. Retain an existing working opening mechanism when repairing a card. If a requested multi-start design has no implemented and verified connection yet, report that missing part rather than claiming the greetings are ready.
+For example, this fragment belongs inside an existing definition, not a complete rule package:
 
-Acceptance: start each greeting directly in an isolated fresh chat, switch A → B → A before the first player turn, confirm each intended initial state and no duplicated reward, then play a turn and save/reopen. Reopening must preserve progress. Check the panel and both models' actual request data, not just the greeting prose.
+```json
+{
+  "initial": {
+    "hero": { "place": "营地", "coins": 30, "items": ["背包"] }
+  },
+  "openings": [
+    {},
+    { "hero": { "place": "港口", "coins": 80, "items": ["船票"] } }
+  ]
+}
+```
 
-Sources: `runtime/service.ts` (`enable`, `stage`, `restoreSelection`), `runtime/host.ts` (`capture`, `selectionChange`) and `index.ts` (`CHAT_CREATED`, `MESSAGE_SWIPED`), relative to `modules/variables/state3/`.
+The main greeting starts at the camp with 30 coins and a backpack; the first alternate starts at the port with 80 coins and a ticket. An opening that changes only `hero.place` retains the other `hero` fields. A different inventory supplies the complete list of items.
+
+Use `checkDraft(draft, [], {opening: 1})` or `tryDefinition(bundle, [], {opening: 1})` to start a trial at the first alternate. Without `opening`, trials start at the main greeting. An explicit `state` is the trial's starting point; `opening` selects starting values only when `state` is omitted. `checkDraft(draft, [], {checkOnly: true})` checks the main start and every configured opening. Play a route from each intended start by passing each result's state to the next trial.
+
+Opening values are initialized by 3.0; a panel reads the current state on mount. First enabling a card with `openings` requires a chat containing only its greeting. Revisiting a recorded opening restores its progress without repeating rewards. A progressed chat is not initialized again when reopened.
+
+Acceptance: start each greeting directly in an isolated fresh chat, switch A → B → A before the first player turn, confirm the intended starting values and no duplicated reward, then play a turn and save/reopen. Check the panel and both models' actual request data, not just the greeting prose.
+
+Sources: `definition/openings.ts`, `definition/compile.ts`, `runtime/service.ts`, `runtime/api.ts`, `runtime/host.ts` and `index.ts`, relative to `modules/variables/state3/`.

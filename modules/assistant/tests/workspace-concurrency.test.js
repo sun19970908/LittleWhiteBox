@@ -59,7 +59,7 @@ test('old-window UI saves cannot overwrite new content; two connections retain d
     const oldState = await rb.readWorkspace();
     const ui = createWorkspaceStore({ state: oldState, repository: rb });
     assert.equal((await commit(ra, 'Write', { path: fileA, content: 'A1' })).committed, true);
-    oldState.viewerMode = 'original'; oldState.workspaceWidth = 600;
+    oldState.viewerMode = 'diff'; oldState.workspaceWidth = 600;
     assert.equal((await ui.persistWorkspaceUiState()).ok, true);
     assert.equal(content((await ra.readWorkspace()).localSources), 'A1');
     assert.equal((await commit(rb, 'Write', { path: fileB, content: 'B1' })).committed, true);
@@ -175,7 +175,6 @@ test('remote deletion keeps an accessible draft until explicit discard', async t
     assert.equal(manager.selectWorkspaceFile(fileA), true);
     manager.ensureWorkspaceSelection();
     assert.equal(state.selectedFilePath, fileA);
-    assert.equal(state.mobileWorkspacePane, 'viewer');
     assert.equal(state.workspaceDrafts[fileA].content, 'still here');
     assert.equal(content((await ra.readWorkspace()).localSources), undefined);
     await manager.resolveEditorConflict(fileA, 'saved');
@@ -213,6 +212,34 @@ test('model evidence advances only on its observed paths, not unrelated UI refre
     assert.equal((await controller.callHostTool('Write', { path: fileA, content: 'observed update' }, { runId: 'run' })).ok, true);
     await controller.callHostTool('Write', { path: fileA, content: 'UI update' });
     assert.equal(content(state.activeRun.workspaceBaseline), 'observed update');
+});
+
+test('a missing-path read lets the same run recreate a file deleted elsewhere', async t => {
+    const { ra, rb } = await setup(t);
+    const { state, controller } = editorWindow(t, rb);
+    state.activeRun = { id: 'run', toolRequestIds: new Set(), workspaceBaseline: normalizeLocalSources(initial) };
+    await commit(ra, 'Delete', { path: 'local/story' });
+    assert.equal((await controller.callHostTool('Write', { path: fileA, content: 'blind rebuild' }, { runId: 'run' })).error, 'workspace_conflict');
+    assert.equal((await controller.callHostTool('Read', { filePath: fileA, scope: 'local' }, { runId: 'run' })).ok, false);
+    assert.equal((await controller.callHostTool('Write', { path: fileA, content: 'rebuilt' }, { runId: 'run' })).ok, true);
+    assert.equal(content((await ra.readWorkspace()).localSources), 'rebuilt');
+    assert.equal(content((await ra.readWorkspace()).localSources, fileB), undefined);
+});
+
+// A missing child cannot authorize overwriting its unread parent file (lost concurrent edits).
+test('reading a missing child leaves an unseen parent file protected against write and delete', async t => {
+    const { ra, rb } = await setup(t);
+    const { state, controller } = editorWindow(t, rb);
+    state.activeRun = { id: 'run', toolRequestIds: new Set(), workspaceBaseline: normalizeLocalSources(initial) };
+    await commit(ra, 'Write', { path: fileA, content: 'unseen concurrent edit' });
+    const read = await controller.callHostTool('Read', { filePath: `${fileA}/missing.md`, scope: 'local' }, { runId: 'run' });
+    assert.equal(read.ok, false);
+    assert.equal(content(state.activeRun.workspaceBaseline), 'A0');
+    for (const name of ['Write', 'Delete']) {
+        const result = await controller.callHostTool(name, { path: fileA, content: 'overwrite' }, { runId: 'run' });
+        assert.equal(result.error, 'workspace_conflict');
+        assert.equal(content((await ra.readWorkspace()).localSources), 'unseen concurrent edit');
+    }
 });
 
 test('typing while a save is in flight drains the latest draft before close can proceed', async t => {
@@ -553,7 +580,7 @@ test('close waits for a canceled host mutation to leave the queue before removin
 
 test('closing retries a failed UI-only save once using the latest UI state', async t => {
     const { b, rb } = await setup(t);
-    const state = { viewerMode: 'original' };
+    const state = { viewerMode: 'diff' };
     const workspaceStore = createWorkspaceStore({ state, repository: rb });
     const failed = t.mock.method(b.table('workspace'), 'put', async () => { throw new Error('temporary failure'); });
     assert.equal((await workspaceStore.persistWorkspaceUiState()).ok, false);

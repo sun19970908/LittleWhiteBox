@@ -35,6 +35,16 @@ test('host logging starts without a panel, retains the latest 100 and preserves 
     xbLog.enable();
     assert.equal(console.log('ordinary info'), 'log');
     assert.deepEqual(xbLog.getAll(), before);
+    const originalArguments = { operation: 'external' };
+    const startCalls = calls.length;
+    assert.equal(console.info('external detail', originalArguments), 'info');
+    assert.equal(calls.length, startCalls + 1);
+    assert.equal(calls.at(-1)[2], originalArguments);
+    const quietStart = calls.length;
+    console.warn('[NovelDraw] quiet warning');
+    console.error('[NovelDraw] quiet error', error);
+    assert.equal(calls.length, quietStart);
+    assert.deepEqual(xbLog.getAll().slice(-2).map(log => log.module), ['novelDraw', 'novelDraw']);
     for (let index = 0; index < 350; index++) xbLog.info('scheduledTasks', String(index));
     assert.deepEqual(xbLog.getAll().map(log => log.message), Array.from({ length: 100 }, (_, index) => String(index + 250)));
     const lastId = xbLog.getAll().at(-1).id;

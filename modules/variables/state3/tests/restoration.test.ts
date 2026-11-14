@@ -13,7 +13,7 @@ import { validateState } from '../engine/validation.js';
 test('R1: restored conflicts are read-only diagnostics, not rejected restores or a submission lock', async () => {
     const host = fixture(), bundle = equipmentExample();
     bundle.definition = { ...bundle.definition, schema: {}, initial: { key: false, door: false, reward: 0 },
-        access: [{ path: ['key'], write: ['direct'], description: '钥匙' }, { path: ['door'], write: ['direct'], description: '门' }],
+        access: [{ path: ['key'], direct: true, description: '钥匙' }, { path: ['door'], direct: true, description: '门' }],
         rules: [], actions: [], triggers: [], views: {}, constraints: [{ id: 'door-key', description: '开门必须持有钥匙',
             test: { op: 'or', args: [{ op: 'not', args: [{ get: ['door'] }] }, { get: ['key'] }] } }] };
     accepted(await host.service.enable(bundle));
@@ -71,7 +71,7 @@ test('R5: restoration skips unavailable before reads, but still checks current s
     for (const useFunction of [false, true]) {
         const host = fixture(), bundle = equipmentExample();
         bundle.definition = { ...bundle.definition, schema: {}, initial: { flag: false, coins: 100, spent: 0 },
-            access: ['flag', 'coins', 'spent'].map(key => ({ path: [key], write: ['direct'], description: key })),
+            access: ['flag', 'coins', 'spent'].map(key => ({ path: [key], direct: true, description: key })),
             rules: [], actions: [], triggers: [], views: {}, functions: {}, constraints: [{ id: 'spent', description: '本次花费与金币减少量一致',
                 test: { op: 'eq', args: [{ get: ['spent'] }, { op: 'subtract', args: [{ before: ['coins'] }, { get: ['coins'] }] }] } },
             { id: 'balance', description: '金币不能为负', test: { op: 'gte', args: [{ get: ['coins'] }, { literal: 0 }] } }] };

@@ -255,9 +255,36 @@ function parseKnownLooseArgumentsObject(source = '', toolName = '') {
     return null;
 }
 
+export function hasTrailingArgumentData(source) {
+    if (source[0] !== '{') return false;
+    let depth = 0;
+    let quoted = false;
+    let escaped = false;
+    for (let index = 0; index < source.length; index += 1) {
+        const char = source[index];
+        if (quoted) {
+            if (escaped) escaped = false;
+            else if (char === '\\') escaped = true;
+            else if (char === '"') quoted = false;
+            continue;
+        }
+        if (char === '"') quoted = true;
+        else if (char === '{' || char === '[') depth += 1;
+        else if (char === '}' || char === ']') {
+            depth -= 1;
+            if (depth !== 0) continue;
+            // A complete argument object followed by more data is not a loose
+            // string to repair. Retain it verbatim for JSON validation instead.
+            try { JSON.parse(source.slice(0, index + 1)); } catch { return false; }
+            return source.slice(index + 1).trim().length > 0;
+        }
+    }
+    return false;
+}
+
 function parseLooseArgumentsFallback(source, toolName) {
     // Guessing generic keys can mistake nested text for fields and discard the real payload.
-    if (!Object.hasOwn(LOOSE_ARGUMENT_KEYS_BY_TOOL, toolName)) return null;
+    if (!Object.hasOwn(LOOSE_ARGUMENT_KEYS_BY_TOOL, toolName) || hasTrailingArgumentData(source)) return null;
     const knownParsed = parseKnownLooseArgumentsObject(source, toolName);
     if (knownParsed) return knownParsed;
     const keys = LOOSE_ARGUMENT_KEYS_BY_TOOL[toolName];

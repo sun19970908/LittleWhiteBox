@@ -638,6 +638,12 @@ export function createAgentSettingsPanel(deps = {}) {
         }
     }
 
+    function syncBaseUrlHint(root, provider, scope = 'main') {
+        const prefix = scope === 'delegate' ? '#xb-assistant-delegate' : '#xb-assistant';
+        const hint = root.querySelector(`${prefix}-base-url-hint`);
+        if (hint) hint.hidden = provider !== 'google' && provider !== VERTEX_PROVIDER;
+    }
+
     function syncConfigToForm(root) {
         if (!state.config) return;
         syncConfigPage(root);
@@ -688,6 +694,7 @@ export function createAgentSettingsPanel(deps = {}) {
         if (modelInput) modelInput.value = draft.model || '';
         if (apiKeyInput) apiKeyInput.value = draft.apiKey || '';
         syncVertexSettings(root, provider, draft.vertex);
+        syncBaseUrlHint(root, provider);
         syncModelListAuthControls(root, provider, draft.modelListAuth);
         if (maxTokensInput) maxTokensInput.value = String(normalizeMaxTokens(draft.maxTokens));
         syncWebSettingsForm(root, draft);
@@ -714,6 +721,7 @@ export function createAgentSettingsPanel(deps = {}) {
         if (delegateModelInput) delegateModelInput.value = draft.delegateModel || '';
         if (delegateApiKeyInput) delegateApiKeyInput.value = draft.delegateApiKey || '';
         syncVertexSettings(root, delegateProvider, draft.delegateVertex, 'delegate');
+        syncBaseUrlHint(root, delegateProvider, 'delegate');
         syncModelListAuthControls(root, delegateProvider, draft.delegateModelListAuth, 'delegate');
         if (delegateMaxTokensInput) delegateMaxTokensInput.value = String(normalizeMaxTokens(draft.delegateMaxTokens));
         if (delegateToolModeWrap) {

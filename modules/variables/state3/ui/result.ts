@@ -1,6 +1,6 @@
 import type { Result, Definition, Diagnostic, Source, Change } from '../types.js';
 import type { ErrorObject } from 'ajv';
-import { COPY, errorText, parameterIssueText, restorationLabel, restorationText } from './copy.js';
+import { COPY, errorText, playerErrorText, parameterIssueText, restorationLabel, restorationText } from './copy.js';
 import { overlaps } from '../engine/data.js';
 import { parameterIssues, fieldName } from '../definition/schema-fields.js';
 import { changeTree, type ChangeTree } from './change-tree.js';
@@ -15,23 +15,23 @@ export function resultLabel(result: Result): string {
     if (!result.ok) {return COPY.failed;}
     if (!result.committed) {return COPY.previewLabel;}
     if (result.saved === false) {return COPY.phases.unsaved;}
-    if (result.saved === undefined && result.receipt?.beforeUpdate) {return COPY.beforeOutcomes[result.receipt.beforeUpdate.outcome];}
-    if (result.restoration?.length) {return `${restorationLabel(result)} · ${COPY.saved}`;}
-    if (result.receipt?.beforeUpdate) {return `${COPY.beforeOutcomes[result.receipt.beforeUpdate.outcome]} · ${COPY.saved}`;}
-    return result.restoration ? `${restorationLabel(result)} · ${COPY.saved}` : COPY.saved;
+    const applied = result.actions.length ? COPY.actionsApplied(result.actions.length) : result.changes.length ? COPY.valuesOnly : COPY.noActions;
+    const outcome = result.receipt?.beforeUpdate?.outcome;
+    const label = outcome && outcome !== 'applied' ? COPY.beforeOutcomes[outcome] : applied;
+    if (outcome === 'failed' || result.diagnostics.some(issue => issue.code === 'extension-after-failed') || result.saved === undefined) {return label;}
+    return result.restoration ? restorationLabel(result) : label;
 }
-export function showDiagnostics(root: HTMLElement, diagnostics: Diagnostic[], definition?: Definition) {
+export function showDiagnostics(root: HTMLElement, diagnostics: Diagnostic[], definition?: Definition, author = false) {
     for (const error of diagnostics) {
         const rule = [...(definition?.rules || []), ...(definition?.constraints || []), ...(definition?.triggers || [])].find(item => item.id === error.rule);
-        root.append(element('p', [errorText(error), !error.condition && !error.parameters ? rule?.description : undefined].filter(Boolean).join(' ')));
+        root.append(element('p', [(author ? errorText : playerErrorText)(error, definition), !error.condition && !error.parameters ? rule?.description : undefined].filter(Boolean).join(' ')));
         if (Array.isArray(error.errors) && !error.parameters) {
             const fields = parameterIssues(error.code === 'state-schema' && definition ? definition.schema : {}, error.errors as ErrorObject[]);
             for (const field of fields) {root.append(element('p', parameterIssueText(field)));}
         }
-        if (error.errors || error.response) {
+        if (author) {
             const details = element('details'); details.append(element('summary', COPY.details));
-            if (error.errors) {details.append(element('pre', JSON.stringify(error.errors, null, 2)));}
-            if (typeof error.response === 'string') {details.append(element('pre', error.response));}
+            details.append(element('pre', JSON.stringify(error, null, 2)));
             root.append(details);
         }
     }
@@ -39,21 +39,21 @@ export function showDiagnostics(root: HTMLElement, diagnostics: Diagnostic[], de
 /** Rule check: whether the draft works, and the opening state it produces. */
 export function showCheck(root: HTMLElement, result: Result) {
     root.replaceChildren();
-    if (!result.ok) { root.append(element('p', COPY.checkFailed, 'lwb-state3-status')); showDiagnostics(root, result.diagnostics); return; }
+    if (!result.ok) { root.append(element('p', COPY.checkFailed, 'lwb-state3-status')); showDiagnostics(root, result.diagnostics, undefined, true); return; }
     root.append(element('p', COPY.checkPassed, 'lwb-state3-status'), element('pre', JSON.stringify(result.state, null, 2)));
 }
-export function showResult(root: HTMLElement, result: Result, definition?: Definition) {
+export function showResult(root: HTMLElement, result: Result, definition?: Definition, author = false) {
     root.replaceChildren();
     if (!result.ok) {
         root.append(element('p', COPY.failed));
-        showDiagnostics(root, result.diagnostics || [], definition);
+        showDiagnostics(root, result.diagnostics || [], definition, author);
         return;
     }
     const restorationWarning = Boolean(result.restoration?.length);
     if (!result.committed) {
         if (result.changes.length) {root.append(element('p', COPY.previewed, 'lwb-state3-status'));}
     } else if (!restorationWarning || result.saved === false) {
-        const status = element('p', result.saved === false ? COPY.unconfirmed : result.saved === undefined ? COPY.hostSave : resultLabel(result), 'lwb-state3-status');
+        const status = element('p', result.saved === false ? COPY.unconfirmed : resultLabel(result), 'lwb-state3-status');
         status.setAttribute('role', 'status'); root.append(status);
     }
     if (result.restoration?.length) {
@@ -64,8 +64,8 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
         if (result.restoration.some(issue => ['constraint', 'state-schema'].includes(issue.code))) {warning.append(element('p', COPY.conflictHelp));}
         root.append(warning);
     }
-    for (const error of result.diagnostics) {root.append(element('p', errorText(error)));}
-    if (result.receipt?.beforeUpdate?.diagnostics.length) {showDiagnostics(root, result.receipt.beforeUpdate.diagnostics, definition);}
+    showDiagnostics(root, result.diagnostics, definition, author);
+    if (result.receipt?.beforeUpdate?.diagnostics.length) {showDiagnostics(root, result.receipt.beforeUpdate.diagnostics, definition, author);}
     const shown = result.changes;
     const shownReasons = new Set<number>();
     const sourceInfo = (source?: Source) => {
@@ -138,5 +138,7 @@ export function showResult(root: HTMLElement, result: Result, definition?: Defin
         for (const [key, value] of extras) {fields.append(element('dt', key), element('dd', typeof value === 'string' ? value : JSON.stringify(value, null, 2)));}
         section.append(fields); root.append(section);
     }
-    if (!shown.length) {root.append(element('p', COPY.empty));}
+    if (!shown.length && (!result.committed || result.actions.length || result.saved === false || result.restoration)) {
+        root.append(element('p', COPY.empty));
+    }
 }

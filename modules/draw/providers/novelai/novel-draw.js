@@ -1,4 +1,5 @@
 import { createVibeEncodingService } from './vibe-encoding.js';
+import { projectGalleryPrompt } from '../../shared/gallery-prompt.js';
 import { createIdentifier as createVibeCacheKey } from '../../../../shared/common/identifier.js';
 import { getVibeModelKey, clampVibeInfoExtracted, vibeEncodingKey, normalizeVibeEncodings } from './vibe.js';
 import novelBackendTransport from './backend-transport-contract.cjs';
@@ -230,6 +231,7 @@ import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, I
 import { requestNovelImageWithRetry } from './novel-request-retry.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
+import { toggleImageCardControls } from '../../shared/image-card-controls.js';
 import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { getCharacterTagEditGroups, persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
@@ -2538,6 +2540,9 @@ async function handleDelegatedClick(e) {
     e.stopImmediatePropagation();
 
     switch (action) {
+        case 'toggle-controls':
+            toggleImageCardControls(container);
+            break;
         case 'toggle-menu': {
             const wrap = container.querySelector('.xb-nd-menu-wrap');
             if (!wrap) break;
@@ -2548,16 +2553,6 @@ async function handleDelegatedClick(e) {
             break;
         }
         case 'open-gallery':
-            if (actionEl.tagName === 'IMG' && document.body.classList.contains('xb-nd-tap-controls')) {
-                // 觸控裝置：點圖只切換控制列（張數列＋「⋮」），不開彈窗放大。
-                const willShow = !container.classList.contains('controls-visible');
-                container.classList.toggle('controls-visible', willShow);
-                if (!willShow) {
-                    document.querySelectorAll('.xb-nd-menu-wrap.open').forEach(w => w.classList.remove('open'));
-                }
-                break;
-            }
-            // 菜单放大与鼠标点图共用画廊入口；触屏点图仅切换控制列。
             container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open');
             await handleImageClick(container);
             break;
@@ -2616,11 +2611,6 @@ async function handleDelegatedClick(e) {
 function setupEventDelegation() {
     if (window._xbNovelEventsBound) return;
     window._xbNovelEventsBound = true;
-
-    // 僅觸控裝置啟用「點圖才顯示控制列」；滑鼠端維持原樣（點圖即開畫廊放大）。
-    if (window.matchMedia?.('(hover: none), (pointer: coarse)')?.matches) {
-        document.body.classList.add('xb-nd-tap-controls');
-    }
 
     document.addEventListener('click', handleDelegatedClickEvent, { capture: true });
     document.addEventListener('touchstart', handleTouchStart, { passive: true });
@@ -4907,6 +4897,15 @@ async function handleFrameMessage(event) {
             break;
         }
 
+        case 'LOAD_GALLERY_PROMPT': {
+            const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
+            let prompt = null;
+            try { prompt = projectGalleryPrompt(await getPreview(data.imgId)); }
+            catch (error) { console.error('[NovelDraw] Gallery prompt read failed:', error); }
+            if (iframe?.isConnected) postToIframe(iframe, { type: 'GALLERY_PROMPT_LOADED', requestId: data.requestId, prompt }, 'LittleWhiteBox-NovelDraw');
+            break;
+        }
+
         case 'LOAD_GALLERY_IMAGE': {
             const iframe = document.getElementById('xiaobaix-novel-draw-iframe');
             let image = null;
@@ -5256,8 +5255,6 @@ export async function cleanupNovelDraw() {
     document.getElementById('xiaobaix-novel-draw-overlay')?.remove();
     delete window.xiaobaixNovelDraw;
     delete window._xbNovelEventsBound;
-    // 触控样式只属于 NovelAI 生图；不清掉会连带隐藏其他供应商的图片操作按钮
-    document.body.classList.remove('xb-nd-tap-controls');
 
     // 动态导入并清理
     try {

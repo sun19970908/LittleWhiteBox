@@ -4,7 +4,6 @@ import {
     resolveResultToolCalls,
 } from './protocol.js';
 
-const DEFAULT_MAX_DELEGATE_ROUNDS = 16;
 const RESULT_SUMMARY_LIMIT = 420;
 const TRACE_SUMMARY_LIMIT = 240;
 const MAX_TOOL_TRACE_ITEMS = 24;
@@ -168,19 +167,6 @@ function buildUnavailableToolResult(toolName = '') {
     };
 }
 
-function buildRoundLimitResult(rounds = 0, toolCallCount = 0, toolTrace = []) {
-    return {
-        ok: false,
-        status: 'round_limit',
-        result: '',
-        summary: '子任务达到工具轮次上限，已停止。',
-        rounds,
-        toolCallCount,
-        toolTrace: toolTrace.slice(-MAX_TOOL_TRACE_ITEMS),
-        error: 'delegate_round_limit',
-    };
-}
-
 export function createDelegateRunner(deps = {}) {
     const {
         createAdapter,
@@ -193,7 +179,6 @@ export function createDelegateRunner(deps = {}) {
         isAbortError,
         TOOL_NAMES,
     } = deps;
-    const maxRounds = Math.max(1, Number(deps.maxRounds) || DEFAULT_MAX_DELEGATE_ROUNDS);
 
     async function runDelegate(args = {}, parentRun = {}) {
         const normalizedArgs = normalizeDelegateArgs(args);
@@ -233,7 +218,8 @@ export function createDelegateRunner(deps = {}) {
             summary: '审稿分身已启动。',
         });
 
-        while (rounds < maxRounds) {
+        // A delegate runs until it answers or the parent run is stopped.
+        while (true) {
             if (parentRun?.controller?.signal?.aborted) {
                 throw new Error('assistant_aborted');
             }
@@ -242,7 +228,6 @@ export function createDelegateRunner(deps = {}) {
             emitDelegateProgress(parentRun, {
                 type: 'round_start',
                 round: rounds,
-                maxRounds,
                 summary: `第 ${rounds} 轮思考中。`,
             });
             const tools = filterDelegateToolDefinitions(resolveToolDefinitions({ messages }), TOOL_NAMES);
@@ -406,8 +391,6 @@ export function createDelegateRunner(deps = {}) {
                 error: '',
             };
         }
-
-        return buildRoundLimitResult(rounds, toolCallCount, toolTrace);
     }
 
     return {

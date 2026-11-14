@@ -145,6 +145,19 @@ test('gallery host handles JPEG persistence, partial deletion, ZIP export and ca
     assert.equal(Object.hasOwn(failedRefresh, 'cacheStats'), false);
     host.overview = overview;
 
+    // Prompt reads carry only the chosen saved inputs, never presets or payload.
+    host.read = async id => ({ imgId: id, positive: 'original scene', base64: 'large image', apiKey: 'private' });
+    await send({ type: 'LOAD_GALLERY_PROMPT', imgId: 'original', requestId: 'prompt-ok' });
+    const promptReceipt = host.messages.find(event => event.requestId === 'prompt-ok');
+    assert.equal(promptReceipt.type, 'GALLERY_PROMPT_LOADED');
+    assert.equal(promptReceipt.prompt.imgId, 'original');
+    assert.equal(promptReceipt.prompt.positive, 'original scene');
+    assert.equal(Object.hasOwn(promptReceipt.prompt, 'base64'), false);
+    assert.equal(Object.hasOwn(promptReceipt.prompt, 'apiKey'), false);
+    host.read = async () => { throw new Error('read failed'); };
+    await send({ type: 'LOAD_GALLERY_PROMPT', imgId: 'original', requestId: 'prompt-failed' });
+    assert.equal(host.messages.find(event => event.requestId === 'prompt-failed').prompt, null);
+
     const removed = [];
     host.remove = async id => { if (id === 'blocked') throw new Error('write failed'); removed.push(id); };
     await send({ type: 'BATCH_DELETE', ids: ['one', 'blocked', 'one'], requestId: 'delete-1' });

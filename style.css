@@ -271,6 +271,11 @@ body.immersive-mode .flex-container.flex1.alignitemscenter {
 }
 
 .message-preview-content-box {
+    --mp-scrollbar-thumb: #9ca3af;
+    --mp-scrollbar-track: #202020;
+    scrollbar-width: auto;
+    scrollbar-color: var(--mp-scrollbar-thumb) var(--mp-scrollbar-track);
+    scrollbar-gutter: stable;
     font-family: 'Courier New', 'Monaco', 'Menlo', monospace;
     white-space: pre-wrap;
     max-height: 82vh;
@@ -350,24 +355,43 @@ body.immersive-mode .flex-container.flex1.alignitemscenter {
   white-space: nowrap;
 }
 
-.message-preview-content-box:hover::-webkit-scrollbar-thumb,
+.message-preview-content-box:hover {
+    --mp-scrollbar-thumb: #d1d5db;
+}
+
+.message-preview-content-box::-webkit-scrollbar {
+    width: 12px;
+    height: 12px;
+}
+
+.message-preview-content-box::-webkit-scrollbar-track {
+    background: var(--mp-scrollbar-track);
+    border-radius: 6px;
+}
+
+.message-preview-content-box::-webkit-scrollbar-thumb {
+    background: var(--mp-scrollbar-thumb);
+    border: 2px solid transparent;
+    background-clip: content-box;
+    border-radius: 6px;
+    min-height: 40px;
+    min-width: 40px;
+}
+
 .xiaobai_template_editor:hover::-webkit-scrollbar-thumb {
     background: var(--SmartThemeAccent);
 }
 
 /* ==================== 滚动条样式 ==================== */
-.message-preview-content-box::-webkit-scrollbar,
 .xiaobai_template_editor::-webkit-scrollbar {
     width: 5px;
 }
 
-.message-preview-content-box::-webkit-scrollbar-track,
 .xiaobai_template_editor::-webkit-scrollbar-track {
     background: var(--SmartThemeBlurTintColor);
     border-radius: 3px;
 }
 
-.message-preview-content-box::-webkit-scrollbar-thumb,
 .xiaobai_template_editor::-webkit-scrollbar-thumb {
     background: var(--SmartThemeBorderColor);
     border-radius: 3px;

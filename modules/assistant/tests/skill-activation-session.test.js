@@ -26,7 +26,7 @@ async function harness() {
     compaction = createHistoryCompactionController({
         state, render() {}, showToast() {}, persistSession: store.persistSession,
         getActiveProviderConfig: () => ({}), formatToolResultDisplay: () => ({}), buildTextWithAttachmentSummary: text => text,
-        trimForSummary: text => text, SUMMARY_SYSTEM_PROMPT: '', SUMMARY_TRIGGER_TOKENS: 100,
+        trimForSummary: text => text, SUMMARY_SYSTEM_PROMPT: '', compactionThreshold: () => 100, requestInputLimit: () => 100000,
         buildContextMeterLabel: () => '', toProviderMessages: messages => messages,
         updateContextStats() { state.contextStats.usedTokens = state.messages.length > 3 ? 200 : 1; },
     });
@@ -34,7 +34,7 @@ async function harness() {
     return { state, store, compaction };
 }
 
-for (const fallback of [false, true]) test(`confirmed skill receipts survive compaction and IndexedDB reopening (${fallback ? 'fallback' : 'model'} summary)`, async () => {
+for (const failed of [false, true]) test(`confirmed skill receipts survive ${failed ? 'failed' : 'successful'} compaction and IndexedDB reopening`, async () => {
     const { state, store, compaction } = await harness();
     state.messages = [
         { role: 'user', content: 'Earlier task.' }, ...receipt('builtin-card-files', 'archived'),
@@ -42,20 +42,32 @@ for (const fallback of [false, true]) test(`confirmed skill receipts survive com
         { role: 'user', content: 'Current task.' }, ...receipt('builtin-live-page', 'active'),
     ];
     await store.persistSession();
-    await compaction.ensureContextBudget({ async chat() {
-        if (fallback) throw new Error('fixture summary outage');
+    const original = structuredClone(state.messages);
+    const compact = compaction.ensureContextBudget({ async chat() {
+        if (failed) throw new Error('fixture summary outage');
         return { text: 'A prose summary mentions builtin-planning but contains no skill receipt.' };
     } }, new AbortController().signal);
-    assert.equal(state.messages.length, 3);
-    assert.deepEqual(state.archivedSkillIds, ['builtin-card-files']);
+    if (failed) await assert.rejects(compact, { code: 'assistant_summary_failed' });
+    else await compact;
+    const archived = failed ? [] : ['builtin-card-files'];
+    if (failed) assert.deepEqual(state.messages, original);
+    else assert.equal(state.messages.length, 3);
+    assert.deepEqual(state.archivedSkillIds, archived);
     assert.deepEqual(loadedSkillIds(state.messages, state.archivedSkillIds), ['builtin-card-files', 'builtin-live-page']);
     await store.persistSession();
     const stored = await sessionsTable.get(state.assistantSessionId);
-    assert.deepEqual(stored.archivedSkillIds, ['builtin-card-files']);
+    assert.deepEqual(stored.archivedSkillIds, archived);
     state.messages = [];
     state.archivedSkillIds = [];
     await store.restoreSession();
-    assert.deepEqual(state.archivedSkillIds, ['builtin-card-files']);
+    assert.deepEqual(state.archivedSkillIds, archived);
+    if (failed) {
+        assert.equal(state.messages.length, original.length);
+        original.forEach((message, index) => {
+            for (const key of Object.keys(message)) assert.deepEqual(state.messages[index][key], message[key]);
+        });
+        assert.equal(state.historySummary, '');
+    }
     assert.deepEqual(loadedSkillIds(state.messages, state.archivedSkillIds), ['builtin-card-files', 'builtin-live-page']);
     assert.equal(loadedSkillIds(state.messages, state.archivedSkillIds).includes('builtin-planning'), false);
     const oldSessionId = state.assistantSessionId;

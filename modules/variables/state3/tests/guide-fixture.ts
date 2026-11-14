@@ -1,9 +1,11 @@
 import { createSettlementService } from '../runtime/service.js';
+import { isOpeningReceipt } from '../runtime/history.js';
+import type { ExtensionHost } from '../extensions/runtime.js';
 import type { Bundle, History, HostAdapter, Json, Result, SwipeRecord } from '../types.js';
 
 // Isolated host for the published guide panel in DOM and browser acceptance.
 // Settlement and restoration use the real service; only storage/host APIs are simulated.
-export async function createGuideFixture(bundle: Bundle) {
+export async function createGuideFixture(bundle: Bundle, extensionHost?: ExtensionHost) {
     let state: Json = {}, history: History | undefined, records: SwipeRecord[] = [{ entries: [] }];
     let lastResult: Result | undefined, save: (() => Promise<void>) | undefined;
     let persisted: { state: Json; history: History; records: SwipeRecord[] } | undefined;
@@ -12,7 +14,9 @@ export async function createGuideFixture(bundle: Bundle) {
     const adapter: HostAdapter = {
         bundle: () => bundle,
         capture(index = records.length - 1) {
-            return structuredClone({ state, history, records, lastReceiptIndex: records.reduce((last, record, floor) => record.entries.length ? floor : last, -1), index, target: { floor: index, swipeId: 0 } });
+            return structuredClone({ state, history, records, opening: index === 0 && records.length === 1,
+                lastReceiptIndex: records.reduce((last, record, floor) => record.entries.some(entry => !isOpeningReceipt(entry)) ? floor : last, -1),
+                index, target: { floor: index, swipeId: 0 } });
         },
         isCurrent: snapshot => snapshot.history?.revision === history?.revision,
         assertMutable(snapshot) { if (snapshot.index !== records.length - 1) {throw { code: 'target-missing' };} },
@@ -28,7 +32,7 @@ export async function createGuideFixture(bundle: Bundle) {
             return save;
         },
     };
-    const service = createSettlementService(adapter);
+    const service = createSettlementService(adapter, extensionHost);
     const retain = async (work: Promise<Result>) => { lastResult = await work; return lastResult; };
     await retain(service.enable());
     const ctx = {

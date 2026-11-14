@@ -3,13 +3,45 @@ import assert from 'node:assert/strict';
 import { parseHTML } from 'linkedom';
 import { createResultDialog } from '../ui/result-dialog.js';
 import { COPY } from '../ui/copy.js';
+import { EXTENSION_COPY as EC } from '../extensions/copy.js';
 import type { State3Api } from '../runtime/api.js';
 import type { Success } from '../types.js';
+import { OPENING_SOURCE } from '../runtime/history.js';
 
 const result = (value: number, saved = true): Success => ({ ok: true, committed: true, saved,
     state: { coins: value }, changes: [{ path: ['coins'], before: 10, after: value, removed: false }],
     actions: [], provenance: [], diagnostics: [], receipt: { id: String(value), revision: 1, source: 'model', delta: null, actions: [] } });
 const ready = { busy: false, phase: 'ready' } as ReturnType<State3Api['updateStatus']>;
+
+test('opening-only results offer no gameplay undo, while subsequent gameplay can be undone', async t => {
+    const { document } = parseHTML('<html><body></body></html>');
+    const previous = globalThis.document; globalThis.document = document; t.after(() => { globalThis.document = previous; });
+    const view = createResultDialog({} as State3Api), dialog = document.querySelector('dialog')!;
+    dialog.showModal = () => { dialog.open = true; }; t.after(() => view.dispose());
+    const start = result(15); start.receipt!.source = OPENING_SOURCE;
+    view.sync([{ index: 0, stage: 'after', result: start }], 0, ready); view.open(0);
+    assert.equal(dialog.querySelectorAll('main button').length, 0);
+    view.sync([{ index: 0, stage: 'after', result: result(18) }], 0, ready);
+    assert.equal(dialog.querySelectorAll('main button').length, 1);
+});
+
+test('player failures cannot replay host code; author retesting preserves the original result', async t => {
+    const {document}=parseHTML('<html><body></body></html>');
+    const previous=globalThis.document; globalThis.document=document; t.after(()=>{globalThis.document=previous;});
+    const settled=result(12); settled.diagnostics=[{code:'extension-after-failed',path:'variables/scripts/committed.js',message:'secret technical error'}];
+    settled.extensions={calls:[{kind:'committed',name:'committed',path:'variables/scripts/committed.js',input:{},error:'secret technical error'}]};
+    let runs=0;
+    const api={testExtension:async()=>{runs++;return {ok:true,output:null,extensions:{calls:[]}};}} as unknown as State3Api;
+    const view=createResultDialog(api), dialog=document.querySelector('dialog')!; dialog.showModal=()=>{dialog.open=true;}; t.after(()=>view.dispose());
+    view.sync([{index:0,stage:'after',result:settled}],0,ready); view.open(0);
+    assert.equal(dialog.querySelector('pre'),null);
+    assert.equal([...dialog.querySelectorAll('button')].some(button=>([EC.retest,EC.open,EC.repair] as string[]).includes(button.textContent!)),false);
+    view.showAuthor(settled,async()=>({root:'local/card/',avatar:'test.png',name:'Test',files:[]}));
+    const original=dialog.querySelector('main>section')!;
+    [...dialog.querySelectorAll('button')].find(button=>button.textContent===EC.retest)!.click();
+    await new Promise(resolve=>setTimeout(resolve,0));
+    assert.equal(runs,1); assert.equal(original.isConnected,true);
+});
 
 // U1: persistence retry never repeats settlement; old floors remain read-only,
 // and closing the viewer never cancels an update (duplicate increments / invisible data loss).

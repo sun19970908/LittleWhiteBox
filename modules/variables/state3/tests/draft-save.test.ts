@@ -19,7 +19,7 @@ test('C2: identical concurrent draft saves succeed, divergent edits remain prote
         buildWorkspacePreconditions: () => [], INTERNAL_WORKSPACE_TOOL_NAMES: { BATCH_WRITE_FILES: 'BatchWriteFiles' },
         reject: (code: string) => { throw new Error(code); },
     });
-    const draft = { avatar: 'fixture.png', files: [{ path, content: 'before' }] }, updates = [{ path, content }];
+    const draft = { root: 'local/cards/fixture.png/', avatar: 'fixture.png', files: [{ path, content: 'before' }] }, updates = [{ path, content }];
     await saveDraft(draft, updates); assert.equal(writes, 1);
     content = 'someone else edited this';
     await assert.rejects(saveDraft(draft, updates), { message: 'draft-conflict' }); assert.equal(writes, 1);

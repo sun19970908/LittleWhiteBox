@@ -6,7 +6,7 @@ import { adoptChatImageMessage, releaseChatImageAdmission, withdrawEditedImagePl
 import { createChatImageSession } from './chat-image-session.js';
 import { buildPendingImageHtml, ensureDrawImageStyles, isMessageBeingEdited } from './draw-common.js';
 import { DRAW_SLOT_COPY } from './image-record.js';
-import { getSharedDrawSettings } from './draw-settings.js';
+import { getSharedDrawSettings, getSharedMessageFilterRules } from './draw-settings.js';
 import { subscribeChatImagePlacement } from './chat-image-placement.js';
 import { withDrawActionFeedback } from './draw-action-feedback.js';
 import { drawMessageViewport } from './draw-message-viewport.js';
@@ -89,13 +89,18 @@ function currentMessageId(lease) {
     return value === null || value === undefined ? lease.messageId : Number(value);
 }
 
+function findMessageImageTags(content, source, nodes) {
+    return findRenderedChatImageTags(content, parseChatImageTags(source), nodes,
+        parseChatImageTags(source, getSharedMessageFilterRules()));
+}
+
 function enhance(lease) {
     lease.messageId = currentMessageId(lease);
     const ctx = getContext(), message = ctx.chat?.[lease.messageId];
     if (!message || isMessageBeingEdited(lease.messageId)) return;
     for (const node of lease.nodes.keys()) if (!lease.content.contains(node)) lease.nodes.delete(node);
     const source = message.mes, swipeIndex = message.swipe_id ?? 0;
-    const { matched } = findRenderedChatImageTags(lease.content, parseChatImageTags(source), lease.nodes);
+    const { matched } = findMessageImageTags(lease.content, source, lease.nodes);
     const retained = new Set(matched.map(item => item.node));
     // Only a genuinely invalidated/ambiguous projection returns to source text.
     // Ordinary refreshes and state transitions keep the card and its controls.
@@ -133,7 +138,7 @@ function adoptPlacedCards(change) {
         const messageId = currentMessageId(lease);
         if (!lease.content.isConnected || ctx.chat?.[messageId] !== change.message
             || (change.message.swipe_id ?? 0) !== change.swipeIndex || isMessageBeingEdited(messageId)) return;
-        const { matched } = findRenderedChatImageTags(lease.content, parseChatImageTags(change.before), lease.nodes);
+        const { matched } = findMessageImageTags(lease.content, change.before, lease.nodes);
         for (const match of matched.reverse()) {
             const edit = change.edits.find(item => item.start === match.candidate.start && item.end === match.candidate.end);
             if (!edit?.slotId || !edit.content || edit.discarded) continue;

@@ -14,6 +14,7 @@ import {
     getStateAtoms,
     getStateVectorDescriptors,
     getL0Index,
+    deleteStateVectorsByIds,
 } from '../storage/state-store.js';
 import { L0_FLOOR_MAX_ATTEMPTS, summarizeL0Floors } from './l0-floor-status.js';
 import { trackVectorActivity } from '../runtime/vector-activity.js';
@@ -30,6 +31,7 @@ import {
 } from '../llm/embedding-failure.js';
 import { getVectorConfig } from '../../data/config.js';
 import { getEngineFingerprint } from '../utils/embedder.js';
+import { orphanVectorIds } from '../utils/vector-source.js';
 import { filterText } from '../utils/text-filter.js';
 import { getMeta } from '../storage/chunk-store.js';
 import { createAbortError } from '../../../../shared/common/abort-utils.js';
@@ -377,12 +379,14 @@ async function collectL0VectorBuildState(chatId, options = {}) {
         total: atoms.length,
         fingerprint,
         missingAtoms,
+        obsoleteAtomIds: orphanVectorIds(stateVectors, new Set(atoms.map(atom => atom.atomId)), 'atomId'),
     };
 }
 
 export async function getL0VectorBuildStatus(chatId, options = {}) {
     const status = { ...await collectL0VectorBuildState(chatId, options) };
     delete status.missingAtoms;
+    delete status.obsoleteAtomIds;
     return status;
 }
 
@@ -444,7 +448,7 @@ async function vectorizeMissingStateAtomsInner(chatId, onProgress, options, acti
 
     const atoms = status.missingAtoms;
     activity.update({ total: atoms.length, state: 'embedding' });
-    if (!atoms.length) {
+    if (!atoms.length && !status.obsoleteAtomIds.length) {
         return {
             success: true,
             status: 'up_to_date',
@@ -530,6 +534,8 @@ async function vectorizeMissingStateAtomsInner(chatId, onProgress, options, acti
             assertMemoryWritable(chatId);
             const currentAtoms = new Map(getStateAtoms().map(atom => [atom.atomId, atom]));
             if (isCancelled() || atoms.some(atom => !sameMemory(atom, currentAtoms.get(atom.atomId)))) return false;
+            await deleteStateVectorsByIds(chatId, status.obsoleteAtomIds.filter(id => !currentAtoms.has(id)));
+            if (isCancelled()) return false;
             await saveStateVectors(chatId, allItems, fingerprint);
             return true;
         });

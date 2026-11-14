@@ -140,6 +140,7 @@ export const TOOL_DEFINITIONS = [
             description: [
                 'Read the current contents of a text file as numbered lines, or list a directory.',
                 'Returns up to 2000 lines or entries with nextOffset for the following range; nextOffset is null at the end.',
+                'All results in a tool batch share the next model request\'s context budget. Read needed sections with offset and limit; page through large files in successive batches.',
             ].join('\n'),
             parameters: {
                 type: 'object',

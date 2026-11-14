@@ -41,7 +41,7 @@ test('B13: replacement preview is read-only and rejected replacement stays at th
 function dualCard() {
     const bundle = equipmentExample(); bundle.definition.updates = ['before', 'after'];
     for (const action of bundle.definition.actions) {action.stages = ['before'];}
-    for (const entry of bundle.definition.access) {if (entry.write.includes('direct')) {entry.stages = ['after'];}}
+    for (const entry of bundle.definition.access) {if (entry.direct) {entry.stages = ['after'];}}
     return bundle;
 }
 
@@ -60,7 +60,7 @@ test('B1: stages restrict tools, instructions and whole submissions, not shared 
     assert.ok(validateAfter([edit])); assert.equal(validateAfter([action]), false);
     for (const stage of ['before', 'after'] as const) {
         const rejected = await settle(compiled, start.state, [action, edit], { stage });
-        assert.equal(rejected.ok, false); assert.equal(rejected.diagnostics[0].code, 'stage-permission');
+        assert.equal(rejected.ok, false); assert.equal(rejected.diagnostics[0].code, stage === 'before' ? 'direct-other-stage' : 'action-other-stage');
     }
     assert.equal((accepted(await settle(compiled, start.state, [action], { stage: 'before' })).state as { hero: { health: number } }).hero.health, 60);
     assert.ok((await settle(compiled, start.state, [action, edit])).ok);

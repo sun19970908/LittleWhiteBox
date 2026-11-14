@@ -32,20 +32,42 @@ test('fingerprint and unrepaired event-vector failures still warn immediately', 
     );
 });
 
-test('temporary L0 gaps below five floors stay silent', () => {
-    assert.deepEqual(buildVectorIntegrityIssues({ incompleteL0FloorCount: 1 }), []);
-    assert.deepEqual(buildVectorIntegrityIssues({ incompleteL0FloorCount: 4 }), []);
+test('temporary anchor and vector gaps below five floors stay silent independently', () => {
+    for (const count of [0, 1, 4]) {
+        assert.deepEqual(decisions({ incompleteL0AnchorFloorCount: count }), []);
+        assert.deepEqual(decisions({ missingL0VectorFloorCount: count }), []);
+    }
+    // The two counts can refer to the same floors; adding them invents a larger gap.
+    assert.deepEqual(decisions({ incompleteL0AnchorFloorCount: 3, missingL0VectorFloorCount: 3 }), []);
 });
 
-test('an L0 gap of five floors warns', () => {
-    assert.deepEqual(
-        decisions({ incompleteL0FloorCount: 5 }),
-        [{ code: 'l0_gap', action: 'fill' }],
-    );
-});
-
-test('confirmed stored-cache inconsistency needs rebuild even when the progress watermark is current', () => {
-    assert.deepEqual(decisions({ cacheInconsistent: true, chunkFloorGap: 0, incompleteL0FloorCount: 1 }), [
-        { code: 'cache_inconsistent', action: 'rebuild' },
+test('unfinished anchor extraction directs users to anchors, not vector repair', () => {
+    assert.deepEqual(decisions({ incompleteL0AnchorFloorCount: 5 }), [
+        { code: 'l0_gap', action: 'extract' },
     ]);
+});
+
+test('missing or stale vectors never imply missing anchor text', () => {
+    assert.deepEqual(decisions({ missingL0VectorFloorCount: 5 }), [
+        { code: 'l0_vectors_missing', action: 'fill' },
+    ]);
+    assert.deepEqual(decisions({ cacheInconsistent: true, cacheRepairable: true, missingL0VectorFloorCount: 5 }), [
+        { code: 'cache_inconsistent', action: 'fill' },
+        { code: 'l0_vectors_missing', action: 'fill' },
+    ]);
+});
+
+test('simultaneous anchor and vector gaps retain both repair destinations', () => {
+    assert.deepEqual(decisions({ incompleteL0AnchorFloorCount: 5, missingL0VectorFloorCount: 5 }), [
+        { code: 'l0_gap', action: 'extract' },
+        { code: 'l0_vectors_missing', action: 'fill' },
+    ]);
+});
+
+test('cache repairability determines the action even when the progress watermark is current', () => {
+    for (const cacheRepairable of [false, true]) {
+        assert.deepEqual(decisions({ cacheInconsistent: true, cacheRepairable, chunkFloorGap: 0, incompleteL0AnchorFloorCount: 1 }), [
+            { code: 'cache_inconsistent', action: cacheRepairable ? 'fill' : 'rebuild' },
+        ]);
+    }
 });

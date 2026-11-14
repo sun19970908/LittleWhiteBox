@@ -5,6 +5,7 @@ import { rootFor, displayCardWorkspacePath, displayCardWorkspaceName } from '../
 import { buildWorkspaceTree, collectDirectoryExpansionKeys } from '../app-src/workspace/local-workspace-tree.js';
 import { renderWorkspace } from '../app-src/workspace/local-workspace-ui.js';
 import { cardFiles, locateFile } from '../../card-workspace/files.js';
+import { resolveItemTarget, itemDocumentValue, serializeItemDocument } from '../../card-workspace/item-document.js';
 
 // Acceptance: readable card names must still select/save the original file
 // (wrong-target writes / lost work). Literal workspace names stay literal;
@@ -17,9 +18,9 @@ const source = {
     files: paths.map(path => ({ path, relativePath: path.slice(6), name: 'system_prompt.md', content: 'draft', originalContent: '' })),
 };
 
-// Acceptance: grouping/renaming tasks must never merge same-name tasks or
-// redirect a settings/body edit to another task (wrong-target writes).
-test('named task groups preserve both files and distinct IDs after rename and filtering', () => {
+// Acceptance: one item is one file; renaming must never merge same-name tasks
+// or redirect a settings/body edit to another task (wrong-target writes).
+test('named task files preserve distinct IDs after rename and filtering', () => {
     const tasks = [
         { id: 'id/a%', name: '日常', commands: '/echo first', interval: 2 },
         { id: 'id-b', name: '日常', commands: '/echo second', interval: 3 },
@@ -33,17 +34,15 @@ test('named task groups preserve both files and distinct IDs after rename and fi
     assert.equal(groups.length, 2);
     assert.notEqual(groups[0].key, groups[1].key);
     for (const group of groups) {
-        const targets = group.children.map(node => locateFile(node.path));
-        assert.equal(targets.length, 2);
-        assert.equal(targets[0].id, targets[1].id);
-        assert.notEqual(targets[0].settings, targets[1].settings);
-        assert.ok(group.children.every(node => files.includes(node.file)));
+        assert.equal(group.type, 'file');
+        assert.ok(files.includes(group.file));
+        assert.ok(tasks.some(task => task.id === resolveItemTarget(locateFile(group.path), group.file).id));
     }
-    const settings = files.find(file => locateFile(file.path)?.id === tasks[0].id && locateFile(file.path)?.settings);
-    settings.content = JSON.stringify({ ...JSON.parse(settings.content), name: '重命名' });
+    const settings = groups.find(group => resolveItemTarget(locateFile(group.path), group.file).id === tasks[0].id).file;
+    settings.content = serializeItemDocument('tasks', { ...itemDocumentValue('tasks', settings.content), name: '重命名' });
     const renamed = buildWorkspaceTree([fixture], { searchQuery: '重命名' });
-    assert.deepEqual(renamed.visiblePaths.map(path => locateFile(path).id), [tasks[0].id, tasks[0].id]);
-    assert.equal(getGroups(renamed)[0].key, groups.find(group => locateFile(group.children[0].path).id === tasks[0].id).key);
+    assert.deepEqual(renamed.visiblePaths, [settings.path]);
+    assert.equal(getGroups(renamed)[0].key, groups.find(group => group.path === settings.path).key);
     assert.deepEqual(tasks.map(task => task.commands), ['/echo first', '/echo second']);
 });
 
@@ -71,7 +70,7 @@ test('card display/search preserves raw keys, paths and files without decoding u
 });
 
 test('rendered card selections and save actions keep encoded targets', t => {
-    const { document } = parseHTML('<html><body><div id="workspace"></div></body></html>');
+    const { document } = parseHTML('<html><body><div id="nav"></div><div id="viewer"></div></body></html>');
     const previousDocument = globalThis.document;
     globalThis.document = document;
     t.after(() => {
@@ -80,16 +79,15 @@ test('rendered card selections and save actions keep encoded targets', t => {
     });
     const tree = buildWorkspaceTree([source]);
     const calls = [];
-    const container = document.querySelector('#workspace');
-    renderWorkspace(container, {
+    const containers = { nav: document.querySelector('#nav'), viewer: document.querySelector('#viewer') };
+    const container = document.body;
+    renderWorkspace(containers, {
         workspaceTree: tree,
         selectedMatch: { source, file: source.files[0] },
-        workspaceState: { selectedFilePath: paths[0], viewerMode: 'original', treeExpandedKeys: [...collectDirectoryExpansionKeys(tree.nodes)] },
-        showSaveButton: true, canSaveFile: () => true,
-        hasOriginalSnapshot: () => true,
+        workspaceState: { selectedFilePath: paths[0], viewerMode: 'diff', treeExpandedKeys: [...collectDirectoryExpansionKeys(tree.nodes)] },
+        primaryFileActions: () => [{ action: 'save-file', label: 'save', callback: path => calls.push(['save', path]) }],
         onSelectNode: path => calls.push(['directory', path]),
         onSelectFile: path => calls.push(['file', path]),
-        onSaveFile: path => calls.push(['save', path]),
     });
     const directoryButton = [...container.querySelectorAll('.type-dir.xb-assistant-workspace-tree-button')]
         .find(button => button.textContent.includes('作者测试.png'));
@@ -98,12 +96,11 @@ test('rendered card selections and save actions keep encoded targets', t => {
     selectedButton.click();
     container.querySelector('[data-action="save-file"]').click();
     assert.deepEqual(calls, [['directory', rootFor('作者测试.png')], ['file', paths[0]], ['save', paths[0]]]);
-    renderWorkspace(container, {
+    renderWorkspace(containers, {
         workspaceTree: tree,
         selectedMatch: { source, file: source.files[1] },
-        workspaceState: { selectedFilePath: paths[1], viewerMode: 'original', treeExpandedKeys: [...collectDirectoryExpansionKeys(tree.nodes)] },
-        showSaveButton: true, canSaveFile: () => true, hasOriginalSnapshot: () => true,
-        onSaveFile: path => calls.push(['save-next', path]),
+        workspaceState: { selectedFilePath: paths[1], viewerMode: 'diff', treeExpandedKeys: [...collectDirectoryExpansionKeys(tree.nodes)] },
+        primaryFileActions: () => [{ action: 'save-file', label: 'save', callback: path => calls.push(['save-next', path]) }],
     });
     container.querySelector('[data-action="save-file"]').click();
     assert.deepEqual(calls.at(-1), ['save-next', paths[1]]);

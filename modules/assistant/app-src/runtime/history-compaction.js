@@ -2,6 +2,11 @@ import { resetMessageWindow } from '../../../agent-core/ui/message-windowing.js'
 import { recentTurnArchiveCounts, hasChatAnswer } from '../../../agent-core/runtime/recent-turns.js';
 import { ACTIVITY_COPY } from '../ui/activity-copy.js';
 import { loadedSkillIds } from '../../shared/skill-tools.js';
+import { dropInvalidatedThinkingFromMessage } from '../../../agent-core/runtime/protocol.js';
+import { estimateTokenCount, estimateConversationTokens } from '../../../agent-core/runtime/context-tokens.js';
+
+// Newest tool cycles of the in-progress request kept verbatim, preferred first.
+const RETAINED_CURRENT_CYCLES = [2, 1];
 
 export function splitMessagesIntoTurns(messages = []) {
     const turns = [];
@@ -32,9 +37,9 @@ export function createHistoryCompactionController(deps) {
         getActiveProviderConfig,
         formatToolResultDisplay,
         buildTextWithAttachmentSummary,
-        trimForSummary,
         SUMMARY_SYSTEM_PROMPT,
-        SUMMARY_TRIGGER_TOKENS,
+        compactionThreshold,
+        requestInputLimit,
         buildContextMeterLabel,
         updateContextStats,
         toProviderMessages,
@@ -64,49 +69,45 @@ export function createHistoryCompactionController(deps) {
         return normalizeSummarySourceText(buildTextWithAttachmentSummary(message.content || '', message.attachments));
     }
 
-    function buildSummarySource(turns, existingSummary = '') {
-        const lines = [];
-        if (existingSummary?.trim()) {
-            lines.push('已有历史摘要（当前记忆底稿，除非新增历史明确纠正，否则需要合并保留）:');
-            lines.push(existingSummary.trim());
-            lines.push('');
-        }
-
-        turns.forEach((turn, index) => {
-            lines.push(`第 ${index + 1} 段历史:`);
-            turn.forEach((message) => {
-                const roleLabel = message.role === 'user'
-                    ? '用户'
-                    : message.role === 'assistant'
-                        ? '助手'
-                        : `工具${message.toolName ? `(${message.toolName})` : ''}`;
-                lines.push(`${roleLabel}: ${getMessageTextForSummary(message) || '[空]'}`);
-            });
-            lines.push('');
-        });
-
-        return lines.join('\n').trim();
+    function messageLabel(message) {
+        return message.role === 'user'
+            ? '用户'
+            : message.role === 'assistant'
+                ? '助手'
+                : `工具${message.toolName ? `(${message.toolName})` : ''}`;
     }
 
-    function buildFallbackSummary(turns, existingSummary = '') {
-        const sections = [];
-        if (existingSummary?.trim()) {
-            sections.push(existingSummary.trim());
+    // Archived history can exceed one request (a long tool run may hold whole
+    // written files). It is read in consecutive pieces of at most half the
+    // request capacity, leaving the rest for the running summary it is folded into.
+    function buildSummaryChunks(turns) {
+        const limit = Math.max(1, Math.floor(requestInputLimit() / 2));
+        // A character is at most four UTF-8 bytes, so this slice fits the token limit.
+        const pieceChars = Math.max(1, Math.floor(limit * 3.35 / 4));
+        const pieces = turns.flatMap((turn, index) => [
+            `第 ${index + 1} 段历史:`,
+            ...turn.map(message => `${messageLabel(message)}: ${getMessageTextForSummary(message) || '[空]'}`),
+            '',
+        ]).flatMap(line => (line.length <= pieceChars ? [line]
+            : Array.from({ length: Math.ceil(line.length / pieceChars) }, (_, index) => line.slice(index * pieceChars, (index + 1) * pieceChars))));
+        const chunks = [];
+        let size = Infinity;
+        for (const piece of pieces) {
+            const tokens = estimateTokenCount(piece) + 1;
+            if (size + tokens > limit) { chunks.push([]); size = 0; }
+            chunks.at(-1).push(piece);
+            size += tokens;
         }
+        return chunks;
+    }
 
-        turns.forEach((turn, index) => {
-            const condensed = turn.map((message) => {
-                const prefix = message.role === 'user'
-                    ? '用户'
-                    : message.role === 'assistant'
-                        ? '助手'
-                        : `工具${message.toolName ? `(${message.toolName})` : ''}`;
-                return `${prefix}: ${getMessageTextForSummary(message) || '[空]'}`;
-            }).join('\n');
-            sections.push(`补充历史 ${index + 1}:\n${condensed}`);
-        });
-
-        return trimForSummary(sections.join('\n\n'), 6000);
+    function buildSummarySource(lines, existingSummary = '') {
+        return [
+            ...(existingSummary?.trim()
+                ? ['已有历史摘要（当前记忆底稿，除非新增历史明确纠正，否则需要合并保留）:', existingSummary.trim(), '']
+                : []),
+            ...lines,
+        ].join('\n').trim();
     }
 
     function getActiveContextMessages() {
@@ -129,27 +130,34 @@ export function createHistoryCompactionController(deps) {
     async function summarizeArchivedTurns(adapter, turnsToArchive, signal) {
         if (!turnsToArchive.length) return;
 
-        const summarySource = buildSummarySource(turnsToArchive, state.historySummary);
-        const fallbackSummary = buildFallbackSummary(turnsToArchive, state.historySummary);
         const providerConfig = getActiveProviderConfig();
 
         try {
-            const result = await adapter.chat({
-                systemPrompt: SUMMARY_SYSTEM_PROMPT,
-                messages: [{ role: 'user', content: summarySource }],
-                tools: [],
-                toolChoice: 'none',
-                temperature: Math.min(providerConfig.temperature ?? 0.2, 0.2),
-                maxTokens: providerConfig.maxTokens,
-                reasoning: { mode: 'inherit', output: 'hide' },
-                signal,
-            });
-            signal?.throwIfAborted();
-            state.historySummary = String(result.text || '').trim() || fallbackSummary;
+            let summary = state.historySummary;
+            for (const lines of buildSummaryChunks(turnsToArchive)) {
+                const request = {
+                    systemPrompt: SUMMARY_SYSTEM_PROMPT,
+                    messages: [{ role: 'user', content: buildSummarySource(lines, summary) }],
+                    tools: [],
+                    toolChoice: 'none',
+                    temperature: Math.min(providerConfig.temperature ?? 0.2, 0.2),
+                    maxTokens: providerConfig.maxTokens,
+                    reasoning: { mode: 'inherit', output: 'hide' },
+                    signal,
+                };
+                const inputTokens = estimateConversationTokens({ messages: [{ role: 'system', content: request.systemPrompt }, ...request.messages],
+                    tools: request.tools, providerConfig });
+                if (inputTokens > requestInputLimit()) throw new Error(ACTIVITY_COPY.summaryOverBudget(inputTokens, requestInputLimit()));
+                const result = await adapter.chat(request);
+                signal?.throwIfAborted();
+                const nextSummary = String(result.text || '').trim();
+                if (!nextSummary) throw new Error(ACTIVITY_COPY.summaryEmpty);
+                summary = nextSummary;
+            }
+            state.historySummary = summary;
         } catch (error) {
             if (signal?.aborted || error?.name === 'AbortError') throw error;
-            state.historySummary = fallbackSummary;
-            showToast('历史摘要生成失败，已使用本地降级摘要。');
+            throw Object.assign(new Error(ACTIVITY_COPY.summaryFailed(error.message), { cause: error }), { code: 'assistant_summary_failed' });
         }
     }
 
@@ -159,7 +167,7 @@ export function createHistoryCompactionController(deps) {
         let providerMessages = toProviderMessages(contextMessages, options);
         updateContextStats(providerMessages);
 
-        if (state.contextStats.usedTokens <= SUMMARY_TRIGGER_TOKENS) {
+        if (state.contextStats.usedTokens <= compactionThreshold()) {
             return providerMessages;
         }
 
@@ -191,16 +199,61 @@ export function createHistoryCompactionController(deps) {
             providerMessages = toProviderMessages(contextMessages, options);
             signal?.throwIfAborted();
             updateContextStats(providerMessages);
-            if (state.contextStats.usedTokens <= SUMMARY_TRIGGER_TOKENS) {
+            if (state.contextStats.usedTokens <= compactionThreshold()) {
                 showToast(`已压缩较早历史，当前上下文 ${buildContextMeterLabel()}`);
                 render();
                 return providerMessages;
             }
         }
 
-        showToast(state.contextStats.usedTokens > state.contextStats.budgetTokens
-            ? ACTIVITY_COPY.contextFull
-            : `最近对话本身已接近上限，当前上下文 ${buildContextMeterLabel()}`);
+        // A single long request can outgrow the context by itself. Its earlier
+        // tool cycles become summary material; the request and the newest
+        // cycles stay verbatim so the model can continue from them.
+        for (const keep of RETAINED_CURRENT_CYCLES) {
+            // Thinking cleanup replaces assistant objects. Use the current history
+            // on each pass so calls and results are removed as one group.
+            const currentTurn = splitMessagesIntoTurns(contextMessages).at(-1) || [];
+            const firstReply = currentTurn.findIndex(message => message.role === 'assistant');
+            const cycles = [];
+            for (const message of firstReply < 0 ? [] : currentTurn.slice(firstReply)) {
+                if (message.role === 'assistant' || !cycles.length) cycles.push([]);
+                cycles.at(-1).push(message);
+            }
+            const boundary = cycles.length - keep;
+            if (boundary <= 0) continue;
+            const archivedMessages = cycles.slice(0, boundary).flat();
+            const previousProgressLabel = state.progressLabel;
+            state.progressLabel = '总结中';
+            render();
+            try {
+                await summarizeArchivedTurns(adapter, [archivedMessages], signal);
+            } finally {
+                state.progressLabel = previousProgressLabel || '生成中';
+                render();
+            }
+            const removed = new Set(archivedMessages);
+            const retained = new Set(cycles.slice(boundary).flat());
+            state.archivedSkillIds = loadedSkillIds(archivedMessages, state.archivedSkillIds);
+            state.messages = state.messages.filter(message => !removed.has(message))
+                .map(message => (retained.has(message) ? dropInvalidatedThinkingFromMessage(message) : message));
+            resetMessageWindow(state);
+            persistSession();
+
+            contextMessages = getActiveContextMessages();
+            providerMessages = toProviderMessages(contextMessages, options);
+            signal?.throwIfAborted();
+            updateContextStats(providerMessages);
+            if (state.contextStats.usedTokens <= compactionThreshold()) {
+                showToast(`已压缩本轮较早的工具记录，当前上下文 ${buildContextMeterLabel()}`);
+                render();
+                return providerMessages;
+            }
+        }
+
+        if (state.contextStats.usedTokens > requestInputLimit()) {
+            throw Object.assign(new Error(ACTIVITY_COPY.contextFull(state.contextStats.usedTokens, requestInputLimit())), { code: 'assistant_context_over_budget' });
+        }
+        showToast(`最近对话本身已接近上限，当前上下文 ${buildContextMeterLabel()}`);
         render();
         return providerMessages;
     }

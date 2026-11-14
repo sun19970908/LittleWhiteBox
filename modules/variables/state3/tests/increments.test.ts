@@ -27,11 +27,11 @@ function shop(): Bundle {
             } },
         } }, initial: { hero: { coins: 10, stock: 2, total: 20, ready: false, claimed: false } },
         access: [
-            { path: ['hero', 'coins'], write: ['direct', 'sell'], description: 'Coins. Selling grants 5 automatically; direct changes cover separate income or spending.' },
-            { path: ['hero', 'stock'], write: ['sell'], description: 'Sale inventory.' },
-            { path: ['hero', 'total'], write: [], description: 'Twice the coin balance.' },
-            { path: ['hero', 'ready'], write: ['direct'], description: 'Reward eligibility. Becoming eligible grants 5 once.' },
-            { path: ['hero', 'claimed'], write: [], description: 'Reward has been claimed.' },
+            { path: ['hero', 'coins'], direct: true, description: 'Coins. Selling grants 5 automatically; direct changes cover separate income or spending.' },
+            { path: ['hero', 'stock'], direct: false, description: 'Sale inventory.' },
+            { path: ['hero', 'total'], direct: false, description: 'Twice the coin balance.' },
+            { path: ['hero', 'ready'], direct: true, description: 'Reward eligibility. Becoming eligible grants 5 once.' },
+            { path: ['hero', 'claimed'], direct: false, description: 'Reward has been claimed.' },
         ],
         rules: [
             { id: 'cap', kind: 'correct', path: ['hero', 'coins'], description: 'Coins are capped at 100.', value: { op: 'min', args: [{ get: ['hero', 'coins'] }, { literal: 100 }] } },
@@ -86,7 +86,7 @@ test('I2: malformed, missing, nonnumeric and overflowing increments fail without
         (bundle.definition.initial.hero as JsonObject).coins = value;
         assert.equal((await settle(compileDefinition(bundle), bundle.definition.initial, [inc(1)])).ok, false);
     }
-    bundle.definition.access.unshift({ path: ['hero'], write: [], description: 'Locked parent.' });
+    bundle.definition.access.unshift({ path: ['hero'], direct: false, description: 'Locked parent.' });
     (bundle.definition.initial.hero as JsonObject).coins = 10;
     assert.equal((await settle(compileDefinition(bundle), bundle.definition.initial, [inc(1)])).ok, false);
 });
@@ -109,7 +109,7 @@ test('I3: dynamic numeric paths and array elements use the same input contract',
     const bundle = shop(); bundle.definition.rules = []; bundle.definition.actions = []; bundle.definition.triggers = [];
     bundle.definition.schema = { type: 'object', properties: { hero: { type: 'object', additionalProperties: { type: 'number' } }, bag: { type: 'array', items: { type: 'number' } } } };
     bundle.definition.initial = { hero: { 'Lv.3': 1 }, bag: [2] };
-    bundle.definition.access = ['hero', 'bag'].map(key => ({ path: [key], write: ['direct'], description: key }));
+    bundle.definition.access = ['hero', 'bag'].map(key => ({ path: [key], direct: true, description: key }));
     const compiled = compileDefinition(bundle), input = [inc(2, ['hero', 'Lv.3']), inc(-1, ['bag', '0']), set(0, ['hero', 'newCounter']), inc(3, ['hero', 'newCounter'])];
     assert.equal(new Ajv({ strict: false }).compile(getInputSchema(compiled))(input), true);
     assert.deepEqual(accepted(await settle(compiled, bundle.definition.initial, input)).state, { hero: { 'Lv.3': 3, newCounter: 3 }, bag: [1] });

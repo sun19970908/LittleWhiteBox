@@ -151,6 +151,7 @@ import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImag
 import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
+import { toggleImageCardControls } from '../../shared/image-card-controls.js';
 import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { getCharacterTagEditGroups, persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
 import { getCurrentUserHandle } from "../../../../../../../user.js";
@@ -4495,6 +4496,11 @@ async function handleImageDelegatedClick(event) {
     event.preventDefault();
     event.stopImmediatePropagation();
 
+    if (action === 'toggle-controls') {
+        toggleImageCardControls(container);
+        return;
+    }
+
     if (action === 'toggle-menu') {
         const wrap = container.querySelector('.xb-nd-menu-wrap');
         document.querySelectorAll('.xb-nd-menu-wrap.open').forEach(w => {
@@ -4505,6 +4511,7 @@ async function handleImageDelegatedClick(event) {
     }
 
     if (action === 'open-gallery') {
+        container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open');
         await openGallery(
             container.dataset.slotId,
             Number(container.dataset.mesid),

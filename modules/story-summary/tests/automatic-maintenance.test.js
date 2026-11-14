@@ -9,13 +9,16 @@ import { createMessageSourceTracker } from '../data/message-sources.js';
 import { getAutoSummaryPlan } from '../generate/summary-trigger.js';
 import { entry } from './helpers/story-summary-entry.js';
 
-// Acceptance: automatic maintenance starts only after host readiness + paint + quiet delay;
+// Acceptance: automatic maintenance starts only after host readiness + quiet delay,
+// even when a background page does not paint;
 // continuation is not lost, navigation cancels it, and an idle L2 probe performs no recovery.
 // Cost: blocked chat UI, repeated IO, or permanently missing anchors.
 const built = await build({
     entryPoints: [fileURLToPath(new URL('../../../core/after-ai-gate.js', import.meta.url))],
     bundle: true, write: false, format: 'esm', platform: 'node',
     plugins: [{ name: 'after-ai-host', setup(api) {
+        api.onResolve({ filter: /sillytavern-generation-state\.js$/ }, ({ path }) => ({ path, namespace: 'generation' }));
+        api.onLoad({ filter: /.*/, namespace: 'generation' }, () => ({ contents: 'export const isGenerating=()=>globalThis.__afterAiTest.generating;' }));
         api.onResolve({ filter: /(?:extensions|debug-core)\.js$/ }, ({ path }) => ({ path, namespace: 'host' }));
         api.onLoad({ filter: /.*/, namespace: 'host' }, ({ path }) => ({ contents: path.endsWith('extensions.js')
             ? 'export const getContext=()=>globalThis.__afterAiTest.context;'
@@ -35,27 +38,26 @@ function readinessFixture(t) {
     } });
     const context = { chatId: 'fixture', chat: [{ mes: 'old reply', is_user: false, send_date: 'unchanged' }] };
     const stop = { isConnected: true, hidden: false };
-    const frames = new Map();
-    let frameId = 0;
+    const host = { context, generating: false };
     Object.assign(globalThis, {
-        __afterAiTest: { context },
+        __afterAiTest: host,
         document: { body: { dataset: { generating: 'true' } }, getElementById: () => stop },
         window: { getComputedStyle: () => ({ display: stop.hidden ? 'none' : 'block' }) },
-        requestAnimationFrame: callback => { frames.set(++frameId, callback); return frameId; },
-        cancelAnimationFrame: id => frames.delete(id),
+        requestAnimationFrame: () => assert.fail('background maintenance cannot depend on painted frames'),
+        cancelAnimationFrame() {},
     });
     const runs = [];
     const scheduler = createVectorMaintenanceScheduler({ getContext: () => context,
         isStale: chatId => chatId !== context.chatId, getQuietWaitMs: () => 0,
         waitForReady: waitForAfterAiReady, run: chatId => runs.push(chatId) });
-    return { context, stop, runs, scheduler,
+    return { context, host, stop, runs, scheduler,
         async advance(ms) { await nextTurn(); t.mock.timers.tick(ms); await nextTurn(); },
-        async frame() { const callbacks = [...frames.values()]; frames.clear(); callbacks.forEach(callback => callback()); await nextTurn(); },
     };
 }
 
-test('the five-second maintenance delay starts after host completion and two frames, not the AI event', async t => {
+test('the five-second maintenance delay starts after host completion without waiting for background paint', async t => {
     const f = readinessFixture(t);
+    f.host.generating = true;
     f.scheduler.schedule(5000);
     await f.advance(10_000);
     assert.deepEqual(f.runs, []);
@@ -63,11 +65,10 @@ test('the five-second maintenance delay starts after host completion and two fra
     await f.advance(5000); // Stop button is still visible.
     assert.deepEqual(f.runs, []);
     f.stop.hidden = true;
-    await f.advance(100);
-    await f.frame();
-    await f.advance(5000); // One frame is not enough.
+    await f.advance(5000); // Native host generation is still active.
     assert.deepEqual(f.runs, []);
-    await f.frame();
+    f.host.generating = false;
+    await f.advance(100);
     await f.advance(4999);
     assert.deepEqual(f.runs, []);
     await f.advance(1);
@@ -89,7 +90,7 @@ test('a continuation on the same floor schedules once; duplicate completion and 
         complete.notifyStorySummaryAfterAi(0, 'message_received');
         complete.notifyStorySummaryAfterAi(0, 'generation_ended');
         complete.notifyStorySummaryAfterAi(0, 'character_message_rendered');
-        await f.frame(); await f.frame(); await f.advance(5000);
+        await f.advance(5000);
     }
     assert.deepEqual(f.runs, ['fixture', 'fixture']);
 });
@@ -101,7 +102,7 @@ for (const cancel of ['replace', 'disable', 'switch']) test(`pending readiness i
     else if (cancel === 'disable') f.scheduler.clear();
     else f.scheduler.schedule(5000);
     delete document.body.dataset.generating; f.stop.hidden = true;
-    await f.advance(100); await f.frame(); await f.frame(); await f.advance(5000);
+    await f.advance(100); await f.advance(5000);
     assert.deepEqual(f.runs, cancel === 'replace' ? ['fixture'] : []);
 });
 
@@ -109,7 +110,7 @@ test('switching away and back cancels the old delay immediately, before deferred
     const f = readinessFixture(t);
     delete document.body.dataset.generating; f.stop.hidden = true;
     f.scheduler.schedule(5000);
-    await f.frame(); await f.frame(); await f.advance(4999);
+    await f.advance(4999);
     const noop = () => {};
     const change = entry(['handleChatChange'], {
         getContext: () => f.context, vectorMaintenanceScheduler: f.scheduler,

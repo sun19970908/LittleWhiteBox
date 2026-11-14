@@ -10,6 +10,7 @@ import { createDrawImageSlotRegex } from './image-marker-syntax.js';
 import { isSceneSlotAlive, setActiveMessageText } from './scene-placement.js';
 import { commitChatImagePlacement } from './chat-image-placement.js';
 import { syncRenderedMessageFromState, renderPreviewsForMessage, isMessageBeingEdited } from './draw-common.js';
+import { getSharedMessageFilterRules } from './draw-settings.js';
 import { PreviewStatus, hasPreviewImage, DRAW_SLOT_ERRORS } from './image-record.js';
 import { listPendingImageJobs, discardPendingImageSlot, PendingJobState, PendingJobAdoptionPhase } from './pending-image-jobs.js';
 
@@ -154,7 +155,8 @@ async function recoverMessage(ctx, messageId, message, initialSource, swipeIndex
     }
 
     const edits = [];
-    for (const [order, tag] of parseChatImageTags(source).entries()) {
+    const filterRules = getSharedMessageFilterRules();
+    for (const [order, tag] of parseChatImageTags(source, filterRules).entries()) {
         const slotId = `slot-legacy-${hashStableValue([owner, messageId, swipeIndex, source, tag.start])}`;
         const placement = captureImagePlacement(owner, source, swipeIndex, { ...tag, mode: 'replace' }, order);
         if ((await adoptCandidates(slotId, tag.tags, placement)).length) {

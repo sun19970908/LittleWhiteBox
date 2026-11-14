@@ -1,10 +1,6 @@
 import { locateFile } from './files.js';
-
-const ITEM_DISPLAY = {
-    tasks: { nameField: 'name', settings: '任务设置', body: '执行脚本' },
-    regex: { nameField: 'scriptName', settings: '正则设置', body: '替换内容' },
-    world: { nameField: 'comment', settings: '条目设置', body: '正文' },
-};
+import { ITEM_KINDS, itemDocumentPath, splitItemDocument } from './item-document.js';
+import { displayCardWorkspaceName } from './paths.js';
 
 function locateDisplayFile(path) {
     try {
@@ -16,17 +12,12 @@ function locateDisplayFile(path) {
     }
 }
 
-export function cardItemGroupKey(path) {
-    const target = locateDisplayFile(path);
-    return ITEM_DISPLAY[target?.kind] ? `item:${path.replace(/\.[^.]+$/, '')}` : '';
-}
-
-function readDisplayName(file, field) {
+function readDisplayName(file) {
     // While JSON is being edited it can be incomplete; keep the last saved name.
     for (const content of [file?.content, file?.originalContent]) {
         if (!content) continue;
         try {
-            const value = JSON.parse(content)?.[field];
+            const value = JSON.parse(splitItemDocument(content).header)?.name;
             return typeof value === 'string' ? value.trim() : '';
         } catch (error) {
             if (!(error instanceof SyntaxError)) throw error;
@@ -38,21 +29,29 @@ function readDisplayName(file, field) {
 // Labels are derived from the same editable files as writeback, never persisted
 // as aliases. Identically named entries still have distinct IDs and paths.
 export function describeCardWorkspaceFiles(files) {
-    const byPath = new Map(files.map(file => [file.path, file]));
     const descriptions = new Map();
-    for (const file of files) {
+    const labels = new Set();
+    // Give the unsuffixed path first choice; the same labels serve tree and editor.
+    for (const file of [...files].sort((a, b) => a.path.length - b.path.length || a.path.localeCompare(b.path))) {
         const target = locateDisplayFile(file.path);
-        const display = ITEM_DISPLAY[target?.kind];
-        if (!display) continue;
-        const settingsPath = file.path.replace(/\.[^.]+$/, '.json');
-        const name = readDisplayName(byPath.get(settingsPath), display.nameField) || String(target.id);
-        const label = target.settings ? display.settings : display.body;
+        if (!target) continue;
+        const name = (ITEM_KINDS[target.kind] ? readDisplayName(file) : '') || displayCardWorkspaceName(file.path, file.name);
+        const labelPath = itemDocumentPath(file.path.slice(0, file.path.lastIndexOf('/') + 1), name, labels);
+        labels.add(labelPath);
+        const label = decodeURIComponent(labelPath.split('/').at(-1).slice(0, -3));
         descriptions.set(file.path, {
-            groupKey: cardItemGroupKey(file.path),
-            name,
-            label,
-            title: `${name} / ${label}`,
+            name, label, title: label, kind: target.kind,
+            ...(target.book ? { book: target.book } : {}),
         });
     }
     return descriptions;
+}
+
+export function cardFileDirectory(files) {
+    const descriptions = describeCardWorkspaceFiles(files);
+    return files.map(file => {
+        const description = descriptions.get(file.path);
+        return { path: file.path, name: description?.name || file.path.split('/').at(-1), kind: description?.kind || 'file',
+            ...(description?.book ? { book: description.book } : {}) };
+    });
 }

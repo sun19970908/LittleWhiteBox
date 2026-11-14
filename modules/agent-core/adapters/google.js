@@ -70,10 +70,18 @@ function buildFallbackUserContent() {
     };
 }
 
+function isEmptyTextPart(part) {
+    // Empty stream terminators carry no content. Signatures and other protocol
+    // fields must survive even when their accompanying text is empty.
+    return part?.text === '' && Object.keys(part).every(key => key === 'text' || key === 'thought');
+}
+
 function normalizeGoogleContentValue(content, fallbackRole = 'model') {
     if (!content?.parts?.length) return null;
     const cloned = cloneJson(content);
     if (!cloned) return null;
+    cloned.parts = cloned.parts.filter(part => !isEmptyTextPart(part));
+    if (!cloned.parts.length) return null;
     if (!cloned.role) {
         cloned.role = fallbackRole;
     }
@@ -323,6 +331,8 @@ function buildToolResponseMessage(toolResponses = []) {
 
 function mapThinkingLevel(effort) {
     switch (effort) {
+        case 'xhigh':
+            return ThinkingLevel.XHIGH;
         case 'minimal':
             return ThinkingLevel.MINIMAL;
         case 'high':
@@ -581,7 +591,7 @@ export class GoogleAdapter {
                 includeThoughts: false,
                 thinkingBudget: 0,
             };
-        } else if (reasoning.mode === 'on' && reasoning.profileId.startsWith('google-gemini-2.5-')) {
+        } else if (reasoning.mode === 'on' && reasoning.budgetTokens !== undefined) {
             config.thinkingConfig = {
                 includeThoughts: isReasoningOutputVisible(reasoning),
                 thinkingBudget: reasoning.budgetTokens,
@@ -810,17 +820,22 @@ export class GoogleAdapter {
             ? finalFunctionCalls
             : extractFunctionCalls(response, internalIdPrefix);
         let historyModelContents = getNewModelContentsFromHistory(chat, historyLengthBeforeSend);
-        if (shouldUseStreaming && streamFunctionCalls.finish && streamedGoogleContent) {
-            // Store the assembled turn, never partialArgs or empty terminators,
-            // in both the active session and the payload used for cold replay.
-            const history = getChatHistory(chat);
+        const assembledContent = shouldUseStreaming && streamFunctionCalls.finish
+            ? normalizeGoogleContentValue(streamedGoogleContent) : null;
+        const history = getChatHistory(chat);
+        if (assembledContent || history.some(content => content.role === 'model' && content.parts?.some(isEmptyTextPart))) {
+            // Both live sessions and saved replay use the same cleaned model
+            // contents. Vertex additionally replaces partialArgs with its assembly.
+            if (assembledContent) historyModelContents = [assembledContent];
+            const previousHistory = history.slice(0, historyLengthBeforeSend)
+                .map(content => content.role === 'model' ? normalizeGoogleContentValue(content) : content)
+                .filter(Boolean);
             const inputContents = history.slice(historyLengthBeforeSend).filter(content => content.role === 'user');
             this.activeChat = this.client.chats.create({
                 model: this.requestModel,
                 config: this.sessionConfig,
-                history: [...history.slice(0, historyLengthBeforeSend), ...inputContents, streamedGoogleContent],
+                history: [...previousHistory, ...inputContents, ...historyModelContents],
             });
-            historyModelContents = [streamedGoogleContent];
         }
 
         return {

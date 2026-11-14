@@ -2,6 +2,7 @@ import { setActiveMessageText } from './scene-placement.js';
 import { parseChatImageTags } from './chat-message-image-markup.js';
 import { createDrawImageSlotRegex } from './image-marker-syntax.js';
 import { DRAW_SLOT_COPY } from './image-record.js';
+import { getSharedMessageFilterRules } from './draw-settings.js';
 
 // Synchronous notification of validated tag -> slot edits. Drawing owns the
 // edits; consumers may rebase transient references, never authorize other edits.
@@ -44,7 +45,7 @@ export function commitChatImageRemoval({ message, swipeIndex, slotId }) {
 }
 
 export function commitChatImagePlacement({ message, swipeIndex, before, edits, owner, restored = false }) {
-    const tags = parseChatImageTags(before);
+    const tags = parseChatImageTags(before, getSharedMessageFilterRules());
     let boundary = before.length;
     for (const edit of [...edits].sort((a, b) => b.start - a.start)) {
         const removal = edit.content === '' && before.slice(edit.start, edit.end) === edit.marker

@@ -1,5 +1,5 @@
 import { clone, equal } from '../engine/data.js';
-import type { History, Json, Receipt, Success } from '../types.js';
+import type { History, Json, Receipt, Success, SwipeRecord } from '../types.js';
 import { createIdentifier } from '../../../../shared/common/identifier.js';
 import { difference, applyDifference } from '../engine/difference.js';
 import { displayChanges } from '../engine/delta-view.js';
@@ -8,12 +8,14 @@ import { modelSource } from '../definition/stages.js';
 export { difference, applyDifference } from '../engine/difference.js';
 export { digest } from '../definition/digest.js';
 
+export const OPENING_SOURCE = 'opening';
+export const isOpeningReceipt = (receipt: Receipt) => receipt.source === OPENING_SOURCE;
 export const effectiveDelta = (receipt: Receipt) => Object.hasOwn(receipt, 'applied') ? receipt.applied! : receipt.delta;
 
-export function makeReceipt({ before, result, revision, source = 'api' }: { before: Json; result: Success; revision: number; source?: string }): Receipt {
+export function makeReceipt({ before, result, revision, source = 'api', retainParams = false }: { before: Json; result: Success; revision: number; source?: string; retainParams?: boolean }): Receipt {
     return { id: createIdentifier(), revision, source, delta: difference(before, result.state),
         // Before outcomes must identify the executed actions when replayed to prose.
-        actions: source === modelSource('before') ? clone(result.actions) : result.actions.map(({ id }) => ({ id })) };
+        actions: retainParams || source === modelSource('before') ? clone(result.actions) : result.actions.map(({ id }) => ({ id })) };
 }
 
 export function restore(state: Json, entries: Receipt[], reverse = false): Json {
@@ -24,6 +26,20 @@ export function restore(state: Json, entries: Receipt[], reverse = false): Json 
 export function receiptResult(state: Json, receipt: Receipt): Success {
     return { ok: true, state, receipt, changes: displayChanges(effectiveDelta(receipt)), committed: true, saved: true,
         diagnostics: [], actions: clone(receipt.actions), provenance: [] };
+}
+
+/** Project a whole floor from its existing receipts. The combined receipt is never saved. */
+export function recordResult(state: Json, records: SwipeRecord[], index: number): Success | undefined {
+    const entries = records[index]?.entries;
+    if (!entries?.length) {return;}
+    const observed = restore(state, records.slice(index + 1).flatMap(record => record.entries), true);
+    const before = restore(observed, entries, true);
+    // Native manual edits are not settlement facts. Reapply only recorded effects.
+    const after = restore(before, entries);
+    const owner = entries.find(entry => entry.beforeUpdate) ?? entries.at(-1)!;
+    const receipt = { ...clone(owner), revision: entries.at(-1)!.revision, delta: difference(before, after), actions: entries.flatMap(entry => clone(entry.actions)) };
+    delete receipt.applied;
+    return receiptResult(after, receipt);
 }
 
 /** Checkpoints accelerate a verified uninterrupted suffix only. */

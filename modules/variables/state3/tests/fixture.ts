@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { createSettlementService } from '../runtime/service.js';
+import { isOpeningReceipt } from '../runtime/history.js';
 import { clone } from '../engine/data.js';
 import type { Bundle, History, HostAdapter, Json, Result, Snapshot, SwipeRecord } from '../types.js';
 
@@ -15,7 +16,7 @@ export function fixture() {
     interface TestSnapshot extends Snapshot { identity: object; revision?: number }
     const adapter: HostAdapter<TestSnapshot> = {
         bundle: () => clone(card),
-        capture(index = records.length - 1) { return { identity, state: clone(state), history: clone(history), records: clone(records), lastReceiptIndex: records.reduce((last, record, floor) => record.entries.length ? floor : last, -1), index, revision: history?.revision, target: { floor: index, swipeId: 0 } }; },
+        capture(index = records.length - 1) { return { identity, state: clone(state), history: clone(history), records: clone(records), opening: index === 0 && records.length === 1, lastReceiptIndex: records.reduce((last, record, floor) => record.entries.some(entry => !isOpeningReceipt(entry)) ? floor : last, -1), index, revision: history?.revision, target: { floor: index, swipeId: 0 } }; },
         isCurrent(snapshot) { return snapshot.identity === identity && snapshot.revision === history?.revision; },
         assertMutable(snapshot) {
             if (snapshot.index < Math.max(0, records.length - 2) || snapshot.index >= records.length) {throw { code: 'target-missing' };}

@@ -98,6 +98,7 @@ test('direct Agent requests preserve explicit auth through real SDK requests and
         'Accept: review-fake-ambient-accept',
         'Content-Type: application/x-www-form-urlencoded',
     ].join('\n');
+    env.ANTHROPIC_CUSTOM_HEADERS = `${env.OPENAI_CUSTOM_HEADERS}\nanthropic-version: ambient-version`;
     const previous = new Map(Object.keys(env).map(key => [key, process.env[key]]));
     Object.assign(process.env, env);
     t.after(() => { for (const [key, value] of previous) { if (value === undefined) delete process.env[key]; else process.env[key] = value; } });
@@ -124,6 +125,10 @@ test('direct Agent requests preserve explicit auth through real SDK requests and
                         const key = apiKey?.trim() || '';
                         for (const request of service.requests) {
                             assertAuth(request.headers, provider, key);
+                            if (provider === 'anthropic') {
+                                assert.equal(request.headers['content-type'], 'application/json');
+                                assert.equal(request.headers['anthropic-version'], '2023-06-01');
+                            }
                             if (provider.startsWith('openai-')) {
                                 assert.equal(request.headers['content-type'], 'application/json');
                                 assert.equal(request.headers.accept, 'application/json');

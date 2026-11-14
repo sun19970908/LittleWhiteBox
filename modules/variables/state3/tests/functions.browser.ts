@@ -38,6 +38,13 @@ export async function verifyBuiltFunctions(api: State3Api) {
             typeof setTimeout,typeof Math.random]`)));
         expect(Array.isArray(absent) && absent.length === 16 && absent.every(value => value === 'undefined'), 'K8: host capabilities unavailable');
         expect(output(await api.tryDefinition(bundle(`()=>Function('return typeof fetch')()`))) === 'undefined', 'K8: dynamic code stays in guest');
+        for (const [source, phase, errorName] of [['()=>1;', 'source', 'SyntaxError'],
+            ['()=>{throw new TypeError("broken inventory");}', 'execute', 'TypeError']]) {
+            const result = await api.tryDefinition(bundle(source));
+            expect(!result.ok && result.diagnostics[0].code === 'function_exception'
+                && result.diagnostics[0].phase === phase && result.diagnostics[0].errorName === errorName
+                && typeof result.diagnostics[0].guestStack === 'string', 'K8: Worker preserves guest error details');
+        }
         const loop = bundle('()=>{while(true){}}');
         const timeout = await api.tryDefinition(loop);
         expect(!timeout.ok && timeout.diagnostics[0].code === 'function_work_limit', 'K8: infinite loop bounded');

@@ -33,7 +33,7 @@ test('K2/K3/K4: direct and ancestor writes cannot bypass restricted descendants;
         const result = await settle(compiled, state, input);
         assert.equal(result.ok, false); assert.equal(Object.hasOwn(result, 'state'), false); assert.deepEqual(state, before);
     }
-    bundle.definition.access.unshift({ path: ['hero'], write: [], description: 'Locked parent' });
+    bundle.definition.access.unshift({ path: ['hero'], direct: false, description: 'Locked parent' });
     assert.equal((await settle(compileDefinition(bundle), state, [set(['hero', 'future'], 1)])).ok, false);
 });
 
@@ -41,7 +41,6 @@ test('K1: the first action after a rule change reads values calculated by the cu
     const { state } = accepted(await initialize(compileDefinition(equipmentExample())));
     const bundle = equipmentExample(), definition = bundle.definition;
     definition.rules[0].value = { op: 'add', args: [{ get: ['hero', 'baseHealth'] }, { op: 'if', args: [{ get: ['hero', 'amulet'] }, { literal: 80 }, { literal: 0 }] }] };
-    definition.access.find(entry => entry.path.join('.') === 'hero.health')!.write.push('heal');
     definition.actions.push({ id: 'heal', title: 'Heal', parameters: { type: 'object', additionalProperties: false, properties: {} }, conversions: [], description: 'Restore full health.', requires: { literal: true }, effects: [{ path: ['hero', 'health'], value: { get: ['hero', 'maxHealth'] } }] });
     const result = accepted(await settle(compileDefinition(bundle), state, [action('heal')]));
     assert.equal(getAt(result.state, ['hero', 'maxHealth']), 140);

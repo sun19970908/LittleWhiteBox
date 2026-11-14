@@ -42,7 +42,7 @@ export async function verifyScopedSave(api: State3Api, bundle: Bundle) {
     const draft = await api.openDraft(), path = draft.root + 'variables/definition.json';
     const incomplete = await api.saveDraft(draft, [{ path, content: '{"name":"unfinished"}' }]);
     const saved = await api.saveCardDraft(incomplete);
-    requireValue('ok' in saved && Boolean(saved.ok), 'K6: incomplete card can be saved');
+    requireValue('ok' in saved && !saved.ok, 'K6: incomplete draft stays in workspace, not on the card');
     const updates = [{ path, content: JSON.stringify(bundle.definition) },
         ...Object.entries(bundle.functions).map(([id, content]) => ({ path: draft.root + 'variables/functions/' + id + '.js', content }))];
     const next = await api.saveDraft(await api.openDraft(), updates);
@@ -58,7 +58,7 @@ export async function verifyScopedSave(api: State3Api, bundle: Bundle) {
     const card = await response.json() as { data: { extensions: Record<string, unknown> } };
     requireValue((card.data.extensions['acceptance-neighbor'] as { marker: string }).marker === marker, 'K6: unrelated concurrent extension preserved');
     requireValue(JSON.stringify(JSON.parse(card.data.extensions['lwb-state3'] as string)) === JSON.stringify(bundle), 'K6: whole bundle persisted');
-    return { incompleteSaved: true, unrelatedPreserved: true, bundleSaved: true };
+    return { incompleteRejected: true, unrelatedPreserved: true, bundleSaved: true };
 }
 
 export async function verifySwipes(api: State3Api) {
@@ -230,7 +230,7 @@ export async function verifyStorage(api: State3Api, size = 10000, turns = 160) {
         schema: { type: 'object', required: ['inventory'], additionalProperties: false, properties: { inventory: { type: 'array', items: {
             type: 'object', required: ['id', 'quantity'], additionalProperties: false, properties: { id: { type: 'string' }, quantity: { type: 'number' } },
         } } } },
-        access: [{ path: ['inventory'], write: ['direct'], description: 'Inventory' }], rules: [], actions: [], constraints: [], functions: {}, views: {},
+        access: [{ path: ['inventory'], direct: true, description: 'Inventory' }], rules: [], actions: [], constraints: [], functions: {}, views: {},
     }, functions: {} };
     // Call on a freshly created isolated fixture only.
     await verifyScopedSave(api, bundle); accepted(await api.enable());

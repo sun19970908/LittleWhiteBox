@@ -72,6 +72,27 @@ test('infinite loops, recursive overflow, and source evaluation are bounded and 
     assert.equal(await run(request('() => 7')), 7);
 });
 
+// A failed guest must retain the exception and its source location; otherwise a
+// broken card cannot be diagnosed. Error extraction must not execute guest getters.
+test('guest syntax and runtime errors preserve structured diagnostics without running error getters', async () => {
+    for (const [source, phase, name] of [
+        ['() => 1;', 'source', 'SyntaxError'],
+        ['() => { throw new TypeError("broken inventory"); }', 'execute', 'TypeError'],
+    ]) {
+        await assert.rejects(run(request(source)), error => {
+            assert.ok(error instanceof FunctionExecutionError);
+            assert.equal(error.code, 'function_exception');
+            assert.equal(error.details.phase, phase);
+            assert.equal(error.details.errorName, name);
+            assert.ok(typeof error.details.message === 'string' && error.details.message.length > 0);
+            assert.ok(typeof error.details.guestStack === 'string' && error.details.guestStack.includes('calculation.js'));
+            return true;
+        });
+    }
+    await assert.rejects(run(request('() => { throw { get message() { while (true) {} } }; }')), { code: 'function_exception' });
+    assert.equal(await run(request('() => 7')), 7);
+});
+
 test('abort before initialization and between asynchronous initialization and execution produces no result', async () => {
     const early = new AbortController(); early.abort();
     await rejectsCode(request('() => { while (true) {} }', { signal: early.signal }), 'function_aborted');

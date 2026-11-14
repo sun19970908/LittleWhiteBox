@@ -22,6 +22,8 @@ for (const provider of ['google', 'openai-responses', 'openai-compatible', 'anth
         const tasks = [];
         const invoked = [];
         const mixed = [toolCall('note', 'n1'), toolCall('submit_scene_plan', 's1', { images: [] })];
+        // Rejected arguments must still receive a paired correction, never execute.
+        if (provider === 'openai-compatible') mixed[1].arguments += '}';
         const output = mixed.map(call => ({ type: 'function_call', id: `fc-${call.id}`, call_id: call.id,
             name: call.name, arguments: call.arguments, status: 'completed' }));
         const diagnostic = beginDrawScenePlannerDiagnostic();
@@ -70,6 +72,7 @@ for (const provider of ['google', 'openai-responses', 'openai-compatible', 'anth
                 const wire = new OpenAICompatibleAdapter(config).buildRequestBody(tasks[1]);
                 calls = wire.messages.flatMap(message => message.tool_calls || []).map(item => item.id);
                 receipts = wire.messages.filter(message => message.role === 'tool').map(item => ({ id: item.tool_call_id, result: JSON.parse(item.content) }));
+                assert.equal(wire.messages.flatMap(message => message.tool_calls || [])[1].function.arguments, mixed[1].arguments);
             }
             assert.deepEqual(calls, ['n1', 's1']);
             assert.deepEqual(receipts.map(item => item.id), calls);

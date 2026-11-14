@@ -12,9 +12,10 @@ import { extensionFolderPath } from "../../core/constants.js";
 import { isTrustedIframeEvent, postToIframe } from "../../core/iframe-messaging.js";
 import { AssistantStorage } from "../../core/server-storage.js";
 import { createAssistantHostWindow } from "./assistant-host-window.js";
+import { shouldAutoRevealWorkspace } from './shared/window-layout.js';
 import { TOOL_NAMES } from "./app-src/tooling.js";
 import { BUILTIN_SKILLS, skillCatalogLine } from './shared/skill-tools.js';
-import { CARD_SKILL, cardSkillContent } from '../card-workspace/assistant-contract.js';
+import { CARD_SKILL, FRONTEND_SKILL, cardSkillContent, frontendSkillContent } from '../card-workspace/assistant-contract.js';
 import { readableCardWorkspacePath, readableCardWorkspaceRelativePath } from '../card-workspace/paths.js';
 import { STATE3_SKILL, state3SkillContent, cardWorkspaceRequest } from '../variables/state3/skill/contract.js';
 import { STATE2_SKILL, state2SkillContent } from '../variables/state2/skill/contract.js';
@@ -2141,7 +2142,7 @@ async function readSkillTool(args = {}, options = {}) {
     if (builtin) {
         const filename = `${extensionFolderPath}/${builtin.path}`;
         const body = await readTextFile(filename, options);
-        const render = { [CARD_SKILL.id]: cardSkillContent, [STATE3_SKILL.id]: state3SkillContent, [STATE2_SKILL.id]: state2SkillContent, [LIVE_PAGE_SKILL.id]: livePageSkillContent }[builtin.id];
+        const render = { [CARD_SKILL.id]: cardSkillContent, [FRONTEND_SKILL.id]: frontendSkillContent, [STATE3_SKILL.id]: state3SkillContent, [STATE2_SKILL.id]: state2SkillContent, [LIVE_PAGE_SKILL.id]: livePageSkillContent }[builtin.id];
         return { ok: true, ...builtin, filename, content: render ? render(body, extensionFolderPath) : body.trim(), builtin: true };
     }
     const byFilename = normalizeSkillFileName(args.filename || '');
@@ -3215,18 +3216,20 @@ function revealDraftMessage() {
     pendingDraftMessage = '';
 }
 
-/** @param {{ variables?: boolean, version?: string }} [options] */
-export async function openCardWorkspace({ variables = false, version } = {}) {
+/** @param {{ variables?: boolean, version?: string, path?: string, message?: string, context?: string, reveal?: boolean }} [options] */
+export async function openCardWorkspace({ variables = false, version, path, message, context, reveal = false } = {}) {
     if (!window.xiaobaixAssistant) await initAssistant();
     const card = await executeToolCall(TOOL_NAMES.CARD_FILES, { action: 'open' });
     const request = cardWorkspaceRequest(card, { variables, version, variablesMode: extensionsModule.extension_settings?.LittleWhiteBox?.variablesMode });
-    setAssistantEditorContext({ source: 'card-files', note: `角色卡：${card.name}。工作区：${readableCardWorkspacePath(card.root)}。ReadSkill id: ${request.skillId}` });
+    if (path?.startsWith(card.root)) request.selectedFilePath = path;
+    if (message) request.draftMessage = message;
+    setAssistantEditorContext({ source: 'card-files', note: `角色卡：${card.name}。工作区：${readableCardWorkspacePath(card.root)}。ReadSkill id: ${request.skillId}\nSelected file: ${readableCardWorkspacePath(request.selectedFilePath)}${context ? `\n${context}` : ''}` });
     const workspace = await workspaceRepository.readWorkspace();
-    await workspaceRepository.saveWorkspaceUiState({ ...workspace, isWorkspaceOpen: true, workspacePanelMode: 'workspace',
+    await workspaceRepository.saveWorkspaceUiState({ ...workspace, isWorkspaceOpen: reveal || shouldAutoRevealWorkspace(), workspacePanelMode: 'workspace',
         selectedFilePath: request.selectedFilePath,
-        fileSearchQuery: '', showModifiedOnly: false, mobileWorkspacePane: 'viewer' });
+        fileSearchQuery: '', showModifiedOnly: false });
     openAssistant({ draftMessage: request.draftMessage });
-    if (assistantFrameReady) postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:card-workspace', payload: { path: request.state3 ? request.selectedFilePath : `${card.root}card.json`, localSources: workspace.localSources } });
+    if (assistantFrameReady) postToIframe(getAssistantHostWindow().getIframe(), { type: 'xb-assistant:card-workspace', payload: { path: request.selectedFilePath, reveal, localSources: workspace.localSources } });
     return card;
 }
 
@@ -3336,6 +3339,24 @@ async function handleIframeMessage(event) {
         case 'xb-assistant:close':
             closeAssistant();
             break;
+        case 'xb-assistant:minimize':
+            getAssistantHostWindow().minimize();
+            break;
+        case 'xb-assistant:state3-workbench': {
+            const { currentCard } = await import('../card-workspace/host.js');
+            const { rootFor } = await import('../card-workspace/paths.js');
+            const root = rootFor(currentCard().avatar);
+            if (typeof payload?.path !== 'string' || !payload.path.startsWith(root + 'variables/')) break;
+            if (payload.tab === 'test') {
+                const { COPY } = await import('../card-workspace/copy.js');
+                await openCardWorkspace({ variables: true, version: '3.0', path: payload.path, message: COPY.testRequest });
+                break;
+            }
+            const { openState3 } = await import('../variables/state3/index.ts');
+            await openState3('author', payload.tab === 'extensions' ? 'extensions' : 'rules', payload.path);
+            getAssistantHostWindow().minimize();
+            break;
+        }
         case 'xb-assistant:save-config': {
             const patch = payload && typeof payload === 'object' ? payload : {};
             const requestId = String(patch.requestId || '');

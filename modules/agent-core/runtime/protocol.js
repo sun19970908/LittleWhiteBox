@@ -1,4 +1,4 @@
-import { repairLooseToolArguments } from './loose-tool-arguments.js';
+import { hasTrailingArgumentData, repairLooseToolArguments } from './loose-tool-arguments.js';
 
 function normalizeToolCallArguments(toolCall = {}) {
     const name = String(toolCall?.name || '').trim();
@@ -96,10 +96,11 @@ export function extractGoogleProviderToolCalls(providerPayload, options = {}) {
 }
 
 export function resolveResultToolCalls(result = {}, providerConfig = {}, options = {}) {
-    // Abnormal transport endings do not invalidate complete calls, but must never
-    // turn a cut-off Write/Edit argument into a repaired, executable request.
-    if (result.completion === 'incomplete') {
-        for (const call of Array.isArray(result.toolCalls) ? result.toolCalls : []) {
+    // Neither a cut-off reply nor concatenated argument objects can authorize a
+    // repaired call (or reach callers that default failed JSON parsing to {}).
+    for (const call of Array.isArray(result.toolCalls) ? result.toolCalls : []) {
+        if (result.completion === 'incomplete'
+            || typeof call.arguments === 'string' && hasTrailingArgumentData(call.arguments.trim())) {
             try {
                 const args = typeof call.arguments === 'string' ? JSON.parse(call.arguments) : call.arguments;
                 if (!args || typeof args !== 'object' || Array.isArray(args)) { throw new TypeError('Expected an argument object'); }

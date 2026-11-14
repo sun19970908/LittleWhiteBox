@@ -2,12 +2,14 @@ import { getContext } from '../../../../../../extensions.js';
 import { getVectorConfig } from '../data/config.js';
 import { getSummaryStore } from '../data/store.js';
 import { assertMemoryWritable, waitForMemoryCommit } from '../data/memory-commit.js';
-import { getStateAtoms, getStateVectorDescriptors, saveStateVectors } from '../vector/storage/state-store.js';
-import { getAllEventVectors, saveEventVectors } from '../vector/storage/chunk-store.js';
+import { getStateAtoms, getStateVectorDescriptors, saveStateVectors, deleteStateVectorsByIds } from '../vector/storage/state-store.js';
+import { getEventVectorDescriptors, saveEventVectors, deleteEventVectorsByIds } from '../vector/storage/chunk-store.js';
 import { getEngineFingerprint } from '../vector/utils/embedder.js';
 import { inputDigest } from '../vector/utils/vector-input-digest.js';
-import { buildEventVectorText } from '../vector/pipeline/event-vector-input.js';
+import { buildEventVectorText, selectMissingEventVectorPairs } from '../vector/pipeline/event-vector-input.js';
 import { buildRAggregateText } from '../vector/pipeline/state-vector-input.js';
+import { selectMissingStateVectorAtoms } from '../vector/pipeline/state-vector-policy.js';
+import { orphanVectorIds } from '../vector/utils/vector-source.js';
 import { embed } from '../vector/llm/siliconflow.js';
 import { runVectorGenerationTask, cancelVectorWriteOperation } from '../vector/runtime/maintenance-coordinator.js';
 import { createAbortError, throwIfSignalAborted } from '../../../shared/common/abort-utils.js';
@@ -17,16 +19,19 @@ export async function inspectMaintenanceIndexes(chatId, impact) {
     const config = getVectorConfig();
     if (!config.enabled) return { status: 'disabled', events: [], atoms: [] };
     const fingerprint = getEngineFingerprint(config);
-    const [eventVectors, stateVectors] = await Promise.all([getAllEventVectors(chatId), getStateVectorDescriptors(chatId)]);
+    const [eventVectors, stateVectors] = await Promise.all([getEventVectorDescriptors(chatId), getStateVectorDescriptors(chatId)]);
     requireMemory(getContext().chatId === chatId, 'conflict');
-    const events = (getSummaryStore()?.json?.events || []).filter(event => impact.eventIds.includes(event.id)
-        && !eventVectors.some(vector => vector.eventId === event.id && vector.fingerprint === fingerprint
-            && vector.sourceHash === inputDigest('event', buildEventVectorText(event))));
-    const atoms = getStateAtoms().filter(atom => impact.atomIds.includes(atom.atomId)
-        && !stateVectors.some(vector => vector.atomId === atom.atomId && vector.fingerprint === fingerprint
-            && vector.vectorValid && vector.rVectorValid && vector.sourceHash === inputDigest('state', atom.semantic)
-            && vector.relationHash === inputDigest('relation', buildRAggregateText(atom))));
-    return { status: events.length || atoms.length ? 'pending' : 'ready', events, atoms, fingerprint };
+    const sourceEvents = (getSummaryStore()?.json?.events || []).filter(event => impact.eventIds.includes(event.id));
+    const sourceAtoms = getStateAtoms().filter(atom => impact.atomIds.includes(atom.atomId));
+    const missingEventIds = new Set(selectMissingEventVectorPairs(sourceEvents, eventVectors, fingerprint).map(pair => pair.id));
+    const events = sourceEvents.filter(event => missingEventIds.has(event.id));
+    const atoms = selectMissingStateVectorAtoms(sourceAtoms, stateVectors, fingerprint);
+    const obsoleteEventIds = orphanVectorIds(eventVectors.filter(vector => impact.eventIds.includes(vector.eventId)),
+        new Set(sourceEvents.map(event => event.id)), 'eventId');
+    const obsoleteAtomIds = orphanVectorIds(stateVectors.filter(vector => impact.atomIds.includes(vector.atomId)),
+        new Set(sourceAtoms.map(atom => atom.atomId)), 'atomId');
+    return { status: events.length || atoms.length || obsoleteEventIds.length || obsoleteAtomIds.length ? 'pending' : 'ready',
+        events, atoms, obsoleteEventIds, obsoleteAtomIds, fingerprint };
 }
 
 /** Only derived data. Retrying here cannot issue another semantic maintenance request. */
@@ -74,6 +79,10 @@ export async function repairMaintenanceIndexes(chatId, impact, { signal: ownerSi
                     atomItems.set(job.id, item);
                 }
             }
+            await deleteEventVectorsByIds(chatId, missing.obsoleteEventIds.filter(id => !currentEvents.has(id)));
+            throwIfSignalAborted(signal);
+            await deleteStateVectorsByIds(chatId, missing.obsoleteAtomIds.filter(id => !currentAtoms.has(id)));
+            throwIfSignalAborted(signal);
             if (eventItems.length) await saveEventVectors(chatId, eventItems, missing.fingerprint);
             throwIfSignalAborted(signal);
             if (atomItems.size) await saveStateVectors(chatId, [...atomItems.values()], missing.fingerprint);

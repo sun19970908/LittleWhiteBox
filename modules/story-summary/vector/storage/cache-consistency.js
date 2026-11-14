@@ -2,6 +2,7 @@ import { packageError } from './package/messages.js';
 import { buildSourceIndex, resolvePackageSources } from './package/sources.js';
 import { collectChunkMaterials } from '../pipeline/chunk-materials.js';
 import { makeChunkId } from './chunk-store.js';
+import { matchesVectorSource } from '../utils/vector-source.js';
 
 // The automatic check needs identities and input digests, not embedding arrays.
 // Export projects through the same boundary before attaching its binary payload.
@@ -80,28 +81,36 @@ export function inspectCacheSourceCoverage(cache, operation) {
     const sources = buildSourceIndex(operation.snapshot, materials);
     const cachedIds = new Set(cache.chunks.map(chunk => chunk.chunkId));
     const fingerprint = (cache.chunkVectors[0] || cache.stateVectors[0] || cache.eventVectors[0])?.fingerprint;
+    if ([cache.chunkVectors, cache.stateVectors, cache.eventVectors].some(records => records.some(record => record.fingerprint !== fingerprint))) {
+        throw packageError('invalid_package', { field: 'fingerprint' });
+    }
     // Daily usability and portable provenance are different contracts. Missing
     // digests do not prove corruption; a present digest must still match. Export
     // remains strict and never fabricates a digest for an existing vector.
+    let repairableMismatch;
     for (const [records, index, key, kind] of [
         [cache.chunkVectors, sources.chunks, 'chunkId', 'chunk'],
         [cache.stateVectors, sources.states, 'atomId', 'state'],
         [cache.eventVectors, sources.events, 'eventId', 'event'],
     ]) {
         for (const record of records) {
-            if (record.fingerprint !== fingerprint) throw packageError('invalid_package', { field: 'fingerprint' });
             const source = index.get(record[key]);
-            if (!source || (record.sourceHash && record.sourceHash !== source.sourceHash)
-                || (kind === 'state' && (source.floor !== record.floor || !Number.isInteger(record.floor)
-                    || record.floor < 0 || record.floor >= chat.length
-                    || (record.hasRelationVector && record.relationHash && record.relationHash !== source.relationHash)))
+            if (!matchesVectorSource(record, source && { ...source,
+                relationHash: record.hasRelationVector ? source.relationHash : undefined })
+                || (kind === 'state' && (!Number.isInteger(record.floor) || record.floor < 0 || record.floor >= chat.length))
                 // An orphan's material may only be recovered from live prose
                 // when the original vector actually proves that input.
                 || (kind === 'chunk' && !cachedIds.has(record.chunkId) && !record.sourceHash)) {
-                throw packageError('source_mismatch', { kind, id: record[key] });
+                const error = packageError('source_mismatch', { kind, id: record[key],
+                    repairable: kind !== 'state' || !source || (Number.isInteger(source.floor) && source.floor >= 0 && source.floor < chat.length) });
+                // A fillable mismatch must not hide a later fault that filling
+                // cannot fix, whether in the same layer or a subsequent one.
+                if (!error.details.repairable) throw error;
+                repairableMismatch ??= error;
             }
         }
     }
+    if (repairableMismatch) throw repairableMismatch;
     const vectorIds = new Set(cache.chunkVectors.map(record => record.chunkId));
     const missingFloors = new Set();
     for (const [id, source] of sources.chunks) {

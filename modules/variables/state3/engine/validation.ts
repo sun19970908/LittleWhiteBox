@@ -23,10 +23,10 @@ async function checkState(compiled: Compiled, context: EvaluationContext): Promi
             .map(path => ({ path, value: clone(getAt(context.state, path)) })) }];
     }
     const errors: Diagnostic[] = [];
-    for (const constraint of compiled.definition.constraints) {
+    for (const [index, constraint] of compiled.definition.constraints.entries()) {
         let issue: Diagnostic | undefined;
         try {
-            if (await evaluate(constraint.test, context) !== true) {issue = { code: 'constraint' };}
+            if (await evaluate(constraint.test, context, ['constraints', String(index), 'test']) !== true) {issue = { code: 'constraint' };}
         } catch (error) { issue = diagnostic(error); }
         context.signal?.throwIfAborted();
         // Restoration has no batch-start state. Leave transition checks to a real

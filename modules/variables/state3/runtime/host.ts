@@ -7,6 +7,7 @@ import { reject } from '../engine/diagnostics.js';
 import { createSaveQueue } from './persistence.js';
 import { decodeBundle } from '../definition/card-files.js';
 import { digest } from '../definition/digest.js';
+import { isOpeningReceipt } from './history.js';
 import type { History, HostAdapter, JsonObject, Receipt, Snapshot, Success, SwipeRecord } from '../types.js';
 import type { CaptureContext } from '../../shared/context-capture.js';
 
@@ -111,8 +112,9 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             return { chat: ctx.chat, messages: [...ctx.chat], metadata: ctx.chatMetadata, chatId: ctx.chatId, characterId: ctx.characterId,
                 history: clone(history), state: readVariables((ctx.chatMetadata.variables || {}) as Record<string, unknown>, history?.roots),
                 records: selectedRecords(ctx.chat), index, message, text: message?.mes, holder: message && selected(message),
+                opening: index === 0 && ctx.chat.length === 1 && !message?.is_user && !message?.is_system && Boolean(message && selected(message)),
                 lastReceiptIndex: ctx.chat.reduce((last, item, floor) => holders(item).some(holder =>
-                    Boolean((holder.extra?.[CHAT_KEY] as SwipeRecord | undefined)?.entries.length)) ? floor : last, -1),
+                    Boolean((holder.extra?.[CHAT_KEY] as SwipeRecord | undefined)?.entries.some(entry => !isOpeningReceipt(entry)))) ? floor : last, -1),
                 rules: clone(character.data?.extensions?.[CARD_EXTENSION]), revision: history?.revision, target: { floor: index, swipeId: message?.swipe_id ?? 0 },
                 destination: { ch_name: character.name, file_name: character.chat, avatar_url: character.avatar }, saveChat: () => ctx.saveChat() };
         },
@@ -121,6 +123,8 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             return ctx.chat === snapshot.chat && ctx.chatMetadata === snapshot.metadata && ctx.chatId === snapshot.chatId
                 && ctx.characterId === snapshot.characterId && equal(snapshot.rules, ctx.characters?.[ctx.characterId]?.data?.extensions?.[CARD_EXTENSION]) && !inGroup(ctx) && history?.revision === snapshot.revision
                 && equal(snapshot.state, readVariables((ctx.chatMetadata.variables || {}) as Record<string, unknown>, snapshot.history?.roots))
+                && (!snapshot.opening || (ctx.chat.length === snapshot.messages.length && !ctx.chat[0]?.is_user && !ctx.chat[0]?.is_system
+                    && ctx.chat.every((message, index) => message === snapshot.messages[index])))
                 && (!snapshot.message || (ctx.chat.includes(snapshot.message) && snapshot.message.mes === snapshot.text && selected(snapshot.message) === snapshot.holder
                     && (snapshot.message.swipe_id ?? 0) === snapshot.target.swipeId));
         },
@@ -135,8 +139,14 @@ export function createHostAdapter({ committed }: { committed?: (result: Success)
             // A rewind invalidates every alternative in its suffix too. Switching
             // an old AI swipe must not resurrect effects based on the discarded USER.
             if (invalidateFrom !== undefined) {
-                snapshot.messages.slice(invalidateFrom).forEach(message => {
-                    holders(message).forEach(holder => { if (holder.extra) {delete holder.extra[CHAT_KEY];} });
+                snapshot.messages.slice(invalidateFrom).forEach((message, offset) => {
+                    holders(message).forEach(holder => {
+                        if (!holder.extra) {return;}
+                        const stored = holder.extra[CHAT_KEY] as SwipeRecord | undefined;
+                        const initial = invalidateFrom + offset === 0 ? stored?.entries.filter(isOpeningReceipt) : undefined;
+                        if (initial?.length) {holder.extra[CHAT_KEY] = { entries: clone(initial) };}
+                        else {delete holder.extra[CHAT_KEY];}
+                    });
                 });
             }
             retry = undefined;

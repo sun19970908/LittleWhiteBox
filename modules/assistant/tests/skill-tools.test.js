@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BUILTIN_SKILLS, loadedSkillIds, filterSkillTools } from '../shared/skill-tools.js';
 import { TOOL_DEFINITIONS, TOOL_NAMES, getAssistantToolDefinitions } from '../app-src/tooling.js';
-import { CARD_SKILL } from '../../card-workspace/assistant-contract.js';
+import { CARD_SKILL, FRONTEND_SKILL } from '../../card-workspace/assistant-contract.js';
 import { LIVE_PAGE_SKILL } from '../../live-page-inspection/tool-contract.ts';
 import { STATE3_SKILL } from '../../variables/state3/skill/contract.ts';
 import { PLANNING_SKILL, SKILL_MANAGEMENT_SKILL } from '../skills/contract.js';
@@ -24,7 +24,7 @@ test('resident definitions exclude skill tools; each skill enables only its decl
         const enabled = names(filterSkillTools(TOOL_DEFINITIONS, [skill.id]));
         assert.deepEqual(new Set(enabled.filter(name => !base.includes(name))), new Set(skill.tools));
     }
-    const shared = names(filterSkillTools(TOOL_DEFINITIONS, [CARD_SKILL.id, LIVE_PAGE_SKILL.id, STATE3_SKILL.id]));
+    const shared = names(filterSkillTools(TOOL_DEFINITIONS, [CARD_SKILL.id, FRONTEND_SKILL.id, LIVE_PAGE_SKILL.id, STATE3_SKILL.id]));
     assert.equal(shared.filter(name => name === TOOL_NAMES.CARD_FILES).length, 1);
     assert.equal(new Set(shared).size, shared.length);
 });

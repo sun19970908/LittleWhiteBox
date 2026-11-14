@@ -66,7 +66,6 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
             ensureDirectoryNode(normalizedDirectoryPath);
         });
 
-        const itemGroups = new Map();
         source.files.forEach((file) => {
             const display = cardDisplay.get(file.path);
             const modified = isModifiedFile(file);
@@ -75,15 +74,7 @@ export function buildWorkspaceTree(localSources = [], options = {}) {
             if (searchQuery && !searchText.includes(searchQuery)) return;
 
             const segments = file.relativePath.split('/').filter(Boolean);
-            let parent = ensureDirectoryNode(segments.slice(0, -1).join('/'));
-            if (display) {
-                if (!itemGroups.has(display.groupKey)) {
-                    const group = { key: display.groupKey, type: 'group', label: display.name, children: [], modified: false };
-                    itemGroups.set(display.groupKey, group);
-                    parent.children.push(group);
-                }
-                parent = itemGroups.get(display.groupKey);
-            }
+            const parent = ensureDirectoryNode(segments.slice(0, -1).join('/'));
 
             parent.children.push({
                 key: `file:${file.path}`,

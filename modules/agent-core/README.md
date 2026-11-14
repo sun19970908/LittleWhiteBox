@@ -41,6 +41,12 @@ createPlanLedger({ plansTable });
 
 持久化格式 v2 不含 `modelConfigs`。读取旧设置时，`settings-migration.js` 在仓库入口按冻结的 v1 规则转换：每个预设保留原来选中渠道的完整配置，Vertex 专属选项保留在同一预设的 `vertex` 字段；不同预设的名称和选择不变。旧数据不会进入日常表单和运行时读写，下一次保存只写当前格式。删除预设沿用原删除入口；移除 Vertex 时仅清理 `vertex` 字段与注册，不删除共享的 URL、Key、模型。
 
+## 模型协议与 SDK 升级
+
+渠道选择决定请求格式，中转可使用跨厂商模型和自定义别名。升级 SDK 保留现有工具、采样和思考控制，不根据域名增加分流，不根据模型名新增工具拦截或要求换渠道。Anthropic 保留升级前的 Messages API 版本与 `x-api-key` 鉴权，继续兼容原有中转。
+
+Google GenerateContent 的 Gemini 2.5 使用 `thinkingBudget`；其余名称沿用渠道的 `thinkingLevel`，新增 XHIGH。Vertex 和 Google 的改名模型也可选择 XHIGH。能力与参数映射仍集中在 `reasoning-capabilities.js` 和各协议适配器，不修改保存的预设。
+
 ## API Key 与免密反代
 
 共享主配置与分身配置的 API Key 均可留空。空值、空白或未提供的 Key 表示不提供模型密码；填写 Key 时按所选 Provider 鉴权。设置和请求共用 CORE 的鉴权规则；模型是否已配置不取决于 Key 是否为空。
@@ -55,7 +61,7 @@ Claude 和 Google 的模型列表鉴权与生成鉴权分开：预设中的 `mod
 
 ## Google Vertex AI
 
-选择独立的 **Google Vertex AI** 渠道，不读取酒馆主连接。此渠道面向 Vertex 上的 Gemini 3.8 / 4 Argon GenerateContent 文本、图片输入与工具调用；不包含 Claude 等 Model Garden 合作模型，也不把 OpenAI 兼容接口当作 Vertex 原生协议。
+选择独立的 **Google Vertex AI** 渠道，不读取酒馆主连接。此渠道面向 Vertex 上的 Gemini GenerateContent 文本、图片输入与工具调用；不包含 Claude 等 Model Garden 合作模型，也不把 OpenAI 兼容接口当作 Vertex 原生协议。
 
 - **中转（默认）**：填写中转地址、API Key 和中转提供的模型名称。使用 Gemini 原生的 `/v1beta/models/{model}:generateContent` / `streamGenerateContent?alt=sse` 路由，以 `x-goog-api-key` 鉴权；地址已带版本时不重复追加，文本 API 入口也支持自定义前缀。中转负责把请求路由到 Vertex。模型别名作为不透明标识编码传输，不靠 `gemini-*` 白名单判断能力；模型列表保留别名。不会读取云项目或发起 OAuth。
 - **服务账号 JSON（Google Cloud 项目）**：为服务账号授予目标项目的 Vertex AI User（`roles/aiplatform.user`）权限，下载 JSON 后导入。项目 ID 留空时使用 JSON 的 `project_id`；跨项目调用时填写目标项目。区域默认 `global`，也可填写模型支持的区域或多区域 `us` / `eu`。模型填写短 ID，如 `gemini-3.8-flash`。
@@ -63,7 +69,7 @@ Claude 和 Google 的模型列表鉴权与生成鉴权分开：预设中的 `mod
 
 服务账号认证通过浏览器原生 Web Crypto 签名，需 HTTPS 或 localhost；不需新增本地服务。JSON 含私钥，与现有 API Key 一样保存在用户自己的模型预设中，不是加密保险箱；不要分享或上传含凭据的配置，也不要在不信任的酒馆实例或扩展环境中导入。删除凭据可清空对应 JSON / Key 后保存，或删除预设；撤销访问需在 Google Cloud 删除相应密钥。切换认证模式保留编辑值，但运行时只传递当前模式所需凭据。
 
-按 [3.8 官方协议](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-3-8-flash)和 [4 Argon 官方协议](https://docs.cloud.google.com/gemini-enterprise-agent-platform/models/guides/gemini-4-argon)，思考强度提供 LOW / MEDIUM / HIGH；跟随默认时不发送强度，开启但未指定时使用 MEDIUM。不能发送 MINIMAL、`thinkingBudget` 或显式关闭思考。此渠道不发送已被忽略的温度 / Top P / Top K，以及会被拒绝的频率 / 存在惩罚；不根据中转模型别名切换这些规则。
+沿用原有渠道约定：LOW / MEDIUM / HIGH，另补充 XHIGH；开启但未指定时仍使用 MEDIUM，不发送 MINIMAL、`thinkingBudget` 或显式关闭思考。跟随默认时不发送强度。此渠道继续省略温度 / Top P / Top K 和频率 / 存在惩罚，不通过中转模型名称切换这些规则。
 
 流式工具请求默认开启 `streamFunctionCallArguments`；中转不透传此字段时可关闭，仍接受完整 `functionCall.args`。按 [Vertex 分片协议](https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/function-calling#streaming_function_call_arguments)处理 `partialArgs` 的路径、类型、字符串续片和两层 `willContinue`，同名调用保持独立。只有参数完整才返回可执行工具；签名和真实调用 ID 保留，无 ID 不伪造供应商 ID。当前会话及保存后重放都使用完整调用，不回传参数碎片。
 

@@ -7,7 +7,7 @@ import type { AgentToolDefinition } from '../../../agent-core/public-api.js';
 export const SUBMIT_TOOL = 'write';
 const object = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === 'object' && !Array.isArray(value);
 const blockedPaths = (compiled: Compiled, stage?: UpdateStage) => [
-    ...compiled.definition.access.filter(entry => !entry.write.includes('direct') || !allowsStage(compiled.definition, entry, stage)).map(entry => entry.path),
+    ...compiled.definition.access.filter(entry => !entry.direct || !allowsStage(compiled.definition, entry, stage)).map(entry => entry.path),
     ...compiled.rules.filter(rule => rule.kind === 'derive').map(rule => rule.path),
 ];
 
@@ -54,7 +54,7 @@ export function getWritableFields(compiled: Compiled, stage?: UpdateStage): Writ
 }
 export function getInputSchema(compiled: Compiled, stage?: UpdateStage): JsonObject {
     const operations: JsonObject[] = [];
-    for (const access of compiled.definition.access.filter(entry => entry.write.includes('direct') && allowsStage(compiled.definition, entry, stage))) {
+    for (const access of compiled.definition.access.filter(entry => entry.direct && allowsStage(compiled.definition, entry, stage))) {
         const blocked = blockedPaths(compiled, stage);
         if (blocked.some(path => contains(path, access.path))) {continue;}
         let schema: unknown = compiled.definition.schema;

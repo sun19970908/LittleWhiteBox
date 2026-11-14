@@ -28,7 +28,7 @@ function responseFor(provider, stream) {
     if (provider === 'openai-responses') return [
         { type: 'response.created', response: { ...responses, output: [], status: 'in_progress' } },
         { type: 'response.output_item.added', output_index: 0, item },
-        { type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'OK' },
+        { type: 'response.output_text.delta', item_id: item.id, output_index: 0, content_index: 0, delta: 'OK' },
         { type: 'response.output_item.done', output_index: 0, item },
         { type: 'response.completed', response: responses },
     ].map(event).join('');

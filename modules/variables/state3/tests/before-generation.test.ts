@@ -8,13 +8,15 @@ import { equipmentExample } from '../definition/example.js';
 import { compileDefinition } from '../definition/compile.js';
 import { digest } from '../definition/digest.js';
 import { modelSource } from '../definition/stages.js';
-import { beforeReceipt, beforeOutcome } from '../runtime/before-result.js';
+import { beforeReceipt, beforeOutcome, beforeFloorOutcome } from '../runtime/before-result.js';
 import { buildUpdateTask, beforeProsePrompt } from '../model/prompts.js';
 import { correctionTask } from '../../updater/correction.js';
+import { readResponseCompletion } from '../../../agent-core/runtime/response-completion.js';
 import { mergeAbortSignals } from '../../../../shared/common/abort-utils.js';
 import { diagnostic, reject } from '../engine/diagnostics.js';
 import { runFunctionInVm, type FunctionOptions } from '../engine/functions-vm.js';
 import { CHAT_KEY } from '../definition/format.js';
+import { activeTools, TOOL_CALL_LIMIT } from '../extensions/definition.js';
 import type { createBeforeGeneration } from '../runtime/before-generation.js';
 import type { createState3Updater } from '../model/updater.js';
 import type { ChatMessage } from '../runtime/host.js';
@@ -28,7 +30,7 @@ const source = (file: string) => ts.transpileModule(readFileSync(new URL('../' +
 async function harness() {
     const f = fixture(), bundle = equipmentExample(); bundle.definition.updates = ['before', 'after'];
     bundle.definition.actions.forEach(action => {action.stages = ['before'];});
-    bundle.definition.access.filter(entry => entry.write.includes('direct')).forEach(entry => {entry.stages = ['after'];});
+    bundle.definition.access.filter(entry => entry.direct).forEach(entry => {entry.stages = ['after'];});
     accepted(await f.service.enable(bundle));
     let chat: ChatMessage[] = [{ mes: 'opening', name: 'Hero' }], generating = false, prompt = '', selected = true, composer = '';
     let interceptor: (...args: unknown[]) => Promise<void>;
@@ -45,8 +47,8 @@ async function harness() {
     let answer: () => unknown | Promise<unknown> = () => ({ completion: 'complete', truncated: false, text: '',
         toolCalls: [{ name: 'write', arguments: JSON.stringify({ state: [{ action: 'unequip', params: {} }] }) }] });
     const env = {
-        getContext: ctx, latestUserIndex, digest, modelSource, beforeReceipt, beforeOutcome, beforeProsePrompt,
-        compileDefinition, buildUpdateTask, correctionTask, mergeAbortSignals, diagnostic, reject, CHAT_KEY,
+        getContext: ctx, latestUserIndex, digest, modelSource, beforeReceipt, beforeOutcome, beforeFloorOutcome, beforeProsePrompt,
+        compileDefinition, buildUpdateTask, correctionTask, mergeAbortSignals, diagnostic, reject, CHAT_KEY, activeTools, TOOL_CALL_LIMIT,
         AbortController, setTimeout, structuredClone, Promise, isGenerating: () => generating, inGroup: () => false,
         document: { getElementById: () => ({ value: composer }) },
         state3Selected: () => selected, passageText: (text: string) => text, exposeVariableReads: () => () => {},
@@ -89,6 +91,7 @@ async function harness() {
     }
     return { f, updater, generate, append, requests, prose, captures, results, emit, event_types, disposedSessions: () => disposedSessions,
         before: () => before, chat: () => chat, answer: (next: typeof answer) => {answer = next;},
+        failOpen(error: unknown) {env.window.xiaobaixAgent.openSession = async () => {throw error;};},
         async drain() {while (pending.size) {await Promise.all([...pending]);}},
         reopen() {before.dispose(); f.load(f.saved()); chat = structuredClone(chat); before = create();},
         dispose() {selected = false; before.dispose();},
@@ -114,6 +117,87 @@ function localFailures(count: number) {
     }
     return { Worker: Worker as unknown as typeof globalThis.Worker, counts: () => ({ created, terminated }) };
 }
+
+// An explicit API failure cannot buy a model correction or publish a gameplay
+// change, in either phase (duplicate billing / false settlement).
+test('provider failures end before/after updates after one request with state unchanged', async t => {
+    for (const stage of ['before', 'after'] as const) {
+        const h = await harness(); t.after(() => h.dispose());
+        h.append({ mes: 'Player action', is_user: true, name: 'Player' });
+        if (stage === 'after') {h.append({ mes: 'Completed passage', name: 'Hero' });}
+        const start = h.f.saved().state;
+        h.answer(() => readResponseCompletion('openai', 'Proxy error (HTTP 400 Bad Request)', false, undefined, 'INVALID_ARGUMENT'));
+        const result = await h.updater.update({ stage, index: h.chat().length - 1 });
+        assert.equal(result.ok, false);
+        assert.equal(result.diagnostics[0].code, 'model-request');
+        assert.equal((result.diagnostics[0].cause as { code: string }).code, 'AGENT_PROVIDER_ERROR');
+        assert.equal((result.diagnostics[0].cause as { status: number }).status, 400);
+        assert.deepEqual(h.f.saved().state, start);
+        assert.equal(h.requests.length, 1);
+    }
+});
+
+// Provider codes are not settlement codes; session setup and network failures
+// preserve their cause, publish nothing, dispose ownership, and buy no correction.
+test('model boundary classifies arbitrary provider codes and session setup failures', async t => {
+    const errors = [
+        Object.assign(new Error('Connection error.'), { code: 'AGENT_REQUEST_FAILED' }),
+        Object.assign(new Error('Invalid API key'), { code: 'invalid_api_key', status: 401 }),
+        Object.assign(new Error('quota exhausted'), { code: 'resource_exhausted', status: 429 }),
+        Object.assign(new Error('provider constraint'), { code: 'constraint', status: 503 }),
+        new Error('Failed to fetch'),
+    ];
+    for (const stage of ['before', 'after'] as const) {
+        for (const error of errors) {
+            const h = await harness(); t.after(() => h.dispose());
+            h.append({ mes: 'Player action', is_user: true });
+            if (stage === 'after') {h.append({ mes: 'Completed passage' });}
+            const start = h.f.saved();
+            h.answer(() => {throw error;});
+            const result = await h.updater.update({ stage, index: h.chat().length - 1 });
+            assert.equal(result.ok, false);
+            assert.deepEqual(result.diagnostics[0], { code: 'model-request', cause: diagnostic(error) });
+            assert.deepEqual(h.f.saved(), start);
+            assert.equal(h.requests.length, 1);
+            assert.equal(h.disposedSessions(), 1);
+            assert.equal(h.updater.status().busy, false);
+        }
+        const h = await harness(); t.after(() => h.dispose());
+        h.append({ mes: 'Player action', is_user: true });
+        if (stage === 'after') {h.append({ mes: 'Completed passage' });}
+        const error = Object.assign(new Error('Select a model'), { code: 'AGENT_NOT_CONFIGURED' });
+        h.failOpen(error);
+        const start = h.f.saved();
+        const result = await h.updater.update({ stage, index: h.chat().length - 1 });
+        assert.equal(result.ok, false);
+        assert.deepEqual(result.diagnostics[0], { code: 'model-request', cause: diagnostic(error) });
+        assert.deepEqual(h.f.saved(), start);
+        assert.equal(h.requests.length, 0);
+        assert.equal(h.disposedSessions(), 0);
+        assert.equal(h.updater.status().busy, false);
+    }
+});
+
+// D9：JSON 解析与提交形状错误必须区分，纠正请求收到原始原因；代价：付费重试仍猜错协议。
+test('D9: malformed submissions preserve their cause in the sole correction request', async t => {
+    for (const [argument, reason] of [['{broken', 'invalid-json'], ['{"state":{}}', 'invalid-shape']]) {
+        const h = await harness(); t.after(() => h.dispose());
+        h.append({mes:'Remove the charm.', is_user:true});
+        h.answer(() => ({completion:'complete',truncated:false,text:'',toolCalls:[{name:'write',arguments:argument}]}));
+        const before = h.f.saved().state;
+        const result = await h.updater.update({stage:'before',index:1});
+        assert.equal(result.ok,false); assert.equal(result.diagnostics[0].reason,reason);
+        assert.equal(h.requests.length,2); assert.deepEqual(h.f.saved().state,before);
+        const content=String(h.requests[1].messages.at(-1)!.content);
+        const correction=JSON.parse(content.slice(content.indexOf('\n\n')+2));
+        assert.equal(correction.errors[0].reason,reason);
+        if (reason==='invalid-json') {
+            assert.equal(correction.errors[0].arguments,argument);
+            assert.equal(correction.errors[0].cause.errorName,'SyntaxError');
+            assert.ok(correction.errors[0].cause.message);
+        } else {assert.deepEqual(correction.errors[0].actual,{state:{}});}
+    }
+});
 function useFunction(h: Awaited<ReturnType<typeof harness>>) {
     const bundle = h.f.saved().card;
     bundle.definition.functions = { maximum: { reads: [['hero', 'amulet']], description: 'Equipment changes the health maximum.' } };
@@ -121,6 +205,56 @@ function useFunction(h: Awaited<ReturnType<typeof harness>>) {
     bundle.definition.rules[0].value = { call: 'maximum', args: [] };
     h.f.setCard(bundle);
 }
+
+// F7: both paid update phases send per-item facts on the sole correction request;
+// failed attempts write nothing, successful corrections execute only the returned batch.
+test('F7: before and after carry precise correction results and never request a third attempt', async t => {
+    for (const stage of ['before', 'after'] as const) {
+        for (const kind of ['direct-not-allowed', 'direct-other-stage', 'action-other-stage', 'derived-write'] as const) {
+            const h = await harness(); t.after(() => h.dispose());
+            const bundle = h.f.saved().card;
+            bundle.definition.actions.forEach(action => {action.stages = [stage];});
+            bundle.definition.access[1].stages = [stage === 'before' ? 'after' : 'before'];
+            if (kind === 'action-other-stage') {bundle.definition.actions[1].stages = [stage === 'before' ? 'after' : 'before'];}
+            h.f.setCard(bundle);
+            h.append({ mes: 'Take off the amulet.', is_user: stage === 'before', name: 'Player' });
+            const valid = { action: 'unequip', params: {} };
+            const invalid = kind === 'action-other-stage' ? { action: 'equip', params: {} }
+                : { path: ['hero', kind === 'derived-write' ? 'maxHealth' : kind === 'direct-other-stage' ? 'health' : 'amulet'], value: 40 };
+            const batch = [valid, invalid], saved = h.f.saved(), counts = h.f.counts();
+            h.answer(() => {
+                if (h.requests.length === 2) {
+                    assert.deepEqual(h.f.saved(), saved); assert.deepEqual(h.f.counts(), counts);
+                    const task = h.requests[1];
+                    assert.deepEqual(task.messages.slice(0, -1), h.requests[0].messages);
+                    const report = JSON.parse(String(task.messages.at(-1)!.content).split('\n\n').at(-1)!);
+                    const items = report.errors[0].items;
+                    assert.deepEqual(items.map((item: { status: string }) => item.status), ['static-passed', 'rejected']);
+                    assert.deepEqual(items.map((item: { item: unknown }) => item.item), batch);
+                    assert.equal(items[1].diagnostics[0].code, kind);
+                    assert.equal(items[1].diagnostics[0].message, undefined);
+                    assert.equal(items[1].diagnostics[0].operation, undefined);
+                    assert.equal(items[1].diagnostics[0].actions, undefined);
+                }
+                return { completion: 'complete', truncated: false, text: '', toolCalls: [{ name: 'write',
+                    arguments: JSON.stringify({ state: h.requests.length === 1 ? batch : [valid] }) }] };
+            });
+            accepted(await h.updater.update({ stage, index: 1 }));
+            assert.equal(h.requests.length, 2); assert.equal(h.disposedSessions(), 1);
+            assert.equal((h.f.saved().state as { hero: { health: number } }).hero.health, 60);
+            assert.equal(h.f.saved().records[1].entries.length, 1);
+            h.dispose();
+        }
+        const h = await harness(); t.after(() => h.dispose());
+        h.append({ mes: 'Unsupported edit.', is_user: stage === 'before', name: 'Player' });
+        h.answer(() => ({ completion: 'complete', toolCalls: [{ name: 'write', arguments: JSON.stringify({ state: [{ path: ['hero', 'amulet'], value: false }] }) }] }));
+        const saved = h.f.saved(), counts = h.f.counts();
+        assert.equal((await h.updater.update({ stage, index: 1 })).ok, false);
+        assert.equal(h.requests.length, 2);
+        assert.deepEqual(h.f.saved(), saved); assert.deepEqual(h.f.counts(), counts);
+        h.dispose();
+    }
+});
 
 // Recalculation must expose the real rollback while saving, then build the paid
 // request from that state; the latest USER may still have a later AI outcome.
@@ -333,6 +467,16 @@ test('B5: failed requests persist without prose, explicit skip resumes, valid re
     assert.equal(h.requests.length, 3);
 });
 
+test('X8: before failure keeps extension diagnostics available without adding them to history', async t => {
+    const h = await harness(); t.after(() => h.dispose());
+    const extensions = { calls: [{kind:'prepare' as const,name:'prepare',path:'variables/scripts/prepare.js',input:[],error:'unavailable'}],modelRequests:1 };
+    h.updater.update = async () => ({ok:false,diagnostics:[{code:'extension-execution',path:'variables/scripts/prepare.js'}],extensions});
+    await h.generate('normal','Try the extension.'); await h.drain();
+    assert.deepEqual(h.results.at(-1)!.extensions,extensions);
+    assert.equal(h.prose.length,0);
+    assert.equal('extensions' in h.f.saved().records[1].entries[0],false);
+});
+
 // B10: empty/skip/undo outcomes stay out of prose while their receipts prevent
 // paid reruns; actions and real rule changes remain visible (wrong story / cost).
 test('B10: an empty before result clears prior prose context and survives reload without another request', async t => {
@@ -380,7 +524,6 @@ test('B10: actions without net changes and empty submissions with rule changes b
 test('B11: no-change before actions keep converted parameters across reload and after handoff', async t => {
     const h = await harness(); t.after(() => h.dispose());
     const bundle = h.f.saved().card;
-    bundle.definition.access.find(entry => entry.path.at(-1) === 'health')!.write.push('heal');
     bundle.definition.actions.push({ id: 'heal', title: '治疗', stages: ['before'], description: 'Heal by twice the submitted amount.',
         parameters: { type: 'object', additionalProperties: false, required: ['amount'], properties: { amount: { type: 'number' } } },
         conversions: [{ path: ['amount'], value: { op: 'multiply', args: [{ param: ['amount'] }, { literal: 2 }] } }],

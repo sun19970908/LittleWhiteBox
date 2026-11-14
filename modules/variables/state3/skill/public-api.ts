@@ -5,7 +5,7 @@ import type { Draft } from '../definition/authoring.js';
 const METHODS = Object.freeze({
     exportRules: 'read', prepareRuleImport: 'read', importRules: 'write', tryDefinition: 'read', checkDraft: 'read', inspect: 'read', preview: 'read', previewRequest: 'read', settings: 'read',
     openDraft: 'write', saveCardDraft: 'write', enable: 'write', apply: 'write', undo: 'write',
-    saveSettings: 'write', retrySave: 'write',
+    saveSettings: 'write', retrySave: 'write', testExtension: 'write',
 });
 interface Manifest {
     allowedPaths?: string[]; callablePaths?: string[]; apiSemantics?: Record<string, string>;
@@ -38,7 +38,7 @@ function mapDraftPaths(draft: Draft & { paths?: string[] }, map: (path: string) 
 // Only the assistant namespace presents readable workspace paths. Settlement
 // inputs, variable paths and the public LWB_StateV3 API are unchanged.
 function callAuthoringApi(name: string, call: (...args: unknown[]) => unknown, args: unknown[]) {
-    if (['checkDraft', 'saveCardDraft'].includes(name)) {
+    if (['checkDraft', 'saveCardDraft', 'testExtension'].includes(name)) {
         args = [...args];
         args[0] = mapDraftPaths(args[0] as Draft, storedCardWorkspacePath);
     }

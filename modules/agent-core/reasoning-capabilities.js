@@ -81,7 +81,7 @@ const DEEPSEEK_LATEST = effortCapability(
 const OPENAI_COMPATIBLE_GEMINI_LATEST = effortCapability(
     'openai-compatible-gemini-latest',
     ['inherit', 'on', 'off'],
-    ['minimal', 'low', 'medium', 'high'],
+    ['minimal', 'low', 'medium', 'high', 'xhigh'],
     'high',
     { temperatureOmitModes: OMIT_TEMPERATURE_WHEN_REASONING },
 );
@@ -116,12 +116,12 @@ const HOST_ANTHROPIC_LATEST = effortCapability(
 const GOOGLE_LATEST = effortCapability(
     'google-gemini-3-flash',
     ['inherit', 'on'],
-    ['minimal', 'low', 'medium', 'high'],
+    ['minimal', 'low', 'medium', 'high', 'xhigh'],
     'high',
 );
 // Explicit Vertex channel contract for 3.8 / 4 Argon, independent of relay aliases.
 const VERTEX_CURRENT = effortCapability(
-    'vertex-gemini-current', ['inherit', 'on'], ['low', 'medium', 'high'], 'medium',
+    'vertex-gemini-current', ['inherit', 'on'], ['low', 'medium', 'high', 'xhigh'], 'medium',
     { temperatureOmitModes: OMIT_TEMPERATURE_ALWAYS },
 );
 const HOST_GOOGLE_LATEST = effortCapability(
@@ -130,6 +130,18 @@ const HOST_GOOGLE_LATEST = effortCapability(
     ['min', 'low', 'medium', 'high'],
     'high',
 );
+// Google 2.5 uses token budgets on GenerateContent. Other names and relay
+// aliases keep the existing level-based channel contract.
+function resolveGoogleCapability(model) {
+    const match = model.match(/\bgemini-2\.5-(pro|flash(?:-lite)?)(?=$|-(?:preview|\d)|[:/@\s])/);
+    if (!match) return GOOGLE_LATEST;
+    return freezeCapability({
+        profileId: `google-gemini-2.5-${match[1]}`,
+        modes: ['inherit', 'on', ...(match[1] === 'pro' ? [] : ['off'])],
+        intensity: { kind: 'budget', defaultValue: -1, min: 0, max: '', allowAuto: true },
+    });
+}
+
 function resolveOpenAICompatibleCapability(model = '') {
     switch (resolveModelFamily(model)) {
         case 'deepseek': return DEEPSEEK_LATEST;
@@ -157,7 +169,7 @@ export function resolveReasoningCapability(context = {}) {
         case 'google-vertex':
             return VERTEX_CURRENT;
         case 'google':
-            return GOOGLE_LATEST;
+            return resolveGoogleCapability(model);
         case 'sillytavern-google':
             return HOST_GOOGLE_LATEST;
         default:
@@ -201,6 +213,9 @@ function selectCapabilityIntensity(reasoning, capability) {
             ...base,
             ...(reasoning.effort ? { effort: reasoning.effort } : {}),
         };
+    }
+    if (capability.intensity?.kind === 'budget') {
+        return { ...base, ...(reasoning.budgetTokens !== undefined ? { budgetTokens: reasoning.budgetTokens } : {}) };
     }
     return base;
 }
@@ -266,6 +281,7 @@ export function resolveRuntimeReasoning(context = {}, source = {}) {
 
     return {
         ...reasoning,
+        ...(capability.intensity.kind === 'budget' ? { budgetTokens: reasoning.budgetTokens ?? capability.intensity.defaultValue } : {}),
         profileId: capability.profileId,
         valid: true,
     };

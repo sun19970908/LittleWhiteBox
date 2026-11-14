@@ -16,9 +16,9 @@ function purchaseCard(): Bundle {
             properties: { coins: { type: 'number', minimum: 0 }, items: { type: 'integer', minimum: 0 }, claimed: { type: 'boolean' }, health: { type: 'number', minimum: 0 } } },
         initial: { coins: 20, items: 0, claimed: false, health: 10 },
         access: [
-            { path: ['coins'], write: ['buy'], description: 'Paid by purchase' },
-            { path: ['items'], write: ['buy'], description: 'Received by purchase' },
-            { path: ['health'], write: ['hurt', 'heal'], description: 'Changed by an action' },
+            { path: ['coins'], direct: false, description: 'Paid by purchase' },
+            { path: ['items'], direct: false, description: 'Received by purchase' },
+            { path: ['health'], direct: false, description: 'Changed by an action' },
         ], rules: [], constraints: [{ id: 'affordable', description: 'No debt', test: op('gte', get('coins'), literal(0)) }],
         functions: { quantity: { reads: [], description: 'Normalize a numeric quantity' } }, views: {},
         actions: [

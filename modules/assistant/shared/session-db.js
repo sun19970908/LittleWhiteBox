@@ -1,5 +1,6 @@
 import Dexie from '../../../libs/dexie.mjs';
 import { migrateWorkspaceV3 } from './migrations/workspace-v3.js';
+import { migrateCardDocuments } from '../../card-workspace/migrations/named-documents.js';
 
 const db = new Dexie('LittleWhiteBox_Assistant');
 
@@ -18,6 +19,8 @@ db.version(2).stores({
 db.version(3).stores({
     workspace: 'id',
 }).upgrade(migrateWorkspaceV3);
+
+db.version(4).stores({ workspace: 'id' }).upgrade(migrateCardDocuments);
 
 export const sessionsTable = db.sessions;
 export const messagesTable = db.messages;

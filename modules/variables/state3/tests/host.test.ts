@@ -9,10 +9,10 @@ import { createSaveQueue } from '../runtime/persistence.js';
 import { clone, equal } from '../engine/data.js';
 import { readVariables, writeVariables, variableRoots } from '../runtime/variables.js';
 import { reject, diagnostic } from '../engine/diagnostics.js';
-import { receiptResult } from '../runtime/history.js';
+import { recordResult, isOpeningReceipt } from '../runtime/history.js';
 import { digest } from '../definition/digest.js';
 import { modelSource } from '../definition/stages.js';
-import { beforeReceipt, beforeOutcome } from '../runtime/before-result.js';
+import { beforeReceipt, beforeOutcome, beforeFloorOutcome } from '../runtime/before-result.js';
 import { compileDefinition } from '../definition/compile.js';
 import { decodeBundle } from '../definition/card-files.js';
 import { equipmentExample } from '../definition/example.js';
@@ -22,6 +22,8 @@ import type { Context, ChatMessage, createHostAdapter } from '../runtime/host.js
 import { accepted } from './fixture.js';
 import { runFunctionInVm } from '../engine/functions-vm.js';
 import type { Bundle } from '../types.js';
+import { activeTools, TOOL_CALL_LIMIT } from '../extensions/definition.js';
+import { createRuleRefresh } from '../definition/refresh.js';
 
 const source = (file: string) => ts.transpileModule(readFileSync(new URL('../' + file, import.meta.url), 'utf8'), {
     compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
@@ -33,7 +35,7 @@ function harness() {
     const ctx = { chat: [message], chatMetadata: { variables: { neighbor: 'keep' } }, chatId: 'test', characterId: 0,
         characters: [{ name: 'test', chat: 'test', avatar: 'test.png', data: { extensions: { [CARD_EXTENSION]: JSON.stringify(equipmentExample()) } } }], saveChat: async () => { saves++; } } as unknown as Context;
     const env = { getContext: () => ctx, getRequestHeaders: () => ({}), CHAT_KEY, clone, equal, reject,
-        createSaveQueue, readVariables, writeVariables, variableRoots, CARD_EXTENSION, decodeBundle, digest,
+        createSaveQueue, readVariables, writeVariables, variableRoots, CARD_EXTENSION, decodeBundle, digest, isOpeningReceipt,
         fetch: async () => ({ ok: true, json: async () => [{ chat_metadata: clone(ctx.chatMetadata) }] }),
     };
     const exports = runInNewContext(source('runtime/host.ts') + '\n({createHostAdapter,inGroup,latestUserIndex})', env) as {
@@ -42,8 +44,17 @@ function harness() {
     return { ctx, message, exports, saves: () => saves };
 }
 
-function runtimeHarness(bundle: Bundle | null = equipmentExample(), initialMode = '3.0') {
+function runtimeHarness(bundle: Bundle | null = equipmentExample(), initialMode = '3.0', ready: (chatId: string, signal: AbortSignal) => Promise<boolean> = async () => true, realBefore = false, authorize: () => Promise<void> = async () => {}) {
     const h = harness(), pending = new Set<Promise<unknown>>(), handlers = new Map<string, (...args: unknown[]) => unknown>();
+    const listeners = new Map<string, ((...args: unknown[]) => unknown)[]>();
+    const createModuleEvents = () => ({
+        on(key: string, fn: (...args: unknown[]) => unknown) {
+            if (!realBefore) {handlers.set(key, fn); return;}
+            const registered = listeners.get(key) ?? []; registered.push(fn); listeners.set(key, registered);
+            handlers.set(key, async (...args) => { for (const listener of registered) {await listener(...args);} });
+        },
+        cleanup() { handlers.clear(); listeners.clear(); },
+    });
     if (bundle) {h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);}
     else {delete h.ctx.characters[0].data!.extensions![CARD_EXTENSION];}
     const selector = { value: initialMode };
@@ -52,31 +63,44 @@ function runtimeHarness(bundle: Bundle | null = equipmentExample(), initialMode 
         extension_settings: preferences, reject, saveSettingsDebounced() {}, structuredClone,
         document: { getElementById: () => selector },
     });
-    let finish!: (value: unknown) => void, requested!: () => void, disposed = false, lateControls = 0, lateMacros = 0, controls = false, requests = 0;
+    let finish!: (value: unknown) => void, fail!: (error: Error) => void, requested!: () => void, disposed = false, lateControls = 0, lateMacros = 0, controls = false, requests = 0;
     const started = new Promise<void>(resolve => { requested = resolve; });
-    const response = new Promise(resolve => { finish = resolve; });
+    const response = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
     const agentWindow = { xiaobaixAgent: { openSession: async () => ({ chat: async () => { requests++; requested(); return response; }, dispose() {} }) } };
     const { createState3Updater } = runInNewContext(source('model/updater.ts') + '\n({createState3Updater})', {
         getContext: () => h.ctx, exposeVariableReads: () => () => {}, captureContext: async () => ({}), passageText: (text: string) => text,
-        compileDefinition, buildUpdateTask: () => ({}), SUBMIT_TOOL: 'write', ...settings, reject, diagnostic,
-        digest, modelSource, beforeReceipt, beforeOutcome, mergeAbortSignals, latestUserIndex: h.exports.latestUserIndex,
+        compileDefinition, buildUpdateTask: () => ({}), SUBMIT_TOOL: 'write', ...settings, reject, diagnostic, activeTools, TOOL_CALL_LIMIT,
+        digest, modelSource, beforeReceipt, beforeOutcome, beforeFloorOutcome, mergeAbortSignals, latestUserIndex: h.exports.latestUserIndex,
         AbortController, structuredClone, window: agentWindow, correctionTask() { throw new Error('unexpected correction'); },
     });
     const event_types = Object.fromEntries(['CHAT_CHANGED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'SETTINGS_UPDATED',
-        'CHARACTER_MESSAGE_RENDERED', 'GENERATION_STARTED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'CHAT_CREATED'].map(key => [key, key]));
-    const emitted: { state: unknown }[] = [], resumed: number[] = [];
+        'CHARACTER_MESSAGE_RENDERED', 'GENERATION_STARTED', 'GENERATION_AFTER_COMMANDS', 'GENERATION_STOPPED', 'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'CHAT_CREATED'].map(key => [key, key]));
+    const emitted: { state: unknown }[] = [], resumed: number[] = [], macroVersions: string[] = [];
+    let remoteCard = structuredClone(h.ctx.characters[0]);
+    let interceptor: ((chat: unknown, size: number, abort: (immediately: boolean) => void, type: string, dispatch: { input: { deferred: boolean; rebuild: boolean } }) => Promise<void>) | undefined;
+    const beforeHost = {
+        ...settings, createModuleEvents, event_types, ...h.exports, getContext: () => h.ctx,
+        CHAT_KEY, digest, diagnostic, reject, beforeReceipt, beforeFloorOutcome, AbortController,
+        isGenerating: () => false, setExtensionPrompt() {}, extension_prompt_types: { IN_CHAT: 1 }, extension_prompt_roles: { SYSTEM: 0 },
+        Generate: async () => { resumed.push(h.ctx.chat.length - 1); },
+        registerGenerateInterceptor(_id: string, handler: NonNullable<typeof interceptor>) {interceptor = handler;}, unregisterGenerateInterceptor() {interceptor = undefined;}, GENERATE_INTERCEPTOR_ORDER: { VARIABLES: 0 },
+        document: { getElementById: () => ({ value: '' }) },
+    };
+    const realBeforeGeneration = realBefore ? runInNewContext(source('runtime/before-generation.ts') + '\ncreateBeforeGeneration', beforeHost) : undefined;
     const env = {
-        ...settings, createModuleEvents: () => ({ on: (key: string, fn: (...args: unknown[]) => unknown) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
+        authorizeExtensions: authorize, assertExtensionTrust: async () => {}, revokeExtensionTrust() {}, extensionTrust: () => 'unused',
+        ...settings, createModuleEvents, event_types,
         observeBackgroundTask(p: Promise<unknown>) { pending.add(p); p.then(() => pending.delete(p), () => pending.delete(p)); },
-        isGenerating: () => false, waitForAfterAiReady: async () => true, createSettlementService,
-        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, receiptResult, CHAT_KEY, CARD_EXTENSION, digest,
+        isGenerating: () => false, waitForAfterAiReady: ready, createSettlementService,
+        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, recordResult, CHAT_KEY, CARD_EXTENSION, digest,
         exportRules() {}, prepareRuleImport() {}, importRules() {}, onRulesSaved: () => () => {},
-        createState3Macros: () => ({ clear() {}, set() { if (disposed) {lateMacros++;} }, dispose() {} }),
+        createRuleRefresh, currentCard: () => h.ctx.characters[h.ctx.characterId], readCharacter: async () => structuredClone(remoteCard),
+        createState3Macros: () => ({ clear() {macroVersions.length = 0;}, set(compiled: ReturnType<typeof compileDefinition>) { macroVersions.push(digest(compiled.bundle)); if (disposed) {lateMacros++;} }, dispose() {} }),
         createState3Updater,
-        createBeforeGeneration: ({ updater }: { updater: ReturnType<typeof createState3Updater> }) => ({
+        createBeforeGeneration: realBeforeGeneration ?? (({ updater }: { updater: ReturnType<typeof createState3Updater> }) => ({
             status: updater.status, cancel: updater.cancel, changed: updater.cancel, dispose: updater.cancel,
             async resume(index: number) { resumed.push(index); },
-        }),
+        })),
         createState3Page: () => ({ mountControl() { controls = true; if (disposed) {lateControls++;} }, targetChanged() {}, dispose() { disposed = true; } }),
         notifyError(error: Error) { throw error; }, openDraft() {}, saveDraft() {}, checkDraft() {}, saveCardDraft() {},
         AbortController, structuredClone, mergeAbortSignals, CustomEvent: class { constructor(public type: string, public options: { detail: { state: unknown } }) {} },
@@ -85,11 +109,170 @@ function runtimeHarness(bundle: Bundle | null = equipmentExample(), initialMode 
         window: {} as { LWB_StateV3: State3Api },
     };
     const runtime = runInNewContext(source('index.ts') + '\ninitState3(); ({cleanupState3})', env);
-    return { ...h, api: env.window.LWB_StateV3, handlers, preferences, selector, started, finish, emitted, resumed,
+    return { ...h, api: env.window.LWB_StateV3, handlers, preferences, selector, started, finish, fail, emitted, resumed, macroVersions,
+        setRemote(card: typeof remoteCard) {remoteCard = structuredClone(card);},
         cleanup: () => runtime.cleanupState3(), late: () => ({ controls: lateControls, macros: lateMacros }), controls: () => controls, requests: () => requests,
+        async prepare(type = 'normal') {
+            let aborted = false;
+            await interceptor?.([], 0, () => {aborted = true;}, type, { input: { deferred: false, rebuild: false } });
+            return { aborted };
+        },
         async drain() { while (pending.size) {await Promise.all([...pending]);} },
     };
 }
+
+// O4: external refresh replaces only rules, updates macros before resolving,
+// preserves progress and makes pending old-rule work stale (silent state loss).
+test('O4: external refresh updates rules/macros, preserves progress, rejects old stages and surfaces malformed rules', async t => {
+    const h = runtimeHarness(); t.after(() => h.cleanup()); await h.drain();
+    accepted(await h.api.enable());
+    const before = structuredClone(h.ctx.chatMetadata), stage = await h.api.stage();
+    const next = equipmentExample();
+    next.definition.rules.find(rule => rule.id === 'base-health')!.value = { literal: 30 };
+    const remote = structuredClone(h.ctx.characters[0]); remote.data!.extensions![CARD_EXTENSION] = JSON.stringify(next);
+    remote.name = 'unrelated remote name'; h.setRemote(remote);
+    assert.equal((await h.api.refreshRules({ avatar: 'test.png' })).changed, true);
+    assert.deepEqual(h.ctx.chatMetadata, before);
+    assert.equal(h.ctx.characters[0].name, 'test');
+    assert.deepEqual(h.macroVersions, [digest(next)]);
+    await assert.rejects(stage.run([], { preview: false }), { code: 'stale-target' });
+    const result = accepted(await h.api.apply([{ action: 'unequip', params: {} }]));
+    assert.equal((result.state as { hero: { health: number } }).hero.health, 30);
+    assert.equal((await h.api.refreshRules({ avatar: 'test.png' })).changed, false);
+    remote.data!.extensions![CARD_EXTENSION] = '{broken'; h.setRemote(remote);
+    const progress = structuredClone(h.ctx.chatMetadata);
+    await assert.rejects(h.api.refreshRules({ avatar: 'test.png' }));
+    assert.deepEqual(h.ctx.chatMetadata, progress);
+    assert.deepEqual(h.macroVersions, []);
+    assert.equal(h.ctx.characters[0].data!.extensions![CARD_EXTENSION], '{broken');
+});
+
+// A1: completion signals may arrive in any order, but one reply must start only
+// one update request, including after request failure (lost state / API cost).
+test('A1: late reply notifications recover automatic updates without duplicate requests', async t => {
+    for (const first of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED']) {
+        const h = runtimeHarness(); t.after(() => h.cleanup()); await h.drain();
+        accepted(await h.api.enable()); h.preferences.LittleWhiteBox.state3Updater.auto = true;
+        await h.handlers.get('GENERATION_STARTED')!('normal', {}, false);
+        await h.handlers.get('GENERATION_ENDED')!(); await h.drain();
+        assert.equal(h.requests(), 0);
+        h.ctx.chat.push({ mes: 'New reply.', extra: {} });
+        const index = h.ctx.chat.length - 1;
+        await h.handlers.get(first)!(index);
+        // Late events must not buy another request after either success or failure.
+        await new Promise(resolve => setImmediate(resolve));
+        assert.equal(h.requests(), 1);
+        if (first === 'MESSAGE_RECEIVED') {h.finish({ completion: 'complete', truncated: false, text: '', toolCalls: [{ name: 'write', arguments: '{"state":[{"op":"inc","path":["hero","health"],"delta":-1}]}' }] });}
+        else {h.fail(new Error('offline'));}
+        await h.drain(); assert.equal(h.requests(), 1);
+        assert.equal((accepted(await h.api.inspect()).state as { hero: { health: number } }).hero.health, first === 'MESSAGE_RECEIVED' ? 79 : 80);
+        for (const event of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'GENERATION_ENDED']) {await h.handlers.get(event)!(index);}
+        await h.drain(); assert.equal(h.requests(), 1);
+    }
+});
+
+// A1 also covers replacing/reusing a floor: a legitimate new generation gets one
+// request, while replaying its completion notifications never buys another.
+test('A1: regeneration, continuation and new swipes each retain their own automatic update', async t => {
+    const h = runtimeHarness(); t.after(() => h.cleanup()); await h.drain(); accepted(await h.api.enable());
+    h.preferences.LittleWhiteBox.state3Updater.auto = true;
+    h.finish({ completion: 'complete', truncated: false, text: '', toolCalls: [{ name: 'write', arguments: '{"state":[]}' }] });
+    for (const [count, type] of ['normal', 'continue', 'regenerate', 'swipe'].entries()) {
+        if (type === 'swipe') {await h.handlers.get('MESSAGE_SWIPED')!(h.ctx.chat.length - 1); await h.drain();}
+        await h.handlers.get('GENERATION_STARTED')!(type, {}, false);
+        if (type === 'regenerate') {h.ctx.chat.pop(); await h.handlers.get('MESSAGE_DELETED')!(); await h.drain();}
+        if (type === 'normal' || type === 'regenerate') {h.ctx.chat.push({ mes: 'Reply.', extra: {} });}
+        const index = h.ctx.chat.length - 1;
+        if (type === 'continue') {h.ctx.chat[index].mes += ' Continued.';}
+        if (type === 'swipe') {h.ctx.chat[index] = { mes: 'New swipe.', extra: {}, swipe_id: 0 };}
+        for (const event of ['MESSAGE_RECEIVED', 'GENERATION_ENDED', 'CHARACTER_MESSAGE_RENDERED']) {await h.handlers.get(event)!(index);}
+        await h.drain(); assert.equal(h.requests(), count + 1, type);
+        for (const event of ['MESSAGE_RECEIVED', 'GENERATION_ENDED', 'CHARACTER_MESSAGE_RENDERED']) {await h.handlers.get(event)!(index);}
+        await h.drain(); assert.equal(h.requests(), count + 1, type);
+    }
+});
+
+// Generate(regenerate) does not wait for an extension's in-flight save: STARTED,
+// AFTER_COMMANDS, native suffix deletion, MESSAGE_DELETED, then reply notifications.
+// The real before owner cancels the old updater but persistence may still own it.
+// A replacement reply must receive one settlement, not lose its turn to commit-busy.
+test('regeneration waits for a cancelled updater still saving the previous reply', async t => {
+    for (const boundary of ['saved', 'save-failed', 'chat', 'generation', 'edit', 'cancel', 'dispose']) {
+        await t.test(boundary, async t => {
+            const h = runtimeHarness(equipmentExample(), '3.0', async () => true, true);
+            t.after(() => h.cleanup()); await h.drain(); accepted(await h.api.enable());
+            h.message.is_user = true;
+            h.ctx.chat.push({ mes: 'Old reply.', extra: {} });
+            h.finish({ completion: 'complete', truncated: false, text: '', toolCalls: [{ name: 'write', arguments: '{"state":[{"op":"inc","path":["hero","health"],"delta":-1}]}' }] });
+            let saving!: () => void, release!: () => void, saves = 0;
+            const started = new Promise<void>(resolve => { saving = resolve; });
+            const gate = new Promise<void>(resolve => { release = resolve; });
+            t.after(() => release());
+            h.ctx.saveChat = async () => {
+                const first = saves++ === 0; saving(); await gate;
+                if (first && boundary === 'save-failed') {throw new Error('save unavailable');}
+            };
+            const previous = h.api.update(); await started;
+            assert.equal(h.requests(), 1);
+            assert.equal((accepted(await h.api.inspect()).state as { hero: { health: number } }).hero.health, 79);
+            h.preferences.LittleWhiteBox.state3Updater.auto = true;
+            await h.handlers.get('GENERATION_STARTED')!('regenerate', {}, false);
+            await h.handlers.get('GENERATION_AFTER_COMMANDS')!('regenerate', {}, false);
+            h.ctx.chat.pop(); await h.handlers.get('MESSAGE_DELETED')!(h.ctx.chat.length);
+            assert.equal((accepted(await h.api.inspect()).state as { hero: { health: number } }).hero.health, 80);
+            h.ctx.chat.push({ mes: 'Replacement reply.', extra: {} });
+            for (const event of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'GENERATION_ENDED']) {await h.handlers.get(event)!(1);}
+            // Do not drain selection persistence before the generation completes.
+            await new Promise(resolve => setImmediate(resolve));
+            assert.equal(h.requests(), 1);
+            if (boundary === 'chat') {
+                h.ctx.chatId = 'other'; h.ctx.chat = [{ mes: 'Another chat.', extra: {} }];
+                h.ctx.chatMetadata = clone(h.ctx.chatMetadata); await h.handlers.get('CHAT_CHANGED')!();
+            }
+            if (boundary === 'generation') {await h.handlers.get('GENERATION_STARTED')!('normal', {}, false);}
+            if (boundary === 'edit') {await h.handlers.get('MESSAGE_EDITED')!(1);}
+            if (boundary === 'cancel') {h.api.cancel();}
+            if (boundary === 'dispose') {h.cleanup();}
+            release(); await previous; await h.drain();
+            if (!['saved', 'save-failed'].includes(boundary)) {
+                assert.equal(h.requests(), 1);
+                assert.equal(accepted(await h.api.inspect()).receipt, undefined);
+                assert.deepEqual(h.late(), { controls: 0, macros: 0 });
+                return;
+            }
+            assert.equal(h.requests(), 2);
+            const result = accepted(await h.api.inspect());
+            assert.equal((result.state as { hero: { health: number } }).hero.health, 79);
+            assert.equal(result.receipt?.source, modelSource('after'));
+            for (const event of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'GENERATION_ENDED']) {await h.handlers.get(event)!(1);}
+            await h.drain(); assert.equal(h.requests(), 2);
+        });
+    }
+});
+
+// A2: delayed readiness coalesces signals and cancellation discards the waiting
+// turn; it must not update another chat or a restored swipe (wrong state / cost).
+test('A2: waiting completion coalesces signals and cannot survive chat or generation changes', async t => {
+    for (const boundary of ['ready', 'chat', 'generation', 'edit', 'dispose']) {
+        let release!: (ready: boolean) => void, waits = 0;
+        const h = runtimeHarness(equipmentExample(), '3.0', () => { waits++; return new Promise(resolve => { release = resolve; }); });
+        t.after(() => h.cleanup()); await h.drain(); accepted(await h.api.enable());
+        h.preferences.LittleWhiteBox.state3Updater.auto = true;
+        await h.handlers.get('GENERATION_STARTED')!('normal', {}, false);
+        h.ctx.chat.push({ mes: 'New reply.', extra: {} }); const index = h.ctx.chat.length - 1;
+        for (let repeat = 0; repeat < 3; repeat++) {
+            for (const event of ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'GENERATION_ENDED']) {await h.handlers.get(event)!(index);}
+        }
+        assert.equal(waits, 1); assert.equal(h.requests(), 0);
+        if (boundary === 'chat') {h.ctx.chatId = 'other'; await h.handlers.get('CHAT_CHANGED')!();}
+        if (boundary === 'generation') {await h.handlers.get('GENERATION_STARTED')!('continue', {}, false);}
+        if (boundary === 'edit') {await h.handlers.get('MESSAGE_EDITED')!(index);}
+        if (boundary === 'dispose') {h.cleanup();}
+        release(true);
+        h.finish({ completion: 'complete', truncated: false, text: '', toolCalls: [{ name: 'write', arguments: '{"state":[]}' }] });
+        await h.drain(); assert.equal(h.requests(), boundary === 'ready' ? 1 : 0);
+    }
+});
 
 // R9: selecting 3.0 does not enroll ordinary cards. Opening/rendering/generating
 // must neither fail nor request updates; missing rules on an enabled chat still fail
@@ -152,7 +335,7 @@ function workerGate() {
 function doorBundle(): Bundle {
     const bundle = equipmentExample();
     bundle.definition = { ...bundle.definition, schema: {}, initial: { key: false, door: false },
-        access: ['key', 'door'].map(key => ({ path: [key], write: ['direct'], description: key })),
+        access: ['key', 'door'].map(key => ({ path: [key], direct: true, description: key })),
         rules: [], actions: [], triggers: [], views: {},
         functions: { valid: { reads: [['key'], ['door']], description: '钥匙与门' } },
         constraints: [{ id: 'door-key', description: '开门必须持有钥匙', test: { call: 'valid', args: [] } }] };
@@ -229,15 +412,18 @@ test('B9: a late save retry never resumes another chat or replaces its result', 
         const result = accepted(await h.api.apply([], { index: 0, source: modelSource('before'), stage: 'before',
             beforeUpdate: { inputDigest: digest(h.message.mes), outcome: 'applied', diagnostics: [] } }));
         assert.equal(result.saved, false);
+        // A preview in between must not hide the pending save from lastResult().
+        accepted(await h.api.preview([]));
+        assert.equal(h.api.lastResult(), result);
         let started!: () => void, release!: () => void;
         const saving = new Promise<void>(resolve => { started = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
         h.ctx.saveChat = async () => { started(); await gate; };
         const retrying = h.api.retrySave(); await saving;
-        let current = result;
+        let current: typeof result | undefined = result;
         if (switchChat) {
             h.ctx.chat = [{ mes: 'another chat', extra: {} }]; h.ctx.chatMetadata = clone(h.ctx.chatMetadata); h.ctx.chatId = 'another';
             await h.handlers.get('CHAT_CHANGED')!(); await h.drain();
-            current = accepted(await h.api.preview([]));
+            current = h.api.lastResult();
         }
         release(); await retrying; await h.drain();
         assert.deepEqual(h.resumed, switchChat ? [] : [0]);
@@ -280,12 +466,14 @@ test('K14/K13: native silent swipe recovery restores values and controls without
     const event_types = Object.fromEntries(['CHAT_CHANGED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'SETTINGS_UPDATED',
         'CHARACTER_MESSAGE_RENDERED', 'GENERATION_STARTED', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'CHAT_CREATED'].map(key => [key, key]));
     const env = {
+        authorizeExtensions: async () => {}, assertExtensionTrust: async () => {}, revokeExtensionTrust() {}, extensionTrust: () => 'unused',
         createModuleEvents: () => ({ on: (key: string, fn: (...args: unknown[]) => unknown) => handlers.set(key, fn), cleanup: () => handlers.clear() }), event_types,
         observeBackgroundTask(p: Promise<unknown>) { pending.add(p); p.then(() => pending.delete(p), () => pending.delete(p)); },
         isGenerating: () => false, waitForAfterAiReady: async () => true, createSettlementService,
-        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, receiptResult, CHAT_KEY, CARD_EXTENSION, digest,
+        ...h.exports, getContext: () => h.ctx, compileDefinition, diagnostic, reject, recordResult, CHAT_KEY, CARD_EXTENSION, digest,
         createBeforeGeneration: () => ({ status: () => ({ phase: 'ready', busy: false }), cancel() {}, changed() {}, dispose() {} }),
         exportRules() {}, prepareRuleImport() {}, importRules() {}, onRulesSaved: () => () => {}, state3Selected: () => true, selectState3() {},
+        createRuleRefresh, currentCard: () => h.ctx.characters[0], readCharacter: async () => structuredClone(h.ctx.characters[0]),
         readSettings: () => ({ auto: mode === 'auto', source: 'main' }), saveSettings() {},
         createState3Macros: () => ({ clear() {}, set() {}, dispose() {} }),
         createState3Updater: () => ({ cancel() {}, status: () => ({ phase: 'ready', busy: false }), async update() {
@@ -465,7 +653,7 @@ test('K15/K17: current card rules govern the next operation, owned roots do not 
     const h = harness();
     const bundle = equipmentExample();
     bundle.definition = { ...bundle.definition, schema: {}, initial: { own: {}, text: '123', flag: false },
-        access: [{ path: ['own'], write: ['direct'], description: 'test' }, { path: ['text'], write: ['direct'], description: 'test' }],
+        access: [{ path: ['own'], direct: true, description: 'test' }, { path: ['text'], direct: true, description: 'test' }],
         rules: [], actions: [], triggers: [], constraints: [], functions: {}, views: {} };
     const setCard = () => { h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle); };
     setCard();
@@ -477,7 +665,7 @@ test('K15/K17: current card rules govern the next operation, owned roots do not 
     native.gold = 75;
     const staged = await service.stage();
     bundle.definition.name = 'new';
-    bundle.definition.access.push({ path: ['gold'], write: ['direct'], description: 'test' });
+    bundle.definition.access.push({ path: ['gold'], direct: true, description: 'test' });
     bundle.definition.schema = { type: 'object', properties: { own: true, text: true, flag: true, gold: true } };
     bundle.definition.rules = [{ id: 'new-rule', kind: 'derive', path: ['own', 'calculated'], value: { literal: 3 }, description: 'test' }];
     setCard();
@@ -504,7 +692,7 @@ test('K16: native historical selections retain child effects, but explicit write
     ]) {
         const h = harness(), bundle = equipmentExample();
         bundle.definition = { ...bundle.definition, schema: {}, initial: { own: {} },
-            access: [{ path: ['own'], write: ['direct'], description: 'test' }], rules: [], actions: [], constraints: [], views: {} };
+            access: [{ path: ['own'], direct: true, description: 'test' }], rules: [], actions: [], constraints: [], views: {} };
         h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);
         let adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter);
         accepted(await service.enable());
@@ -534,5 +722,268 @@ test('K16: native historical selections retain child effects, but explicit write
         assert.deepEqual(accepted(await service.inspect()).state, { own: scenario.value });
         accepted(await service.undo({ index: 0, all: true }));
         assert.deepEqual(accepted(await service.inspect()).state, { own: {} });
+    }
+});
+
+function greetingBundle(): Bundle {
+    const bundle = equipmentExample();
+    bundle.definition.openings = [{ hero: { health: 33 } }, { hero: { amulet: false } }, {}];
+    return bundle;
+}
+function selectGreeting(h: ReturnType<typeof harness>, swipeId: number) {
+    h.message.swipes = ['same greeting', 'same greeting', 'same greeting', 'same greeting'];
+    h.message.swipe_info ??= [];
+    while (h.message.swipe_info.length < 4) {h.message.swipe_info.push({ extra: {} });}
+    h.message.swipe_id = swipeId;
+    h.message.mes = h.message.swipes[swipeId];
+    h.message.extra = clone(h.message.swipe_info[swipeId].extra || {});
+}
+const hero = (result: ReturnType<typeof accepted>) => result.state as { hero: { health: number; amulet: boolean; maxHealth: number } };
+
+test('opening state uses floor0 swipe identity, overlays native common values, and records default starts too', async () => {
+    const h = harness(), bundle = greetingBundle();
+    h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);
+    (h.ctx.chatMetadata.variables as Record<string, unknown>).hero = JSON.stringify({ health: 75, amulet: true });
+    selectGreeting(h, 1);
+    const adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter);
+    const enabled = accepted(await service.enable());
+    assert.equal(hero(enabled).hero.health, 60);
+    assert.equal(hero(enabled).hero.amulet, false);
+    assert.equal((h.ctx.chatMetadata.variables as Record<string, unknown>).neighbor, 'keep');
+    assert.equal(adapter.capture().records[0].entries.filter(isOpeningReceipt).length, 1);
+    for (const [swipeId, health] of [[2, 75], [3, 75], [0, 33], [1, 60], [2, 75]] as const) {
+        selectGreeting(h, swipeId);
+        const change = adapter.selectionChange('swipe', 0);
+        await service.restoreSelection(change.previous, change.next);
+        await service.initializeOpening();
+        assert.equal(hero(accepted(await service.inspect())).hero.health, health);
+        assert.equal(adapter.capture().records[0].entries.filter(isOpeningReceipt).length, 1);
+    }
+    const saves = h.saves();
+    assert.equal(await service.initializeOpening(), undefined);
+    assert.equal(h.saves(), saves);
+    assert.equal(Object.hasOwn(h.ctx.chatMetadata[CHAT_KEY]!, 'state'), false);
+});
+
+test('opening receipts survive ordinary undo, whole-floor replacement, and alternate invalidation', async () => {
+    const h = harness(), bundle = greetingBundle();
+    h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);
+    selectGreeting(h, 0);
+    const adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter);
+    accepted(await service.enable());
+    await assert.rejects(service.undo(), { code: 'nothing-to-undo' });
+    await assert.rejects(service.apply([], { source: 'opening' }), { code: 'source-reserved' });
+    const wound = [{ op: 'inc', path: ['hero', 'health'], delta: -1 }];
+    for (let repeat = 0; repeat < 2; repeat++) {
+        accepted(await service.apply(wound, { replace: true }));
+        assert.equal(hero(accepted(await service.inspect())).hero.health, 32);
+    }
+    accepted(await service.undo());
+    assert.equal(hero(accepted(await service.inspect())).hero.health, 33);
+    accepted(await service.apply(wound));
+    selectGreeting(h, 1);
+    let change = adapter.selectionChange('swipe', 0);
+    await service.restoreSelection(change.previous, change.next); accepted((await service.initializeOpening())!);
+    accepted(await service.apply(wound));
+    accepted(await service.rollback({ index: 0 }));
+    assert.equal(hero(accepted(await service.inspect())).hero.health, 60);
+    selectGreeting(h, 0); change = adapter.selectionChange('swipe', 0);
+    await service.restoreSelection(change.previous, change.next);
+    assert.equal(hero(accepted(await service.inspect())).hero.health, 33);
+    assert.equal(adapter.capture().records[0].entries.length, 1);
+});
+
+test('an empty opening delta still owns its selected greeting and cannot be undone', async () => {
+    const h = harness(), bundle = greetingBundle();
+    bundle.definition = { ...bundle.definition, initial: { count: 0 }, openings: [{}, { count: 2 }], schema: {},
+        access: [{ path: ['count'], direct: true, description: 'count' }], rules: [], actions: [], constraints: [], views: {} };
+    h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);
+    selectGreeting(h, 0);
+    const adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter);
+    accepted(await service.enable());
+    assert.equal(adapter.capture().records[0].entries.length, 1);
+    await assert.rejects(service.undo({ all: true }), { code: 'nothing-to-undo' });
+    selectGreeting(h, 1);
+    let change = adapter.selectionChange('swipe', 0);
+    await service.restoreSelection(change.previous, change.next); await service.initializeOpening();
+    assert.deepEqual(accepted(await service.inspect()).state, { count: 2 });
+    selectGreeting(h, 0); change = adapter.selectionChange('swipe', 0);
+    await service.restoreSelection(change.previous, change.next);
+    assert.deepEqual(accepted(await service.inspect()).state, { count: 0 });
+});
+
+test('rapid greeting swipes cancel stale pure initialization and preserve reopened progress', async t => {
+    const gate = workerGate(), previousWorker = globalThis.Worker;
+    globalThis.Worker = gate.Worker; t.after(() => { globalThis.Worker = previousWorker; });
+    const bundle = greetingBundle();
+    bundle.definition.functions = { starting: { reads: [], description: 'base health' } };
+    bundle.functions.starting = '() => 60';
+    bundle.definition.rules.find(rule => rule.id === 'base-health')!.value = { call: 'starting', args: [] };
+    const h = runtimeHarness(bundle); t.after(() => h.cleanup()); await h.drain();
+    selectGreeting(h, 0); accepted(await h.api.enable());
+    gate.hold(); selectGreeting(h, 1);
+    await h.handlers.get('MESSAGE_SWIPED')!(0); await gate.started;
+    assert.throws(() => h.api.apply([]), { code: 'commit-busy' });
+    selectGreeting(h, 2); await h.handlers.get('MESSAGE_SWIPED')!(0);
+    gate.release(); await h.drain();
+    assert.equal(hero(accepted(await h.api.inspect())).hero.health, 80);
+    assert.equal(h.message.swipe_info![1].extra?.[CHAT_KEY], undefined);
+    accepted(await h.api.apply([{ op: 'set', path: ['hero', 'health'], value: 17 }]));
+    h.ctx.chat.splice(0, 1, clone(h.message)); h.ctx.chatMetadata = clone(h.ctx.chatMetadata);
+    const progress = clone(h.ctx.chatMetadata), saved = h.saves();
+    await h.handlers.get('CHAT_CHANGED')!(); await h.handlers.get('CHARACTER_MESSAGE_RENDERED')!(0); await h.drain();
+    assert.deepEqual(h.ctx.chatMetadata, progress); assert.equal(h.saves(), saved);
+    assert.equal(hero(accepted(await h.api.inspect())).hero.health, 17);
+});
+
+test('swiping during fresh-chat authorization retries the latest opening instead of leaving chat inactive', async t => {
+    let announce!: () => void, release!: () => void, calls = 0;
+    const started = new Promise<void>(resolve => { announce = resolve; }), gate = new Promise<void>(resolve => { release = resolve; });
+    const h = runtimeHarness(greetingBundle(), '3.0', async () => true, false, async () => { if (++calls === 1) {announce(); await gate;} });
+    t.after(() => {release(); h.cleanup();}); await h.drain(); selectGreeting(h, 0);
+    const creating = h.handlers.get('CHAT_CREATED')!(); await started;
+    selectGreeting(h, 1); await h.handlers.get('MESSAGE_SWIPED')!(0);
+    // The new selection is allowed to initialize while the obsolete authorization still waits.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(hero(accepted(await h.api.inspect())).hero.health, 60);
+    release(); await creating; await h.drain();
+    assert.equal(hero(accepted(await h.api.inspect())).hero.health, 60);
+    assert.equal(h.message.swipe_info![0].extra?.[CHAT_KEY], undefined);
+});
+
+test('first generation waits for pending opening rules before the host can append its player message', async t => {
+    const gate = workerGate(), previousWorker = globalThis.Worker;
+    globalThis.Worker = gate.Worker; t.after(() => { globalThis.Worker = previousWorker; });
+    const bundle = greetingBundle();
+    bundle.definition.functions = { identity: { reads: [], description: 'base health' } };
+    bundle.functions.identity = '() => 60';
+    bundle.definition.rules.find(rule => rule.id === 'base-health')!.value = { call: 'identity', args: [] };
+    const h = runtimeHarness(bundle); t.after(() => h.cleanup()); await h.drain(); selectGreeting(h, 0); accepted(await h.api.enable());
+    gate.hold(); selectGreeting(h, 1); await h.handlers.get('MESSAGE_SWIPED')!(0); await gate.started;
+    let prepared = false;
+    const generation = Promise.resolve(h.handlers.get('GENERATION_STARTED')!('normal', {}, false)).then(() => {prepared = true;});
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(prepared, false);
+    gate.release(); await generation; await h.drain();
+    assert.equal(prepared, true); assert.equal(hero(accepted(await h.api.inspect())).hero.health, 60);
+    assert.equal(h.requests(), 0);
+});
+
+test('failed opening initialization remains visible and cannot enter generation on the raw common baseline', async t => {
+    const bundle = greetingBundle(); bundle.definition.openings![1] = { hero: { health: -10 } }; bundle.definition.updates = ['before', 'after'];
+    for (const item of [...bundle.definition.actions, ...bundle.definition.access.filter(entry => entry.direct)]) {item.stages = ['after'];}
+    const h = runtimeHarness(bundle, '3.0', async () => true, true); t.after(() => h.cleanup()); await h.drain(); selectGreeting(h, 0); accepted(await h.api.enable());
+    selectGreeting(h, 1); await h.handlers.get('MESSAGE_SWIPED')!(0); await h.drain();
+    assert.equal(h.api.lastResult()?.ok, false);
+    assert.throws(() => h.api.apply([]), { code: 'commit-busy' });
+    await assert.rejects(Promise.resolve(h.handlers.get('GENERATION_STARTED')!('normal', {}, false)));
+    // SillyTavern catches event errors and still appends USER before invoking interceptors.
+    h.ctx.chat.push({ mes: 'player turn', is_user: true });
+    assert.deepEqual(await h.prepare(), { aborted: true });
+    assert.throws(() => h.api.apply([]), { code: 'commit-busy' });
+    const failedState = clone(h.ctx.chatMetadata), failedMessages = clone(h.ctx.chat);
+    for (const run of [() => h.api.skipBefore(1), () => h.api.recomputeBefore(1), () => h.api.undoBefore(1)]) {
+        await assert.rejects(Promise.resolve(run()), { code: 'commit-busy' });
+    }
+    assert.deepEqual(h.ctx.chatMetadata, failedState); assert.deepEqual(h.ctx.chat, failedMessages);
+    assert.equal(h.api.lastResult()?.ok, false); assert.equal(h.requests(), 0);
+    assert.equal(h.message.swipe_info![1].extra?.[CHAT_KEY], undefined);
+    for (const boundary of ['reload', 'mode']) {
+        if (boundary === 'reload') {
+            h.ctx.chatMetadata = clone(h.ctx.chatMetadata); h.ctx.chat.splice(0, h.ctx.chat.length, ...clone(h.ctx.chat));
+            await h.handlers.get('CHAT_CHANGED')!();
+        } else {
+            for (const mode of ['2.0', '3.0']) {
+                h.preferences.LittleWhiteBox.variablesMode = mode; await h.handlers.get('SETTINGS_UPDATED')!();
+            }
+        }
+        await h.drain();
+        await h.handlers.get('GENERATION_STARTED')!('normal', {}, false);
+        assert.deepEqual(await h.prepare(), { aborted: true });
+        assert.throws(() => h.api.apply([]), { code: 'commit-busy' });
+    }
+});
+
+test('unconfirmed opening saves permit committed play and retry persistence without initializing twice', async t => {
+    const h = runtimeHarness(greetingBundle(), '3.0', async () => true, true); t.after(() => h.cleanup()); await h.drain(); selectGreeting(h, 1);
+    let saveCalls = 0;
+    h.ctx.saveChat = async () => {saveCalls++; throw new Error('offline');};
+    const result = accepted(await h.api.enable());
+    assert.equal(result.committed, true); assert.equal(result.saved, false);
+    const record = clone(h.message.extra![CHAT_KEY]), history = clone(h.ctx.chatMetadata[CHAT_KEY]);
+    await h.handlers.get('GENERATION_STARTED')!('normal', {}, false);
+    h.ctx.chat.push({ mes: 'player turn', is_user: true });
+    assert.deepEqual(await h.prepare(), { aborted: false });
+    assert.equal(hero(accepted(await h.api.inspect())).hero.health, 60);
+    assert.equal(h.api.lastResult(), result); assert.equal(saveCalls, 1);
+    h.ctx.saveChat = async () => {saveCalls++;};
+    await h.api.retrySave();
+    assert.equal(saveCalls, 2); assert.equal(accepted(h.api.lastResult()!).saved, true);
+    assert.deepEqual(h.message.extra![CHAT_KEY], record); assert.deepEqual(h.ctx.chatMetadata[CHAT_KEY], history);
+    assert.equal(h.requests(), 0);
+});
+
+test('opening-aware first enrollment requires greeting-only chat; failed enrollment blocks after-only dispatch without history', async t => {
+    const h = harness(), bundle = greetingBundle();
+    h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle);
+    h.ctx.chat.push({ mes: 'already started', is_user: true });
+    const before = clone(h.ctx.chatMetadata), service = createSettlementService(h.exports.createHostAdapter());
+    await assert.rejects(service.enable(), { code: 'opening-start-required' });
+    assert.deepEqual(h.ctx.chatMetadata, before); assert.equal(h.saves(), 0);
+    const invalid = greetingBundle(); invalid.definition.openings![0] = { hero: { health: -1 } };
+    const active = runtimeHarness(invalid, '3.0', async () => true, true); t.after(() => active.cleanup()); await active.drain();
+    assert.equal((await active.api.enable()).ok, false);
+    assert.equal(active.ctx.chatMetadata[CHAT_KEY], undefined);
+    active.ctx.chat.push({ mes: 'player turn', is_user: true });
+    assert.deepEqual(await active.prepare(), { aborted: true });
+    active.ctx.chatMetadata = clone(active.ctx.chatMetadata); active.ctx.chat.splice(0, active.ctx.chat.length, ...clone(active.ctx.chat));
+    await active.handlers.get('CHAT_CHANGED')!(); await active.drain();
+    assert.deepEqual(await active.prepare(), { aborted: true });
+    assert.equal(active.requests(), 0);
+});
+
+test('adding openings preserves existing progress even when only later floors have gameplay receipts', async t => {
+    for (const later of [false, true]) {
+        const h = runtimeHarness(equipmentExample(), '3.0', async () => true, true); t.after(() => h.cleanup()); await h.drain();
+        accepted(await h.api.enable());
+        if (later) {h.ctx.chat.push({ mes: 'previous player turn', is_user: true }, { mes: 'previous reply', extra: {} });}
+        accepted(await h.api.apply([{ op: 'set', path: ['hero', 'health'], value: 17 }]));
+        h.ctx.chat.push({ mes: 'player turn', is_user: true });
+        h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(greetingBundle());
+        const progress = clone(h.ctx.chatMetadata), saves = h.saves();
+        await h.handlers.get('CHAT_CHANGED')!(); await h.drain();
+        assert.deepEqual(await h.prepare(), { aborted: false });
+        assert.equal(hero(accepted(await h.api.inspect())).hero.health, 17);
+        assert.deepEqual(h.ctx.chatMetadata, progress); assert.equal(h.saves(), saves);
+    }
+});
+
+test('pending overswipe placeholders cannot initialize or fabricate native greeting holders', async () => {
+    const h = harness(); h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(greetingBundle()); selectGreeting(h, 0);
+    h.message.swipe_id = h.message.swipes!.length; h.message.extra = {};
+    const adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter);
+    assert.equal(adapter.capture(0).opening, false);
+    await assert.rejects(service.enable(), { code: 'opening-start-required' });
+    assert.equal(h.message.swipe_info!.length, 4); assert.equal(h.saves(), 0);
+    selectGreeting(h, 0); accepted(await service.enable());
+    assert.equal(hero(accepted(await service.inspect())).hero.health, 33);
+});
+
+test('opening initialization cannot write after a chat reload, cross-chat switch, or a newly appended player turn', async () => {
+    for (const boundary of ['reload', 'chat', 'send']) {
+        let announce!: () => void, release!: () => void;
+        const started = new Promise<void>(resolve => {announce = resolve;}), gate = new Promise<void>(resolve => {release = resolve;});
+        const h = harness(), bundle = greetingBundle();
+        h.ctx.characters[0].data!.extensions![CARD_EXTENSION] = JSON.stringify(bundle); selectGreeting(h, 0);
+        const adapter = h.exports.createHostAdapter(), service = createSettlementService(adapter, {
+            requestAuthorization: async () => {announce(); await gate;}, authorize: async () => {}, context: () => ({}), passage: () => '',
+        });
+        const pending = service.enable(); await started;
+        if (boundary === 'reload') {h.ctx.chatMetadata = clone(h.ctx.chatMetadata); h.ctx.chat.splice(0, 1, clone(h.message));}
+        if (boundary === 'chat') {h.ctx.chatId = 'another'; h.ctx.chatMetadata = { variables: { neighbor: 'another' } };}
+        if (boundary === 'send') {h.ctx.chat.push({ mes: 'player turn', is_user: true });}
+        const untouched = clone(h.ctx.chatMetadata); release();
+        await assert.rejects(pending, { code: 'stale-target' });
+        assert.deepEqual(h.ctx.chatMetadata, untouched); assert.equal(h.saves(), 0);
     }
 });

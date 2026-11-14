@@ -20,6 +20,15 @@ function buildModelListAuthMarkup(scope = 'main') {
     </label>`;
 }
 
+function buildBaseUrlMarkup(scope = 'main') {
+    const prefix = scope === 'delegate' ? 'xb-assistant-delegate' : 'xb-assistant';
+    return `<label>
+        <span>Base URL</span>
+        <input id="${prefix}-base-url" type="text" aria-describedby="${prefix}-base-url-hint" />
+        <small id="${prefix}-base-url-hint" hidden>填写服务地址，不要在末尾加 /v1；系统默认使用 /v1beta。</small>
+    </label>`;
+}
+
 export function buildPresetActionIcon(name) {
     const paths = {
         add: '<path d="M12 5v14" /><path d="M5 12h14" />',
@@ -186,10 +195,7 @@ export function buildAgentSettingsPanelMarkup(options = {}) {
                         ${PROVIDER_OPTIONS.map(item => `<option value="${item.value}">${item.label}</option>`).join('')}
                     </select>
                 </label>
-                <label>
-                    <span>Base URL</span>
-                    <input id="xb-assistant-delegate-base-url" type="text" />
-                </label>
+                ${buildBaseUrlMarkup('delegate')}
                 <label>
                     <span>API Key</span>
                     <div class="xb-assistant-inline-input">
@@ -268,10 +274,7 @@ export function buildAgentSettingsPanelMarkup(options = {}) {
                     ${PROVIDER_OPTIONS.map(item => `<option value="${item.value}">${item.label}</option>`).join('')}
                 </select>
             </label>
-            <label>
-                <span>Base URL</span>
-                <input id="xb-assistant-base-url" type="text" />
-            </label>
+            ${buildBaseUrlMarkup()}
             <label>
                 <span>API Key</span>
                 <div class="xb-assistant-inline-input">

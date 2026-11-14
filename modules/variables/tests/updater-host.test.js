@@ -22,15 +22,22 @@ test('updater host preserves regeneration through its own deletion, but cancels 
     runInNewContext(source + '\nglobalThis.host = { initVariableUpdater, notifyVariableReplyReady, cleanupVariableUpdater };', sandbox);
     sandbox.host.initVariableUpdater({});
     const emit = (name, ...args) => handlers.get(name)?.(...args);
-    for (const mode of ['regenerate', 'normal', 'user-delete', 'chat-change']) {
+    for (const [mode, order] of ['regenerate', 'normal', 'user-delete', 'chat-change'].flatMap(mode =>
+        ['received-first', 'ready-first', 'rendered-first'].map(order => [mode, order]))) {
         const before = updates;
         ctx = { chat: [{ mes: 'old' }] };
         emit('GENERATION_STARTED', mode === 'regenerate' ? 'regenerate' : 'normal', {}, false);
         if (mode === 'regenerate' || mode === 'user-delete') { ctx.chat.pop(); emit('MESSAGE_DELETED', 0); }
         if (mode === 'chat-change') { ctx = { chat: [] }; emit('CHAT_CHANGED'); }
         ctx.chat.push({ mes: 'new' }); const index = ctx.chat.length - 1;
+        // A4: core settlement may finish before this listener sees the message.
+        // Either order must trigger once, not miss a paid automatic update.
+        if (order === 'ready-first') sandbox.host.notifyVariableReplyReady(index);
+        emit(order === 'rendered-first' ? 'CHARACTER_MESSAGE_RENDERED' : 'MESSAGE_RECEIVED', index);
+        if (order !== 'ready-first') sandbox.host.notifyVariableReplyReady(index);
+        assert.equal(updates - before, ['regenerate', 'normal'].includes(mode) ? 1 : 0, `${mode}: ${order}`);
         emit('MESSAGE_RECEIVED', index);
-        sandbox.host.notifyVariableReplyReady(index);
+        emit('CHARACTER_MESSAGE_RENDERED', index);
         sandbox.host.notifyVariableReplyReady(index);
         assert.equal(updates - before, ['regenerate', 'normal'].includes(mode) ? 1 : 0, mode);
     }

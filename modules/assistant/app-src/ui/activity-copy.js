@@ -1,3 +1,5 @@
+import { ASSISTANT_WINDOW_COPY } from '../../shared/window-layout.js';
+
 export const ACTIVITY_COPY = {
     statuses: {
         queued: '等待中',
@@ -30,12 +32,20 @@ export const ACTIVITY_COPY = {
     contextUsage: label => `约 ${label} tokens`,
     contextPolicy: trigger => `达到 ${trigger}k 时，在下次请求前自动总结。`,
     contextSummarized: '已压缩较早历史',
-    contextFull: '近期对话和本轮材料已超出上下文估算预算，最近问答和工具结果仍然保留。若模型提示超限，请缩小本轮请求或附件后重试。',
+    contextFull: (used, limit) => `本次输入估算为 ${used} tokens，可用输入预算为 ${limit}，已停止发送。最近对话和完整工具结果已保留。请减少本轮附件，或新建对话从保留的工作区继续，分批读取所需文件片段。`,
+    summaryEmpty: '模型返回了空摘要',
+    summaryOverBudget: (used, limit) => `摘要输入估算为 ${used} tokens，超过可用输入预算 ${limit}，已停止发送`,
+    summaryFailed: reason => `历史压缩失败：${reason}。本次待压缩记录和原摘要已保留，可重试。`,
     clearConversation: '清空对话',
     conversationCleared: '对话已清空，工作区已保留',
     clearFailed: reason => `对话清空失败：${reason}`,
     restoreFailed: '存档读取失败，已停止加载。请重新打开助手。',
     configLoadFailed: reason => `配置读取失败，请重新打开助手：${reason}`,
-    settingsToggle: collapsed => collapsed ? '展开 API 配置' : '收起 API 配置',
-    closeAssistant: '关闭小白助手',
+    sidebarToggle: collapsed => collapsed ? '打开文件目录' : '收起文件目录',
+    apiSettings: 'API 配置',
+    closeApiSettings: '关闭 API 配置',
+    apiSummary: (preset, model) => `API 配置：${preset} · ${model}`,
+    modelMissing: '未设置模型',
+    closeAssistant: ASSISTANT_WINDOW_COPY.close,
+    minimizeAssistant: ASSISTANT_WINDOW_COPY.minimize,
 };

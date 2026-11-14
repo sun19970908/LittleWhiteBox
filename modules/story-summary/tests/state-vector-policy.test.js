@@ -6,7 +6,7 @@ import {
     selectMissingStateVectorAtoms,
 } from '../vector/pipeline/state-vector-policy.js';
 
-test('L0派生向量仅以 atomId、当前指纹和双向量完整性认定有效', () => {
+test('L0 补齐选择缺失、模型不符或双向量不完整的记录', () => {
     const atoms = [
         { atomId: 'a' },
         { atomId: 'b' },

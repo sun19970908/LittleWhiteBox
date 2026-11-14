@@ -111,7 +111,10 @@ export async function checkVectorCacheConsistency(options = {}) {
             missingChunkFloors: result.data.missingChunkFloors,
             diagnostic: result.diagnostic,
         };
-        if (isCacheConsistencyFailure(result.error)) return { status: 'inconsistent', diagnostic: result.diagnostic };
+        if (isCacheConsistencyFailure(result.error)) return {
+            status: 'inconsistent', repairable: result.error.details?.repairable === true,
+            diagnostic: result.diagnostic,
+        };
         throw result.error;
     } catch (error) {
         if (['cancelled', 'chat_changed', 'source_changed'].includes(error.code)) return { status: 'deferred' };

@@ -45,7 +45,7 @@ function harness(t, { mode, enabled, role = 'main', approve = true, nextMode }) 
         buildJsApiApprovalResult: (_args, approved) => ({ ok: approved, approved, skipped: !approved }),
         getActiveProviderConfig: () => ({ provider: 'openai-compatible' }), getDelegateProviderConfig: () => ({ provider: 'openai-compatible' }),
         getToolDefinitions: options => getAssistantToolDefinitions({ ...options, jsApiEnabled: enabled }), isJsApiEnabled: () => enabled,
-        SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000, MAX_TOOL_ROUNDS: 10, REQUEST_TIMEOUT_MS: 1000,
+        SYSTEM_PROMPT: '', MAX_CONTEXT_TOKENS: 100000, SUMMARY_TRIGGER_TOKENS: 90000, REQUEST_TIMEOUT_MS: 1000,
         isAbortError: error => error.name === 'AbortError',
         createAdapter: config => {
             const target = config ? 'delegate' : 'main';

@@ -98,7 +98,8 @@ export const SUMMARY_FEEDBACK_COPY = Object.freeze({
         fingerprintMismatch: '向量引擎/模型已变更',
         cacheInconsistent: '部分向量缓存与保存的来源不一致',
         l1Gap: count => `${count} 层片段未向量化`,
-        l0Gap: count => `${count} 个楼层的锚点或基础向量未完成`,
+        l0Gap: count => `${count} 个楼层的记忆锚点提取未完成`,
+        l0VectorsMissing: count => `${count} 个楼层的锚点向量需要补齐或更新`,
         eventsMissing: count => `${count} 个事件未向量化`,
         checking: '正在检查向量状态…',
         pending: '等待当前任务结束后检查。',
@@ -106,9 +107,11 @@ export const SUMMARY_FEEDBACK_COPY = Object.freeze({
         status: issues => {
             if (!issues.length) return '';
             const rebuild = issues.some(issue => issue.action === 'rebuild');
-            const advice = rebuild ? VECTOR_REBUILD_ADVICE : '';
-            const anchors = issues.some(issue => issue.code === 'l0_gap')
-                ? '缺失的锚点文本需在「记忆锚点」中生成/补齐。' : '';
+            const advice = rebuild ? VECTOR_REBUILD_ADVICE
+                : issues.some(issue => issue.action === 'fill')
+                    ? '请执行「向量数据 → 补齐缺漏」，只更新需要修复的向量并清理已删除记忆的缓存。' : '';
+            const anchors = issues.some(issue => issue.action === 'extract')
+                ? '请在「记忆锚点」中生成/补齐未完成的锚点。' : '';
             return `${issues.map(issue => issue.message).join('、')}。${advice}${anchors}`;
         },
     }),

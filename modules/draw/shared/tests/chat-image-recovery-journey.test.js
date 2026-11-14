@@ -263,6 +263,31 @@ test('native completion submits only new tags and does not await paid transport;
     assert.equal(h.counters.requests.length, 1);
 });
 
+// Cost: hidden blocks buying images or replacing the wrong occurrence.
+for (const custom of [false, true]) {
+    test(`filtered tags do not buy images on history/manual or native automatic paths (custom=${custom})`, async t => {
+        const h = await setup(t, ['body']);
+        const start = custom ? '<private>' : '<status>', end = custom ? '</private>' : '</status>';
+        if (custom) h.api.getSharedDrawSettings().messageFilterRules = [{ start, end, keep: true }];
+        h.ctx.chat[0].mes = `${start}[img: same]${end}[img: same]`;
+        // eslint-disable-next-line no-unsanitized/property -- Fixed local test tags; exercise rendered custom blocks.
+        h.body(0).innerHTML = h.ctx.chat[0].mes;
+        h.start(); await h.pump(6);
+        const actions = h.body(0).querySelectorAll('[data-xb-draw-tag-action]');
+        assert.equal(actions.length, 1);
+        actions[0].click(); await h.pump(10);
+        assert.deepEqual(h.counters.requests, [{ messageId: 0, tags: 'same' }]);
+        assert.ok(h.ctx.chat[0].mes.startsWith(`${start}[img: same]${end}`));
+        await h.emit('GENERATION_AFTER_COMMANDS', 'continue'); await h.emit('GENERATE_AFTER_DATA', {}, false);
+        h.ctx.chat[0].mes += `${start}[img: forbidden]${end}[img: new body]`;
+        h.body(0).textContent = h.ctx.chat[0].mes;
+        await h.emit('MESSAGE_RECEIVED', 0, 'continue'); await h.pump(8);
+        assert.deepEqual(h.counters.requests.map(item => item.tags), ['same', 'new body']);
+        assert.ok(h.ctx.chat[0].mes.includes(`${start}[img: forbidden]${end}`));
+        assert.equal(h.counters.saves, 0);
+    });
+}
+
 function generate(h, placements = [{ mode: 'tail' }]) {
     return h.api.generatePreparedChatImages('review-provider', { ctx: h.ctx, message: h.ctx.chat[0], messageId: 0,
         sourceText: h.ctx.chat[0].mes, tasks: placements.map((placement, index) => ({ scene: `paid-${index}`, placement })) });

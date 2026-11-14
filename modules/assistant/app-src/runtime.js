@@ -96,7 +96,6 @@ export function createAssistantRuntime(deps) {
         HISTORY_SUMMARY_PREFIX,
         MAX_CONTEXT_TOKENS,
         SUMMARY_TRIGGER_TOKENS,
-        MAX_TOOL_ROUNDS,
         REQUEST_TIMEOUT_MS,
         TOOL_DEFINITIONS,
         TOOL_NAMES,
@@ -186,12 +185,6 @@ export function createAssistantRuntime(deps) {
         render();
     }
 
-    function trimForSummary(text, limit = 1800) {
-        const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-        if (normalized.length <= limit) return normalized;
-        return `${normalized.slice(0, limit)}…`;
-    }
-
     function buildToolResultMessage({ toolCallId, toolName, toolResult }) {
         return {
             role: 'tool',
@@ -213,6 +206,8 @@ export function createAssistantRuntime(deps) {
     }
     const {
         buildContextMeterLabel,
+        compactionThreshold,
+        requestInputLimit,
         updateContextStats,
     } = createContextStatsController({
         state,
@@ -220,6 +215,7 @@ export function createAssistantRuntime(deps) {
         getToolDefinitions: resolveToolDefinitions,
         TOOL_DEFINITIONS,
         MAX_CONTEXT_TOKENS,
+        SUMMARY_TRIGGER_TOKENS,
     });
 
     function pushMessage(message) {
@@ -331,9 +327,9 @@ export function createAssistantRuntime(deps) {
         getActiveProviderConfig,
         formatToolResultDisplay,
         buildTextWithAttachmentSummary,
-        trimForSummary,
         SUMMARY_SYSTEM_PROMPT,
-        SUMMARY_TRIGGER_TOKENS,
+        compactionThreshold,
+        requestInputLimit,
         buildContextMeterLabel,
         updateContextStats,
         toProviderMessages,
@@ -661,7 +657,8 @@ export function createAssistantRuntime(deps) {
 
         await maybeAutoReadSlashSkill(run);
 
-        while (rounds < MAX_TOOL_ROUNDS) {
+        // The user's stop button ends a run; the loop itself sets no round cap.
+        while (true) {
             if (run.controller.signal.aborted) {
                 throw new Error('assistant_aborted');
             }
@@ -854,18 +851,13 @@ export function createAssistantRuntime(deps) {
             render();
             return;
         }
-
-        settleAssistantRunFailure({ messages: state.messages,
-            notice: `这轮工具调用已经到上限了（${MAX_TOOL_ROUNDS}/${MAX_TOOL_ROUNDS}）。你可以把问题再收窄一点，比如直接给我模块名、设置项名或报错文本。`,
-            pushMessage, persistSession });
-        state.progressLabel = '';
-        render();
     }
 
     return {
         getToolActivity,
         resetCompactionState,
         buildContextMeterLabel,
+        compactionThreshold,
         updateContextStats,
         pushMessage,
         cancelActiveRun,

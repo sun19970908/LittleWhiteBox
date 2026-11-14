@@ -121,6 +121,35 @@ test('all shared adapters preserve complete content independently of completion 
     }
 });
 
+// A relay's explicit upstream failure inside HTTP 200 is an API failure, not a
+// model submission eligible for another paid correction (duplicate billing).
+test('relay HTTP 200 error completions fail across direct/host JSON and SSE transports', async t => {
+    const reason = 'Proxy error (HTTP 400 Bad Request)';
+    const detail = 'The referenced name #/$defs/npc does not match a display_name.';
+    for (const provider of ['openai-compatible', 'sillytavern-openai-compatible']) {
+        for (const streaming of [false, true]) {
+            await t.test(`${provider}/${streaming ? 'SSE' : 'JSON'}`, async t => {
+                const wire = { json: { choices: [{ finish_reason: reason, message: { role: 'assistant', content: detail } }] },
+                    events: [{ choices: [{ delta: { role: 'assistant', content: detail } }] },
+                        { choices: [{ delta: {}, finish_reason: reason }] }] };
+                const hosted = provider.startsWith('sillytavern-');
+                const service = hosted ? hostClient(wire) : await localProvider(t, wire, streaming);
+                const adapter = createAgentAdapter({ provider, apiKey: 'offline-fixture', baseUrl: service.baseUrl,
+                    model: 'fixture', toolMode: 'native', timeoutMs: 3000 }, hosted ? { hostClient: service } : {});
+                await assert.rejects(adapter.chat({ messages, tools, ...(streaming ? { onStreamProgress() {} } : {}) }), error => {
+                    assert.equal(error.code, 'AGENT_PROVIDER_ERROR');
+                    assert.equal(error.status, 400);
+                    assert.ok(error.message.includes(detail));
+                    return true;
+                });
+                assert.equal(service.requests(), 1);
+            });
+        }
+    }
+    // Story text that quotes an API error is not an error completion.
+    assert.equal(readResponseCompletion('openai', 'stop').completion, 'complete');
+});
+
 test('draw accepts a complete plan after length or missing completion, once', async t => {
     for (const ending of ['limit', 'missing']) {
         await t.test(ending, async t => {

@@ -8,6 +8,8 @@ import { getWorkspaceMutationPermissionError } from './workspace-mutation-policy
 import { captureWorkspacePath, workspaceMutationScopes } from './workspace-preconditions.js';
 import { LOOKUP_SCOPE_LOCAL, normalizeLookupScope } from './lookup-scope.js';
 
+const MISSING_READ_ERRORS = new Set(['local_file_not_found', 'directory_not_found']);
+
 export function createLocalSourcesToolRuntime(deps) {
     const { getLocalSources, setLocalSources, normalizeLocalSourcesSnapshot, executeToolCall, repository } = deps;
     let stateWriteQueue = Promise.resolve();
@@ -80,8 +82,17 @@ export function createLocalSourcesToolRuntime(deps) {
                 const localSources = readsWorkspace ? (await repository.readWorkspace()).localSources : getSnapshot();
                 result = await executeToolCall(name, args, { ...options, localSources, workspaceMeta: meta });
                 const path = String(result?.path || '').replace(/\/+$/, '');
-                if (name === 'Read' && result?.ok !== false && (path === 'local' || path.startsWith('local/'))) {
-                    options.onWorkspaceObserved?.([{ path, scope: 'entry', expected: captureWorkspacePath(localSources, path) }]);
+                if (name === 'Read' && (path === 'local' || path.startsWith('local/'))) {
+                    if (result?.ok !== false) {
+                        options.onWorkspaceObserved?.([{ path, scope: 'entry', expected: captureWorkspacePath(localSources, path) }]);
+                    } else if (MISSING_READ_ERRORS.has(result.error)) {
+                        // Missing ancestors may need recreating too. A parent file's contents
+                        // were not returned by this failed read and must remain unobserved.
+                        const parts = path.split('/');
+                        options.onWorkspaceObserved?.(parts.map((_, index) => parts.slice(0, index + 1).join('/'))
+                            .map(item => ({ path: item, scope: 'entry', expected: captureWorkspacePath(localSources, item) }))
+                            .filter(item => item.expected.kind !== 'file'));
+                    }
                 }
             }
             const nextResult = result && typeof result === 'object'

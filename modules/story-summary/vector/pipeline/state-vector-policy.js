@@ -1,3 +1,7 @@
+import { inputDigest } from '../utils/vector-input-digest.js';
+import { buildRAggregateText } from './state-vector-input.js';
+import { matchesVectorSource } from '../utils/vector-source.js';
+
 function hasValidVectorPair(item) {
     const vectorValid = typeof item?.vectorValid === 'boolean'
         ? item.vectorValid
@@ -10,16 +14,14 @@ function hasValidVectorPair(item) {
 
 export function selectMissingStateVectorAtoms(atoms, stateVectors, fingerprint) {
     const currentFingerprint = String(fingerprint || '');
-    const validIds = new Set((Array.isArray(stateVectors) ? stateVectors : [])
-        .filter(item => (
-            item?.atomId
-            && item.fingerprint === currentFingerprint
-            && hasValidVectorPair(item)
-        ))
-        .map(item => item.atomId));
-
+    const byId = new Map((stateVectors || []).map(item => [item.atomId, item]));
     return (Array.isArray(atoms) ? atoms : [])
-        .filter(atom => atom?.atomId && !validIds.has(atom.atomId));
+        .filter(atom => {
+            const vector = byId.get(atom?.atomId);
+            return atom?.atomId && (!vector || vector.fingerprint !== currentFingerprint || !hasValidVectorPair(vector)
+                || !matchesVectorSource(vector, { floor: atom.floor, sourceHash: inputDigest('state', atom.semantic),
+                    relationHash: inputDigest('relation', buildRAggregateText(atom)) }));
+        });
 }
 
 export function canRepairStateVectors(metaFingerprint, currentFingerprint) {

@@ -1,6 +1,8 @@
 import { buildEntryUrl, reportBuildFailure } from "./core/build-assets.js";
 import { extension_settings } from "../../../extensions.js";
 import { saveSettingsDebounced } from "../../../../script.js";
+import { SlashCommandParser } from "../../../slash-commands/SlashCommandParser.js";
+import { SlashCommand } from "../../../slash-commands/SlashCommand.js";
 import { EXT_ID, extensionFolderPath } from "./core/constants.js";
 import { executeSlashCommand } from "./core/slash-command.js";
 import { EventCenter } from "./core/event-manager.js";
@@ -975,15 +977,7 @@ async function setupSettings() {
         });
 
         $("#xiaobaix_assistant_open_settings").on("click", observeAsyncCallback(async function () {
-            if (!isXiaobaixEnabled) return;
-            if (!window.xiaobaixAssistant?.open) {
-                await initAssistant();
-            }
-            if (window.xiaobaixAssistant?.open) {
-                window.xiaobaixAssistant.open();
-            } else {
-                toastr.warning('小白助手初始化失败');
-            }
+            await openAssistantPanel();
         }, { source: import.meta.url, operation: "callback" }));
 
         $("#xiaobaix_ebook_open_settings").on("click", observeAsyncCallback(async function () {
@@ -1257,3 +1251,21 @@ jQuery(observeAsyncCallback(async () => {
 }, { source: import.meta.url, operation: "callback" }));
 
 export { executeSlashCommand };
+
+async function openAssistantPanel() {
+    if (!isXiaobaixEnabled) return '';
+    if (!window.xiaobaixAssistant?.open) await initAssistant();
+    if (window.xiaobaixAssistant?.open) {
+        window.xiaobaixAssistant.open();
+    } else {
+        toastr.warning('小白助手初始化失败');
+    }
+    return '';
+}
+
+SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+    name: 'xiaobaix',
+    aliases: ['助手'],
+    callback: openAssistantPanel,
+    helpString: '打开小白助手面板',
+}));

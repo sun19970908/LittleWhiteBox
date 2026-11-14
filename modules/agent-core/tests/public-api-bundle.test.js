@@ -2,13 +2,18 @@
 // the public facade or keeps its replay helpers in the same browser dependency graph.
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
 import test from 'node:test';
 
-test('the shipped Agent entry supports caller-owned replay and host invalidation', async () => {
+async function loadShippedCore() {
     const manifest = JSON.parse(await readFile(new URL('../../../dist/manifest.json', import.meta.url), 'utf8'));
     const entry = new URL(`../../../dist/${manifest.entries['runtime/agent-core'].file}`, import.meta.url);
     // eslint-disable-next-line no-unsanitized/method -- Entry is from the repository's generated build manifest.
-    const core = await import(entry.href);
+    return import(entry.href);
+}
+
+test('the shipped Agent entry supports caller-owned replay and host invalidation', async () => {
+    const core = await loadShippedCore();
     const settings = core.normalizeAgentSettings({
         provider: 'google',
         model: 'fixture', apiKey: '', maxTokens: 512,
@@ -58,4 +63,73 @@ test('the shipped Agent entry supports caller-owned replay and host invalidation
     const next = await api.openSession({ api: 'main' });
     next.dispose();
     await assert.rejects(next.chat({ messages }), { code: 'AGENT_SESSION_DISPOSED' });
+});
+
+// Contract: the installed runtime must send the same verified model protocol as
+// source, through its bundled SDKs (cost: rejected or incorrectly billed requests).
+test('shipped SDKs send current model controls over the actual HTTP wire', async t => {
+    const core = await loadShippedCore();
+    const requests = [];
+    const server = createServer((request, response) => {
+        const respond = async () => {
+            let raw = '';
+            for await (const chunk of request) raw += chunk;
+            requests.push({ body: JSON.parse(raw), headers: request.headers });
+            const body = request.url.includes(':generateContent')
+                ? { candidates: [{ content: { role: 'model', parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] }
+                : request.url.includes('/messages')
+                    ? { id: 'msg_fixture', type: 'message', role: 'assistant', model: 'fixture',
+                        content: [{ type: 'text', text: 'OK' }], stop_reason: 'end_turn',
+                        usage: { input_tokens: 1, output_tokens: 1 } }
+                    : { id: 'resp_fixture', object: 'response', status: 'completed', model: 'fixture',
+                        output: [{ type: 'message', id: 'msg_fixture', role: 'assistant', status: 'completed',
+                            content: [{ type: 'output_text', text: 'OK', annotations: [] }] }] };
+            response.writeHead(200, { 'Content-Type': 'application/json' });
+            response.end(JSON.stringify(body));
+        };
+        respond().catch(error => response.destroy(error));
+    });
+    await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+    t.after(() => new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }));
+    const baseUrl = `http://127.0.0.1:${server.address().port}`;
+    const cases = [
+        { provider: 'google', model: 'gemini-4-hydrogen', reasoning: { mode: 'on', effort: 'xhigh' }, check({ body }) {
+            assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, 'XHIGH');
+            assert.equal(body.generationConfig.thinkingConfig.thinkingBudget, undefined);
+        } },
+        { provider: 'google', model: 'gemini-2.5-flash', reasoning: { mode: 'on', budgetTokens: 2048 }, check({ body }) {
+            assert.equal(body.generationConfig.thinkingConfig.thinkingBudget, 2048);
+            assert.equal(body.generationConfig.thinkingConfig.thinkingLevel, undefined);
+        } },
+        { provider: 'anthropic', model: 'deepseek-chat', reasoning: { mode: 'on', effort: 'high' }, check({ body, headers }) {
+            assert.equal(body.thinking.type, 'adaptive');
+            assert.equal(body.output_config.effort, 'high');
+            assert.equal(body.top_p, 0.83);
+            assert.equal(body.top_k, 37);
+            assert.equal(body.temperature, undefined);
+            assert.equal(headers['x-api-key'], 'offline-fixture');
+            assert.equal(headers.authorization, undefined);
+            assert.equal(headers['anthropic-version'], '2023-06-01');
+        } },
+        { provider: 'anthropic', model: 'claude-opus-5-5', reasoning: { mode: 'on', effort: 'xhigh' }, check({ body }) {
+            assert.equal(body.thinking.type, 'adaptive');
+            assert.equal(body.output_config.effort, 'xhigh');
+            assert.equal(body.temperature, undefined);
+        } },
+        { provider: 'openai-responses', model: 'gpt-6-astra', reasoning: { mode: 'on', effort: 'max' }, check({ body }) {
+            assert.equal(body.reasoning.effort, 'max');
+            assert.equal(body.temperature, undefined);
+        } },
+    ];
+    for (const { provider, model, reasoning, check } of cases) {
+        await t.test(`${provider}/${model}`, async () => {
+            const adapter = core.createAgentAdapter({ provider, model, baseUrl, apiKey: 'offline-fixture', timeoutMs: 3000,
+                sampling: { topP: { enabled: true, value: 0.83 }, topK: { enabled: true, value: 37 } } });
+            const result = await adapter.chat({ messages: [{ role: 'user', content: 'offline' }],
+                maxTokens: 8192, temperature: 0.2, reasoning });
+            assert.equal(result.text, 'OK');
+            check(requests.at(-1));
+        });
+    }
+    assert.equal(requests.length, cases.length);
 });

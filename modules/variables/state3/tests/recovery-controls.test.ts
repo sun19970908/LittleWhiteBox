@@ -9,13 +9,18 @@ import { element, resultLabel } from '../ui/result.js';
 import { createResultDialog } from '../ui/result-dialog.js';
 import type { State3Api } from '../runtime/api.js';
 import type { createState3Page } from '../ui/settings.js';
-import type { Success } from '../types.js';
+import type { Result, Success } from '../types.js';
+import { createAuthorExtensions } from '../ui/author-extensions.js';
+import { EXTENSION_COPY as EC } from '../extensions/copy.js';
+import { DEFINITION_FILE } from '../definition/format.js';
+import type { Draft } from '../definition/authoring.js';
 
 function createPage(api: State3Api, document: Document, tasks: Promise<unknown>[], confirm: () => boolean, syncs: number[] = []) {
     const source = ts.transpileModule(readFileSync(new URL('../ui/settings.ts', import.meta.url), 'utf8'), {
         compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext },
     }).outputText.replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '').replaceAll('import.meta.url', "'controls-test'");
-    const create = runInNewContext(source + '\ncreateState3Page', { document, AbortController, COPY, element, resultLabel, confirm,
+    const create = runInNewContext(source + '\ncreateState3Page', { document, AbortController, COPY, element, resultLabel, confirm, createAuthorExtensions, EC, DEFINITION_FILE,
+        errorText: String, notifyInfo() {},
         createResultDialog: (target: State3Api) => {
             const view = createResultDialog(target);
             return { ...view, sync(...args: Parameters<typeof view.sync>) { syncs.push(args[1]); view.sync(...args); } };
@@ -41,7 +46,7 @@ test('U3: unsettled latest USER has direct settle/skip controls, UI cleanup does
         page.mountControl(2, [], { updates, beforeIndex: 3, lastReceiptIndex: -1 });
         const group = document.querySelector('.lwb-state3-controls[data-floor="3"]'); assert.ok(group);
         const click = (label: string) => {const button = [...group.querySelectorAll('button')].find(node => node.textContent === label); assert.ok(button); button.click();};
-        click(COPY.settleBefore); await Promise.all(tasks.splice(0));
+        click(COPY.settle); await Promise.all(tasks.splice(0));
         click(COPY.skipBefore); await Promise.all(tasks.splice(0));
         assert.equal(document.querySelector('.lwb-state3-controls[data-floor="1"]'), null);
     }
@@ -51,6 +56,35 @@ test('U3: unsettled latest USER has direct settle/skip controls, UI cleanup does
     page.mountControl(2, [], { updates: ['before'], beforeIndex: -1, lastReceiptIndex: -1 });
     assert.equal(document.querySelector('.lwb-state3-controls'), null);
     page.targetChanged(); assert.equal(cancelled, 0);
+});
+
+// Authoring failure must hand over exactly what was checked, preserving conflicts
+// and allowing help while source is invalid (lost work / repairing the wrong code).
+test('invalid draft can be checked and handed to assistant without dropping edits', async t => {
+    const { document } = parseHTML('<html><head></head><body></body></html>');
+    const previous=globalThis.document; globalThis.document=document; t.after(()=>{globalThis.document=previous;});
+    const proto=document.createElement('dialog');
+    Object.getPrototypeOf(proto).showModal=function(){this.open=true;};
+    Object.getPrototypeOf(proto).close=function(){this.open=false;};
+    const path='local/cards/draft.png/'+DEFINITION_FILE;
+    let stored: Draft={root:'local/cards/draft.png/',avatar:'draft.png',name:'Draft',files:[{path,content:'{}'}]};
+    const tasks:Promise<unknown>[]=[], checked:string[]=[], handed:string[]=[];
+    let saved=0;
+    const api={openDraft:async()=>structuredClone(stored),cancel(){},lastResult:()=>undefined,
+        saveDraft:async(_draft:Draft,files:Draft['files'])=>{saved++; stored={...stored,files:structuredClone(files)};return structuredClone(stored);},
+        checkDraft:async(draft:Draft)=>{checked.push(draft.files[0].content);return {ok:false,diagnostics:[{code:'definition-schema'}]} as Result;},
+        openAssistant:async()=>{handed.push(stored.files[0].content);},
+    } as unknown as State3Api;
+    const page=createPage(api,document,tasks,()=>true); t.after(()=>page.dispose());
+    await page.open('author');
+    const editor=document.querySelector<HTMLTextAreaElement>('textarea')!;
+    editor.value='{broken current draft'; editor.dispatchEvent(new document.defaultView!.Event('input'));
+    const click=async(root:Element,label:string)=>{const button=[...root.querySelectorAll('button')].find(node=>node.textContent===label)!;assert.ok(button);button.click();await Promise.all(tasks.splice(0));};
+    await click(document.querySelector('.lwb-state3-dialog:not(.lwb-state3-result-dialog)')!,COPY.check);
+    assert.deepEqual(checked,['{broken current draft']);
+    await click(document.querySelector('.lwb-state3-result-dialog')!,EC.repair);
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(saved,1); assert.deepEqual(handed,checked);
 });
 
 // Historical receipts and busy indices never create controls; retained buttons must
@@ -75,12 +109,12 @@ test('only latest USER/AI controls remain and recomputation requires current rol
     mount(3, 2);
     assert.deepEqual([...document.querySelectorAll<HTMLElement>('.lwb-state3-controls')].map(node => Number(node.dataset.floor)).sort(), [2, 3]);
     assert.equal(updated, 0); assert.deepEqual(settled, []);
-    await click(find(2, COPY.recompute)); await click(find(3, COPY.retry));
+    await click(find(2, COPY.recompute)); await click(find(3, COPY.recompute));
     assert.equal(confirmations, 2); assert.equal(updated, 0); assert.deepEqual(settled, []);
     accepted = true;
-    await click(find(2, COPY.recompute)); await click(find(3, COPY.retry));
+    await click(find(2, COPY.recompute)); await click(find(3, COPY.recompute));
     assert.equal(updated, 1); assert.deepEqual(settled, [2]);
-    const oldBefore = find(2, COPY.recompute), oldAfter = find(3, COPY.retry), oldResult = find(3, COPY.result);
+    const oldBefore = find(2, COPY.recompute), oldAfter = find(3, COPY.recompute), oldResult = find(3, COPY.result);
     status = { ...status, busy: true, phase: 'requesting', index: 0 };
     mount(5, 4);
     assert.equal(syncs.at(-1), 5);
@@ -91,8 +125,8 @@ test('only latest USER/AI controls remain and recomputation requires current rol
     // No selected receipt is visible, but an alternative AI reply has old effects.
     status = { ...status, busy: false, phase: 'ready' }; accepted = false;
     page.mountControl(5, [], { updates: ['before', 'after'], beforeIndex: 4, lastReceiptIndex: 5 });
-    await click(find(4, COPY.settleBefore));
+    await click(find(4, COPY.settle));
     assert.equal(confirmations, 5); assert.deepEqual(settled, [2]);
-    accepted = true; await click(find(4, COPY.settleBefore));
+    accepted = true; await click(find(4, COPY.settle));
     assert.deepEqual(settled, [2, 4]);
 });

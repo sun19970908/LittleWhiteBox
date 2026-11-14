@@ -1,7 +1,7 @@
 import { CARD_EXTENSION } from './format.js';
-import { decodeBundle, locateVariableFile, prepareVariableWrite, projectVariableFiles, variableExtensionWrite, type CardFile } from './card-files.js';
+import { CARD_FILES_COPY, decodeBundle, locateVariableFile, prepareVariableWrite, projectVariableFiles, variableExtensionWrite, type CardFile } from './card-files.js';
 import { compileDefinition } from './compile.js';
-import { reject } from '../engine/diagnostics.js';
+import { diagnostic, reject } from '../engine/diagnostics.js';
 import type { Bundle } from '../types.js';
 import { digest } from './digest.js';
 import { readFiles, storeFiles, observeTree } from '../../../card-workspace/workspace.js';
@@ -46,6 +46,10 @@ export function variableCardHost(host: Host) {
             const files = [file, ...companions.map(item => item.file)];
             const card = await host.readCharacter(target.avatar, signal);
             const { bundle, unchanged } = prepareVariableWrite(target.root, files, card.data.extensions?.[CARD_EXTENSION]);
+            try { compileDefinition(bundle); }
+            catch (error) {
+                throw new Error(`${CARD_FILES_COPY.invalidRules}\n${JSON.stringify(diagnostic(error))}`, { cause: error });
+            }
             if (!unchanged) {
                 host.assertCard(target.avatar);
                 await host.request('/api/characters/merge-attributes', variableExtensionWrite(card, bundle), signal);

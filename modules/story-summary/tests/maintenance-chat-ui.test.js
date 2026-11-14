@@ -316,6 +316,6 @@ test('closed dialogs merge live state without rendering, then restore it on reop
     h.render({ delta: true, turns: [turn({ revision: 2, status: 'completed', answer: 'after-close' })] });
     assert.equal(answer.textContent, 'before-close');
     h.ui.open();
-    assert.equal(answer.textContent, 'after-close');
+    assert.equal(answer.textContent.trimEnd(), 'after-close');
     assert.equal(h.sent.some(item => item.type === routes.send || item.type === routes.stop), false);
 });

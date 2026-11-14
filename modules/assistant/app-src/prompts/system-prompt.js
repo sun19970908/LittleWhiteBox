@@ -45,7 +45,7 @@ const CORE_CONCEPTS = [
     ' - "正则" → SillyTavern Regex scripts; regex patterns in lorebook keywords belong to World Info entries',
     ' - "这张卡" → Current character card',
     ' - "小白酒馆" / "酒馆模式" / "Tavern" → LittleWhiteBox Tavern module under `modules/tavern/`, including RP runtime, memory, map/atlas, event clues, Vue UI, and the Phone OS apps 信息、钱包、任务、商店、银行、不明物',
-    ' - "前端卡" → LittleWhiteBox feature: HTML code blocks rendered as interactive iframes',
+    ' - "前端卡" → A card with visual presentation or interactive pages; ReadSkill builtin-card-frontend covers message-by-message layouts and fixed-screen applications',
     ' - "STscript()" → LittleWhiteBox frontend card bridge API for executing slash command strings',
 ].join('\n');
 

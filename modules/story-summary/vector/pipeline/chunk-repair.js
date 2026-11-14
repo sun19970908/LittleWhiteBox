@@ -1,9 +1,10 @@
-import { getAllChunks, getChunkVectorDescriptors, getMeta, updateMeta, saveChunks, saveChunkVectors } from '../storage/chunk-store.js';
+import { getAllChunks, getChunkVectorDescriptors, getMeta, updateMeta, saveChunks, saveChunkVectors, deleteChunkVectorsByIds } from '../storage/chunk-store.js';
 import { collectChunkMaterials } from './chunk-materials.js';
 import { embed, getEngineFingerprint } from '../utils/embedder.js';
 import { getEmbeddingFailureDetails } from '../llm/embedding-failure.js';
 import { selectChunksForRepair } from './chunk-repair-policy.js';
 import { inputDigest } from '../utils/vector-input-digest.js';
+import { orphanVectorIds } from '../utils/vector-source.js';
 import { trackVectorActivity } from '../runtime/vector-activity.js';
 
 const REPAIR_BATCH_SIZE = 20;
@@ -31,6 +32,12 @@ async function repairMissingChunksInner({ chatId, chat, vectorConfig, signal, sh
         if (isCancelled()) return cancelled();
         const materials = collectChunkMaterials(chat, stored, vectors);
         const missing = selectChunksForRepair(materials, stored, vectors, fingerprint);
+        const obsoleteIds = orphanVectorIds(vectors, new Set(materials.map(chunk => chunk.chunkId)), 'chunkId');
+        if (obsoleteIds.length) {
+            phase = 'write';
+            await commit(() => deleteChunkVectorsByIds(chatId, obsoleteIds));
+            if (isCancelled()) return cancelled();
+        }
         activity.update({ total: missing.length });
         const storedIds = new Set(stored.map(chunk => chunk.chunkId));
         const newMaterials = materials.filter(chunk => !storedIds.has(chunk.chunkId));

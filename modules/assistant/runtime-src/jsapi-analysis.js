@@ -1,4 +1,5 @@
-import { parse } from 'acorn';
+import { parseScriptBody, childNodes } from '../../../shared/common/script-syntax.js';
+export { childNodes } from '../../../shared/common/script-syntax.js';
 import { JSAPI_INVALID_BODY } from '../shared/jsapi-contract.js';
 
 const EFFECTS = new Set(['write', 'ui', 'network', 'exec']);
@@ -40,16 +41,8 @@ function mergeOrigins(before, after) {
 }
 
 export function parseJavaScriptApi(code) {
-    const prefix = 'async function __xb__() {\n';
-    const source = prefix + code + '\n}', tokens = [];
-    const ast = parse(source, { ecmaVersion: 'latest', sourceType: 'script', onToken: tokens });
-    if (ast.body.length !== 1 || ast.body[0].end !== source.length) throw new SyntaxError(JSAPI_INVALID_BODY);
-    return { body: ast.body[0].body, offset: prefix.length, tokens };
-}
-
-export function childNodes(node) {
-    return Object.values(node).flatMap(value => Array.isArray(value) ? value : [value])
-        .filter(value => value && typeof value === 'object' && typeof value.type === 'string');
+    try { return parseScriptBody(code); }
+    catch (error) { if (error.loc) throw error; throw new SyntaxError(JSAPI_INVALID_BODY, { cause: error }); }
 }
 
 function propertyName(node) {

@@ -31,7 +31,7 @@ test('card paths round-trip without aliases; unrelated workspace percent names s
     assert.equal(readable(paths[1]), 'local/cards/Alice Smith.png/system_prompt.md');
     assert.equal(stored('local/notes/A%20B.md'), 'local/notes/A%20B.md');
     for (const folder of ['world_book', 'tasks', 'regex']) {
-        const suffix = folder === 'world_book' ? '/0.md' : '.json';
+        const suffix = folder === 'world_book' ? '/' + encodeURIComponent('条目') + '.md' : '.md';
         const path = rootFor(names[0]) + folder + '/' + encodeURIComponent('规则/100% 测试') + suffix;
         assert.equal(stored(readable(path)), path);
         assert.equal(locateFile(stored(readable(path))).avatar, names[0]);

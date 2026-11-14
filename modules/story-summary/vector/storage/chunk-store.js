@@ -245,7 +245,8 @@ export async function getChunkVectorDescriptors(chatId) {
             assertFiniteVector(bufferToFloat32(record.vector), 'stored chunk vector', record.dims);
             valid = true;
         } catch (caughtError) { console.warn({ source: import.meta.url, operation: "getChunkVectorDescriptors" }, caughtError); }
-        descriptors.push({ chunkId: record.chunkId, fingerprint: record.fingerprint, valid });
+        descriptors.push({ chunkId: record.chunkId, fingerprint: record.fingerprint,
+            ...(record.sourceHash ? { sourceHash: record.sourceHash } : {}), valid });
     });
     return descriptors;
 }
@@ -256,6 +257,12 @@ export async function getAllChunkVectors(chatId) {
         ...r,
         vector: bufferToFloat32(r.vector),
     }));
+}
+
+export async function deleteChunkVectorsByIds(chatId, chunkIds) {
+    if (!chunkIds.length) return;
+    await chunkVectorsTable.bulkDelete(chunkIds.map(id => [chatId, id]));
+    await clearRecallRuntime(chatId, 'chunks');
 }
 
 export async function getChunkVectorsByIds(chatId, chunkIds, options = {}) {
@@ -317,11 +324,12 @@ export async function getAllEventVectors(chatId) {
     }));
 }
 
-// Gap checks need identity/model only, not decoded vector payloads.
+// Repair checks need the saved input digest, not decoded vector payloads.
 export async function getEventVectorDescriptors(chatId) {
     const descriptors = [];
     await eventVectorsTable.where('chatId').equals(chatId).each(record => {
-        descriptors.push({ eventId: record.eventId, fingerprint: record.fingerprint });
+        descriptors.push({ eventId: record.eventId, fingerprint: record.fingerprint,
+            ...(record.sourceHash ? { sourceHash: record.sourceHash } : {}) });
     });
     return descriptors;
 }

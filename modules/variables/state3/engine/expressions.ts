@@ -1,7 +1,7 @@
 import type { Expression, Definition, Path, EvaluationContext, Json, Schema, Condition, ConditionValue, Comparison } from '../types.js';
 import { fieldName } from '../definition/schema-fields.js';
 import { assertJson, equal, getAt, pathOf } from './data.js';
-import { reject } from './diagnostics.js';
+import { diagnostic, reject } from './diagnostics.js';
 import { createFunctionRunner } from './functions.js';
 
 // All referenced state, including batch-start paths and declared function reads.
@@ -16,6 +16,7 @@ export function readsOf(expression: Expression, definition: Definition): Path[] 
     if (expression.get) {return [pathOf(expression.get)];}
     if (expression.before) { pathOf(expression.before); return []; }
     if (expression.param) { pathOf(expression.param); return []; }
+    if (expression.prepared) { pathOf(expression.prepared); return []; }
     const nested = (expression.args || []).flatMap(item => readsOf(item, definition));
     if (expression.call) {
         const fn = definition.functions[expression.call];
@@ -25,7 +26,14 @@ export function readsOf(expression: Expression, definition: Definition): Path[] 
     return nested;
 }
 
-export async function evaluate(expression: Expression, context: EvaluationContext): Promise<Json | undefined> {
+export async function evaluate(expression: Expression, context: EvaluationContext, expressionPath: Path = []): Promise<Json | undefined> {
+    try {return await evaluateNode(expression, context, expressionPath);}
+    catch (error) {
+        const issue = diagnostic(error);
+        reject(issue.code, { ...issue, expressionPath: issue.expressionPath ?? expressionPath });
+    }
+}
+async function evaluateNode(expression: Expression, context: EvaluationContext, expressionPath: Path): Promise<Json | undefined> {
     context.signal?.throwIfAborted();
     if (Object.hasOwn(expression, 'literal')) {return structuredClone(expression.literal);}
     if (expression.get) {return getAt(context.state, expression.get);}
@@ -34,13 +42,18 @@ export async function evaluate(expression: Expression, context: EvaluationContex
         return getAt(context.before, expression.before);
     }
     if (expression.param) {return getAt(context.params, expression.param);}
+    if (expression.prepared) {
+        if (context.prepared === undefined) {reject('prepared-missing', { path: expression.prepared });}
+        return getAt(context.prepared, expression.prepared);
+    }
     const args = expression.args || [];
+    const child = (index: number) => evaluate(args[index], context, [...expressionPath, 'args', String(index)]);
     // Branches are lazy: inactive rules need not read absent optional state.
-    if (expression.op === 'if') {return evaluate(args[await evaluate(args[0], context) ? 1 : 2], context);}
-    if (expression.op === 'and') { for (const item of args) {if (!await evaluate(item, context)) {return false;}} return true; }
-    if (expression.op === 'or') { for (const item of args) {if (await evaluate(item, context)) {return true;}} return false; }
+    if (expression.op === 'if') {return child(await child(0) ? 1 : 2);}
+    if (expression.op === 'and') { for (let index = 0; index < args.length; index++) {if (!await child(index)) {return false;}} return true; }
+    if (expression.op === 'or') { for (let index = 0; index < args.length; index++) {if (await child(index)) {return true;}} return false; }
     const values = [];
-    for (const item of args) {values.push(await evaluate(item, context));}
+    for (let index = 0; index < args.length; index++) {values.push(await child(index));}
     if (expression.call) {
         const name = expression.call;
         assertJson(values);
@@ -52,26 +65,32 @@ export async function evaluate(expression: Expression, context: EvaluationContex
         } finally { if (!context.functions) {runner.dispose();} }
     }
     const [a, b] = values;
+    const operand = (value: unknown, index: number) => ({ operator: expression.op, operand: index,
+        actualType: Array.isArray(value) ? 'array' : value === null ? 'null' : typeof value,
+        ...(value === undefined ? {} : { actual: typeof value === 'number' && !Number.isFinite(value) ? String(value) : value }) });
+    const number = (value: unknown, index: number): number => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) {reject('expression-type', { ...operand(value, index), expected: 'finite-number' });}
+        return value;
+    };
     switch (expression.op) {
-        case 'add': return values.reduce<number>((sum, value) => sum + number(value), 0);
-        case 'subtract': return number(a) - number(b);
-        case 'multiply': return values.reduce<number>((product, value) => product * number(value), 1);
-        case 'divide': if (number(b) === 0) {reject('division-zero');} return number(a) / number(b);
+        case 'add': return values.reduce<number>((sum, value, index) => sum + number(value, index), 0);
+        case 'subtract': return number(a, 0) - number(b, 1);
+        case 'multiply': return values.reduce<number>((product, value, index) => product * number(value, index), 1);
+        case 'divide': if (number(b, 1) === 0) {reject('division-zero', operand(b, 1));} return number(a, 0) / number(b, 1);
         case 'min': return Math.min(...values.map(number));
         case 'max': return Math.max(...values.map(number));
         case 'eq': return equal(a, b);
         case 'ne': return !equal(a, b);
-        case 'lt': return number(a) < number(b);
-        case 'lte': return number(a) <= number(b);
-        case 'gt': return number(a) > number(b);
-        case 'gte': return number(a) >= number(b);
+        case 'lt': return number(a, 0) < number(b, 1);
+        case 'lte': return number(a, 0) <= number(b, 1);
+        case 'gt': return number(a, 0) > number(b, 1);
+        case 'gte': return number(a, 0) >= number(b, 1);
         case 'not': return !a;
-        case 'length': if (!Array.isArray(a) && typeof a !== 'string') {reject('expression-type');} return a.length;
-        case 'includes': if (!Array.isArray(a) && typeof a !== 'string') {reject('expression-type');} return typeof a === 'string' ? a.includes(String(b)) : a.some(item => equal(item, b));
+        case 'length': if (!Array.isArray(a) && typeof a !== 'string') {reject('expression-type', { ...operand(a, 0), expected: 'string-or-array' });} return a.length;
+        case 'includes': if (!Array.isArray(a) && typeof a !== 'string') {reject('expression-type', { ...operand(a, 0), expected: 'string-or-array' });} return typeof a === 'string' ? a.includes(String(b)) : a.some(item => equal(item, b));
         default: reject('expression-operation', { operation: expression.op });
     }
 }
-function number(value: unknown): number { if (typeof value !== 'number' || !Number.isFinite(value)) {reject('expression-type');} return value; }
 
 const inverse: Record<Comparison, Comparison> = { eq: 'ne', ne: 'eq', lt: 'gte', lte: 'gt', gt: 'lte', gte: 'lt' };
 
