@@ -123,7 +123,7 @@ import { runSummaryGeneration } from "./generate/generator.js";
 import { createSummaryGenerationCancelledError, isSummaryGenerationCancelledError } from "./generate/llm.js";
 
 // vector service
-import { getEngineFingerprint } from "./vector/utils/embedder.js";
+import { embed, getEngineFingerprint } from "./vector/utils/embedder.js";
 import { embedForStorage, acknowledgeStoredEmbeddings, retryStoredEmbeddings, forgetStoredEmbeddings } from './vector/runtime/embedding-receipts.js';
 import { testL0Service } from "./vector/llm/llm-service.js";
 import { testRerankService } from "./vector/llm/reranker.js";
