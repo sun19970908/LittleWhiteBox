@@ -36,12 +36,17 @@ import { locateFile } from '../../card-workspace/files.js';
 import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
 import { createAttachmentsManager } from './attachments.js';
 import { applyWorkspaceLayout, renderAppChrome, renderContextHint, resolveWorkspaceWidth } from './ui/app-chrome.js';
-import { bindApiPopover, setApiPopoverOpen } from './ui/api-entry.js';
+import { createSettingsPopoverGroup } from './ui/settings-popover-group.js';
+import { bindDeliveryPanel } from '../plugins/delivery/panel.js';
+import { deliverySettingsForRun, loadDeliverySettings, saveDeliverySettings } from '../plugins/delivery/settings.js';
+import { deliveredText } from '../plugins/delivery/history.js';
+import { bindApiPopover } from './ui/api-entry.js';
 import { bindContextMeter, renderContextMeter } from './ui/context-meter.js';
 import { buildAppMarkup as buildAssistantAppMarkup } from './ui/app-shell.js';
 import { createChatUi } from './ui/chat-ui.js';
 import { MESSAGE_ACTION_COPY } from './ui/message-actions.js';
 import { getMessageActions, getRerollUserIndex } from './state/message-actions.js';
+import { rewindUserTurn } from './state/compaction-history.js';
 import { createSettingsPanel } from './ui/settings-panel.js';
 import { syncAgentSettingsPanelFeedback } from '../../agent-core/ui/settings-markup.js';
 import { setHostChatCompletionsRequestHeadersProvider } from '../../../shared/host-llm/chat-completions/client.js';
@@ -55,7 +60,6 @@ import {
 import { injectAssistantStyles } from './styles.js';
 import {
     HISTORY_SUMMARY_PREFIX,
-    SUMMARY_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     buildPermissionModePrompt,
 } from './prompts/system-prompt.js';
@@ -93,8 +97,8 @@ const state = {
     pendingApproval: null,
     assistantSessionId: '',
     messages: [],
-    historySummary: '',
-    archivedTurnCount: 0,
+    compactions: [],
+    compactionPending: false,
     archivedSkillIds: [],
     contextStats: {
         usedTokens: 0,
@@ -278,6 +282,18 @@ async function persistWorkspaceUiState() {
 
 function persistSession() {
     return sessionStore?.persistSession();
+}
+
+async function saveHistoryEdit(next) {
+    const { messages, compactions, archivedSkillIds } = state;
+    Object.assign(state, next);
+    let saved;
+    try {
+        saved = await persistSession();
+        return saved;
+    } finally {
+        if (!saved?.ok) Object.assign(state, { messages, compactions, archivedSkillIds });
+    }
 }
 
 function clearSession() {
@@ -1296,7 +1312,6 @@ const runtime = createAssistantRuntime({
     getEphemeralUserContextText,
     flushPendingWorkspaceChanges,
     SYSTEM_PROMPT,
-    SUMMARY_SYSTEM_PROMPT,
     HISTORY_SUMMARY_PREFIX,
     MAX_CONTEXT_TOKENS,
     SUMMARY_TRIGGER_TOKENS,
@@ -1309,10 +1324,9 @@ const {
     resetCompactionState,
     buildContextMeterLabel,
     compactionThreshold,
-    updateContextStats,
+    updateDisplayContextStats,
     pushMessage,
     cancelActiveRun,
-    toProviderMessages,
     getActiveContextMessages,
     runAssistantLoop,
     callHostTool,
@@ -1328,6 +1342,8 @@ sessionStore = createSessionStore({
     normalizeThoughtBlocks,
     getActiveContextMessages,
 });
+
+let deliveryPanel, openApiPopover;
 
 function applyConfig(config) {
     const nextConfig = normalizeAssistantConfig(config || {});
@@ -1354,6 +1370,7 @@ async function createAssistantRun() {
     };
     state.activeRun = run;
     try {
+        run.deliverySettings = deliverySettingsForRun(showToast);
         run.userContextSnapshotText = await getRunUserContextSnapshotText();
         return run.controller.signal.aborted ? null : run;
     } catch (error) {
@@ -1378,7 +1395,7 @@ async function executeAssistantRun(run) {
         await runAssistantLoop(run);
     } catch (error) {
         settleAssistantRunFailure({ messages: state.messages,
-            notice: isAbortError(error) ? run.cancelNotice : describeError(error),
+            notice: isAbortError(error) ? run.cancelNotice : error.compactionReported ? '' : describeError(error),
             pushMessage, persistSession });
     } finally {
         if (state.activeRun?.id === run.id) {
@@ -1409,7 +1426,7 @@ function renderCurrentContextMeter(root = document.getElementById(ROOT_ID)) {
 function runContextStatsUpdateForRender() {
     contextStatsRenderTimer = null;
     lastContextStatsRenderAt = Date.now();
-    updateContextStats(toProviderMessages(getActiveContextMessages()));
+    updateDisplayContextStats(deliveryPanel?.savedSettings);
     renderCurrentContextMeter();
 }
 
@@ -1459,6 +1476,7 @@ function render() {
         syncConfigToForm(root);
         state.configFormSyncPending = false;
     }
+    deliveryPanel.refreshStatus();
     scheduleContextStatsUpdateForRender();
     ensureWorkspaceSelection();
     renderActivity();
@@ -1622,7 +1640,10 @@ function bindEvents(root) {
         post('xb-assistant:minimize');
     });
 
-    bindApiPopover(root);
+    const bindPopover = createSettingsPopoverGroup(root);
+    openApiPopover = bindApiPopover(root, bindPopover);
+    deliveryPanel = bindDeliveryPanel(root, { load: loadDeliverySettings, save: saveDeliverySettings,
+        getProviderConfig: getActiveProviderConfig, bindPopover, onSaved: scheduleContextStatsUpdateForRender });
 
     root.querySelector('#xb-assistant-workspace-backdrop')?.addEventListener('click', () => {
         closeWorkspace();
@@ -1715,7 +1736,7 @@ function bindEvents(root) {
         if (requiredAction !== action && state.editingMessageIndex !== messageIndex) return;
 
         if (action === 'copy') {
-            const copied = await copyText(String(message.content || ''));
+            const copied = await copyText(deliveredText(state.messages, messageIndex) ?? String(message.content || ''));
             flashMessageActionButton(messageIndex, action, copied);
             showToast(copied ? MESSAGE_ACTION_COPY.copied : MESSAGE_ACTION_COPY.error.label);
             return;
@@ -1758,16 +1779,21 @@ function bindEvents(root) {
 
         if (action === 'delete') {
             if (state.isBusy) return;
-            if (message.role === 'user') {
-                if (messageIndex < state.messages.length - 1 && !window.confirm(MESSAGE_ACTION_COPY.deleteTurn)) return;
-                state.messages.splice(messageIndex);
-            } else {
-                state.messages.splice(messageIndex, 1);
+            const wholeTurn = message.role === 'user';
+            if (wholeTurn && messageIndex < state.messages.length - 1 && !window.confirm(MESSAGE_ACTION_COPY.deleteTurn)) return;
+            state.isPreparingRun = true;
+            try {
+                const next = wholeTurn ? rewindUserTurn(state, messageIndex, false)
+                    : { messages: state.messages.filter((_, index) => index !== messageIndex) };
+                const saved = await saveHistoryEdit(next);
+                state.editingMessageIndex = -1;
+                showToast(saved.ok ? MESSAGE_ACTION_COPY.deleted : MESSAGE_ACTION_COPY.saveFailed(saved.error));
+            } catch (error) {
+                showToast(MESSAGE_ACTION_COPY.saveFailed(describeError(error)));
+            } finally {
+                state.isPreparingRun = false;
+                render();
             }
-            state.editingMessageIndex = -1;
-            const saved = await persistSession();
-            showToast(saved.ok ? MESSAGE_ACTION_COPY.deleted : MESSAGE_ACTION_COPY.saveFailed(saved.error));
-            render();
             return;
         }
 
@@ -1778,18 +1804,14 @@ function bindEvents(root) {
                 showToast(MESSAGE_ACTION_COPY.noUserInput);
                 return;
             }
-            const nextMessages = state.messages.slice(0, turnUserIndex + 1);
             state.isPreparingRun = true;
             try {
                 const run = await createAssistantRun();
                 if (!run) return;
-                const previousMessages = state.messages;
-                state.messages = nextMessages;
                 state.pendingApproval = null;
                 state.editingMessageIndex = -1;
-                const saved = await persistSession();
+                const saved = await saveHistoryEdit(rewindUserTurn(state, turnUserIndex, true));
                 if (!saved.ok) {
-                    state.messages = previousMessages;
                     state.activeRun = null;
                     showToast(MESSAGE_ACTION_COPY.saveFailed(saved.error));
                     render();
@@ -1800,6 +1822,7 @@ function bindEvents(root) {
                 state.isPreparingRun = false;
                 await executeAssistantRun(run);
             } catch (error) {
+                state.activeRun = null;
                 showToast(MESSAGE_ACTION_COPY.saveFailed(describeError(error)));
             } finally {
                 state.isPreparingRun = false;
@@ -1811,6 +1834,7 @@ function bindEvents(root) {
     root.querySelector('#xb-assistant-chat').addEventListener('click', handleAssistantPanelClick);
     root.querySelector('#xb-assistant-approval-slot')?.addEventListener('click', handleAssistantPanelClick);
     bindSettingsPanelEvents(root);
+    root.querySelector('#xb-assistant-tool-mode').addEventListener('change', deliveryPanel.refreshStatus);
 
     root.querySelector('#xb-assistant-clear').addEventListener('click', async () => {
         if (state.isClosingAssistant || state.isBusy || state.isPreparingRun || state.isClearingConversation) return;
@@ -2059,7 +2083,7 @@ window.addEventListener('message', (event) => {
     if (data.type === 'xb-assistant:open-settings') {
         state.sidebarCollapsed = false;
         render();
-        setApiPopoverOpen(document.getElementById(ROOT_ID), true);
+        openApiPopover?.();
         return;
     }
 

@@ -1,3 +1,6 @@
+import { deliveredText } from '../../plugins/delivery/history.js';
+import { isTimelineCompaction } from '../state/compaction-history.js';
+import { compactionRow } from './compaction-row.js';
 import { buildMarkdownFragment } from '../../../agent-core/ui/message-markdown.js';
 import { createToolActivityProjection } from './tool-activity.js';
 import { createToolProcess } from './tool-process.js';
@@ -381,17 +384,18 @@ export function createChatUi(deps) {
         return bubble;
     }
 
-    function createMessageRenderUnit(message, messageIndex) {
+    function createMessageRenderUnit(message, messageIndex, deliveryBody) {
+        const display = deliveryBody === undefined ? message : { ...message, role: 'assistant', content: deliveryBody };
         const signature = JSON.stringify({
             type: 'message',
             messageIndex,
-            message: getRenderableMessageSignature(message, messageIndex),
+            message: getRenderableMessageSignature(display, messageIndex),
         });
         return {
             key: message,
             signature,
             build: () => {
-                const node = buildMessageBubble(message, messageIndex);
+                const node = buildMessageBubble(display, messageIndex);
                 node.dataset.renderSignature = signature;
                 return node;
             },
@@ -416,7 +420,7 @@ export function createChatUi(deps) {
         return { key: view, build: () => view.node, update: () => view.update(messages, running) };
     }
 
-    function collectRenderUnits(startIndex, endIndex) {
+    function collectMessageUnits(startIndex, endIndex) {
         const units = [];
         for (let start = startIndex; start < endIndex;) {
             let end = start + 1;
@@ -434,13 +438,43 @@ export function createChatUi(deps) {
                 if (index === firstTool) {
                     units.push(createProcessUnit(state.messages.slice(firstTool, processEnd),
                         !!state.isBusy && end === state.messages.length));
-                    index = processEnd - 1;
-                } else if (state.messages[index].role !== 'tool' && !state.messages[index].approvalRequest) {
-                    units.push(createMessageRenderUnit(state.messages[index], index));
+                }
+                const message = state.messages[index];
+                const body = deliveredText(state.messages, index);
+                if (body !== undefined) {
+                    units.push(createMessageRenderUnit(message, index, body));
+                } else if ((index < firstTool || index >= processEnd) && message.role !== 'tool' && !message.approvalRequest) {
+                    units.push(createMessageRenderUnit(message, index));
                 }
             }
             start = end;
         }
+        return units;
+    }
+
+    function collectRenderUnits(start, end) {
+        const records = state.compactions || [];
+        if (!records.length && !state.compactionPending) return collectMessageUnits(start, end);
+        const units = [];
+        let epoch = start ? state.messages[start - 1].compactionEpoch || 0 : 0;
+        const emitUntil = limit => {
+            while (epoch < limit) {
+                const record = records[epoch];
+                // Imported old summaries have no recorded event to display.
+                if (isTimelineCompaction(record)) units.push(compactionRow(epoch, record));
+                epoch++;
+            }
+        };
+        for (let i = start; i < end;) {
+            const position = state.messages[i].compactionEpoch || 0;
+            emitUntil(position);
+            let next = i + 1;
+            while (next < end && (state.messages[next].compactionEpoch || 0) === position) next++;
+            units.push(...collectMessageUnits(i, next));
+            i = next;
+        }
+        emitUntil(records.length);
+        if (state.compactionPending) units.push(compactionRow(records.length, null));
         return units;
     }
 
@@ -478,7 +512,7 @@ export function createChatUi(deps) {
     function renderMessages(container) {
         if (!container) return;
         container.classList.toggle('is-busy', !!state.isBusy);
-        if (!state.messages.length) {
+        if (!state.messages.length && !state.compactions?.some(isTimelineCompaction)) {
             if (renderCache.kind === 'empty') return;
             container.replaceChildren();
             const empty = document.createElement('div');

@@ -7,6 +7,7 @@ import ignore from 'ignore';
 export const pluginRoot = path.resolve(import.meta.dirname, '../..');
 export const official = JSON.parse(fs.readFileSync(new URL('./official.json', import.meta.url), 'utf8'));
 const remote = `https://github.com/${official.repository}.git`;
+const objectCache = commit => path.join(pluginRoot, 'output/official-host', commit);
 
 function git(directory, args, options = {}) {
     const result = spawnSync('git', ['--no-replace-objects', '-C', directory, ...args], {
@@ -15,6 +16,28 @@ function git(directory, args, options = {}) {
     if (result.error) throw result.error;
     if (result.status !== 0) throw new Error(`Official host reference: ${result.stderr || args.join(' ')}`);
     return result.stdout;
+}
+
+function ensureReference(directory, commit) {
+    const hasCommit = () => fs.existsSync(path.join(directory, 'HEAD')) &&
+        spawnSync('git', ['--no-replace-objects', '-C', directory, 'cat-file', '-e', `${commit}^{commit}`]).status === 0;
+    if (hasCommit()) return;
+    // Concurrent suites may request the same cold reference. Publish only a
+    // complete repository, so readers never share a fetch or its shallow.lock.
+    const parent = path.dirname(directory);
+    fs.mkdirSync(parent, { recursive: true });
+    const incoming = fs.mkdtempSync(path.join(parent, 'fetch-'));
+    try {
+        git(incoming, ['init', '--bare']);
+        git(incoming, ['fetch', '--depth=1', remote, commit]);
+        try {
+            fs.renameSync(incoming, directory);
+        } catch (error) {
+            if (!hasCommit()) throw error;
+        }
+    } finally {
+        fs.rmSync(incoming, { recursive: true, force: true });
+    }
 }
 
 export function referenceFor(version) {
@@ -28,11 +51,8 @@ export function referenceFor(version) {
         if (!resolved) throw new Error(`No official SillyTavern ref: ${version}`);
         commit = resolved[0];
     }
-    const directory = path.join(pluginRoot, 'output/official-host', commit);
-    fs.mkdirSync(directory, { recursive: true });
-    if (!fs.existsSync(path.join(directory, 'HEAD'))) git(directory, ['init', '--bare']);
-    const present = spawnSync('git', ['--no-replace-objects', '-C', directory, 'cat-file', '-e', `${commit}^{commit}`]);
-    if (present.status !== 0) git(directory, ['fetch', '--depth=1', remote, commit]);
+    const directory = objectCache(commit);
+    ensureReference(directory, commit);
     const entries = git(directory, ['ls-tree', '-r', '-l', '-z', commit]).split('\0').filter(Boolean).map(line => {
         const [metadata, file] = line.split('\t');
         const [mode, type, hash, size] = metadata.trim().split(/\s+/);
@@ -51,7 +71,13 @@ export function installedHostRoot() {
 }
 
 export function readOfficialFile(reference, file) {
-    return git(path.join(pluginRoot, 'output/official-host', reference.commit), ['show', `${reference.commit}:${file}`]);
+    return git(objectCache(reference.commit), ['show', `${reference.commit}:${file}`]);
+}
+
+// Export the real browser sources without installing or starting a second host.
+export function exportTestHost(reference, directory) {
+    git(objectCache(reference.commit), [`--work-tree=${directory}`, 'restore', `--source=${reference.commit}`, '--worktree', '--', 'package.json', 'public'],
+        { env: { ...process.env, GIT_INDEX_FILE: path.join(directory, '.test-index') } });
 }
 
 export function installedHostReference(directory) {

@@ -134,6 +134,14 @@ export function injectAssistantStyles(rootId) {
             font-size: 13px;
         }
         .xb-assistant-api-popover-body { min-height: 0; overflow: auto; padding: 14px 16px 16px; }
+        .xb-assistant-delivery-entry { position: relative; padding: 2px 8px; border-bottom: 1px solid var(--xb-assistant-border); }
+        .xb-assistant-delivery-form { display: grid; gap: 10px; color: var(--xb-assistant-text); font-size: 13px; }
+        .xb-assistant-delivery-form p { margin: 0; color: var(--xb-assistant-text-soft); line-height: 1.55; }
+        .xb-assistant-delivery-form textarea { box-sizing: border-box; width: 100%; min-height: 5em; resize: vertical; font: inherit; color: inherit; background: var(--xb-assistant-surface); border: 1px solid var(--xb-assistant-border); border-radius: 6px; padding: 8px; }
+        .xb-assistant-delivery-form button { justify-self: start; min-height: 32px; border: 1px solid var(--xb-assistant-border); border-radius: 6px; background: var(--xb-assistant-surface-muted); color: inherit; cursor: pointer; padding: 4px 10px; }
+        .xb-assistant-delivery-form button:disabled { opacity: .55; cursor: default; }
+        .xb-assistant-delivery-actions { display: flex; gap: 8px; }
+        @media (min-width: 901px) { .xb-assistant-delivery-entry .xb-assistant-api-popover { max-height: calc(100dvh - ${ASSISTANT_HEADER_HEIGHT + 146}px); } }
         .xb-assistant-sidebar-tree { min-width: 0; min-height: 0; display: grid; }
         .xb-assistant-config { display: grid; gap: 12px; }
         /* Theme contract for the shared web-settings installation guide. */
@@ -1141,6 +1149,16 @@ export function injectAssistantStyles(rootId) {
         .xb-assistant-empty h2 { margin: 0 0 10px; font-size: 24px; }
         .xb-assistant-empty p { margin: 0; color: #766d62; line-height: 1.7; }
         .xb-assistant-empty p + p { margin-top: 8px; }
+        .xb-assistant-compaction {
+            min-width: 0;
+            padding: 4px;
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--xb-assistant-text);
+            overflow-wrap: anywhere;
+        }
+        .xb-assistant-compaction > summary { cursor: pointer; width: fit-content; }
+        .xb-assistant-compaction > div { margin: 6px 0 0 1em; white-space: pre-wrap; }
         .xb-assistant-history-gate {
             align-self: center;
             color: rgba(111, 103, 93, 0.72);

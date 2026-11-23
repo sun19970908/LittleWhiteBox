@@ -5,12 +5,12 @@ import {
     setSlotSelection,
     openDB,
     openGallery,
+    openManagementGallery,
     getPreviewsBySlot,
     getPreview,
     getGallerySummary,
     clearExpiredCache,
     clearAllCache,
-    deletePreview,
     updatePreviewSavedUrl,
     getPreviewDisplayUrl,
     preloadPreviewDisplayUrl,
@@ -44,6 +44,7 @@ import { createLlmRecordsView } from "../../shared/llm-records-view.js";
 import { characterLibraryFromSettings, selectEnabledCharacters } from "../../shared/character-library.js";
 import { attachDrawAgentSettingsSurface } from "../../shared/agent-settings-surface.js";
 import { createSerialImageRequestQueue } from "../../shared/serial-image-request-queue.js";
+import { runSequentialImageBatch } from '../../shared/sequential-image-batch.js';
 import { buildSdImageRequest, compile as compileSdScenePlan, SD_REQUEST_DELAY_MS } from "./compiler.js";
 import { validateDrawInput } from '../../shared/public-api.js';
 import { decodeImageList } from '../../shared/image-collection.js';
@@ -104,12 +105,10 @@ import {
     classifyError,
     ErrorType,
     syncDrawSavedFromPreview,
-    syncDrawSavedAfterDeletion,
     clearDrawSavedEntry,
     startSharedDrawPreviewRuntime,
     stopSharedDrawPreviewRuntime,
     toScenePlannerProgress,
-    buildFailedPlaceholderHtml,
 } from "../../shared/draw-common.js";
 import * as drawCommonModule from "../../shared/draw-common.js";
 import { createFilterRuleHandle, createFilterRuleSortable } from "../../shared/filter-rule-sort.js";
@@ -142,7 +141,7 @@ import { prepareImageInput } from '../../shared/prepared-image-input.js';
 import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImagePhase, getFloorImageState, releaseFloorImageJob, observeFloorImageJob, failFloorImageJob, clearFloorImageJobs, resolveFloorImageJobTarget, rebaseFloorImageJobsAfterSwipeDeletion } from '../../shared/floor-image-job.js';
 import { createImageRequestAttempt, imageHttpFailure } from '../../shared/image-request-outcome.js';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
-import { redrawImageCard, removeChatImageSlot, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
+import { deleteImageFromCard, redrawImageCard, removeChatImageSlot, removeFloorFailedImageCards, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
 import { toggleImageCardControls } from '../../shared/image-card-controls.js';
 import { withDrawActionFeedback } from "../../shared/draw-action-feedback.js";
 import { getCharacterTagEditGroups, persistCardTagEdits, readCardTagEditor } from "../../shared/card-tag-editor.js";
@@ -832,37 +831,25 @@ async function runSdImageBatch({
             detachScope.dispose();
         }
     }
-    for (let index = 0; index < requests.length; index++) {
-        if (signal?.aborted) {
-            for (let pending = index; pending < requests.length; pending++) {
-                await onItemSettled?.({ index: pending, state: 'cancelled', error: new Error('已取消'), source: 'frontend' });
-            }
-            break;
-        }
-        try {
-            const base64 = await generateSdImage({
-                ...requests[index],
-                payload: prepared[index],
-                beforeRequest: () => onItemStarting?.({ index }),
-                generationConfig: settings,
-                signal,
-                queueBatch,
-                onQueueStateChange: (state, data) => {
+    await runSequentialImageBatch({
+        count: requests.length, signal, onItemReady, onItemSettled,
+        request: index => generateSdImage({
+            ...requests[index],
+            payload: prepared[index],
+            beforeRequest: () => onItemStarting?.({ index }),
+            generationConfig: settings,
+            signal,
+            queueBatch,
+            onQueueStateChange: (state, data) => {
                 if (state === 'start') return onStateChange?.('progress', { current: index + 1, total: requests.length });
                 if (state === 'cooldown') {
                     if (index + 1 >= requests.length) return;
                     return onStateChange?.('cooldown', { ...data, nextIndex: index + 2, total: requests.length });
                 }
                 onStateChange?.(state, { current: index + 1, total: requests.length, ...data });
-                },
-            });
-            if (base64 === null) continue;
-            await onItemReady?.({ index, base64 });
-        } catch (error) {
-            await onItemSettled?.({ index, state: signal?.aborted ? 'cancelled' : 'failed', error, source: 'frontend' });
-            if (signal?.aborted) break;
-        }
-    }
+            },
+        }),
+    });
     return { mode: 'frontend' };
 }
 
@@ -1796,12 +1783,7 @@ async function renderGalleryManagement() {
             button.type = 'button';
             button.className = 'gallery-slot-btn';
             button.addEventListener('click', observeAsyncCallback(async () => {
-                const latest = await getPreview(slotSummaries[slotId]?.latestImgId).catch(() => null);
-                const messageId = latest?.messageId == null ? null : Number(latest.messageId);
-                const refresh = () => renderGalleryManagement();
-                await openGallery(slotId, messageId, messageId === null
-                    ? { onSave: refresh, onDelete: refresh, onBecameEmpty: refresh }
-                    : buildSharedGalleryCallbacks(slotId, messageId));
+                await openManagementGallery(slotSummaries[slotId].latestImgId, buildSharedGalleryCallbacks, renderGalleryManagement);
             }, { source: "modules/draw/providers/sd-webui/sd-draw.js", operation: "callback" }));
 
             const img = document.createElement('img');
@@ -3328,6 +3310,9 @@ async function navigateToImage(container, targetIndex) {
 }
 
 function buildSharedGalleryCallbacks(slotId, messageId, container) {
+    const refreshManagement = async () => {
+        if (getSettingsElement('sd-gallery-container')) await renderGalleryManagement();
+    };
     return {
         onUse: (sid, msgId, selected, historyCount) => {
             const cont = container?.isConnected && container.dataset.slotId === sid ? container : null;
@@ -3352,39 +3337,8 @@ function buildSharedGalleryCallbacks(slotId, messageId, container) {
                 await syncDrawSavedFromPreview(messageId, preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onSave" }, caughtError); });
             }
         },
-        onDelete: async (sid, deletedImgId, remainingPreviews) => {
-            const cont = container?.isConnected && container.dataset.slotId === sid ? container : null;
-            if (cont && cont.dataset.imgId === deletedImgId && remainingPreviews.length > 0) {
-                syncContainerToPreview(cont, remainingPreviews[0], remainingPreviews.length, 0);
-            }
-            await syncDrawSavedAfterDeletion(messageId, sid, deletedImgId, remainingPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onDelete" }, caughtError); });
-        },
-        onBecameEmpty: async (sid, msgId, lastImageInfo = {}) => {
-            const cont = container?.isConnected && container.dataset.slotId === sid ? container : null;
-            if (cont) {
-                // eslint-disable-next-line no-unsanitized/property -- Template-only UI markup built locally.
-                cont.outerHTML = buildFailedPlaceholderHtml({
-                    slotId: sid,
-                    messageId: msgId,
-                    tags: lastImageInfo.tags || '',
-                    positive: lastImageInfo.positive || '',
-                    errorType: '图片已删除',
-                    errorMessage: '点击重试可重新生成',
-                });
-            }
-            await storeFailedPlaceholder({
-                slotId: sid,
-                messageId: msgId,
-                tags: lastImageInfo.tags || '',
-                positive: lastImageInfo.positive || '',
-                errorType: 'deleted',
-                errorMessage: '图片已删除，点击重试可重新生成',
-            }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
-            await clearDrawSavedEntry(msgId, sid).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "onBecameEmpty" }, caughtError); });
-            if (getSettingsElement('sd-gallery-container')) {
-                await renderGalleryManagement();
-            }
-        },
+        onDelete: refreshManagement,
+        onBecameEmpty: refreshManagement,
     };
 }
 
@@ -3461,7 +3415,7 @@ async function handleImageDelegatedClick(event) {
 
     if (action === 'delete-image') {
         container.querySelector('.xb-nd-menu-wrap')?.classList.remove('open');
-        await deleteCurrentImage(container);
+        await deleteImageFromCard(container);
         return;
     }
 
@@ -3471,7 +3425,7 @@ async function handleImageDelegatedClick(event) {
     }
 
     if (action === 'retry-floor-failed') {
-        await retryFloorFailedImageCards("sdwebui", container);
+        await retryFloorFailedImageCards("sdwebui", container, !getSettings().useImageBackendJobs);
         return;
     }
 
@@ -3509,6 +3463,11 @@ async function handleImageDelegatedClick(event) {
 
     if (action === 'remove-placeholder') {
         await removePlaceholder(container);
+        return;
+    }
+
+    if (action === 'remove-floor-failed') {
+        await removeFloorFailedImageCards(container);
     }
 }
 
@@ -3612,36 +3571,6 @@ async function removePlaceholder(container) {
     catch (error) { console.error(DRAW_SLOT_COPY.removeFailed, error); drawNotify.error(error.message); }
 }
 
-async function deleteCurrentImage(container) {
-    const slotId = container.dataset.slotId;
-    const imgId = container.dataset.imgId;
-    const messageId = Number(container.dataset.mesid);
-    if (!slotId) return;
-
-    if (imgId) {
-        try { await deletePreview(imgId); } catch (caughtError) { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); }
-    }
-    const previews = await getPreviewsBySlot(slotId).catch(() => []);
-    const successPreviews = previews.filter(hasPreviewImage);
-    if (successPreviews.length > 0) {
-        const nextPreview = successPreviews[0];
-        await setSlotSelection(slotId, nextPreview.imgId).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
-        syncContainerToPreview(container, nextPreview, successPreviews.length, 0);
-        await syncDrawSavedAfterDeletion(messageId, slotId, imgId, successPreviews).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "deleteCurrentImage" }, caughtError); });
-        drawNotify.success(`已删除（剩余 ${successPreviews.length} 张）`);
-        return;
-    } else {
-        try { await removeChatImageSlot(container); }
-        catch (error) {
-            console.error(DRAW_SLOT_COPY.removeFailed, error);
-            drawNotify.error(error.message);
-            return;
-        }
-    }
-    container.remove();
-    drawNotify.success('图片已删除');
-}
-
 async function saveCurrentImage(container) {
     const imgId = container.dataset.imgId;
     const slotId = container.dataset.slotId;
@@ -3661,7 +3590,7 @@ async function saveCurrentImage(container) {
             ? String(ctx.groups?.[ctx.groupId]?.id ?? 'group')
             : String(ctx.characters?.[ctx.characterId]?.name || 'character');
         const url = await saveImageToServer({ base64: preview.base64, charName, fileName: `sd_${imgId}`, format: 'png' });
-        await updatePreviewSavedUrl(imgId, url);
+        if (!await updatePreviewSavedUrl(imgId, url)) return;
         preview.savedUrl = url;
         await syncDrawSavedFromPreview(Number(container.dataset.mesid), preview, { slotId, savedUrl: url }).catch((caughtError) => { console.warn({ source: import.meta.url, operation: "saveCurrentImage" }, caughtError); });
         const img = container.querySelector('img');
@@ -4081,8 +4010,7 @@ export async function initSdDraw() {
     }, 300);
 
     preparedImageDispose?.();
-    preparedImageDispose = registerPreparedImageProvider("sdwebui", createImageCardRedrawProvider({
-        execute: runPreparedSdSlots,
+    preparedImageDispose = registerPreparedImageProvider("sdwebui", runPreparedSdSlots, createImageCardRedrawProvider({
         createJob: createGenerationJob,
         releaseJob: releaseGenerationJob,
         getCurrentContext: getContext,

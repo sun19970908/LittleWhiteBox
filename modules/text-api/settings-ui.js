@@ -6,7 +6,7 @@ import { PROVIDER_OPTIONS } from '../agent-core/provider-resolution.js';
 import { samplingParametersFor } from '../agent-core/sampling.js';
 import { resolveReasoningCapability, getReasoningModeOptions, getReasoningEffortOptions } from '../agent-core/reasoning-capabilities.js';
 import { getModelListAuthOptions, normalizeModelListAuth, supportsModelListAuth } from '../agent-core/model-list-auth.js';
-import { createPreset, HOST_BINDING, HOST_PROVIDER } from './model.js';
+import { createPreset, resolvePreset, HOST_BINDING, HOST_PROVIDER, MIN_REQUEST_TIMEOUT_SEC, MAX_REQUEST_TIMEOUT_SEC, normalizeRequestTimeoutSec } from './model.js';
 import { TEXT_API_COPY as COPY, deletionMessage } from './copy.js';
 import { VERTEX_PROVIDER, normalizeVertexConfig } from '../agent-core/vertex-config.js';
 import { buildVertexSettingsMarkup, bindVertexSettings, readVertexSettings, syncVertexSettings } from '../agent-core/ui/vertex-settings.js';
@@ -88,9 +88,19 @@ export function mountTextApiSettings(root, { feature, namespace }) {
         node.onclick = () => { Promise.resolve().then(run).catch(error => feedback(error.message, true)); };
         return node;
     }
+    function requestTimeoutControl() {
+        const node = input('requestTimeoutSec', 'number'); node.step = '1';
+        node.min = String(MIN_REQUEST_TIMEOUT_SEC); node.max = String(MAX_REQUEST_TIMEOUT_SEC);
+        node.placeholder = '';
+        node.onchange = () => {
+            draft.requestTimeoutSec = normalizeRequestTimeoutSec(node.valueAsNumber);
+            node.value = String(draft.requestTimeoutSec);
+        };
+        control(COPY.requestTimeout, node);
+    }
     function choose(id) {
         revision++; cancelRequests(); selected = id;
-        draft = id === HOST_BINDING ? createPreset(id, COPY.host) : structuredClone(settings.presets.find(preset => preset.id === id));
+        draft = id ? resolvePreset(settings, id) : null;
         render();
     }
     async function mutate(mutation, selection = null) {
@@ -115,8 +125,7 @@ export function mountTextApiSettings(root, { feature, namespace }) {
         saveFeedback.set({ status: 'saving' });
         feedback(COPY.saving);
         try {
-            const mutation = selected === HOST_BINDING ? { type: 'select-host' }
-                : { type: 'save', id: selected, preset: structuredClone(draft) };
+            const mutation = { type: 'save', id: selected, preset: structuredClone(draft) };
             settings = await request('mutate', { mutation });
             // Keep the live draft and its input bindings, including edits made
             // while the submitted snapshot was being saved.
@@ -173,6 +182,7 @@ export function mountTextApiSettings(root, { feature, namespace }) {
         toolbar.append(selector, actions); fields.append(toolbar);
         syncSaveButton();
         if (!draft) return;
+        requestTimeoutControl();
         if (selected === HOST_BINDING) {
             fields.append(button(COPY.test, async () => {
                 if (networkBusy) return;

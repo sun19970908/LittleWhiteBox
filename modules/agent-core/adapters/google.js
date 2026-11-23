@@ -10,6 +10,16 @@ import {
 import { resolveTaskReasoning } from '../reasoning-capabilities.js';
 import { isReasoningOutputVisible } from '../reasoning-config.js';
 import { stripToolProtocolMarker } from './tool-protocol-marker.js';
+import { encodeGeminiToolResponse } from './gemini-tool-result.js';
+import { prepareGoogleToolParameters } from './google-tool-schema.js';
+
+const GOOGLE_SAFETY_SETTINGS_OFF = [
+    { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
+    { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
+    { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'OFF' },
+    { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' },
+    { category: 'HARM_CATEGORY_CIVIC_INTEGRITY', threshold: 'OFF' },
+];
 
 function parseArguments(text) {
     try {
@@ -322,7 +332,7 @@ function buildToolResponseMessage(toolResponses = []) {
                     functionResponse: {
                         ...(responseId ? { id: responseId } : {}),
                         name: item.name,
-                        response: item.response || {},
+                        response: encodeGeminiToolResponse(item.response || {}),
                     },
                 };
             }),
@@ -461,7 +471,7 @@ function buildConversation(messages) {
                         name: String(toolMessage.toolName || toolMessage.tool_name || '').trim()
                             || toolNameById.get(internalId)
                             || 'tool_result',
-                        response: parseArguments(toolMessage.content),
+                        response: encodeGeminiToolResponse(parseArguments(toolMessage.content), toolMessage.content),
                     },
                 });
                 cursor += 1;
@@ -585,6 +595,7 @@ export class GoogleAdapter {
             ...(systemInstruction ? { systemInstruction } : {}),
             temperature: task.temperature,
             ...(task.maxTokens ? { maxOutputTokens: task.maxTokens } : {}),
+            safetySettings: GOOGLE_SAFETY_SETTINGS_OFF,
         };
         if (reasoning.mode === 'off') {
             config.thinkingConfig = {
@@ -610,7 +621,8 @@ export class GoogleAdapter {
                 functionDeclarations: tools.map((tool) => ({
                     name: tool.function.name,
                     description: tool.function.description,
-                    parameters: tool.function.parameters,
+                    // parametersJsonSchema keeps the complete JSON Schema; `parameters` is an OpenAPI subset.
+                    parametersJsonSchema: prepareGoogleToolParameters(tool.function.parameters),
                 })),
             }];
         }
@@ -841,6 +853,7 @@ export class GoogleAdapter {
         return {
             text,
             toolCalls: normalizedToolCalls,
+            toolCallsAreNative: true,
             thoughts,
             ...readResponseCompletion('google', finishReason),
             model: response.modelVersion || this.config.model,
