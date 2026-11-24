@@ -1882,7 +1882,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/assistant-host-window.js",
       "relativePath": "modules/assistant/assistant-host-window.js",
       "extension": ".js",
-      "sizeBytes": 36297
+      "sizeBytes": 36299
     },
     {
       "source": "littlewhitebox",
@@ -11444,7 +11444,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/index.ts",
       "relativePath": "modules/variables/state3/index.ts",
       "extension": ".ts",
-      "sizeBytes": 25258
+      "sizeBytes": 25921
     },
     {
       "source": "littlewhitebox",
@@ -11584,7 +11584,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/runtime/service.ts",
       "relativePath": "modules/variables/state3/runtime/service.ts",
       "extension": ".ts",
-      "sizeBytes": 21400
+      "sizeBytes": 21492
     },
     {
       "source": "littlewhitebox",
@@ -12200,7 +12200,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/tests/host.test.ts",
       "relativePath": "modules/variables/state3/tests/host.test.ts",
       "extension": ".ts",
-      "sizeBytes": 74927
+      "sizeBytes": 80581
     },
     {
       "source": "littlewhitebox",
@@ -12277,7 +12277,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/tests/recovery-controls.test.ts",
       "relativePath": "modules/variables/state3/tests/recovery-controls.test.ts",
       "extension": ".ts",
-      "sizeBytes": 10330
+      "sizeBytes": 12624
     },
     {
       "source": "littlewhitebox",
@@ -12305,7 +12305,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/tests/result-dialog.test.ts",
       "relativePath": "modules/variables/state3/tests/result-dialog.test.ts",
       "extension": ".ts",
-      "sizeBytes": 9618
+      "sizeBytes": 12020
     },
     {
       "source": "littlewhitebox",
@@ -12375,7 +12375,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/copy.ts",
       "relativePath": "modules/variables/state3/ui/copy.ts",
       "extension": ".ts",
-      "sizeBytes": 20099
+      "sizeBytes": 20146
     },
     {
       "source": "littlewhitebox",
@@ -12403,21 +12403,21 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/result-dialog.ts",
       "relativePath": "modules/variables/state3/ui/result-dialog.ts",
       "extension": ".ts",
-      "sizeBytes": 9874
+      "sizeBytes": 10097
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/result.ts",
       "relativePath": "modules/variables/state3/ui/result.ts",
       "extension": ".ts",
-      "sizeBytes": 9682
+      "sizeBytes": 10106
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/ui/settings.ts",
       "relativePath": "modules/variables/state3/ui/settings.ts",
       "extension": ".ts",
-      "sizeBytes": 18708
+      "sizeBytes": 18964
     },
     {
       "source": "littlewhitebox",
