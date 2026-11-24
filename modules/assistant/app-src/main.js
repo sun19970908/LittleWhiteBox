@@ -75,7 +75,7 @@ import { observeBackgroundTask } from '../../../shared/common/async-errors.js';
 const SOURCE = 'xb-assistant-app';
 const ROOT_ID = 'xb-assistant-root';
 const REQUEST_TIMEOUT_MS = 180000;
-const MAX_CONTEXT_TOKENS = 258000;
+const MAX_CONTEXT_TOKENS = 256000;
 const SUMMARY_TRIGGER_TOKENS = 228000;
 const MAX_IMAGE_ATTACHMENTS = 3;
 const MAX_IMAGE_FILE_BYTES = 4 * 1024 * 1024;
@@ -1004,8 +1004,6 @@ function describeError(error) {
         }
         return '工作区路径结构冲突，无法完成这次操作。';
     }
-    if (lowered.startsWith('apply_patch_parse_error:')) return 'apply_patch 补丁格式无效。';
-    if (lowered.startsWith('apply_patch_apply_error:')) return 'apply_patch 无法在目标文件中定位补丁上下文。';
     if (lowered === 'directory_path_required') return '还没有提供要查看的目录路径。';
     if (lowered === 'glob_pattern_required') return '还没有提供 glob 路径模式。';
     if (lowered === 'empty_query') return '搜索词是空的，换一个明确点的关键词就行。';
@@ -1065,9 +1063,9 @@ const chatUi = createChatUi({
 const {
     renderMessages,
     renderApprovalPanel,
-    scrollChatToBottom,
+    followChatToBottom,
+    trackChatScroll,
     scrollChatToTop,
-    revealOlderMessages,
     updateChatScrollButtonsVisibility,
     handleAssistantChatScroll,
     copyText,
@@ -1454,6 +1452,7 @@ function renderActivity() {
     if (!root?.firstChild) return;
     renderMessages(root.querySelector('#xb-assistant-chat'));
     renderApprovalPanel(root.querySelector('#xb-assistant-approval-slot'));
+    followChatToBottom(root.querySelector('#xb-assistant-chat'));
     updateChatScrollButtonsVisibility(root);
     renderCurrentContextMeter(root);
 }
@@ -1670,15 +1669,14 @@ function bindEvents(root) {
         render();
     });
 
-    root.querySelector('#xb-assistant-chat').addEventListener('scroll', (event) => {
-        const container = event.currentTarget;
-        if (revealOlderMessages(container)) {
-            state.autoScroll = false;
-            updateChatScrollButtonsVisibility(root);
-            return;
-        }
-        const threshold = 48;
-        state.autoScroll = container.scrollHeight - container.scrollTop - container.clientHeight <= threshold;
+    const chat = root.querySelector('#xb-assistant-chat');
+    const chatResizeObserver = new ResizeObserver(() => {
+        followChatToBottom(chat);
+        updateChatScrollButtonsVisibility(root);
+    });
+    chatResizeObserver.observe(chat);
+    chat.addEventListener('scroll', () => {
+        trackChatScroll(chat);
         handleAssistantChatScroll(root);
     });
 
@@ -1905,7 +1903,7 @@ function bindEvents(root) {
 
     root.querySelector('#xb-assistant-scroll-bottom').addEventListener('click', () => {
         state.autoScroll = true;
-        scrollChatToBottom(root.querySelector('#xb-assistant-chat'));
+        followChatToBottom(root.querySelector('#xb-assistant-chat'));
         updateChatScrollButtonsVisibility(root);
     });
 
@@ -1968,6 +1966,7 @@ function bindEvents(root) {
         try {
             const run = await createAssistantRun();
             if (!run) return;
+            state.autoScroll = true;
             resetMessageWindow(state);
             pushMessage({ role: 'user', content: value, attachments });
             input.value = '';

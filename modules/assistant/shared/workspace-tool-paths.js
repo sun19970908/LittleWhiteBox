@@ -1,5 +1,4 @@
 import { TOOL_NAMES } from '../app-src/tooling.js';
-import { parseApplyPatch } from '../../agent-core/tools/apply-patch.js';
 import { readableCardWorkspacePath, readableCardWorkspaceRelativePath, storedCardWorkspacePath } from '../../card-workspace/paths.js';
 
 const TOOL_PATH_FIELDS = new Map([
@@ -16,7 +15,7 @@ const TOOL_PATH_FIELDS = new Map([
 const RESULT_PATH_FIELDS = new Set(['path', 'publicPath', 'filePath', 'directoryPath', 'root', 'rootPath', 'searchPath', 'fromPath', 'toPath']);
 const RESULT_PATH_LISTS = new Set(['paths', 'suggestions', 'skippedPaths', 'conflictPaths']);
 const DIAGNOSTIC_FIELDS = new Set(['error', 'raw', 'message', 'suggestion', 'summary']);
-const RESULT_RECORDS = new Set(['items', 'files', 'results', 'changes', 'readErrors', 'validation']);
+const RESULT_RECORDS = new Set(['items', 'files', 'results', 'changes', 'readErrors', 'validation', 'issue']);
 
 // Model/host boundary only. UI writes, repository snapshots and conflict
 // observations retain their stored paths and never enter this adapter.
@@ -39,18 +38,15 @@ export async function callReadableWorkspaceTool(name, args, callHost) {
         if (typeof args[field] === 'string') hostArgs[field] = stored(args[field]);
         else if (Array.isArray(args[field])) hostArgs[field] = args[field].map(stored);
     }
-    if (name === TOOL_NAMES.APPLY_PATCH) {
-        const field = typeof args.patchText === 'string' ? 'patchText' : 'input';
-        const patch = String(args[field] ?? '');
-        const parsed = parseApplyPatch(patch);
-        const patchPaths = new Map();
-        for (const operation of parsed.operations) {
-            patchPaths.set(operation.path, stored(operation.path));
-            if (operation.moveTo) patchPaths.set(operation.moveTo, stored(operation.moveTo));
-        }
-        // Parsed file headers only; hunk anchors, context and +/- text stay exact.
-        hostArgs[field] = patch.replace(/^(\*\*\* (?:Add File|Delete File|Update File|Move to): )([^\r\n]+)(\r?)$/gm,
-            (line, prefix, path, ending) => `${prefix}${patchPaths.get(path.trim())}${ending}`);
+    if (name === TOOL_NAMES.APPLY_PATCH && Array.isArray(args.files)) {
+        hostArgs.files = args.files.map((file) => {
+            if (!file || typeof file !== 'object' || Array.isArray(file)) return file;
+            return {
+                ...file,
+                ...(typeof file.path === 'string' ? { path: stored(file.path.trim()) } : {}),
+                ...(typeof file.moveTo === 'string' ? { moveTo: stored(file.moveTo.trim()) } : {}),
+            };
+        });
     }
 
     function project(value) {
@@ -93,7 +89,10 @@ export async function callReadableWorkspaceTool(name, args, callHost) {
     try {
         return projectDiagnostics(project(await callHost(hostArgs)));
     } catch (error) {
-        if (error instanceof Error) error.message = diagnostic(error.message);
+        if (error instanceof Error) {
+            error.message = diagnostic(error.message);
+            if (error.patchIssue) error.patchIssue = projectDiagnostics(project(error.patchIssue));
+        }
         throw error;
     }
 }

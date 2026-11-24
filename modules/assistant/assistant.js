@@ -26,7 +26,7 @@ import { iframeRendererJsApiNamespace } from '../iframe-renderer/assistant-api.t
 import { processMessageById } from '../iframe-renderer.js';
 import { isTauriTavernChatSurfaceManaged } from '../../integrations/tauritavern/environment.js';
 import { normalizeSlashSkillTrigger } from "./app-src/slash-command-policy.js";
-import { applyPatchUpdateToText, parseApplyPatch } from "../agent-core/tools/apply-patch.js";
+import { parseApplyPatch } from "../agent-core/tools/apply-patch.js";
 import { buildPatchFailureResult, runPatchValidationAndApply } from "../agent-core/tools/apply-patch-execution.js";
 import { createLocalSourcesToolRuntime } from "./shared/local-sources-tool-runtime.js";
 import { workspaceRepository } from './shared/workspace-repository.js';
@@ -1635,61 +1635,26 @@ async function batchWriteLocalFiles(args = {}, options = {}) {
 
 async function applyLocalPatch(args = {}, options = {}) {
     ensureNotAborted(options.signal);
-    const patchText = typeof args.patchText === 'string'
-        ? args.patchText
-        : String(args.patchText ?? args.input ?? '');
-    let parsed = null;
     try {
-        parsed = parseApplyPatch(patchText);
-    } catch (error) {
-        return buildPatchFailureResult(error);
-    }
-
-    try {
-        const targetPaths = Array.isArray(parsed?.operations)
-            ? parsed.operations
-                .map((operation) => String(operation?.moveTo || operation?.path || '').trim())
-                .filter(Boolean)
-            : [];
-        console.info('[Assistant][apply_patch] applyLocalPatch:start', {
-            targetPaths,
-            snapshot: summarizeLocalSourcesForDebug(options.localSources),
-        });
-        const result = runPatchValidationAndApply(
+        const parsed = parseApplyPatch(args);
+        const { nextState, ...result } = runPatchValidationAndApply(
             parsed,
             normalizeLocalSourcesSnapshot(options.localSources),
             {
-                cloneState: normalizeLocalSourcesSnapshot,
                 normalizePath: normalizeWritableLocalPath,
                 getPathError: getWritableLocalPathError,
                 findFile: (localSources, publicPath) => findLocalSourceFileByPath(publicPath, localSources),
-                addFile: (localSources, publicPath, content) => upsertLocalSourceFile(localSources, publicPath, content),
+                addFile: upsertLocalSourceFile,
                 removeFile: removeLocalSourceFile,
                 moveFile: moveLocalSourceFile,
-                writeFile: (localSources, publicPath, content) => upsertLocalSourceFile(localSources, publicPath, content),
-                applyUpdate: applyPatchUpdateToText,
+                writeFile: upsertLocalSourceFile,
             },
         );
         ensureNotAborted(options.signal);
-        options.onLocalSourcesUpdated?.(result.nextState);
-        return {
-            ok: result.ok,
-            phase: result.phase,
-            summary: result.summary,
-            filesChanged: result.filesChanged,
-            addedCount: result.addedCount,
-            updatedCount: result.updatedCount,
-            deletedCount: result.deletedCount,
-            movedCount: result.movedCount,
-            hunksApplied: result.hunksApplied,
-            changes: result.changes,
-            validation: result.validation,
-        };
+        if (result.filesChanged) options.onLocalSourcesUpdated?.(nextState);
+        return result;
     } catch (error) {
-        console.info('[Assistant][apply_patch] applyLocalPatch:failed', {
-            error: error instanceof Error ? error.message : String(error || 'unknown_error'),
-            snapshot: summarizeLocalSourcesForDebug(options.localSources),
-        });
+        ensureNotAborted(options.signal);
         return buildPatchFailureResult(error);
     }
 }

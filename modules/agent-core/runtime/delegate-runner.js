@@ -114,9 +114,7 @@ function summarizeToolArguments(args = {}) {
             parts.push(`${key}: ${normalizeInlineText(args[key], 120)}`);
         }
     });
-    if (typeof args.patchText === 'string') {
-        parts.push(`patchLength: ${args.patchText.length}`);
-    }
+    if (Array.isArray(args.files)) parts.push(`files: ${args.files.length}`);
     return parts.join('; ');
 }
 

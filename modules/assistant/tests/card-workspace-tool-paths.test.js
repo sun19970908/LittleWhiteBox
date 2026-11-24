@@ -77,8 +77,8 @@ test('readable file tools share stored conflict targets and persist only the int
     const grep = await call('Grep', { scope: 'local', pattern: 'Literal', include: '**/作者*/*.md' });
     assert.equal(grep.items[0].path, path);
     assert.equal(grep.items[0].text, unchanged);
-    const patch = `*** Begin Patch\n*** Update File: ${path}\n@@\n ${unchanged}\n+正文不转换 ${raw}\n*** End Patch`;
-    assert.equal((await call('apply_patch', { patchText: patch })).ok, true);
+    const patch = { files: [{ path, edits: [{ oldString: unchanged, newString: `${unchanged}\n正文不转换 ${raw}` }] }] };
+    assert.equal((await call('apply_patch', patch)).ok, true);
     assert.equal(posted.at(-1).workspaceMeta.preconditions.some(item => item.path === raw && item.expected.kind === 'file'), true);
     const before = flattenLocalSourceFiles(cache);
     assert.equal(before.find(item => item.path === raw).content, `${unchanged}\n正文不转换 ${raw}`);

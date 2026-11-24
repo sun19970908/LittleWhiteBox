@@ -28,7 +28,7 @@ function harness({ messages, summary = '', threshold = 2500, inputLimit = 5000, 
         compactionThreshold: () => threshold, requestInputLimit: () => inputLimit,
         buildContextMeterLabel: () => '',
         toProviderMessages: (messages, { historySummary = currentHistorySummary(state) } = {}) => [...(historySummary ? [{ role: 'system', content: historySummary }] : []), ...buildProviderMessagesFromHistory(messages)],
-        updateContextStats(messages) { state.contextStats = { usedTokens: estimateConversationTokens({ messages, providerConfig }), budgetTokens: 258000 }; },
+        updateContextStats(messages) { state.contextStats = { usedTokens: estimateConversationTokens({ messages, providerConfig }), budgetTokens: 256000 }; },
     });
     const adapter = { chat: async request => {
         requests.push(request); return respond(request, requests.length);

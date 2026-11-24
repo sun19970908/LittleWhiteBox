@@ -1161,6 +1161,10 @@ export function injectAssistantStyles(rootId) {
         .xb-assistant-compaction > div { margin: 6px 0 0 1em; white-space: pre-wrap; }
         .xb-assistant-history-gate {
             align-self: center;
+            border: 0;
+            background: none;
+            font-family: inherit;
+            cursor: pointer;
             color: rgba(111, 103, 93, 0.72);
             font-size: 12px;
             line-height: 1;

@@ -6,6 +6,7 @@ import {
 import { applyWorkspaceObservations, buildWorkspacePreconditions } from '../../shared/workspace-preconditions.js';
 import { INVALID_LOOKUP_SCOPE, LOOKUP_SCOPES, describeInvalidLookupScope } from '../../shared/lookup-scope.js';
 import { JSAPI_CANCEL_NOTICE } from '../../shared/jsapi-contract.js';
+import { buildPatchFailureResult } from '../../../agent-core/tools/apply-patch-execution.js';
 import { TOOL_NAMES } from '../tooling.js';
 
 export function createHostToolRequestController(deps) {
@@ -31,9 +32,7 @@ export function createHostToolRequestController(deps) {
         if (typeof args.path === 'string') {
             summary.path = args.path;
         }
-        if (typeof args.patchText === 'string') {
-            summary.patchLength = args.patchText.length;
-        }
+        if (Array.isArray(args.files)) summary.fileCount = args.files.length;
         return summary;
     }
 
@@ -165,6 +164,7 @@ export function createHostToolRequestController(deps) {
     }
 
     function buildToolFailureResult(toolName, args, error) {
+        if (toolName === TOOL_NAMES.APPLY_PATCH && error?.patchIssue) return buildPatchFailureResult(error);
         const raw = String(error?.message || error || 'tool_failed');
         const [code] = raw.split(':');
         return {

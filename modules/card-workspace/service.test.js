@@ -51,7 +51,7 @@ for (const timing of ['none', 'before', 'during', 'after']) test('same-run CardF
         if (timing === 'after') await edit('D');
         const actual = (await workspaceRepository.readWorkspace()).localSources;
         function conflicts(target) {
-            const args = { patchText: ['*** Begin Patch', '*** Update File: ' + target, '@@', '-B', '+C', '*** End Patch'].join('\n') };
+            const args = { files: [{ path: target, edits: [{ oldString: 'B', newString: 'C' }] }] };
             return findWorkspaceConflicts('apply_patch', args, buildWorkspacePreconditions('apply_patch', args, baseline), actual);
         }
         assert.deepEqual(conflicts(path), timing === 'none' ? [] : [path]);

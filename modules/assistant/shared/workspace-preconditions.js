@@ -42,7 +42,7 @@ export function workspaceMutationScopes(name, args = {}) {
         case 'Delete': add(args.path, 'tree'); break;
         case 'Move': add(args.fromPath, 'tree'); add(args.toPath, 'tree'); break;
         case 'apply_patch':
-            parseApplyPatch(String(args.patchText ?? args.input ?? '')).operations.forEach(operation => {
+            parseApplyPatch(args).operations.forEach(operation => {
                 add(operation.path);
                 if (operation.moveTo) add(operation.moveTo);
             });

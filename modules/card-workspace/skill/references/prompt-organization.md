@@ -147,7 +147,7 @@ Foundation settings:
 Foundation content:
 
 ```text
-# 港城基础
+港城基础
 雾港依靠潮汐安排航行。潮位表由港务署发布；出海手续由码头登记处办理。
 ```
 
@@ -160,7 +160,7 @@ Organization settings:
 Organization content:
 
 ```text
-## 港务署
+港务署
 港务署负责潮位公告，不办理出海登记。人物提到航行制度时，以这两个机构的分工为准。
 ```
 
@@ -173,7 +173,7 @@ Optional location settings:
 Location content:
 
 ```text
-## 东码头（旧渡口）
+东码头（旧渡口）
 码头登记处在这里办公。登记队伍沿仓库外墙排开，货船在退潮前离港。
 ```
 

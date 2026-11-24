@@ -65,6 +65,7 @@ export function createChatUi(deps) {
     } = deps;
 
     let chatScrollTicking = false;
+    let bottomFollowPending = false;
     let chatScrollHideTimer = null;
     let renderCache = {
         kind: '',
@@ -484,10 +485,15 @@ export function createChatUi(deps) {
             key: 'history-gate',
             signature,
             build: () => {
-                const gate = document.createElement('div');
+                const gate = document.createElement('button');
+                gate.type = 'button';
                 gate.className = 'xb-assistant-history-gate';
                 gate.dataset.renderSignature = signature;
                 gate.textContent = `较早记录 ${hiddenBefore} 轮`;
+                gate.addEventListener('click', () => {
+                    state.autoScroll = false;
+                    revealOlderMessages(gate.parentElement);
+                });
                 return gate;
             },
         };
@@ -549,11 +555,7 @@ export function createChatUi(deps) {
             units: nextUnits,
         };
 
-        if (state.autoScroll) {
-            container.scrollTop = container.scrollHeight;
-        } else {
-            container.scrollTop = previousScrollTop;
-        }
+        if (!state.autoScroll) container.scrollTop = previousScrollTop;
     }
 
     function revealOlderMessages(container) {
@@ -578,15 +580,20 @@ export function createChatUi(deps) {
         }
     }
 
-    function scrollChatToBottom(container) {
+    function trackChatScroll(container) {
         if (!container) return;
-        const apply = () => {
-            container.scrollTop = container.scrollHeight;
-        };
-        apply();
-        requestAnimationFrame(() => {
-            apply();
-            requestAnimationFrame(apply);
+        // A short conversation can be at the bottom and inside the history-loading band.
+        state.autoScroll = container.scrollHeight - container.scrollTop - container.clientHeight <= 48;
+        if (!state.autoScroll) revealOlderMessages(container);
+    }
+
+    function followChatToBottom(container) {
+        if (!container || !state.autoScroll || bottomFollowPending) return;
+        bottomFollowPending = true;
+        // Finish the synchronous render (including the composer) before browser scroll events.
+        queueMicrotask(() => {
+            bottomFollowPending = false;
+            if (state.autoScroll && container.isConnected) container.scrollTop = container.scrollHeight;
         });
     }
 
@@ -642,9 +649,9 @@ export function createChatUi(deps) {
     return {
         renderMessages,
         renderApprovalPanel,
-        scrollChatToBottom,
+        followChatToBottom,
+        trackChatScroll,
         scrollChatToTop,
-        revealOlderMessages,
         updateChatScrollButtonsVisibility,
         handleAssistantChatScroll,
         copyText,

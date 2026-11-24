@@ -154,7 +154,7 @@ const TOOL_GUIDELINES = [
     '',
     '## Editing the Workspace',
     ' - Change workspace files with Write / apply_patch / Move / Delete',
-    ' - Use apply_patch for small targeted edits with reliable current-file context; use Write for new files, large block rewrites, or whole-file rewrites',
+    ' - Use Write for a new file or a whole-file rewrite. Use apply_patch to change part of a file or to save related changes to several files together.',
     '',
     '## Using Skills',
     ' - Choose the relevant skill from the supplied catalog and read it before starting that workflow. ReadSkillsCatalog provides the full catalog when needed.',

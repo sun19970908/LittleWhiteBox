@@ -183,18 +183,42 @@ export const TOOL_DEFINITIONS = [
         function: {
             name: TOOL_NAMES.APPLY_PATCH,
             description: [
-                'Apply a structured patch to `local/` text files.',
-                'Use this for targeted edits, multi-file changes, adds, deletes, and renames inside the workspace.',
-                'Patch format uses structured headers such as `*** Begin Patch`, `*** Update File: local/example.js`, `@@`, and `*** End Patch`.',
-                'Hunk headers support plain `@@`, anchored `@@ existing line`, and standard unified diff ranges like `@@ -1,3 +1,3 @@`.',
-                'For `@@ -1,3 +1,3 @@ existing line`, the range is a positioning hint and `existing line` is the header anchor.',
+                'Apply a batch of changes to workspace text files. A batch can edit, create, delete and move multiple files. If any operation fails, none of the changes are saved.',
+                'Use line numbers from Read. If a previous edit makes the target line number uncertain, use Read on the target area before editing it by line number.',
+                'Group all edits to a file in one entry. Line edits in that entry refer to the same pre-edit content; the tool handles shifts. Use either line positions or oldString for that file.',
+                'Returns ok and phase (applied, unchanged or failed). Successful results list changes, with numbered previews for line edits; failed results report the issue or conflicting paths.',
             ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
-                    patchText: { type: 'string', description: 'Full apply_patch body, including `*** Begin Patch` and `*** End Patch`.' },
+                    files: {
+                        type: 'array', minItems: 1,
+                        items: {
+                            type: 'object', required: ['path'], additionalProperties: false,
+                            description: 'Use content to create, delete: true to remove, or edits and/or moveTo for an existing file.',
+                            properties: {
+                                path: { type: 'string', description: 'Workspace file path starting with local/.' },
+                                content: { type: 'string', description: 'Full content for a new file. The path must not exist.' },
+                                delete: { type: 'boolean', description: 'Set true to delete this file.' },
+                                moveTo: { type: 'string', description: 'An unused local/ path to move this file to. Can be combined with edits.' },
+                                edits: {
+                                    type: 'array', minItems: 1,
+                                    items: {
+                                        type: 'object', required: ['newString'], additionalProperties: false,
+                                        properties: {
+                                            startLine: { type: 'integer', minimum: 1, description: 'First line to replace, inclusive.' },
+                                            endLine: { type: 'integer', minimum: 1, description: 'Last line to replace, inclusive.' },
+                                            insertAtLine: { type: 'integer', minimum: 1, description: 'Insert before this line. Use totalLines + 1 to append.' },
+                                            oldString: { type: 'string', minLength: 1, description: 'A unique fragment of the current text.' },
+                                            newString: { type: 'string', description: 'Replacement or inserted text. Use an empty string to remove the selected lines or fragment.' },
+                                        },
+                                    },
+                                },
+                            },
+                        },
+                    },
                 },
-                required: ['patchText'],
+                required: ['files'],
                 additionalProperties: false,
             },
         },
@@ -893,16 +917,15 @@ export function formatToolResultDisplay(message) {
     if (planToolResult) return planToolResult;
 
     if (message.toolName === TOOL_NAMES.APPLY_PATCH && parsed.ok === false) {
-        const recovery = parsed.recovery && typeof parsed.recovery === 'object' ? parsed.recovery : {};
-        const rules = Array.isArray(recovery.rules) ? recovery.rules : [];
+        const issue = parsed.issue;
+        const location = [issue?.path, Number.isInteger(issue?.editIndex) ? `第 ${issue.editIndex + 1} 处修改` : ''].filter(Boolean).join(' · ');
         return {
-            summary: [
-                parsed.summary || 'Patch 失败，未修改任何文件。',
-                parsed.nextStep ? `下一步：${parsed.nextStep}` : '',
-            ].filter(Boolean).join('\n'),
+            summary: parsed.summary || '补丁未提交，没有修改任何文件。',
             details: [
-                parsed.error ? `错误：${parsed.error}` : '',
-                ...rules.map((rule) => `- ${rule}`),
+                location,
+                issue?.message || parsed.message || parsed.error,
+                issue?.suggestion,
+                ...(Array.isArray(parsed.conflictPaths) ? parsed.conflictPaths : []),
             ].filter(Boolean).join('\n'),
         };
     }
@@ -1163,19 +1186,18 @@ export function formatToolResultDisplay(message) {
     if (message.toolName === TOOL_NAMES.APPLY_PATCH) {
         const changes = Array.isArray(parsed.changes) ? parsed.changes : [];
         const lines = [
-            `补丁已应用：共处理 ${parsed.filesChanged || changes.length || 0} 项变更`,
-            Number.isFinite(parsed.hunksApplied) ? `hunk 数：${parsed.hunksApplied}` : '',
+            parsed.phase === 'unchanged' ? '补丁未产生文件变更。' : `补丁已应用，涉及 ${parsed.filesChanged || changes.length || 0} 个路径`,
+            parsed.editsApplied > 0 ? `内容修改：${parsed.editsApplied} 处` : '',
             Number.isFinite(parsed.addedCount) && parsed.addedCount > 0 ? `新增：${parsed.addedCount}` : '',
             Number.isFinite(parsed.updatedCount) && parsed.updatedCount > 0 ? `更新：${parsed.updatedCount}` : '',
             Number.isFinite(parsed.deletedCount) && parsed.deletedCount > 0 ? `删除：${parsed.deletedCount}` : '',
             Number.isFinite(parsed.movedCount) && parsed.movedCount > 0 ? `移动：${parsed.movedCount}` : '',
         ].filter(Boolean);
+        const labels = { add: '新增', update: '更新', delete: '删除' };
         const detailLines = changes.map((change) => {
-            if (change.action === 'move') {
-                return `- move ${change.fromPath || ''} -> ${change.toPath || change.path || ''}`;
-            }
-            const suffix = Number.isFinite(change.hunksApplied) ? ` (${change.hunksApplied} hunks)` : '';
-            return `- ${change.action} ${change.path || ''}${suffix}`;
+            if (change.action === 'move') return `- 移动 ${change.fromPath} → ${change.toPath}`;
+            const editCount = change.edits?.length;
+            return `- ${labels[change.action] || change.action} ${change.path || ''}${editCount ? `（${editCount} 处）` : ''}`;
         });
         return {
             summary: lines.join('\n'),

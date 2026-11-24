@@ -104,7 +104,10 @@ test('batch and patch conflicts or storage failures never partially commit', asy
     await commit(ra, 'Write', { path: fileB, content: 'B1' });
     const batch = await commit(rb, 'BatchWriteFiles', { files: [{ path: fileA, content: 'changed' }, { path: fileB, content: 'changed' }] });
     assert.equal(batch.result.error, 'workspace_conflict');
-    const patch = await commit(rb, 'apply_patch', { patchText: `*** Begin Patch\n*** Update File: ${fileA}\n@@\n-A0\n+A2\n*** Update File: ${fileB}\n@@\n-B0\n+B2\n*** End Patch` });
+    const patch = await commit(rb, 'apply_patch', { files: [
+        { path: fileA, edits: [{ oldString: 'A0', newString: 'A2' }] },
+        { path: fileB, edits: [{ oldString: 'B0', newString: 'B2' }] },
+    ] });
     assert.equal(patch.result.error, 'workspace_conflict');
     const before = await ra.readWorkspace();
     const failed = t.mock.method(a.table('workspace'), 'put', async () => { throw new Error('disk full'); });
@@ -430,11 +433,48 @@ test('successful batch and patch apply against latest storage without losing unr
     await commit(ra, 'Write', { path: 'local/unrelated.md', content: 'keep' });
     const batch = await commit(rb, 'BatchWriteFiles', { files: [{ path: fileA, content: 'A2' }, { path: fileB, content: 'B2' }] });
     assert.equal(batch.committed, true);
-    const patch = await commit(rb, 'apply_patch', { patchText: `*** Begin Patch\n*** Update File: ${fileA}\n@@\n-A2\n+A3\n*** Update File: ${fileB}\n@@\n-B2\n+B3\n*** End Patch` }, batch.localSources);
+    const patch = await commit(rb, 'apply_patch', { files: [
+        { path: fileA, edits: [{ oldString: 'A2', newString: 'A3' }] },
+        { path: fileB, edits: [{ startLine: 1, endLine: 1, newString: 'B3' }] },
+    ] }, batch.localSources);
     assert.equal(patch.committed, true);
     assert.equal(content(patch.localSources), 'A3');
     assert.equal(content(patch.localSources, fileB), 'B3');
     assert.equal(content(patch.localSources, 'local/unrelated.md'), 'keep');
+});
+
+test('mixed structured patches commit together and leave storage unchanged if a later edit fails', async t => {
+    const { ra, rb } = await setup(t);
+    const added = 'local/story/new.md';
+    const plainSource = 'local/story/plain.md', plainTarget = 'local/archive/plain.md';
+    const editedSource = 'local/story/draft.md', editedTarget = 'local/archive/revised.md';
+    await commit(ra, 'BatchWriteFiles', { files: [
+        { path: plainSource, content: 'keep' },
+        { path: editedSource, content: 'draft' },
+    ] });
+    const before = await ra.readWorkspace();
+    const patch = oldString => ({ files: [
+        { path: added, content: 'new' },
+        { path: fileA, edits: [{ insertAtLine: 1, newString: 'header' }] },
+        { path: fileB, delete: true },
+        { path: plainSource, moveTo: plainTarget },
+        { path: editedSource, moveTo: editedTarget, edits: [{ oldString, newString: 'revised' }] },
+    ] });
+
+    const failed = await commit(rb, 'apply_patch', patch('not in the draft'), before.localSources);
+    assert.equal(failed.committed, false);
+    assert.equal(failed.result.ok, false);
+    assert.deepEqual(await ra.readWorkspace(), before);
+
+    assert.equal((await commit(rb, 'apply_patch', patch('draft'), before.localSources)).committed, true);
+    const saved = (await ra.readWorkspace()).localSources;
+    assert.equal(content(saved, added), 'new');
+    assert.equal(content(saved, fileA), 'header\nA0');
+    assert.equal(content(saved, fileB), undefined);
+    assert.equal(content(saved, plainSource), undefined);
+    assert.equal(content(saved, plainTarget), 'keep');
+    assert.equal(content(saved, editedSource), undefined);
+    assert.equal(content(saved, editedTarget), 'revised');
 });
 
 for (const failure of ['conflict', 'error']) {
