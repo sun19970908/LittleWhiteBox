@@ -1367,6 +1367,7 @@ async function readFile(args = {}, options = {}) {
             suggestions,
         });
     }
+    if (entry.kind === 'image') return { ok: true, path: targetPath, name: entry.name, kind: 'image', mimeType: entry.mimeType, sizeBytes: entry.sizeBytes };
     const hasExplicitOffsetRange = Number.isFinite(Number(args.offset))
         || Number.isFinite(Number(args.startLine))
         || Number.isFinite(requestedEndAlias);
@@ -3086,13 +3087,46 @@ async function executeToolCall(name, args, options = {}) {
             const { runLivePageInspection } = await import('../live-page-inspection/service.ts');
             return runLivePageInspection(args);
         }
-        case TOOL_NAMES.CARD_FILES: {
-            const { runCardFiles } = await import('../card-workspace/service.js');
-            const result = await runCardFiles(args, options);
+        case TOOL_NAMES.CARD_FILES:
+        case TOOL_NAMES.CARD_ASSETS: {
+            const { runCardFiles, handleAssistantCardAssets } = await import('../card-workspace/service.js');
+            const result = await (name === TOOL_NAMES.CARD_FILES ? runCardFiles : handleAssistantCardAssets)(args, options);
             const { localSources } = await workspaceRepository.readWorkspace();
             await getLocalSourcesToolRuntime().hydrateLocalSources(localSources);
             options.onLocalSourcesUpdated?.(localSources, getLocalSourcesToolRuntime().getWorkspaceState());
             return result;
+        }
+        case TOOL_NAMES.DRAW_IMAGE:
+        case TOOL_NAMES.DRAW_PRESETS:
+        case TOOL_NAMES.SAVE_DRAW_IMAGES: {
+            const { runAssistantDrawing, workspaceImageObservations } = await import('../draw/assistant/host.js');
+            const result = await runAssistantDrawing(name, args, options);
+            const { finishDrawingResult, showLateDrawingResult } = await import('../draw/assistant/recovery.js');
+            const { DRAW_COPY } = await import('../draw/assistant/contract.js');
+            return finishDrawingResult(result, {
+                refresh: async () => {
+                    if (result.images?.length) options.onWorkspaceObserved?.(workspaceImageObservations(result.images));
+                    const { localSources } = await workspaceRepository.readWorkspace();
+                    await getLocalSourcesToolRuntime().hydrateLocalSources(localSources);
+                    options.onLocalSourcesUpdated?.(localSources, getLocalSourcesToolRuntime().getWorkspaceState());
+                },
+                isDetached: () => options.signal?.aborted || options.isRecipientActive?.() === false,
+                onRefreshError: error => {
+                    console.warn('[Assistant] Drawing workspace refresh failed', error);
+                    toastr.warning(DRAW_COPY.refreshFailed, '', { escapeHtml: true });
+                },
+                notifyLate: value => showLateDrawingResult(value, {
+                    toast: toastr,
+                    save: args => executeToolCall(TOOL_NAMES.SAVE_DRAW_IMAGES, args, { onLocalSourcesUpdated: options.onLocalSourcesUpdated }),
+                    describeError: error => { console.warn('[Assistant] Image recovery failed', error); return DRAW_COPY.saveFailed; },
+                }),
+            });
+        }
+        case TOOL_NAMES.READ_IMAGE: {
+            const { readWorkspaceImage, workspaceImageObservations } = await import('./shared/workspace-images.js');
+            const { file } = await readWorkspaceImage(args.path);
+            options.onWorkspaceObserved?.(workspaceImageObservations([file]));
+            return { ok: true, images: [file] };
         }
         case TOOL_NAMES.LS:
             return await listDirectory(args, options);
@@ -3419,10 +3453,11 @@ async function handleIframeMessage(event) {
                     : await getLocalSourcesToolRuntime().execute(toolName, args, {
                         signal: controller.signal,
                         workspaceMeta,
+                        isRecipientActive: () => iframe.isConnected,
                         onWorkspaceObserved: observations => { workspaceObservations = observations; },
                         onWorkspaceConflict: snapshot => { workspaceConflictSnapshot = snapshot; },
                         onLocalSourcesUpdated: (nextSources, workspaceState) => {
-                            postToIframe(iframe, {
+                            postToIframe(getAssistantHostWindow().getIframe(), {
                                 type: LOCAL_SOURCES_UPDATED,
                                 payload: {
                                     localSources: nextSources,

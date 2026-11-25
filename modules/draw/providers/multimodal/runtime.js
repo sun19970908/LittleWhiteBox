@@ -1,0 +1,67 @@
+import { getRequestHeaders } from '../../../../../../../../script.js';
+import { getCurrentUserHandle } from '../../../../../../../user.js';
+import { sha256 } from '../../../../libs/js-sha256.mjs';
+import { createImageBackendJobsClient, readImageBlobBase64 } from '../../shared/backend-image-jobs.js';
+import { resolveDrawAgentProviderConfig } from '../../shared/draw-agent.js';
+import { stableSerialize } from '../../shared/generation-fingerprint.js';
+import { capturePublicGallery } from '../../shared/public-gallery.js';
+import { generateCollectedDrawResult } from '../../shared/public-api.js';
+import { createDirectGeneration } from './direct-generation.js';
+import { createMultimodalChatRuntime } from './chat-runtime.js';
+import { planDirectInput } from './planning.js';
+import { getActiveParamsPreset, PROVIDERS } from './settings-model.js';
+import { getSettings, loadSettings } from './settings.js';
+
+const client = createImageBackendJobsClient({ getHeaders: getRequestHeaders, getOwner: getCurrentUserHandle });
+
+export function createMultimodalPublicGeneration(provider, jobs = client, plan = planDirectInput) {
+    return createDirectGeneration(provider, { jobs, plan, snapshot: () => loadSettings(provider) });
+}
+
+export async function captureMultimodalGeneration(execution, resolveScene = resolveDrawAgentProviderConfig) {
+    const { apiBaseUrl, apiKey, timeout, overrideSize, paramsPresets, selectedParamsPresetId, promptPresets, selectedPromptPresetId } = execution;
+    const { providerConfig: sceneConfig } = await resolveScene({ timeout });
+    return { execution, sceneConfig, fingerprint: {
+        imageConnection: sha256(stableSerialize({ apiBaseUrl, apiKey })),
+        sceneConfig: sha256(stableSerialize(sceneConfig)),
+        timeout, overrideSize,
+        paramsPreset: paramsPresets.find(preset => preset.id === selectedParamsPresetId),
+        promptPreset: promptPresets.find(preset => preset.id === selectedPromptPresetId),
+    } };
+}
+
+export const multimodalProviders = Object.fromEntries(Object.keys(PROVIDERS).map(provider => {
+    const publicGeneration = createMultimodalPublicGeneration(provider);
+    const openSettings = options => import('./settings-ui.js').then(ui => ui.openSettings(provider, options));
+    const closeSettings = () => import('./settings-ui.js').then(ui => ui.closeSettings(provider));
+    const chat = createMultimodalChatRuntime(provider, client, { openSettings, closeSettings });
+    const facade = {
+        ...chat.facade,
+        openSettings,
+        buildPromptData(input) {
+            const settings = getSettings(provider);
+            const preset = getActiveParamsPreset(settings);
+            const prompt = input.prompt ?? input.tags;
+            // Keep guidance separate until the scene model adapts the request.
+            return { tags: prompt, positive: prompt, positivePrefix: input.positivePrefix ?? preset.positivePrefix,
+                negativePrompt: input.negativePrompt ?? input.negative, characterPrompts: input.characterPrompts,
+                referenceImages: input.referenceImages, params: input.params,
+                overrideSize: input.overrideSize };
+        },
+        getGenerationSnapshot() {
+            return captureMultimodalGeneration(getSettings(provider));
+        },
+        async generateImage({ generationConfig = getSettings(provider), sceneConfig, onQueueStateChange, signal, ...request } = {}) {
+            const [image] = await publicGeneration.generate(request, generationConfig, { signal, sceneConfig,
+                onProgress: ({ state, ...info }) => onQueueStateChange?.(state === 'progress' ? 'start' : state, info) });
+            return readImageBlobBase64(image);
+        },
+    };
+    return [provider, { ...chat, facade, publicGeneration }];
+}));
+
+export async function generateTestImage(provider, { settings, signal, onProgress, ...request } = {}) {
+    const saveImages = capturePublicGallery(request, provider);
+    const { publicGeneration: adapter } = multimodalProviders[provider];
+    return generateCollectedDrawResult({ adapter, request, settings: settings ?? await adapter.snapshot(), saveImages, signal, onProgress });
+}

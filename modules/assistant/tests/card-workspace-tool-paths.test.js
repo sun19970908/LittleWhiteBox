@@ -41,7 +41,7 @@ test('card paths round-trip without aliases; unrelated workspace percent names s
 test('readable file tools share stored conflict targets and persist only the intended edits', async t => {
     t.mock.method(console, 'info', () => {});
     const db = new Dexie(`card-path-contract-${createIdentifier()}`);
-    db.version(1).stores({ workspace: 'id' });
+    db.version(1).stores({ workspace: 'id', workspaceImageBlobs: 'id' });
     await db.open();
     t.after(async () => db.delete());
     const repository = createWorkspaceRepository(db), executeHost = await loadWorkspaceHostTools();

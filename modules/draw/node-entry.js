@@ -2,6 +2,7 @@ import { compile as compileComfyUi } from './providers/comfyui/compiler.js';
 import { compile as compileNovelAi } from './providers/novelai/compiler.js';
 import { getNovelModelCapability } from './providers/novelai/novel-model-capabilities.js';
 import { compile as compileSdWebUi } from './providers/sd-webui/compiler.js';
+import { compileGemini, compileOpenAi } from './providers/multimodal/compiler.js';
 import {
     assertDrawRunId,
     createDrawRunId,
@@ -34,6 +35,8 @@ const PROVIDER_COMPILERS = Object.freeze({
     novelai: compileNovelAi,
     'sd-webui': compileSdWebUi,
     comfyui: compileComfyUi,
+    gemini: compileGemini,
+    openai: compileOpenAi,
 });
 
 export function compileDrawRunImages(provider, scenePlan, generationRecipe) {

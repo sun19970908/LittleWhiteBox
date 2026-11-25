@@ -3,7 +3,9 @@ import { COORDINATION_TOOLS, SKILL_MANAGEMENT_TOOLS } from '../skills/contract.j
 import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, getWebSearchToolDefinition, getWebFetchToolDefinition, isWebConfigured } from '../../agent-core/web/tools.js';
 import { ACTIVITY_COPY } from './ui/activity-copy.js';
 import { getToolResultReadDefinition, TOOL_RESULT_READ, withPagedToolResult } from '../../agent-core/runtime/tool-result-contract.js';
-import { CARD_TOOL } from '../../card-workspace/assistant-contract.js';
+import { CARD_TOOL, CARD_ASSETS_TOOL } from '../../card-workspace/assistant-contract.js';
+import { drawTools, DRAW_IMAGE, DRAW_PRESETS, SAVE_DRAW_IMAGES, DRAW_COPY } from '../../draw/assistant/contract.js';
+import { READ_IMAGE, READ_IMAGE_TOOL, IMAGE_COPY, imageResultFiles } from '../shared/image-tools.js';
 import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
 import { LOOKUP_SCOPES, LOOKUP_SCOPE_PROJECT, LOOKUP_SCOPE_LOCAL } from '../shared/lookup-scope.js';
 import { INSPECT_PAGE_TOOL } from '../../live-page-inspection/tool-contract.ts';
@@ -25,6 +27,8 @@ export const TOOL_NAMES = {
     READ_LOGS: READ_LOGS_TOOL.function.name,
     INSPECT_PAGE: INSPECT_PAGE_TOOL.function.name,
     CARD_FILES: CARD_TOOL.function.name,
+    CARD_ASSETS: CARD_ASSETS_TOOL.function.name,
+    DRAW_IMAGE, DRAW_PRESETS, SAVE_DRAW_IMAGES, READ_IMAGE,
     LS: 'LS',
     GLOB: 'Glob',
     GREP: 'Grep',
@@ -58,10 +62,18 @@ export const TOOL_NAMES = {
 // ============================================================
 // 工具定义
 // ============================================================
-export const TOOL_DEFINITIONS = [
+// Image tools depend on whether the run's model preset accepts image input.
+const IMAGE_TOOLS_SLOT = Symbol('imageTools');
+function imageToolDefinitions(imageInput) {
+    return [...(imageInput ? [READ_IMAGE_TOOL] : []), ...drawTools({ imageInput })];
+}
+
+const BASE_TOOL_DEFINITIONS = [
     withPagedToolResult(READ_LOGS_TOOL),
     INSPECT_PAGE_TOOL,
     CARD_TOOL,
+    CARD_ASSETS_TOOL,
+    IMAGE_TOOLS_SLOT,
     {
         type: 'function',
         function: {
@@ -483,6 +495,7 @@ export const TOOL_DEFINITIONS = [
                 'Use after you can state the subtask scope and how its result should be merged back into the main answer.',
                 'The delegate only knows task/context/deliverable plus its system prompt; include needed paths, facts, constraints, current context, and plan details explicitly.',
                 'The delegate can use normal execution tools, but it does not manage plans and cannot delegate again.',
+                'Drawing results accompany its conclusion: images are saved workspace files; drawingFailures contain unresolved outcomes. A receiptId can be passed to SaveDrawImages to save an existing batch without generating again.',
             ].join('\n'),
             parameters: {
                 type: 'object',
@@ -612,14 +625,21 @@ export const TOOL_DEFINITIONS = [
     },
 ];
 
+/** @param {{ imageInput?: boolean }} [options] */
+export function buildToolDefinitions({ imageInput = true } = {}) {
+    return BASE_TOOL_DEFINITIONS.flatMap(definition => definition === IMAGE_TOOLS_SLOT ? imageToolDefinitions(imageInput) : [definition]);
+}
+
+export const TOOL_DEFINITIONS = buildToolDefinitions();
+
 export function isWebTool(name) {
     return name === TOOL_NAMES.WEB_SEARCH || name === TOOL_NAMES.WEB_FETCH;
 }
 
-/** @param {{ providerConfig?: object, jsApiEnabled?: boolean, skillIds?: string[], role?: string }} options */
-export function getAssistantToolDefinitions({ providerConfig = {}, jsApiEnabled = false, skillIds = [], role = 'main' } = {}) {
+/** @param {{ providerConfig?: object, jsApiEnabled?: boolean, imageInput?: boolean, skillIds?: string[], role?: string }} options */
+export function getAssistantToolDefinitions({ providerConfig = {}, jsApiEnabled = false, imageInput = true, skillIds = [], role = 'main' } = {}) {
     const webEnabled = isWebConfigured(providerConfig);
-    return filterSkillTools(TOOL_DEFINITIONS, skillIds, { role }).filter(({ function: { name } }) =>
+    return filterSkillTools(buildToolDefinitions({ imageInput }), skillIds, { role }).filter(({ function: { name } }) =>
         (jsApiEnabled || name !== TOOL_NAMES.RUN_JAVASCRIPT_API) && (webEnabled || !isWebTool(name)));
 }
 
@@ -655,6 +675,11 @@ function truncateInlineText(value = '', limit = 220) {
 
 export function describeToolCall(name, args = {}) {
     switch (name) {
+        case TOOL_NAMES.DRAW_IMAGE: return DRAW_COPY.generate;
+        case TOOL_NAMES.DRAW_PRESETS: return DRAW_COPY.presets;
+        case TOOL_NAMES.SAVE_DRAW_IMAGES: return args.receiptId ? DRAW_COPY.save : DRAW_COPY.pending;
+        case TOOL_NAMES.READ_IMAGE: return IMAGE_COPY.read;
+        case TOOL_NAMES.CARD_ASSETS: return CARD_COPY.assetActions[args.action] || CARD_COPY.assets;
         case TOOL_NAMES.READ_LOGS:
             return LOG_TOOL_COPY.label;
         case TOOL_NAMES.INSPECT_PAGE:
@@ -903,15 +928,32 @@ export function formatToolResultDisplay(message) {
         };
     }
 
+    if (message.toolName === TOOL_NAMES.CARD_ASSETS) {
+        if (Array.isArray(parsed.tasks) && Array.isArray(parsed.errors)) return {
+            summary: CARD_COPY.assetListSummary(parsed.tasks.length, parsed.errors.length),
+            details: [
+                ...parsed.tasks.map(task => `${task.name || task.taskPath} · ${task.taskPath}\n${task.assets.map(asset => asset.key).join('、')}`),
+                ...parsed.errors.map(item => `${item.taskPath}\n${item.error}`),
+            ].join('\n\n'),
+        };
+        if (parsed.ok === true && parsed.draft && parsed.requiresWriteback) return {
+            summary: parsed.unchanged ? CARD_COPY.assetDraftUnchanged : CARD_COPY.assetDraftNote,
+            details: [parsed.asset?.key, parsed.taskPath].filter(Boolean).join('\n'),
+        };
+    }
+
+    const delegateToolResult = formatDelegateToolResult(message, parsed);
+    if (delegateToolResult) return delegateToolResult;
+
+    const images = imageResultFiles(parsed);
+    if (images.length) return { summary: [[TOOL_NAMES.DRAW_IMAGE, TOOL_NAMES.SAVE_DRAW_IMAGES].includes(message.toolName) ? DRAW_COPY.saved(images.length) : IMAGE_COPY.result(images.length), parsed.ok === false ? parsed.message || parsed.error : ''].filter(Boolean).join(' · '), details: images.map(file => `[${file.name}](<${file.path}>)`).join('\n') };
+
     if (message.toolName === TOOL_NAMES.INSPECT_PAGE) {
         return {
             summary: parsed.ok === false ? parsed.message : [INSPECTION_COPY.result, parsed.next ? INSPECTION_COPY.continued : ''].filter(Boolean).join(' · '),
             details: [parsed.frame ? JSON.stringify(parsed.frame, null, 2) : '', parsed.content || ''].filter(Boolean).join('\n\n'),
         };
     }
-
-    const delegateToolResult = formatDelegateToolResult(message, parsed);
-    if (delegateToolResult) return delegateToolResult;
 
     const planToolResult = formatPlanToolResult(message, parsed);
     if (planToolResult) return planToolResult;

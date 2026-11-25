@@ -3,6 +3,10 @@ import { readableCardWorkspacePath, readableCardWorkspaceRelativePath, storedCar
 
 const TOOL_PATH_FIELDS = new Map([
     [TOOL_NAMES.CARD_FILES, ['paths']],
+    [TOOL_NAMES.CARD_ASSETS, ['rootPath', 'taskPath', 'sourcePath']],
+    [TOOL_NAMES.READ_IMAGE, ['path']],
+    [TOOL_NAMES.DRAW_IMAGE, ['outputDir']],
+    [TOOL_NAMES.SAVE_DRAW_IMAGES, ['outputDir']],
     [TOOL_NAMES.LS, ['path']],
     [TOOL_NAMES.GLOB, ['path']],
     [TOOL_NAMES.GREP, ['path']],
@@ -12,10 +16,10 @@ const TOOL_PATH_FIELDS = new Map([
     [TOOL_NAMES.MOVE, ['fromPath', 'toPath']],
     [TOOL_NAMES.APPLY_PATCH, []],
 ]);
-const RESULT_PATH_FIELDS = new Set(['path', 'publicPath', 'filePath', 'directoryPath', 'root', 'rootPath', 'searchPath', 'fromPath', 'toPath']);
+const RESULT_PATH_FIELDS = new Set(['path', 'publicPath', 'filePath', 'directoryPath', 'root', 'rootPath', 'searchPath', 'fromPath', 'toPath', 'taskPath', 'sourcePath', 'outputDir']);
 const RESULT_PATH_LISTS = new Set(['paths', 'suggestions', 'skippedPaths', 'conflictPaths']);
 const DIAGNOSTIC_FIELDS = new Set(['error', 'raw', 'message', 'suggestion', 'summary']);
-const RESULT_RECORDS = new Set(['items', 'files', 'results', 'changes', 'readErrors', 'validation', 'issue']);
+const RESULT_RECORDS = new Set(['items', 'files', 'results', 'changes', 'readErrors', 'validation', 'issue', 'images', 'tasks', 'assets', 'asset']);
 
 // Model/host boundary only. UI writes, repository snapshots and conflict
 // observations retain their stored paths and never enter this adapter.

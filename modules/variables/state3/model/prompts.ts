@@ -13,15 +13,21 @@ export function buildUpdateTask(compiled: Compiled, state: Json, context: unknow
             stage === 'before'
                 ? 'You resolve the player action marked <variable-update-target> before the story reply is written. The card rules decide its outcome. Everything before that message is already reflected in the state.'
                 : 'You update the story variables for the reply marked <variable-update-target>. Everything before that reply is already reflected in the state; this update records what the reply itself changes.',
-            '',
-            '# What you have',
-            '## read_manuscript',
+            ...(custom.length ? ['', '# Additional tools', `The additional tools can query or process information for this update. Use them when needed, then submit write in a separate call. At most ${TOOL_CALL_LIMIT} additional tool calls are available. A failed submission receives one correction opportunity.`] : []),
+        ].join('\n'),
+        manuscript: context,
+        manuscriptDescription: [
+            'Read the conversation context for this update. Returns confirmation of reading the manuscript mounted below.',
             stage === 'before'
                 ? '- messages: the conversation up to and including the marked player message. Earlier passages and recalled memories are background; their events are already in the state.'
                 : '- messages: the conversation up to and including the marked reply. Earlier passages and recalled memories are background; their events are already in the state.',
             ...(stage === 'after' ? ['- beforeUpdate, when present: this turn’s player action, resolved before the reply was written. Its changes are already in the state; the reply may add further events.'] : []),
+        ].join('\n'),
+        guide: buildUpdateView(compiled, state, stage),
+        guideDescription: [
+            'Read the starting state, schema, actions and rules for this update. Returns confirmation of reading the writing guide mounted below.',
             '',
-            '## read_writing_guide',
+            '# What the guide contains',
             '- state: current values.',
             '- schema: valid values, required fields and allowed object keys.',
             '- fields: what each field means. write lists how it can change in this update: "direct" or action ids. update, when present, says when and how to change it.',
@@ -39,9 +45,8 @@ export function buildUpdateTask(compiled: Compiled, state: Json, context: unknow
             '# Writing each item',
             '- reason: for numeric changes and judgement calls, name the event in the passage that supports it. Plain factual updates go without one.',
             '- old: only when the prior value explains the change, as that single value rather than a copied object or array.',
-            ...(custom.length ? ['', '# Additional tools', `The additional tools can query or process information for this update. Use them when needed, then submit write in a separate call. At most ${TOOL_CALL_LIMIT} additional tool calls are available. A failed submission receives one correction opportunity.`] : []),
         ].join('\n'),
-        manuscript: context, guide: buildUpdateView(compiled, state, stage), tools: [...getTools(compiled, stage),
+        tools: [...getTools(compiled, stage),
             ...custom.map(([name, entry]) => ({ type: 'function' as const, function: { name, description: entry.description, parameters: entry.parameters as JsonObject } }))],
     });
 }

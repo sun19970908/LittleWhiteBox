@@ -1,8 +1,9 @@
 import { compile as compileNovel } from '../providers/novelai/compiler.js';
 import { compile as compileSd } from '../providers/sd-webui/compiler.js';
 import { compile as compileComfy } from '../providers/comfyui/compiler.js';
+import { compileGemini, compileOpenAi } from '../providers/multimodal/compiler.js';
 
-const compilers = { novelai: compileNovel, 'sd-webui': compileSd, comfyui: compileComfy };
+const compilers = { novelai: compileNovel, 'sd-webui': compileSd, comfyui: compileComfy, gemini: compileGemini, openai: compileOpenAi };
 
 // Provider preparation is local and deterministic for the captured recipe.
 // The existing provider batch runners consume these exact compiled requests;

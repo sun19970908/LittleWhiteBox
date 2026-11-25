@@ -1,19 +1,20 @@
 import { CARD_FIELDS, TEXT_FIELDS } from './files.js';
 
 export const CARD_FILES = 'CardFiles';
+export const CARD_ASSETS = 'CardAssets';
 
 export const CARD_SKILL = Object.freeze({
     id: 'builtin-card-files', title: '小白X角色卡制作',
     summary: 'CardFlow: keep design decisions and open questions in design.md while discussing, prototyping or building to the user\'s current goal. Organizes character-card content and worldbooks and writes files back through CardFiles. Read builtin-card-frontend for presentation and builtin-state3 or builtin-state2 for gameplay state.',
     path: 'modules/card-workspace/skill/SKILL.md',
-    tools: [CARD_FILES],
+    tools: [CARD_FILES, CARD_ASSETS],
 });
 
 export const FRONTEND_SKILL = Object.freeze({
     id: 'builtin-card-frontend', title: '角色卡前端与交互',
     summary: 'Design story presentation, supporting panels or an integrated play interface. Connect scene entry, reading, player actions and feedback while reusing host chat, variable controls and image operations. Includes a complete integrated-card example; gameplay rules belong to the variable skills.',
     path: 'modules/card-workspace/skill/frontend/SKILL.md',
-    tools: [CARD_FILES],
+    tools: [CARD_FILES, CARD_ASSETS],
 });
 
 // Field names are derived from the same projection used by CardFiles.
@@ -71,4 +72,24 @@ export const CARD_TOOL = Object.freeze({ type: 'function', function: {
         action: { type: 'string', enum: ['open', 'save', 'refresh'] },
         paths: { type: 'array', items: { type: 'string' }, description: 'Exact local workspace file paths. Required for save and refresh; omitted for open. Each save changes only the named files.' },
     }, required: ['action'], additionalProperties: false },
+} });
+
+export const CARD_ASSETS_TOOL = Object.freeze({ type: 'function', function: {
+    name: CARD_ASSETS,
+    description: [
+        'Manage portable images for the current character card. Open its working copy with CardFiles first.',
+        'list returns {ok,status,tasks:[{taskPath,name,runtime,assets}],errors:[{taskPath,error}]}. It checks all task files in the open root unless taskPath is provided. Malformed files appear in errors; status is partial when usable image tasks remain, failed when only errors remain, otherwise success.',
+        'set copies a workspace image into the card draft, replacing the image at the same key. It creates a dedicated loader at a new taskPath. remove clears a key from its draft. Both return {ok,taskPath,runtime,asset?,unchanged,draft:true,requiresWriteback:true}; unchanged means the draft already matched the request. These are workspace-only receipts.',
+        'read opens an existing key as an image for inspection and returns {ok,asset,runtime,images}. The images entries are workspace image references.',
+        'An asset is {key,digest,mime,size}; size is in bytes. A runtime is {taskId,reference,readyEvent}; reference is a host-page JavaScript expression for the loader.',
+        'CardFiles save of taskPath embeds the draft images in the card. The loader and images travel in the exported card.',
+        'A damaged saved entry stays on the card while other keys are edited. Errors identify its task and position. Use set or remove for a unique key; for a missing or duplicate key, edit only the reported entry in the task document.',
+    ].join('\n'),
+    parameters: { type: 'object', properties: {
+        action: { type: 'string', enum: ['list', 'set', 'remove', 'read'] },
+        rootPath: { type: 'string', description: 'Root returned by CardFiles open.' },
+        taskPath: { type: 'string', description: 'Dedicated image task path under tasks/ in that root. Required for set, remove and read; optional for list. For the first set, choose a new .md task path.' },
+        key: { type: 'string', maxLength: 80, pattern: '^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$', description: 'Image key used by the card frontend. Required for set, remove and read.' },
+        sourcePath: { type: 'string', description: 'Path to a workspace PNG, JPEG, WebP or GIF. Required for set.' },
+    }, required: ['action', 'rootPath'], additionalProperties: false },
 } });

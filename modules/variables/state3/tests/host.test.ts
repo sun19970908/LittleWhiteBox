@@ -75,7 +75,7 @@ function runtimeHarness(bundle: Bundle | null = equipmentExample(), initialMode 
         getContext: () => h.ctx, exposeVariableReads: () => () => {}, captureContext: async () => ({}), passageText: (text: string) => text,
         compileDefinition, buildUpdateTask: () => ({}), SUBMIT_TOOL: 'write', ...settings, reject, diagnostic, activeTools, TOOL_CALL_LIMIT,
         digest, modelSource, beforeReceipt, beforeOutcome, beforeFloorOutcome, mergeAbortSignals, latestUserIndex: h.exports.latestUserIndex,
-        AbortController, structuredClone, window: agentWindow, correctionTask() { throw new Error('unexpected correction'); },
+        AbortController, structuredClone, window: agentWindow, correctionTask() { throw new Error('unexpected correction'); }, handoffReceipt: () => undefined,
     });
     const event_types = Object.fromEntries(['CHAT_CHANGED', 'MESSAGE_DELETED', 'MESSAGE_SWIPED', 'MESSAGE_EDITED', 'SETTINGS_UPDATED',
         'CHARACTER_MESSAGE_RENDERED', 'GENERATION_STARTED', 'GENERATION_AFTER_COMMANDS', 'GENERATION_STOPPED', 'MESSAGE_SENT', 'MESSAGE_RECEIVED', 'GENERATION_ENDED', 'CHAT_CREATED'].map(key => [key, key]));

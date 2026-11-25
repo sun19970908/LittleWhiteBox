@@ -81,8 +81,8 @@ test('standard request guides expose before actions and only individual trust fi
     const changes = [direct(['people', 'witness', 'trust'], 6)];
     assert.equal(validate(changes), true);
     const task = buildUpdateTask(compiled, state, { target: { floor: 1, swipeId: 0 }, messages: [] }, 'after');
-    const guide = task.messages.find(message => message.role === 'tool' && message.toolName === 'read_writing_guide')!;
-    assert.deepEqual(JSON.parse(String(guide.content)), after);
+    const guide = task.tools!.find(tool => tool.function.name === 'read_writing_guide')!;
+    assert.ok(guide.function.description!.endsWith(JSON.stringify(after)));
     assert.ok(after.fields.filter(field => field.write.includes('direct')).every(field => field.update));
     const facts = buildDescriptionView(compiled, ['case']);
     assert.equal(facts.fields.some(field => Object.hasOwn(field, 'update')), false);

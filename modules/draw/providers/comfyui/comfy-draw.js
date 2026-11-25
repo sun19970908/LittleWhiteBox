@@ -55,6 +55,7 @@ import {
     resolveComfyDirectOutputImages,
     validateComfyWorkflowNodeMap,
 } from "./compiler.js";
+import { DRAW_DIMENSION_BOUNDS } from '../../shared/draw-size.js';
 import { validateDrawInput } from '../../shared/public-api.js';
 import { imageBlob } from '../../shared/image-collection.js';
 import { runPublicImageJob } from '../../shared/public-image-job.js';
@@ -760,8 +761,8 @@ function getEffectiveParams(settings = getSettings(), overrides = {}) {
         const match = overrideSize.match(/^(\d+)x(\d+)$/i);
         if (match) {
             sizeOverride = {
-                width: normalizeNumber(match[1], preset.width ?? 1024, 64, 2048),
-                height: normalizeNumber(match[2], preset.height ?? 1024, 64, 2048),
+                width: normalizeNumber(match[1], preset.width ?? 1024, ...DRAW_DIMENSION_BOUNDS),
+                height: normalizeNumber(match[2], preset.height ?? 1024, ...DRAW_DIMENSION_BOUNDS),
             };
         }
     }
@@ -1392,6 +1393,8 @@ export const comfyPublicGeneration = {
         if (!['simple', 'custom'].includes(settings.workflowMode)) throw new MediaApiError('invalid_request', { field: 'workflowMode' });
         if (settings.workflowMode === 'custom' && !settings.customWorkflow?.json) throw new MediaApiError('not_configured', { field: 'customWorkflow' });
         if (settings.workflowMode === 'custom') {
+            if (request.overrideSize !== undefined && request.overrideSize !== 'default'
+                && (!settings.customWorkflow.nodeWidth || !settings.customWorkflow.nodeHeight)) throw new MediaApiError('unsupported_field', { field: 'overrideSize' });
             const mappings = { width: 'nodeWidth', height: 'nodeHeight', positivePrefix: 'nodePositive', negativePrefix: 'nodeNegative' };
             for (const field of Object.keys(request.params || {})) {
                 if (!mappings[field] || !settings.customWorkflow[mappings[field]]) throw new MediaApiError('unsupported_field', { field: `params.${field}` });

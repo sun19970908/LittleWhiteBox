@@ -199,6 +199,7 @@ export async function executePreparedScenePlanner(prepared, options = {}) {
                 maxPlanImages: validationContext.maxPlanImages,
                 maxCharactersPerImage: validationContext.effectiveMaxCharactersPerImage,
                 centerMode: validationContext.centerMode,
+                promptStyle: validationContext.promptStyle,
                 presetName: providerConfig.currentPresetName,
                 provider: providerConfig.provider,
                 model: providerConfig.model,

@@ -35,6 +35,7 @@ const CORE_CONCEPTS = [
     ' - User sees "工作区" (workspace UI); you access it via `local/` path prefix in tools',
     ' - User imports files via "选文件/选文件夹"; they appear in workspace and are accessible as `local/<filename>`',
     ' - The Assistant has one persistent workspace shared across conversations and reloads',
+    ' - Workspace text is editable; image files persist alongside text files. Drawing tools are directly available; ReadSkill builtin-drawing provides request and image-handling guidance.',
     ' - File tools edit workspace copies. CardFiles writes selected character-card files back to SillyTavern; imported disk files are not written back',
     '',
     '## SillyTavern Context Defaults',
@@ -195,6 +196,18 @@ export const SYSTEM_PROMPT = [
 // 历史摘要提示词
 // ============================================================
 export const HISTORY_SUMMARY_PREFIX = '[历史摘要]';
+
+// ============================================================
+// 图片输入提示词（随本次请求所用 API 预设的「发送图片给模型」）
+// ============================================================
+export function buildImageInputPrompt(imageInput = true) {
+    return [
+        '# Image Input',
+        imageInput
+            ? 'Image input is on. Uploaded attachments appear in user messages; images returned by tools follow their results. Large images are resized, and GIFs are sent as a static first frame. Images missing or omitted from a request are described by filename or path.'
+            : 'Image input is off for this model preset. Uploaded attachments and workspace images are shown only to the user. You receive filenames and metadata, not their visual contents; use the user\'s description or ask them to confirm the image.',
+    ].join('\n');
+}
 
 // ============================================================
 // 权限模式提示词

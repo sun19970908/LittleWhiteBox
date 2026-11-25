@@ -4,7 +4,11 @@ import {
     formatToolResultDisplay,
     getAssistantToolDefinitions,
 } from './tooling.js';
+import { IMAGE_ERRORS } from '../shared/image-tools.js';
+import { DRAW_COPY } from '../../draw/assistant/contract.js';
+import { createDrawingRecovery } from '../../draw/assistant/recovery.js';
 import { createAssistantRuntime } from './runtime.js';
+import { isModelRefusal } from './runtime/model-retry.js';
 import { settleAssistantRunFailure } from './runtime/run-failure.js';
 import { buildCurrentPlansContextText } from '../../agent-core/current-plans.js';
 import { mergeThoughtBlocks } from '../../agent-core/runtime/protocol.js';
@@ -17,6 +21,7 @@ import { readableCardWorkspacePath } from '../../card-workspace/paths.js';
 import { INVALID_LOOKUP_SCOPE, describeInvalidLookupScope } from '../shared/lookup-scope.js';
 import { normalizeMemoryFiles } from './memory/memory-files.js';
 import {
+    AGENT_IMAGE_INPUT_COPY,
     DEFAULT_PRESET_NAME,
     normalizeJsApiPermission,
     normalizeAssistantConfig,
@@ -61,6 +66,7 @@ import { injectAssistantStyles } from './styles.js';
 import {
     HISTORY_SUMMARY_PREFIX,
     SYSTEM_PROMPT,
+    buildImageInputPrompt,
     buildPermissionModePrompt,
 } from './prompts/system-prompt.js';
 import {
@@ -926,6 +932,7 @@ const attachmentsManager = createAttachmentsManager({
     acceptedImageMimeTypes: ACCEPTED_IMAGE_MIME_TYPES,
     maxImageAttachments: MAX_IMAGE_ATTACHMENTS,
     maxImageFileBytes: MAX_IMAGE_FILE_BYTES,
+    isImageInputEnabled: () => settingsPanel.isImageInputEnabled(),
 });
 
 const {
@@ -940,10 +947,15 @@ const localSourcesManager = createLocalSourcesManager({
     state,
     createRequestId,
     showToast,
+    describeError,
     setImportProgress: setLocalImportProgress,
     render,
     renderWorkspaceOnly,
     persistWorkspaceUiState,
+    onWorkspaceImagesChanged: () => {
+        const chat = document.getElementById('xb-assistant-chat');
+        if (chat) renderMessages(chat);
+    },
     onWorkspaceClosed: clearWorkspaceSelectionContext,
     onWorkspaceDirectoryChanged: (fromPath, toPath) => {
         relocateWorkspaceEditor(document.getElementById('xb-assistant-workspace-panel'), fromPath, toPath);
@@ -973,13 +985,14 @@ const {
     captureRunWorkspaceBaseline,
 } = localSourcesManager;
 
-function describeError(error) {
+function describeError(error, fallback) {
     const raw = String(error?.message || error || 'unknown_error');
     const lowered = raw.toLowerCase();
     const validationErrors = Array.isArray(error?.validation?.errors) ? error.validation.errors : [];
 
     if (error?.rawDisplay) return String(error.rawDisplay);
     if (isAbortError(error)) return '本轮请求已终止。';
+    if (isModelRefusal(error)) return ACTIVITY_COPY.modelRefused;
     if (lowered === 'tool_timeout') return '工具调用超时了（180 秒），可以重试，或把问题收窄一点。';
     if (lowered.startsWith('workspace_write_failed:')) return '工作区写入失败，请检查酒馆文件权限或稍后重试。';
     if (lowered.startsWith('manifest_load_failed:')) return '助手索引文件清单加载失败，请刷新页面后再试。';
@@ -989,7 +1002,8 @@ function describeError(error) {
     if (lowered === 'workspace_scope_local_required') return '要读取或搜索 `local/` 工作区，请显式传 `scope: "local"`。';
     if (lowered === 'workspace_scope_local_only') return '当前已切到 `local` 工作区作用域，因此这里只能读取或搜索 `local/` 路径。';
     if (lowered === INVALID_LOOKUP_SCOPE) return describeInvalidLookupScope();
-    if (lowered === 'unsupported_text_file') return '目前只支持文本类工作区文件。';
+    if (Object.hasOwn(IMAGE_ERRORS, lowered)) return IMAGE_ERRORS[lowered];
+    if (lowered === 'workspace_image_directory_invalid') return DRAW_COPY.invalidDirectory;
     if (lowered === 'local_source_not_found') return '源 `local/` 路径不存在，无法完成这次移动。';
     if (lowered === 'local_file_not_found') return '目标 `local/` 文件不存在；可以先用 Write 新建。';
     if (lowered === 'directory_not_found') return '目标目录不存在。';
@@ -1009,7 +1023,7 @@ function describeError(error) {
     if (lowered === 'empty_query') return '搜索词是空的，换一个明确点的关键词就行。';
     if (lowered === 'tool_result_expired') return ACTIVITY_COPY.resultExpired;
     if (lowered === 'tool_result_range_invalid') return ACTIVITY_COPY.resultRangeInvalid;
-    return raw;
+    return fallback ?? raw;
 }
 
 const settingsPanel = createSettingsPanel({
@@ -1046,15 +1060,27 @@ function isJsApiPermissionEnabled() {
 function getEnabledToolDefinitions(options = {}) {
     const role = options.role === 'delegate' ? 'delegate' : 'main';
     const providerConfig = getActiveProviderConfig(role === 'delegate' ? { role: 'delegate' } : {});
-    return getAssistantToolDefinitions({ providerConfig, jsApiEnabled: isJsApiPermissionEnabled(), role, skillIds: options.skillIds || [] });
+    return getAssistantToolDefinitions({ providerConfig, jsApiEnabled: isJsApiPermissionEnabled(),
+        imageInput: options.imageInput ?? settingsPanel.isImageInputEnabled({ role }), role, skillIds: options.skillIds || [] });
 }
 
+const drawingRecovery = createDrawingRecovery({
+    save: args => callHostTool(TOOL_NAMES.SAVE_DRAW_IMAGES, args),
+    notify: showToast,
+    describeError,
+    onChange: () => {
+        const chat = document.getElementById('xb-assistant-chat');
+        if (chat) renderMessages(chat);
+    },
+});
 const chatUi = createChatUi({
     state,
     getToolActivity: call => runtime.getToolActivity(call),
+    getToolActions: (call, result) => drawingRecovery.actions(call.name, result),
     normalizeThoughtBlocks,
     normalizeAttachments,
     renderAttachmentGallery,
+    isImageInputEnabled: () => settingsPanel.isImageInputEnabled(),
     onLocalPathClick: (path) => {
         return openWorkspacePanelTarget(path);
     },
@@ -1075,11 +1101,11 @@ function createAdapter(providerConfig = getActiveProviderConfig()) {
     return createAgentAdapter(providerConfig);
 }
 
-function getInjectedSystemPrompt() {
+function getInjectedSystemPrompt({ role = 'main', imageInput = settingsPanel.isImageInputEnabled({ role }) } = {}) {
     const identityContent = String(state.runtime?.identityContent || '').trim();
     const skillsPromptSummary = String(state.runtime?.skillsPromptSummary || '').trim();
     const permissionPrompt = buildPermissionModePrompt(state.config?.permissionMode, state.config?.jsApiPermission);
-    const sections = [SYSTEM_PROMPT];
+    const sections = [SYSTEM_PROMPT, buildImageInputPrompt(imageInput)];
     if (permissionPrompt) {
         sections.push(permissionPrompt);
     }
@@ -1307,6 +1333,8 @@ const runtime = createAssistantRuntime({
     getActiveProviderConfig,
     getDelegateProviderConfig: () => getActiveProviderConfig({ role: 'delegate' }),
     getSystemPrompt: getInjectedSystemPrompt,
+    isImageInputEnabled: options => settingsPanel.isImageInputEnabled(options),
+    bindImageInput: options => settingsPanel.bindImageInput(options),
     getEphemeralUserContextText,
     flushPendingWorkspaceChanges,
     SYSTEM_PROMPT,
@@ -1392,8 +1420,9 @@ async function executeAssistantRun(run) {
     try {
         await runAssistantLoop(run);
     } catch (error) {
+        const failure = isAbortError(error) ? run.cancelNotice : error.compactionReported ? '' : describeError(error);
         settleAssistantRunFailure({ messages: state.messages,
-            notice: isAbortError(error) ? run.cancelNotice : error.compactionReported ? '' : describeError(error),
+            notice: failure && run.requestHadImages && !isAbortError(error) ? `${failure}\n\n${AGENT_IMAGE_INPUT_COPY.requestFailed}` : failure,
             pushMessage, persistSession });
     } finally {
         if (state.activeRun?.id === run.id) {
@@ -1907,14 +1936,10 @@ function bindEvents(root) {
         updateChatScrollButtonsVisibility(root);
     });
 
-    imageInput.addEventListener('change', async (event) => {
-        const files = Array.from(event.currentTarget.files || []);
-        if (!files.length) return;
-        try {
-            await appendDraftImageFiles(files);
-        } finally {
-            event.currentTarget.value = '';
-        }
+    imageInput.addEventListener('change', async () => {
+        const files = Array.from(imageInput.files);
+        imageInput.value = '';
+        if (files.length) await appendDraftImageFiles(files);
     });
 
     localFileInput.addEventListener('change', async (event) => {

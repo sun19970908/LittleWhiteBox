@@ -1,4 +1,5 @@
 import {
+    INTERNAL_WORKSPACE_TOOL_NAMES,
     WORKSPACE_SOURCES,
     buildWorkspaceOpMeta,
     isWorkspaceMutationTool,
@@ -7,6 +8,7 @@ import { applyWorkspaceObservations, buildWorkspacePreconditions } from '../../s
 import { INVALID_LOOKUP_SCOPE, LOOKUP_SCOPES, describeInvalidLookupScope } from '../../shared/lookup-scope.js';
 import { JSAPI_CANCEL_NOTICE } from '../../shared/jsapi-contract.js';
 import { buildPatchFailureResult } from '../../../agent-core/tools/apply-patch-execution.js';
+import { DRAW_COPY } from '../../../draw/assistant/contract.js';
 import { TOOL_NAMES } from '../tooling.js';
 
 export function createHostToolRequestController(deps) {
@@ -115,10 +117,12 @@ export function createHostToolRequestController(deps) {
                 settled = true;
                 pendingToolCalls.delete(requestId);
                 cleanup();
-                if (run && observations.length) run.workspaceBaseline = applyWorkspaceObservations(run.workspaceBaseline, observations);
-                options.onWorkspaceObserved?.(observations);
-                if (conflictSnapshot) options.onWorkspaceConflict?.(conflictSnapshot);
-                resolve(value);
+                try {
+                    if (run && observations.length) run.workspaceBaseline = applyWorkspaceObservations(run.workspaceBaseline, observations);
+                    options.onWorkspaceObserved?.(observations);
+                    if (conflictSnapshot) options.onWorkspaceConflict?.(conflictSnapshot);
+                    resolve(value);
+                } catch (error) { reject(error); }
             };
 
             abortHandler = () => {
@@ -126,7 +130,9 @@ export function createHostToolRequestController(deps) {
                 finishReject(new Error('tool_aborted'));
             };
 
-            timer = setTimeout(() => {
+            // Drawing owns provider timeouts and may spend time in a remote queue.
+            // The user's Stop action still aborts it; a generic text-tool deadline must not orphan paid work.
+            if (name !== TOOL_NAMES.DRAW_IMAGE) timer = setTimeout(() => {
                 if (dispatched) post('xb-assistant:tool-abort', { requestId });
                 finishReject(new Error('tool_timeout'));
             }, REQUEST_TIMEOUT_MS);
@@ -149,8 +155,13 @@ export function createHostToolRequestController(deps) {
             }
 
             const dispatch = async () => {
-                if (options.runId && isWorkspaceMutationTool(name) && typeof flushBeforeToolCall === 'function') {
-                    const flushed = await flushBeforeToolCall({ toolName: name, args });
+                const cardPaths = name === TOOL_NAMES.CARD_FILES && args.action === 'save' ? args.paths
+                    : name === TOOL_NAMES.CARD_ASSETS && ['set', 'remove'].includes(args.action) ? [args.taskPath] : null;
+                const cardFiles = cardPaths?.filter(path => typeof path === 'string').map(path => ({ path }));
+                const flush = cardFiles?.length ? { toolName: INTERNAL_WORKSPACE_TOOL_NAMES.BATCH_WRITE_FILES, args: { files: cardFiles } }
+                    : isWorkspaceMutationTool(name) ? { toolName: name, args } : null;
+                if (options.runId && flush && typeof flushBeforeToolCall === 'function') {
+                    const flushed = await flushBeforeToolCall(flush);
                     if (flushed === false) throw new Error('workspace_unsaved_changes');
                 }
                 if (settled) return;
@@ -174,6 +185,7 @@ export function createHostToolRequestController(deps) {
             error: code || 'tool_failed',
             raw,
             message: describeError(error),
+            ...(toolName === TOOL_NAMES.DRAW_IMAGE && ['tool_timeout', 'tool_aborted'].includes(code) ? { message: DRAW_COPY.cancelled } : {}),
             ...(toolName === TOOL_NAMES.RUN_JAVASCRIPT_API && ['tool_timeout', 'tool_aborted'].includes(code)
                 ? { message: `${describeError(error)} ${JSAPI_CANCEL_NOTICE}` } : {}),
             ...(code === INVALID_LOOKUP_SCOPE ? {

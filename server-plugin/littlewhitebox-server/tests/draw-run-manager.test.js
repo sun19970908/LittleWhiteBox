@@ -70,6 +70,25 @@ function createEnvelope(runId, overrides = {}) {
     return Object.assign(envelope, overrides);
 }
 
+test('Draw Run preserves the natural planner contract and the multimodal recipe without tag fields', () => {
+    const validate = createEnvelopeValidator(drawRuntime);
+    for (const [imageProvider, params] of [
+        ['gemini', { model: 'gemini-nano-banana-2.1', aspectRatio: '1:1', imageSize: '1K' }],
+        ['openai', { model: 'gpt-image-2.6-flare', size: 'auto', quality: 'auto', background: 'auto' }],
+    ]) {
+        const generationRecipe = { apiBaseUrl: 'https://images.example.test/v1', apiKey: 'image-secret', timeout: 5000, delayMs: 1, params, referenceImages: [] };
+        const envelope = createEnvelope(`run-${imageProvider}`, { imageProvider, generationRecipe });
+        Object.assign(envelope.planner.validationContext, { centerMode: 'none', promptStyle: 'natural' });
+        const result = validate(envelope).envelope;
+        assert.deepEqual(result.generationRecipe, generationRecipe);
+        assert.equal(result.planner.validationContext.centerMode, 'none');
+        assert.equal(result.planner.validationContext.promptStyle, 'natural');
+        assert.throws(() => validate({ ...envelope, generationRecipe: { ...generationRecipe, positivePrefix: 'invalid tag text' } }), { code: 'invalid_draw_run' });
+        envelope.planner.validationContext.centerMode = 'grid';
+        assert.throws(() => validate(envelope), { code: 'invalid_draw_run' });
+    }
+});
+
 test('Draw Run knownCharacters cap counts only effectively enabled characters: a closed group frees its share of the 500', async () => {
     const { selectEnabledCharacters, setGroupEnabled } = await import('../../../modules/draw/shared/character-library.js');
     const validate = createEnvelopeValidator(drawRuntime);

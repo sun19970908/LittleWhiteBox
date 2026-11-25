@@ -239,7 +239,7 @@ async function buildScenePlannerRequest(options = {}) {
         continuityText = '',
     } = options;
     const profile = normalizeScenePlannerProfile(plannerProfile);
-    const centerMode = profile.centerMode === 'normalized' ? 'normalized' : 'grid';
+    const centerMode = profile.promptStyle === 'natural' ? 'none' : profile.centerMode === 'normalized' ? 'normalized' : 'grid';
     const sceneSource = providedSceneSource || createSceneSource(messageText);
     if (!String(sceneSource.content || '').trim()) {
         throw new ScenePlannerError('消息内容为空。', 'EMPTY_MESSAGE');
@@ -286,7 +286,9 @@ async function buildScenePlannerRequest(options = {}) {
         );
         const continuityBlock = String(continuityText || '').trim();
         const expandedCharacterInfo = await expandScenePromptText(
-            buildCharacterInfoForLLM(presentCharacters, { hasContinuity: Boolean(continuityBlock) }),
+            profile.promptStyle === 'natural'
+                ? JSON.stringify({ characters: presentCharacters })
+                : buildCharacterInfoForLLM(presentCharacters, { hasContinuity: Boolean(continuityBlock) }),
             runtime,
         );
         const expandedContinuity = continuityBlock
@@ -340,7 +342,7 @@ async function buildScenePlannerRequest(options = {}) {
             if (!expanded && item.role !== 'tool') continue;
             messages.push(renderScenePlannerMessage(item, expanded));
         }
-        const prompt = { systemPrompt: '', messages };
+        const prompt = { systemPrompt: String(options.systemInstruction || ''), messages };
         const readyMessages = stripToolProtocolMarker(markToolProtocolMessages(messages));
         await emitScenePromptReady(runtime, readyMessages);
         return {
@@ -359,6 +361,7 @@ async function buildScenePlannerRequest(options = {}) {
                 maxPlanImages: effectiveMaxPlanImages,
                 effectiveMaxCharactersPerImage,
                 centerMode,
+                ...(profile.promptStyle === 'natural' ? { promptStyle: 'natural' } : {}),
             },
             customTools,
             customToolSources,

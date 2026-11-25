@@ -28,7 +28,14 @@ export const CONTENT_TEMPLATE = `<content>
 </content>`;
 
 export function buildScenePlannerFrameText(profile) {
-    const { imageModelName } = normalizeScenePlannerProfile(profile);
+    const { imageModelName, promptStyle } = normalizeScenePlannerProfile(profile);
+    if (promptStyle === 'natural') return `## Source material
+- <worldInfo> contains setting and character reference information.
+- <content> contains character references followed by the narrative. Each available image placement is marked 【插图点 N】.
+- Generation requirements provide style preferences and image-count limits.
+
+## Where your output goes
+Each scene is the complete description sent to ${imageModelName}. Include the relevant character appearance and style in that description. Reference material informs the depiction; it is not appended to the image request. Placement fields keep their shared meanings in submit_scene_plan.`;
     return `## 你收到的材料
 - <worldInfo>：世界书。其中的 tag 组合、同人角色资料、姿势库是写提示词时的参考来源；未知角色的外貌优先参考其中的数据。
 - <content>：本次唯一的叙事来源。开头是【已录入角色】列表；固定外貌由角色库自动写入，你只写本图中的状态，不要重复固定外貌里已有的 tag；正文里每个可插图的位置已标为【插图点 N】。
@@ -40,9 +47,9 @@ The app uses each image's scene and character fields, together with the characte
 
 // 指南 / 规则单独成段：布局组装需要把它们当作独立的块（空文本 = 整块省略）。
 export function buildScenePlannerGuideSection(guide = '', profile) {
-    const { imageModelName } = normalizeScenePlannerProfile(profile);
+    const { imageModelName, promptStyle } = normalizeScenePlannerProfile(profile);
     const guideText = String(guide || '').trim();
-    return guideText ? `## ${imageModelName} Tag 指南\n\n${guideText}` : '';
+    return guideText ? `## ${imageModelName} ${promptStyle === 'natural' ? 'Drawing guidance' : 'Tag 指南'}\n\n${guideText}` : '';
 }
 
 export function buildScenePlannerRulesSection(rules = '') {

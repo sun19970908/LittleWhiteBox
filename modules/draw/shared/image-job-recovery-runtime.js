@@ -49,10 +49,8 @@ import { observeAsyncCallback, observeBackgroundTask } from '../../../shared/com
 const RETRY_DELAY_MS = 15_000;
 const backendClient = createImageBackendJobsClient({ getHeaders: getRequestHeaders, getOwner: getCurrentUserHandle });
 const drawRunClient = createDrawRunClient({ getHeaders: getRequestHeaders, getOwner: getCurrentUserHandle });
-const resultDecoders = new Map([
-    ['sd-webui', ({ response }) => readImageBackendResultBase64(response)],
-    ['comfyui', ({ response }) => readImageBackendResultBase64(response)],
-]);
+const resultDecoders = new Map(['sd-webui', 'comfyui', 'gemini', 'openai']
+    .map(provider => [provider, ({ response }) => readImageBackendResultBase64(response)]));
 const adoptionEffects = new Map();
 
 let runtimeEvents = null;

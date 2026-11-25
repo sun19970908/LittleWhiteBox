@@ -2,13 +2,16 @@
 
 const { MAX_TIMEOUT_MS } = require('../providers/upstream.js');
 const vertexContract = require('../../../agent-core/vertex-contract.cjs');
+const { normalizeImageApiContext } = require('../providers/image-api.js');
+const { validateReferenceImages } = require('../../shared/reference-image-contract.cjs');
 
 const { MAX_ENVELOPE_BYTES } = require('../../../../server-plugin/littlewhitebox-server/runtime-contract.js');
 const MAX_IMAGE_ITEMS = 20;
 // 仅防御荒谬输入；真正的体量上限仍是整份请求的 MAX_ENVELOPE_BYTES。
 const MAX_PLANNER_PROMPT_MESSAGES = 1000;
 const MAX_CONFIGURED_CHARACTERS_PER_IMAGE = 999;
-const IMAGE_PROVIDERS = new Set(['novelai', 'sd-webui', 'comfyui']);
+const NATURAL_IMAGE_PROVIDERS = new Set(['gemini', 'openai']);
+const IMAGE_PROVIDERS = new Set(['novelai', 'sd-webui', 'comfyui', ...NATURAL_IMAGE_PROVIDERS]);
 const AGENT_CHANNELS = new Set([
     'openai-compatible',
     'openai-responses',
@@ -139,7 +142,7 @@ function validateSceneSource(value, runtime) {
     return cloneJson(source);
 }
 
-function validatePlanner(value, runtime) {
+function validatePlanner(value, runtime, natural) {
     // 工具定义必须由沙盒从源码派生，不接受浏览器声称的可执行定义。
     if (value && typeof value === 'object' && Object.hasOwn(value, 'customTools')) {
         throw invalid('Submit customToolSources; tool definitions are derived by the sandbox', 400, 'custom_tools_unsupported');
@@ -174,7 +177,7 @@ function validatePlanner(value, runtime) {
 
     const context = assertExactKeys(
         planner.validationContext,
-        ['sceneSource', 'effectiveMaxImages', 'maxPlanImages', 'effectiveMaxCharactersPerImage', 'centerMode'],
+        ['sceneSource', 'effectiveMaxImages', 'maxPlanImages', 'effectiveMaxCharactersPerImage', 'centerMode', ...(natural ? ['promptStyle'] : [])],
         'planner.validationContext',
     );
     const sceneSource = validateSceneSource(context.sceneSource, runtime);
@@ -197,9 +200,9 @@ function validatePlanner(value, runtime) {
         0,
         MAX_CONFIGURED_CHARACTERS_PER_IMAGE,
     );
-    if (context.centerMode !== 'grid' && context.centerMode !== 'normalized') {
-        throw invalid('planner.validationContext.centerMode is invalid');
-    }
+    const centerModes = natural ? ['none'] : ['grid', 'normalized'];
+    if (!centerModes.includes(context.centerMode)) throw invalid('planner.validationContext.centerMode is invalid');
+    if (natural && context.promptStyle !== 'natural') throw invalid('planner.validationContext.promptStyle is invalid');
     if (!Array.isArray(planner.presentCharacters) || planner.presentCharacters.length > 500) {
         throw invalid('planner.presentCharacters must be an array with at most 500 entries');
     }
@@ -229,6 +232,7 @@ function validatePlanner(value, runtime) {
             maxPlanImages,
             effectiveMaxCharactersPerImage,
             centerMode: context.centerMode,
+            ...(natural ? { promptStyle: context.promptStyle } : {}),
         },
         presentCharacters: cloneJson(planner.presentCharacters),
     };
@@ -355,6 +359,17 @@ function validateGenerationRecipe(provider, value, imageCount) {
         assertPlainObject(recipe.params, `${path}.params`);
         requireString(recipe.promptOverride, `${path}.promptOverride`, { allowEmpty: true });
         requireString(recipe.negativePromptOverride, `${path}.negativePromptOverride`, { allowEmpty: true });
+    } else if (NATURAL_IMAGE_PROVIDERS.has(provider)) {
+        recipe = assertExactKeys(value, ['apiBaseUrl', 'apiKey', 'timeout', 'delayMs', 'params', 'referenceImages'], path);
+        requirePositiveNumber(recipe.timeout, `${path}.timeout`);
+        requireImageDelay(recipe.delayMs, `${path}.delayMs`);
+        assertPlainObject(recipe.params, `${path}.params`);
+        try {
+            normalizeImageApiContext({ url: recipe.apiBaseUrl, key: recipe.apiKey }, { urlField: `${path}.apiBaseUrl`, keyField: `${path}.apiKey` });
+            validateReferenceImages(recipe.referenceImages, `${path}.referenceImages`);
+        } catch (error) {
+            throw invalid(error.message);
+        }
     } else {
         recipe = assertExactKeys(value, [
             'host', 'auth', 'timeout', 'delayMs', 'workflowMode', 'customWorkflow', 'params',
@@ -427,7 +442,7 @@ function createEnvelopeValidator(runtime) {
         const sourceHash = requireString(envelope.sourceHash, 'envelope.sourceHash');
         const imageProvider = requireString(envelope.imageProvider, 'envelope.imageProvider');
         if (!IMAGE_PROVIDERS.has(imageProvider)) throw invalid('envelope.imageProvider is invalid');
-        const planner = validatePlanner(envelope.planner, runtime);
+        const planner = validatePlanner(envelope.planner, runtime, NATURAL_IMAGE_PROVIDERS.has(imageProvider));
         if (planner.validationContext.sceneSource.sourceHash !== sourceHash) {
             throw invalid('envelope.sourceHash must match planner sceneSource');
         }

@@ -1,3 +1,5 @@
+import { messageImages } from '../../shared/image-tools.js';
+import { createImageResultGallery } from './image-results.js';
 import { deliveredText } from '../../plugins/delivery/history.js';
 import { isTimelineCompaction } from '../state/compaction-history.js';
 import { compactionRow } from './compaction-row.js';
@@ -58,9 +60,11 @@ export function createChatUi(deps) {
     const {
         state,
         getToolActivity,
+        getToolActions,
         normalizeThoughtBlocks,
         normalizeAttachments,
         renderAttachmentGallery,
+        isImageInputEnabled = () => true,
         onLocalPathClick,
     } = deps;
 
@@ -71,7 +75,7 @@ export function createChatUi(deps) {
         kind: '',
         units: [],
     };
-    const projectTools = createToolActivityProjection(getToolActivity);
+    const projectTools = createToolActivityProjection(getToolActivity, getToolActions);
     const processViews = new WeakMap();
     const appendMessageActions = createMessageActions(state);
 
@@ -158,6 +162,7 @@ export function createChatUi(deps) {
                 type: attachment.type,
                 size: attachment.size,
             })),
+            imageInput: message.attachments?.length ? isImageInputEnabled() : undefined,
             streaming: Boolean(message.streaming),
             ui: Number.isInteger(messageIndex) && messageIndex >= 0
                 ? {
@@ -421,6 +426,17 @@ export function createChatUi(deps) {
         return { key: view, build: () => view.node, update: () => view.update(messages, running) };
     }
 
+    function createImageResultUnit(message, images) {
+        const current = new Map((state.localSources || []).flatMap(source => source.files || []).filter(file => file.kind === 'image').map(file => [file.blobId, file]));
+        images = images.map(file => current.has(file.blobId) ? { ...file, ...current.get(file.blobId) } : { ...file, unavailable: true });
+        const unit = { key: message, signature: JSON.stringify(images), build: () => {
+            const view = createImageResultGallery(images, { open: onLocalPathClick });
+            unit.dispose = view.dispose;
+            return view.node;
+        } };
+        return unit;
+    }
+
     function collectMessageUnits(startIndex, endIndex) {
         const units = [];
         for (let start = startIndex; start < endIndex;) {
@@ -441,6 +457,8 @@ export function createChatUi(deps) {
                         !!state.isBusy && end === state.messages.length));
                 }
                 const message = state.messages[index];
+                const images = messageImages(message);
+                if (images.length) units.push(createImageResultUnit(message, images));
                 const body = deliveredText(state.messages, index);
                 if (body !== undefined) {
                     units.push(createMessageRenderUnit(message, index, body));
@@ -508,9 +526,10 @@ export function createChatUi(deps) {
             const node = reuse ? retained.node : unit.build();
             unit.update?.();
             if (container.children[index] !== node) container.insertBefore(node, container.children[index] || null);
-            return { key: unit.key, signature: unit.signature, node };
+            return { key: unit.key, signature: unit.signature, node, dispose: reuse ? retained.dispose : unit.dispose };
         });
         const nodes = new Set(nextUnits.map(unit => unit.node));
+        for (const old of previousUnits) if (!nodes.has(old.node)) old.dispose?.();
         for (const child of Array.from(container.children)) if (!nodes.has(child)) child.remove();
         return nextUnits;
     }
@@ -520,6 +539,7 @@ export function createChatUi(deps) {
         container.classList.toggle('is-busy', !!state.isBusy);
         if (!state.messages.length && !state.compactions?.some(isTimelineCompaction)) {
             if (renderCache.kind === 'empty') return;
+            for (const unit of renderCache.units || []) unit.dispose?.();
             container.replaceChildren();
             const empty = document.createElement('div');
             empty.className = 'xb-assistant-empty';

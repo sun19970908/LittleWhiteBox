@@ -38,7 +38,7 @@ async function setup(t) {
     t.mock.method(console, 'info', () => {});
     const name = `workspace-contract-${createIdentifier()}`;
     const a = new Dexie(name), b = new Dexie(name);
-    for (const database of [a, b]) database.version(1).stores({ workspace: 'id' });
+    for (const database of [a, b]) database.version(1).stores({ workspace: 'id', workspaceImageBlobs: 'id' });
     await a.open(); await b.open();
     await a.table('workspace').put({ id: 'main', localSources: initial });
     t.after(async () => { b.close(); await a.delete(); });
@@ -718,9 +718,9 @@ for (const deleted of [false, true]) {
         const previousDocument = globalThis.document;
         globalThis.document = { createElement: () => ({ click() {} }), body: { appendChild() {}, removeChild() {} } };
         t.after(() => { globalThis.document = previousDocument; });
-        assert.equal(manager.downloadAllLocalSources(), true);
-        assert.equal(manager.downloadLocalFile(fileA), true);
-        if (!deleted) assert.equal(manager.downloadLocalSource(initial[0].sourceId), true);
+        assert.equal(await manager.downloadAllLocalSources(), true);
+        assert.equal(await manager.downloadLocalFile(fileA), true);
+        if (!deleted) assert.equal(await manager.downloadLocalSource(initial[0].sourceId), true);
         const archive = unzipSync(new Uint8Array(await blobs[0].arrayBuffer()));
         assert.equal(strFromU8(archive[fileA]), 'latest A draft');
         assert.equal(strFromU8(archive[fileB]), 'latest B draft');

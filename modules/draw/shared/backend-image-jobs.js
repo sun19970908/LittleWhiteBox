@@ -698,7 +698,12 @@ export function createImageBackendJobsClient({
                 throw detached;
             }
             try {
-                await options.beforeIrreversible?.();
+                const record = await options.beforeIrreversible?.();
+                // This is the last synchronous decision before the first POST.
+                // After an uncertain POST only the original payload/id may be retried.
+                if (!createUncertain && options.isCreateCurrent && !options.isCreateCurrent(record)) {
+                    return { notSubmitted: true };
+                }
                 job = await createJob(createPayload, { signals: [cancelSignal, detachSignal] });
             } catch (error) {
                 if (!(error instanceof ImageBackendJobsError) || !error.retriable) throw error;
