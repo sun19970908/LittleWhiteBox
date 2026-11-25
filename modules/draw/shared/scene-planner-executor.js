@@ -19,6 +19,7 @@ import { logScenePlannerDiagnostic } from './scene-planner-debug.js';
 import { markToolProtocolMessages } from '../../agent-core/adapters/tool-protocol-marker.js';
 import { normalizeToolDefinitions, toFunctionTool } from './custom-tools.js';
 import { assertScenePlannerMessages } from './scene-planner-messages.js';
+import { assertScenePlannerHandoffContext } from './scene-planner-handoff.js';
 import { readRawPlanArguments, refineScenePlanTasks } from './scene-plan-refine.js';
 const ERROR_SOURCE = "modules/draw/shared/scene-planner-executor.js";
 
@@ -56,6 +57,10 @@ function assertPreparedScenePlanner(prepared) {
         throw new ScenePlannerError(`Scene Planner 预处理消息无效：${error.message}`, 'PREPARED_INPUT_INVALID', null, { cause: error });
     }
     assertSubmitScenePlanTool(prepared.planner.tool);
+    try { assertScenePlannerHandoffContext(prompt.messages, prepared.planner.handoffTools); }
+    catch (error) {
+        throw new ScenePlannerError(error.message, 'PREPARED_INPUT_INVALID', null, { cause: error });
+    }
     readPreparedCustomTools(prepared);
     return prepared;
 }
@@ -80,7 +85,7 @@ export function createPreparedScenePlannerTask(prepared) {
     return {
         systemPrompt: input.planner.prompt.systemPrompt,
         messages: markToolProtocolMessages(input.planner.prompt.messages),
-        tools: [input.planner.tool, ...readPreparedCustomTools(input).map(toFunctionTool)],
+        tools: [input.planner.tool, ...(input.planner.handoffTools || []), ...readPreparedCustomTools(input).map(toFunctionTool)],
         toolChoice: SCENE_PLANNER_TOOL_CHOICE,
     };
 }

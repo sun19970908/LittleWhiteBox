@@ -22,7 +22,7 @@ import {
     buildScenePlannerWorldInfoBlock,
 } from './scene-planner-frame.js';
 import { planScenePlannerMessages } from './scene-planner-assembly.js';
-import { renderScenePlannerMessage } from './scene-planner-handoff.js';
+import { createScenePlannerHandoffTools, renderScenePlannerMessage } from './scene-planner-handoff.js';
 import { normalizeLayout } from './scene-planner-layout.js';
 import { TOOL_PROTOCOL_MARKER, markToolProtocolMessages, stripToolProtocolMarker } from '../../agent-core/adapters/tool-protocol-marker.js';
 import { resolveCustomToolDefinitions, snapshotCustomToolSources } from './custom-tools.js';
@@ -331,10 +331,20 @@ async function buildScenePlannerRequest(options = {}) {
             [slots.continuity]: withoutMarker(expandedContinuity),
             [slots.lastMessage]: withoutMarker(expandedMessageText),
         };
-        // Expand raw templates before JSON encoding, so quotes/newlines and macros inside
-        // documents survive both native tool results and the existing tagged-JSON adapter.
+        // Expand documents at their original layout positions, then insert narrative slots
+        // literally. Moving data to descriptions must not reorder stateful macro evaluation.
+        const documents = {};
+        const documentByStage = new Map(plan.documents.map(item => [item.kind, item]));
         const messages = [];
         for (const item of plan.templates) {
+            const document = item.role === 'tool' ? documentByStage.get(item.stageId) : null;
+            if (document) {
+                for (const block of document.blocks) {
+                    documents[block.id] = applyPromptSlots(
+                        await expandScenePromptText(block.template, runtime), slotValues,
+                    ).trim();
+                }
+            }
             const expanded = applyPromptSlots(
                 await expandScenePromptText(item.template, runtime),
                 slotValues,
@@ -342,11 +352,13 @@ async function buildScenePlannerRequest(options = {}) {
             if (!expanded && item.role !== 'tool') continue;
             messages.push(renderScenePlannerMessage(item, expanded));
         }
+        const handoffTools = createScenePlannerHandoffTools({ documents });
         const prompt = { systemPrompt: String(options.systemInstruction || ''), messages };
         const readyMessages = stripToolProtocolMarker(markToolProtocolMessages(messages));
         await emitScenePromptReady(runtime, readyMessages);
         return {
             prompt,
+            handoffTools,
             tool: createSubmitScenePlanTool({
                 maxImages: effectiveMaxImages,
                 maxPlanImages: effectiveMaxPlanImages,
@@ -380,6 +392,7 @@ export async function buildScenePlannerTask(options = {}) {
         planner: {
             prompt: request.prompt,
             tool: request.tool,
+            handoffTools: request.handoffTools,
             validationContext: request.validationContext,
             presentCharacters: Array.isArray(options.presentCharacters) ? options.presentCharacters : [],
             ...(request.customTools.length ? { customTools: request.customTools } : {}),
@@ -421,6 +434,7 @@ export async function prepareScenePlannerInput(options = {}) {
         planner: {
             prompt: request.prompt,
             tool: request.tool,
+            handoffTools: request.handoffTools,
             validationContext: request.validationContext,
             presentCharacters: Array.isArray(options.presentCharacters) ? options.presentCharacters : [],
             ...(request.customTools.length ? { customTools: request.customTools } : {}),

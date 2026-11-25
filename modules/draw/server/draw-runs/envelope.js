@@ -149,7 +149,7 @@ function validatePlanner(value, runtime, natural) {
     }
     const planner = assertExactKeys(
         value,
-        ['prompt', 'tool', 'validationContext', 'presentCharacters', 'retry', 'customToolSources', 'refine'],
+        ['prompt', 'tool', 'handoffTools', 'validationContext', 'presentCharacters', 'retry', 'customToolSources', 'refine'],
         'planner',
         ['prompt', 'tool', 'validationContext', 'presentCharacters'],
     );
@@ -168,6 +168,9 @@ function validatePlanner(value, runtime, natural) {
         throw invalid(error.message);
     }
 
+    if (planner.handoffTools !== undefined) assertSafeJson(planner.handoffTools, 'planner.handoffTools');
+    try { runtime.assertScenePlannerHandoffContext(prompt.messages, planner.handoffTools); }
+    catch (error) { throw invalid(error.message); }
     assertSafeJson(planner.tool, 'planner.tool');
     try {
         runtime.assertSubmitScenePlanTool(planner.tool);
@@ -226,6 +229,7 @@ function validatePlanner(value, runtime, natural) {
         ...(planner.customToolSources ? { customToolSources: cloneJson(planner.customToolSources) } : {}),
         prompt: cloneJson(prompt),
         tool: cloneJson(planner.tool),
+        ...(planner.handoffTools !== undefined ? { handoffTools: cloneJson(planner.handoffTools) } : {}),
         validationContext: {
             sceneSource,
             effectiveMaxImages,

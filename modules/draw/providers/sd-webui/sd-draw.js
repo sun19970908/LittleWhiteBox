@@ -2234,9 +2234,11 @@ function renderPromptChainPreview(settings = getSettings()) {
         tagGuide: 'sd-prompt-guide',
         sceneRules: 'sd-prompt-format',
     };
-    const guideInput = getSettingsElement(editableMap.tagGuide);
+    const preset = getActivePromptPreset(settings);
     const chain = getPromptChainPreview({
-        tagGuideContent: guideInput ? guideInput.value : (getActivePromptPreset(settings)?.tagGuideContent || ''),
+        topSystem: getSettingsElement(editableMap.topSystem)?.value ?? preset?.topSystem,
+        tagGuideContent: getSettingsElement(editableMap.tagGuide)?.value ?? preset?.tagGuideContent,
+        sceneRules: getSettingsElement(editableMap.sceneRules)?.value ?? preset?.sceneRules,
     });
     renderScenePlannerChain(container, chain, {
         getEditable: (key) => getSettingsElement(editableMap[key]),

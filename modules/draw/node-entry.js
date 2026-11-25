@@ -14,6 +14,7 @@ import { assertSubmitScenePlanTool } from './shared/scene-plan-contract.js';
 import { assertScenePlannerMessages } from './shared/scene-planner-messages.js';
 import { assertScenePlanRefine } from './shared/scene-plan-refine.js';
 import { hashSceneSource } from './shared/scene-source.js';
+export { assertScenePlannerHandoffTools, assertScenePlannerHandoffContext } from './shared/scene-planner-handoff.js';
 export { assertCustomToolSources } from './shared/custom-tools.js';
 export { buildDisplayMetadata, createProgressDiagnostic } from './server/draw-runs/projection.js';
 import { buildDisplayMetadata } from './server/draw-runs/projection.js';

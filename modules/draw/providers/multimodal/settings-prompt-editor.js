@@ -54,18 +54,10 @@ export function bindPromptEditor({ document, provider, getState, persist }) {
             settings.promptPresets = [preset];
             const { plannerProfile, systemInstruction, modelGuide } = naturalPlannerOptions(provider, settings);
             const descriptions = parseFieldDescriptions(preset.fieldDescriptions);
-            const draftContents = {
-                topSystem: preset.topSystem, tagGuide: modelGuide, sceneRules: preset.sceneRules,
-            };
-            const chain = buildScenePlannerChainPreview({ profile: plannerProfile, descriptions, layout: draftLayout, hasTagGuide: Boolean(modelGuide) });
-            for (const row of chain) {
-                for (const section of row.sections || []) {
-                    if (!section.editable) continue;
-                    section.editable = false;
-                    section.content = draftContents[section.key];
-                    if (section.key === 'tagGuide') section.summary = COPY.tagGuideContent;
-                }
-            }
+            const chain = buildScenePlannerChainPreview({
+                profile: plannerProfile, descriptions, layout: draftLayout,
+                builtinTexts: { opening: preset.topSystem, guide: modelGuide, rules: preset.sceneRules },
+            });
             system.textContent = systemInstruction;
             status.textContent = '';
             renderScenePlannerChain(chainRoot, chain);

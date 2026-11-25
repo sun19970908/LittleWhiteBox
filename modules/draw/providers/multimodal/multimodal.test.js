@@ -101,7 +101,8 @@ test('prepared natural planning retains its instruction and complete-scene contr
     assert.equal(task.systemPrompt, NON_EXPLICIT_ILLUSTRATION_INSTRUCTION);
     assert.equal(transferred.planner.validationContext.promptStyle, 'natural');
     assert.equal(transferred.planner.validationContext.centerMode, 'none');
-    const documents = task.messages.filter(message => message.role === 'tool').map(message => JSON.parse(message.content).content).join('\n');
+    const documents = task.tools.slice(1).flatMap(tool => Object.values(tool.function.parameters.properties)
+        .map(field => field.description)).join('\n');
     for (const source of ['RAW_STYLE_FIXTURE', 'RAW_EXCLUSION_FIXTURE', 'RAW_APPEARANCE_FIXTURE', 'RAW_CLOTHING_FIXTURE']) {
         assert.equal(documents.split(source).length - 1, 1);
     }

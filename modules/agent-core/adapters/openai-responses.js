@@ -372,6 +372,8 @@ export class OpenAIResponsesAdapter {
                         name: tool.function.name,
                         description: tool.function.description,
                         parameters: tool.function.parameters,
+                        // Responses otherwise makes optional fields required when normalizing strict schemas.
+                        strict: tool.function.strict ?? false,
                     })),
                     tool_choice: task.toolChoice || 'auto',
                 }
