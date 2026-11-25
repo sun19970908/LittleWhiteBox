@@ -46,7 +46,8 @@ export function formatExistingSummaryForAI(store) {
 
     if (data.events?.length) {
         parts.push("【已记录事件】");
-        data.events.forEach(ev => parts.push(`[${ev.id}] ${ev.timeLabel ? `[${ev.timeLabel}] ` : ''}${ev.title}：${ev.summary}`));
+        if (data.events.length > 10) parts.push(`[${data.events[0].id}]-[${data.events[data.events.length - 11].id}]（已总结，暂时省略）`);
+        data.events.slice(-10).forEach(ev => parts.push(`[${ev.id}] ${ev.timeLabel ? `[${ev.timeLabel}] ` : ''}${ev.title}：${ev.summary}`));
     }
 
     if (data.characters?.main?.length) {
