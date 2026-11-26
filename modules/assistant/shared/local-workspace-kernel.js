@@ -771,8 +771,8 @@ export function moveLocalPathInSources(localSources = [], fromPath = '', toPath 
             && normalizeLocalDirectoryPath(fromPath) !== normalizeLocalDirectoryPath(toPath)
             && !!findLocalDirectoryByPath(localSources, toPath)
         ),
-        fromPath: targetMappings.length === 1 ? targetMappings[0].fromPath : fromPath,
-        toPath: targetMappings.length === 1 ? targetMappings[0].toPath : toPath,
+        fromPath: mode === 'file' ? targetMappings[0].fromPath : fromPath,
+        toPath: mode === 'file' ? targetMappings[0].toPath : toPath,
     };
 }
 

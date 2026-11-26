@@ -177,6 +177,7 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.WRITE,
             description: [
                 'Write a `local/` text file. Use for new files or whole-file rewrites.',
+                'On success, returns the saved path, whether it was created or overwritten, and its byte and line counts. Zero lines means the saved file is empty.',
                 'Can directly create a new `local/...` file path, including `local/file.txt` or `local/<root>/file.txt`.',
             ].join('\n'),
             parameters: {
@@ -241,6 +242,7 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.DELETE,
             description: [
                 'Delete a `local/` file or directory.',
+                'On success, returns the removed path, whether it was a file or directory, and how many files were removed. Removing an empty directory reports zero files.',
                 'Supports deleting a single file or a directory with all files under it.',
             ].join('\n'),
             parameters: {
@@ -259,6 +261,8 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.MOVE,
             description: [
                 'Move or rename a `local/` file or directory.',
+                'On success, reports the source and destination paths, whether the destination was overwritten, and how many files moved.',
+                'A move to the same location succeeds without changing anything (`noOp: true`). Moving an empty directory also reports zero files, but does change its location.',
                 'Supports renaming files, moving files, and moving whole directories; existing destinations require explicit overwrite permission.',
             ].join('\n'),
             parameters: {
@@ -279,6 +283,8 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.RUN_SLASH_COMMAND,
             description: [
                 'Execute a SillyTavern slash command (STscript).',
+                'Returns the command output in `pipe` and reports whether execution succeeded, failed, was aborted, or was skipped without running. An empty `pipe` alone does not indicate failure.',
+                'If the output does not confirm a requested change, read the affected state before retrying.',
                 'Use this for reading or operating on objects and state in the user\'s live SillyTavern instance, such as character cards, lorebooks, chat, presets, extensions, or current model settings.',
                 'This operates on the current live instance, not a snapshot.',
             ].join('\n'),
@@ -327,7 +333,10 @@ const BASE_TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.READ_IDENTITY,
-            description: 'Read the fixed identity file at user/files/LittleWhiteBox_Assistant_Identity.md. If the file does not exist yet, the result will report that state.',
+            description: [
+                'Read the fixed identity file at user/files/LittleWhiteBox_Assistant_Identity.md.',
+                'Returns the filename, whether it exists, and its contents. If it does not exist, the returned text is empty; an existing file may also be empty.',
+            ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {},
@@ -339,7 +348,10 @@ const BASE_TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.WRITE_IDENTITY,
-            description: 'Write identity content to user/files/LittleWhiteBox_Assistant_Identity.md. After a successful write, the currently opened assistant session immediately continues with the new identity.',
+            description: [
+                'Replace the identity document at user/files/LittleWhiteBox_Assistant_Identity.md.',
+                'On success, returns the saved filename and path and confirms that the current assistant session has refreshed its identity.',
+            ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
@@ -354,7 +366,10 @@ const BASE_TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.READ_WORKLOG,
-            description: 'Read the fixed worklog file at user/files/LittleWhiteBox_Assistant_Worklog.md. If the file does not exist yet, the result will report that state.',
+            description: [
+                'Read the configured worklog file under user/files. The default is LittleWhiteBox_Assistant_Worklog.md.',
+                'Returns the filename, whether it exists, and its contents. If it does not exist, the returned text is empty; an existing file may also be empty.',
+            ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {},
@@ -366,7 +381,10 @@ const BASE_TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.WRITE_WORKLOG,
-            description: 'Write investigation notes or worklog content into a worklog file under user/files. By default this writes to user/files/LittleWhiteBox_Assistant_Worklog.md; if name is omitted, the default worklog is used.',
+            description: [
+                'Replace a worklog document under user/files. Omit name to write to the configured worklog (LittleWhiteBox_Assistant_Worklog.md by default).',
+                'On success, returns the filename and path that were saved.',
+            ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
@@ -384,6 +402,7 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.PLAN_CREATE,
             description: [
                 'Create one session-scoped checklist item in the current assistant session.',
+                'Returns the new item and its unfinished blockers. It starts pending if there are no blockers, or blocked otherwise. Use its id in PlanGet or PlanUpdate.',
                 'Use for multi-step work, long investigations, blockers, or resumable follow-up.',
                 'This records work state only; it does not execute tools, delegate work, or write long-term memory.',
             ].join('\n'),
@@ -412,9 +431,9 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.PLAN_UPDATE,
             description: [
                 'Update one session-scoped checklist item after actual progress, a status change, blocker, or decision.',
+                'Returns the saved item and its remaining blockers. An item cannot be saved as in_progress while blockers remain; the result lists the blockers and no update is saved.',
                 'Use status for progress state, note for a short progress note, and result/error for final outcome or failure cause.',
                 'Only mark completed when the described work is actually done.',
-                'If blockedBy points to unfinished items, the item cannot move to in_progress.',
             ].join('\n'),
             parameters: {
                 type: 'object',
@@ -449,6 +468,7 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.PLAN_LIST,
             description: [
                 'List session-scoped checklist items for the current assistant session.',
+                'Returns matching items, most recently updated first, and the total match count before the limit. An empty list means no items matched; if truncated, narrow the filters.',
                 'Use before resuming work, avoiding duplicate plans, choosing the next tracked step, or checking blockers.',
                 'Leave filters empty for the current checklist; add status, priority, or owner only when narrowing.',
             ].join('\n'),
@@ -474,6 +494,7 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.PLAN_GET,
             description: [
                 'Read the full record for one session-scoped checklist item.',
+                'Returns the item and its currently unfinished blockers. An unknown id returns a not-found error; use PlanList to find ids in this session.',
                 'Use when the short current-plan snapshot is not enough and the next action depends on detail, blockers, notes, result, or error.',
             ].join('\n'),
             parameters: {
@@ -492,6 +513,8 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.DELEGATE_RUN,
             description: [
                 'Run one clear, independent subtask in a separate assistant turn and wait for its result.',
+                'Returns the subtask status, its conclusion and summary, and recent tool outcomes. A failed run reports why and may have no conclusion even if it already ran tools.',
+                'Completed means the delegate returned a conclusion; check its findings and tool outcomes before treating the requested work as done.',
                 'Use after you can state the subtask scope and how its result should be merged back into the main answer.',
                 'The delegate only knows task/context/deliverable plus its system prompt; include needed paths, facts, constraints, current context, and plan details explicitly.',
                 'The delegate can use normal execution tools, but it does not manage plans and cannot delegate again.',
@@ -513,7 +536,11 @@ const BASE_TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.READ_SKILLS_CATALOG,
-            description: 'Read the skill catalog index at user/files/LittleWhiteBox_Assistant_Skills.json and return registered skill metadata plus the injection-ready catalog summary.',
+            description: [
+                'Read the skill catalog at user/files/LittleWhiteBox_Assistant_Skills.json. If the file is missing, an empty catalog for user-created skills is created.',
+                'Returns entries for user-created and built-in skills, the total and enabled counts, and a short catalog summary. Use ReadSkill with an entry id to read its instructions.',
+                'An unreadable or invalid catalog is reported as an error, not an empty list.',
+            ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {},
@@ -540,7 +567,10 @@ const BASE_TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.UPDATE_SKILL,
-            description: 'Update the body or metadata of an existing skill and sync the changes back to the skill file and Skills.json. Prefer id; filename is also allowed. Partial updates are supported and omitted fields keep their current values.',
+            description: [
+                'Update the body or metadata of an existing skill and sync the changes back to the skill file and Skills.json. Prefer id; filename is also allowed. Partial updates are supported and omitted fields keep their current values.',
+                'On success, returns the saved skill id, title, filename, and whether it is enabled. A disabled skill was still saved.',
+            ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {
@@ -572,8 +602,9 @@ const BASE_TOOL_DEFINITIONS = [
             name: TOOL_NAMES.GENERATE_SKILL,
             description: [
                 'Turn a just-finished large workflow, repeated trial-and-error process, or other reusable procedure into a skill.',
-                'You must call `action: "propose"` first to ask for user approval; only after receiving approvalToken may you call `action: "save"` to actually write the skill file and Skills.json.',
-                'When using `action: "save"`, explicitly provide all required save fields.',
+                'You must call `action: "propose"` first to ask for user approval. An approved proposal returns the skill id, filename, a one-time approvalToken and writing instructions; the skill is not yet saved. If approval is declined, stop without calling `action: "save"`.',
+                'Use the returned id and approvalToken with `action: "save"` and explicitly provide all required save fields. A successful save writes the skill file and catalog entry and returns the saved skill details, including whether it is enabled.',
+                'If a save reports missing trigger fields, the skill was saved; use UpdateSkill to supply the fields named in the result.',
             ].join('\n'),
             parameters: {
                 type: 'object',
@@ -612,7 +643,10 @@ const BASE_TOOL_DEFINITIONS = [
         type: 'function',
         function: {
             name: TOOL_NAMES.DELETE_SKILL,
-            description: 'Delete an existing skill and remove both the skill body file and the catalog entry from Skills.json. Prefer id; filename is also allowed.',
+            description: [
+                'Delete an existing skill by id or filename; prefer id.',
+                'On success, returns the removed skill id, title, and filename. The catalog entry was removed even if `fileDeleted` is false, which means the skill file was already missing.',
+            ].join('\n'),
             parameters: {
                 type: 'object',
                 properties: {

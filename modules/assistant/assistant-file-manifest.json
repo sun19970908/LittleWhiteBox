@@ -1630,7 +1630,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/app-src/prompts/system-prompt.js",
       "relativePath": "modules/assistant/app-src/prompts/system-prompt.js",
       "extension": ".js",
-      "sizeBytes": 15194
+      "sizeBytes": 13878
     },
     {
       "source": "littlewhitebox",
@@ -1763,7 +1763,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/app-src/tooling.js",
       "relativePath": "modules/assistant/app-src/tooling.js",
       "extension": ".js",
-      "sizeBytes": 76478
+      "sizeBytes": 79875
     },
     {
       "source": "littlewhitebox",
@@ -1952,7 +1952,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/assistant.js",
       "relativePath": "modules/assistant/assistant.js",
       "extension": ".js",
-      "sizeBytes": 136587
+      "sizeBytes": 138049
     },
     {
       "source": "littlewhitebox",
@@ -2092,7 +2092,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/shared/local-workspace-kernel.js",
       "relativePath": "modules/assistant/shared/local-workspace-kernel.js",
       "extension": ".js",
-      "sizeBytes": 39517
+      "sizeBytes": 39493
     },
     {
       "source": "littlewhitebox",
@@ -2418,6 +2418,13 @@
     },
     {
       "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/tests/local-workspace-kernel.test.js",
+      "relativePath": "modules/assistant/tests/local-workspace-kernel.test.js",
+      "extension": ".js",
+      "sizeBytes": 1764
+    },
+    {
+      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/tests/lookup-scope.test.js",
       "relativePath": "modules/assistant/tests/lookup-scope.test.js",
       "extension": ".js",
@@ -2478,6 +2485,13 @@
       "relativePath": "modules/assistant/tests/skill-activation-session.test.js",
       "extension": ".js",
       "sizeBytes": 7656
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/tests/skill-catalog.test.js",
+      "relativePath": "modules/assistant/tests/skill-catalog.test.js",
+      "extension": ".js",
+      "sizeBytes": 5756
     },
     {
       "source": "littlewhitebox",
@@ -2687,7 +2701,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/card-workspace/item-document.test.js",
       "relativePath": "modules/card-workspace/item-document.test.js",
       "extension": ".js",
-      "sizeBytes": 7240
+      "sizeBytes": 8394
     },
     {
       "source": "littlewhitebox",
@@ -3051,7 +3065,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/card-workspace/skill/references/prompt-organization.md",
       "relativePath": "modules/card-workspace/skill/references/prompt-organization.md",
       "extension": ".md",
-      "sizeBytes": 22385
+      "sizeBytes": 22584
     },
     {
       "source": "littlewhitebox",
@@ -6600,7 +6614,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/live-page-inspection/skill/references/verify-changes.md",
       "relativePath": "modules/live-page-inspection/skill/references/verify-changes.md",
       "extension": ".md",
-      "sizeBytes": 4683
+      "sizeBytes": 4703
     },
     {
       "source": "littlewhitebox",
@@ -12214,7 +12228,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/variables/state3/skill/contract.ts",
       "relativePath": "modules/variables/state3/skill/contract.ts",
       "extension": ".ts",
-      "sizeBytes": 1838
+      "sizeBytes": 1906
     },
     {
       "source": "littlewhitebox",

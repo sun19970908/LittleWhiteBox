@@ -636,8 +636,30 @@ function serializeSkillsCatalog(catalog = EMPTY_SKILLS_CATALOG) {
 }
 
 function parseSkillsCatalog(text = '') {
-    const parsed = JSON.parse(String(text || '{}'));
-    return normalizeSkillsCatalog(parsed);
+    const parsed = JSON.parse(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)
+        || parsed.version !== 1 || !Array.isArray(parsed.skills)) {
+        throw new Error('技能目录需要 version: 1 和 skills 数组；原文件未修改。');
+    }
+    const ids = new Set();
+    const filenames = new Set();
+    const skills = [];
+    for (const [index, entry] of parsed.skills.entries()) {
+        const valid = entry && typeof entry === 'object' && !Array.isArray(entry)
+            && ['id', 'title', 'filename'].every(key => typeof entry[key] === 'string' && entry[key].trim())
+            && ['summary', 'updatedAt'].every(key => entry[key] === undefined || typeof entry[key] === 'string')
+            && ['triggers', 'slashTriggers'].every(key => entry[key] === undefined
+                || (Array.isArray(entry[key]) && entry[key].every(value => typeof value === 'string')))
+            && (entry.enabled === undefined || typeof entry.enabled === 'boolean');
+        const normalized = valid ? normalizeSkillCatalogEntry(entry) : null;
+        if (!normalized || ids.has(normalized.id) || filenames.has(normalized.filename)) {
+            throw new Error(`技能目录第 ${index + 1} 项格式错误，或 id、filename 重复；原文件未修改。`);
+        }
+        ids.add(normalized.id);
+        filenames.add(normalized.filename);
+        skills.push(normalized);
+    }
+    return { version: 1, skills };
 }
 
 function buildSkillsPromptSummary(catalog = EMPTY_SKILLS_CATALOG) {
@@ -645,10 +667,10 @@ function buildSkillsPromptSummary(catalog = EMPTY_SKILLS_CATALOG) {
     if (!enabledSkills.length) return '';
     const visibleSkills = enabledSkills.slice(0, MAX_SKILL_PROMPT_ITEMS);
     const lines = [
-        '技能目录摘要：只注入目录，不注入正文；命中某项后先读目录，再按需读取对应 skill。',
+        '技能目录摘要：这里只列出技能简介，正文由 ReadSkill 返回。用条目中的 id 直接读取所需技能；查找未列出的技能或完整条目信息时使用 ReadSkillsCatalog。',
     ];
     visibleSkills.forEach((skill) => {
-        lines.push(`- ${skill.title}｜${skill.summary || '无摘要'}｜触发词: ${(skill.triggers || []).join(', ') || '无'}｜文件: ${skill.filename}`);
+        lines.push(`- ${skill.title}｜${skill.summary || '无摘要'}｜id: ${skill.id}｜触发词: ${(skill.triggers || []).join(', ') || '无'}｜文件: ${skill.filename}`);
     });
     if (enabledSkills.length > visibleSkills.length) {
         lines.push(`- 其余 ${enabledSkills.length - visibleSkills.length} 条技能未注入；如需查看，请调用 ReadSkillsCatalog。`);
