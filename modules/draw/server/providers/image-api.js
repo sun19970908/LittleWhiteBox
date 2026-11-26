@@ -23,8 +23,8 @@ function normalizeImageApiContext(context, { urlField = 'context.url', keyField 
     return { url: url.href, key };
 }
 
-function normalizeImageApi(context, items, { parseTimeout }, normalizePayload) {
-    const normalizedContext = normalizeImageApiContext(context);
+function normalizeImageApi(context, items, { parseTimeout }, normalizePayload, normalizeContext = normalizeImageApiContext) {
+    const normalizedContext = normalizeContext(context);
     const normalized = [];
     for (let index = 0; index < items.length; index++) {
         const source = items[index];
@@ -37,7 +37,7 @@ function normalizeImageApi(context, items, { parseTimeout }, normalizePayload) {
         try {
             const referenceImages = validateReferenceImages(request.referenceImages);
             normalized.push({ kind: 'image', request: {
-                payload: normalizePayload(request.payload),
+                payload: normalizePayload(request.payload, normalizedContext),
                 ...(referenceImages.length ? { referenceImages } : {}),
                 ...(request.resultMode === 'all' ? { resultMode: 'all' } : {}),
             }, timeout });
@@ -48,10 +48,17 @@ function normalizeImageApi(context, items, { parseTimeout }, normalizePayload) {
     return { context: normalizedContext, items: normalized };
 }
 
-async function postImageApi(url, { headers, body, signal, providerName, errorReason }) {
+async function postImageApi(url, { headers, body, signal, providerName, errorReason, readResult, httpError, onConnectionLost }) {
     // Redirects could forward an API key header or a private reference image to another origin.
-    const response = await fetch(url, { method: 'POST', headers, body, signal, redirect: 'manual' });
+    signal.throwIfAborted();
+    let response;
+    try { response = await fetch(url, { method: 'POST', headers, body, signal, redirect: 'manual' }); }
+    catch (error) {
+        if (!signal.aborted && onConnectionLost) throw onConnectionLost();
+        throw error;
+    }
     if (!response.ok) {
+        if (httpError) throw await httpError(response, async value => JSON.parse(await readErrorText(value)));
         const errorText = await readErrorText(response);
         let reason = '';
         // Never reflect raw upstream error messages: proxies can echo keys, URLs, or prompts.
@@ -59,6 +66,7 @@ async function postImageApi(url, { headers, body, signal, providerName, errorRea
         catch (error) { if (!(error instanceof SyntaxError)) throw error; }
         throw createUpstreamError(response, `${providerName} returned HTTP ${response.status}${reason ? ` (${reason})` : ''}`);
     }
+    if (readResult) return readResult(response, readJsonResponse);
     try {
         return await readJsonResponse(response);
     } catch (error) {
@@ -74,18 +82,22 @@ function imageResultError(message, code = 'invalid_result') {
 async function decodeImageResult(values, { providerName, resultMode, incomplete = false, missingError, signal }) {
     if (!values.length) throw missingError || imageResultError(`${providerName} did not return an image`, 'no_image');
     if (resultMode !== 'all') signal.throwIfAborted();
+    const { isDecodableImage } = await import('./image-decoder.mjs');
     const images = [];
     for (const { data, mimeType } of values) {
         const buffer = base64Size(data) > 0 ? Buffer.from(data, 'base64') : null;
         const mime = buffer && detectImageMime(buffer);
-        if (!mime || (mimeType !== undefined && mimeType !== mime)) {
+        if (!mime || (mimeType !== undefined && mimeType !== mime) || !await isDecodableImage(buffer, mime)) {
             incomplete = true;
             continue;
         }
         if (resultMode !== 'all') return { buffer, mime };
         images.push(buffer);
     }
-    if (!images.length) throw missingError || imageResultError(`${providerName} did not return valid image bytes`);
+    if (!images.length) {
+        const { MULTIMODAL_COPY } = await import('../../providers/multimodal/copy.js');
+        throw imageResultError(MULTIMODAL_COPY.invalidImageResult);
+    }
     // The upstream body is already downloaded. Preserve completed images even if cancelled during packing.
     const { packImageCollection, IMAGE_COLLECTION_MIME } = await import('../../shared/image-collection.js');
     return { buffer: Buffer.from(packImageCollection(images, incomplete)), mime: IMAGE_COLLECTION_MIME };

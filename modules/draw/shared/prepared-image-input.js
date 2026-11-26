@@ -17,7 +17,8 @@ export function prepareImageInput(provider, tasks, recipe) {
         negativePrompt: novel ? promptData.negativePrompt : promptData.negative,
         params: recipe.params,
     }));
-    const metadata = compiledBatch.artifacts.map(({ task, promptData, continuityChars, vibeNames }) => ({
+    const metadata = compiledBatch.artifacts.map(({ task, promptData, continuityChars, vibeNames, providerMetadata }) => ({
+        ...(provider === 'openai' ? { providerMetadata } : {}),
         presetId: novel ? String(recipe.presetId || '') : '',
         vibeNames: vibeNames || '',
         tags: task.scene || '',

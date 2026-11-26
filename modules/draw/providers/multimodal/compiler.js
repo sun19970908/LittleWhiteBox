@@ -1,7 +1,13 @@
 import references from '../../shared/reference-image-contract.cjs';
+import protocol from '../../shared/multimodal-image-protocol.cjs';
 import { MediaApiError } from '../../../../shared/media-api.js';
-import { getEffectiveParams, providerDefinition, validateParams, isSupportedSize } from './settings-model.js';
+import { getEffectiveParams, providerDefinition, validateParams, isSupportedSize, validateOpenAiImageApi } from './settings-model.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
+import { formatOpenAiImageError } from './openai-image-errors.js';
+
+export function openAiImageMetadata({ imageApi, responsesModel }) {
+    return { imageApi, ...(imageApi === 'responses' ? { responsesModel } : {}) };
+}
 
 export function validateMultimodalInput(provider, input) {
     providerDefinition(provider);
@@ -42,6 +48,8 @@ export function buildMultimodalRequest(provider, input) {
         contents: [{ role: 'user', parts: [{ text: prompt }] }],
         generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: params.aspectRatio, imageSize: params.imageSize } },
     }, ...(referenceImages.length ? { referenceImages } : {}) };
+    try { protocol.validateOpenAiImagePrompt(prompt); }
+    catch (error) { throw formatOpenAiImageError(error); }
     return { payload: { model: params.model, prompt, size: params.size,
         quality: params.quality, background: params.background, output_format: 'png', n: 1 },
         ...(referenceImages.length ? { referenceImages } : {}),
@@ -51,6 +59,7 @@ export function buildMultimodalRequest(provider, input) {
 export function createGenerationRecipe(provider, settings, overrides = {}) {
     return {
         apiBaseUrl: settings.apiBaseUrl, apiKey: settings.apiKey, timeout: settings.timeout, delayMs: 1,
+        ...(provider === 'openai' ? validateOpenAiImageApi(settings) : {}),
         params: getEffectiveParams(provider, settings, overrides.params || overrides.paramsOverride || {}),
         referenceImages: references.validateReferenceImages(overrides.referenceImages),
     };
@@ -61,14 +70,16 @@ export function compileMultimodalBatch(provider, scenePlan, recipe) {
     if (!Array.isArray(tasks) || !tasks.length) throw new TypeError(COPY.invalidParameter('scenePlan'));
     if (!Number.isFinite(recipe.timeout) || recipe.timeout <= 0) throw new TypeError(COPY.invalidParameter('timeout'));
     const params = validateParams(provider, recipe.params);
+    const context = { url: recipe.apiBaseUrl, key: recipe.apiKey, ...(provider === 'openai' ? validateOpenAiImageApi(recipe) : {}) };
     const artifacts = tasks.map(task => {
         if (task.chars?.length || task.characterPrompts?.length) throw new TypeError(COPY.unadaptedInput);
         const input = { prompt: task.scene, params, referenceImages: task.referenceImages ?? recipe.referenceImages };
         return { task, tags: input.prompt, promptData: { positive: input.prompt, negative: '', characterPrompts: [] },
+            ...(provider === 'openai' ? { providerMetadata: openAiImageMetadata(context) } : {}),
             request: buildMultimodalRequest(provider, input) };
     });
     const delay = Math.max(1, recipe.delayMs || 0);
-    return { provider, context: { url: recipe.apiBaseUrl, key: recipe.apiKey }, delay: { min: delay, max: delay },
+    return { provider, context, delay: { min: delay, max: delay },
         items: artifacts.map(artifact => ({ request: artifact.request, timeout: recipe.timeout })), artifacts };
 }
 export const compileGemini = (scenePlan, recipe) => compileMultimodalBatch('gemini', scenePlan, recipe);

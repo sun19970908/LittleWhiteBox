@@ -21,12 +21,13 @@ import { getSharedDrawSettings, loadSharedDrawSettings, updateSharedDrawSettings
 import { markNewGroupsOff } from '../../shared/character-group-presets.js';
 import { normalizePlannerRetry } from '../../shared/planner-retry.js';
 import { MAX_IMAGES_OVERRIDE_MIN, MAX_IMAGES_OVERRIDE_MAX } from '../../shared/max-images-override.js';
-import { API_FIELDS, createDefaultSettings, defaultParams, GEMINI_ASPECT_RATIOS, GEMINI_IMAGE_SIZES,
+import { apiFieldsFor, createDefaultSettings, defaultParams, GEMINI_ASPECT_RATIOS, GEMINI_IMAGE_SIZES,
     OPENAI_BACKGROUNDS, OPENAI_QUALITIES, OPENAI_SIZES, providerDefinition } from './settings-model.js';
 import { getSettings, loadSettings, subscribeSettings, updateSettingsPersistent } from './settings.js';
 import { bindPromptEditor } from './settings-prompt-editor.js';
 import { bindSettingsPresetList } from './settings-preset-list.js';
 import { bindTestView } from './settings-test-view.js';
+import { bindImageApiFields } from './settings-image-api.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
 
 const SETTINGS_PATH = `${extensionFolderPath}/modules/draw/providers/multimodal/settings.html`;
@@ -151,13 +152,16 @@ function bindFrame(document, provider) {
         onPreviewChange: () => promptEditor.refreshPreview() });
     const promptEditor = bindPromptEditor({ document, provider, getState, persist, getPreview: test.getPreview });
     const apiDefaults = createDefaultSettings(provider);
+    const apiFields = apiFieldsFor(provider);
     const sendButtons = [...document.querySelectorAll('[data-send-mode]')];
     let sendMode;
+    const imageApi = bindImageApiFields({ document, provider, report, getSendMode: () => sendMode });
     let statusCheck;
     mountServerPluginGuide($('mm-backend-guide'), 'mm-backend');
     function setSendMode(next) {
         if (sendMode === next) return;
         sendMode = next;
+        imageApi.clearLookup();
         const backend = next === 'backend';
         for (const button of sendButtons) button.setAttribute('aria-pressed', String(button.dataset.sendMode === next));
         $('mm-backend-status').hidden = !backend;
@@ -176,18 +180,19 @@ function bindFrame(document, provider) {
         }).catch(error => { if (!signal.aborted) throw error; }), { source: import.meta.url, operation: 'checkBackend' });
     }
     const readConfig = () => ({ apiBaseUrl: field('apiBaseUrl').value.trim(), apiKey: field('apiKey').value.trim(),
-        timeout: Number(field('timeout').value) * 1000, sendMode });
+        timeout: Number(field('timeout').value) * 1000, sendMode, ...imageApi.read() });
     const fillConfig = config => {
         field('apiBaseUrl').value = config.apiBaseUrl;
         field('apiKey').value = config.apiKey;
         field('timeout').value = config.timeout / 1000;
         setSendMode(config.sendMode);
+        imageApi.fill(config);
     };
     const api = createApiPresetPage({
-        presetOptions: { fields: API_FIELDS, normalizeConfig: value => Object.fromEntries(API_FIELDS.map(key => [key, value[key] ?? apiDefaults[key]])) },
+        presetOptions: { fields: apiFields, normalizeConfig: value => Object.fromEntries(apiFields.map(key => [key, value[key] ?? apiDefaults[key]])) },
         getSettings: getState, getSettingsDocument: () => document, querySettings: q,
         containerSelector: '#mm-api-presets', panelSelector: '[data-page="api"]', formSelector: '#mm-api-form',
-        readConfig, fillConfig,
+        readConfig, fillConfig, validateForm: imageApi.validate,
         persist: async mutator => { await persist(mutator); return true; },
         prompt: (message, fallback) => document.defaultView.prompt(message, fallback),
         confirm: message => document.defaultView.confirm(message),
@@ -197,6 +202,7 @@ function bindFrame(document, provider) {
     api.bindFormRefresh();
     for (const button of sendButtons) button.addEventListener('click', () => setSendMode(button.dataset.sendMode));
     on('#mm-api-save', 'click', async event => {
+        if (!imageApi.validate()) return;
         globalBusy++;
         try { await runSaveButtonTask(event.currentTarget, api.save, { statusElementId: 'mm-api-status' }); }
         finally { globalBusy--; }
@@ -345,7 +351,7 @@ function bindFrame(document, provider) {
     });
     function requestClose() {
         if (forceClosing || globalBusy) return;
-        const dirty = !isSameApiConfig(readConfig(), getState(), API_FIELDS) || params.isDirty() || promptEditor.isDirty()
+        const dirty = !isSameApiConfig(readConfig(), getState(), apiFields) || params.isDirty() || promptEditor.isDirty()
             || agentSurface?.getState().configDirty || savedRules !== JSON.stringify(sections.collectFilterRules())
             || savedLibrary !== JSON.stringify(readLibrary()) || savedBooks !== JSON.stringify(readWorldbook())
             || savedUseWorldInfo !== $('sd-shared-use-worldinfo').checked;
@@ -362,6 +368,7 @@ function bindFrame(document, provider) {
             sections.destroyCharacterLibraryUi();
             agentSurface?.destroy();
             statusCheck?.abort();
+            imageApi.destroy();
             params.destroy();
             promptEditor.destroy();
             test.destroy();

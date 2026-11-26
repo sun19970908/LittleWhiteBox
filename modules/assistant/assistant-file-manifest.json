@@ -216,7 +216,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/docs/user/draw.md",
       "relativePath": "docs/user/draw.md",
       "extension": ".md",
-      "sizeBytes": 24994
+      "sizeBytes": 25558
     },
     {
       "source": "littlewhitebox",
@@ -839,7 +839,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/agent-core/model-list.js",
       "relativePath": "modules/agent-core/model-list.js",
       "extension": ".js",
-      "sizeBytes": 11274
+      "sizeBytes": 11686
     },
     {
       "source": "littlewhitebox",
@@ -3198,7 +3198,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/comfyui/comfy-draw.js",
       "relativePath": "modules/draw/providers/comfyui/comfy-draw.js",
       "extension": ".js",
-      "sizeBytes": 221483
+      "sizeBytes": 221210
     },
     {
       "source": "littlewhitebox",
@@ -3213,6 +3213,13 @@
       "relativePath": "modules/draw/providers/comfyui/compiler.js",
       "extension": ".js",
       "sizeBytes": 16349
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/comfyui/execution-error.cjs",
+      "relativePath": "modules/draw/providers/comfyui/execution-error.cjs",
+      "extension": ".cjs",
+      "sizeBytes": 693
     },
     {
       "source": "littlewhitebox",
@@ -3233,49 +3240,49 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/browser-runtime.test.js",
       "relativePath": "modules/draw/providers/multimodal/browser-runtime.test.js",
       "extension": ".js",
-      "sizeBytes": 30534
+      "sizeBytes": 30892
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/chat-runtime.js",
       "relativePath": "modules/draw/providers/multimodal/chat-runtime.js",
       "extension": ".js",
-      "sizeBytes": 23781
+      "sizeBytes": 23931
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/compiler.js",
       "relativePath": "modules/draw/providers/multimodal/compiler.js",
       "extension": ".js",
-      "sizeBytes": 4965
+      "sizeBytes": 5651
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/copy.js",
       "relativePath": "modules/draw/providers/multimodal/copy.js",
       "extension": ".js",
-      "sizeBytes": 5578
+      "sizeBytes": 7823
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/direct-generation.js",
       "relativePath": "modules/draw/providers/multimodal/direct-generation.js",
       "extension": ".js",
-      "sizeBytes": 3574
+      "sizeBytes": 3684
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/direct-generation.test.js",
       "relativePath": "modules/draw/providers/multimodal/direct-generation.test.js",
       "extension": ".js",
-      "sizeBytes": 11409
+      "sizeBytes": 12729
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/frontend-transport.js",
       "relativePath": "modules/draw/providers/multimodal/frontend-transport.js",
       "extension": ".js",
-      "sizeBytes": 3876
+      "sizeBytes": 5113
     },
     {
       "source": "littlewhitebox",
@@ -3289,7 +3296,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/multimodal.test.js",
       "relativePath": "modules/draw/providers/multimodal/multimodal.test.js",
       "extension": ".js",
-      "sizeBytes": 10924
+      "sizeBytes": 11545
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/openai-image-errors.js",
+      "relativePath": "modules/draw/providers/multimodal/openai-image-errors.js",
+      "extension": ".js",
+      "sizeBytes": 2121
     },
     {
       "source": "littlewhitebox",
@@ -3314,38 +3328,52 @@
     },
     {
       "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/responses.test.js",
+      "relativePath": "modules/draw/providers/multimodal/responses.test.js",
+      "extension": ".js",
+      "sizeBytes": 10039
+    },
+    {
+      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/runtime.js",
       "relativePath": "modules/draw/providers/multimodal/runtime.js",
       "extension": ".js",
-      "sizeBytes": 4467
+      "sizeBytes": 4519
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-image-api.js",
+      "relativePath": "modules/draw/providers/multimodal/settings-image-api.js",
+      "extension": ".js",
+      "sizeBytes": 4478
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-model.js",
       "relativePath": "modules/draw/providers/multimodal/settings-model.js",
       "extension": ".js",
-      "sizeBytes": 8441
+      "sizeBytes": 9372
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-preset-list.js",
       "relativePath": "modules/draw/providers/multimodal/settings-preset-list.js",
       "extension": ".js",
-      "sizeBytes": 7599
+      "sizeBytes": 7900
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-prompt-editor.js",
       "relativePath": "modules/draw/providers/multimodal/settings-prompt-editor.js",
       "extension": ".js",
-      "sizeBytes": 8223
+      "sizeBytes": 8268
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-repository.js",
       "relativePath": "modules/draw/providers/multimodal/settings-repository.js",
       "extension": ".js",
-      "sizeBytes": 2482
+      "sizeBytes": 2506
     },
     {
       "source": "littlewhitebox",
@@ -3359,28 +3387,28 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-ui.css",
       "relativePath": "modules/draw/providers/multimodal/settings-ui.css",
       "extension": ".css",
-      "sizeBytes": 860
+      "sizeBytes": 1000
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-ui.js",
       "relativePath": "modules/draw/providers/multimodal/settings-ui.js",
       "extension": ".js",
-      "sizeBytes": 24333
+      "sizeBytes": 24732
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings-ui.test.js",
       "relativePath": "modules/draw/providers/multimodal/settings-ui.test.js",
       "extension": ".js",
-      "sizeBytes": 5752
+      "sizeBytes": 11885
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/settings.html",
       "relativePath": "modules/draw/providers/multimodal/settings.html",
       "extension": ".html",
-      "sizeBytes": 11120
+      "sizeBytes": 12900
     },
     {
       "source": "littlewhitebox",
@@ -3394,7 +3422,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/providers/multimodal/text-runtime.js",
       "relativePath": "modules/draw/providers/multimodal/text-runtime.js",
       "extension": ".js",
-      "sizeBytes": 4055
+      "sizeBytes": 4480
     },
     {
       "source": "littlewhitebox",
@@ -3758,7 +3786,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/server/draw-runs/envelope.js",
       "relativePath": "modules/draw/server/draw-runs/envelope.js",
       "extension": ".js",
-      "sizeBytes": 24147
+      "sizeBytes": 24407
     },
     {
       "source": "littlewhitebox",
@@ -3786,7 +3814,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/server/providers/comfyui/adapter.js",
       "relativePath": "modules/draw/server/providers/comfyui/adapter.js",
       "extension": ".js",
-      "sizeBytes": 10983
+      "sizeBytes": 10527
     },
     {
       "source": "littlewhitebox",
@@ -3800,7 +3828,21 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/server/providers/image-api.js",
       "relativePath": "modules/draw/server/providers/image-api.js",
       "extension": ".js",
-      "sizeBytes": 4957
+      "sizeBytes": 5586
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/server/providers/image-decoder-assets.mjs",
+      "relativePath": "modules/draw/server/providers/image-decoder-assets.mjs",
+      "extension": ".mjs",
+      "sizeBytes": 454
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/server/providers/image-decoder.mjs",
+      "relativePath": "modules/draw/server/providers/image-decoder.mjs",
+      "extension": ".mjs",
+      "sizeBytes": 2164
     },
     {
       "source": "littlewhitebox",
@@ -3842,7 +3884,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/server/providers/openai/adapter.js",
       "relativePath": "modules/draw/server/providers/openai/adapter.js",
       "extension": ".js",
-      "sizeBytes": 2206
+      "sizeBytes": 2874
     },
     {
       "source": "littlewhitebox",
@@ -3912,7 +3954,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/api-preset-page.js",
       "relativePath": "modules/draw/shared/api-preset-page.js",
       "extension": ".js",
-      "sizeBytes": 4857
+      "sizeBytes": 4901
     },
     {
       "source": "littlewhitebox",
@@ -3926,7 +3968,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/api-presets-ui.js",
       "relativePath": "modules/draw/shared/api-presets-ui.js",
       "extension": ".js",
-      "sizeBytes": 16385
+      "sizeBytes": 16497
     },
     {
       "source": "littlewhitebox",
@@ -3954,7 +3996,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/backend-image-jobs.js",
       "relativePath": "modules/draw/shared/backend-image-jobs.js",
       "extension": ".js",
-      "sizeBytes": 34123
+      "sizeBytes": 34701
     },
     {
       "source": "littlewhitebox",
@@ -4388,7 +4430,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/draw-run-recovery-runtime.js",
       "relativePath": "modules/draw/shared/draw-run-recovery-runtime.js",
       "extension": ".js",
-      "sizeBytes": 10015
+      "sizeBytes": 10426
     },
     {
       "source": "littlewhitebox",
@@ -4402,7 +4444,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/draw-run-target.js",
       "relativePath": "modules/draw/shared/draw-run-target.js",
       "extension": ".js",
-      "sizeBytes": 2891
+      "sizeBytes": 3108
     },
     {
       "source": "littlewhitebox",
@@ -4500,7 +4542,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/gallery-cache.js",
       "relativePath": "modules/draw/shared/gallery-cache.js",
       "extension": ".js",
-      "sizeBytes": 89030
+      "sizeBytes": 89176
     },
     {
       "source": "littlewhitebox",
@@ -4633,7 +4675,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/image-collection.js",
       "relativePath": "modules/draw/shared/image-collection.js",
       "extension": ".js",
-      "sizeBytes": 2757
+      "sizeBytes": 3495
     },
     {
       "source": "littlewhitebox",
@@ -4661,14 +4703,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/image-job-recovery-executor.js",
       "relativePath": "modules/draw/shared/image-job-recovery-executor.js",
       "extension": ".js",
-      "sizeBytes": 5975
+      "sizeBytes": 6097
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/image-job-recovery-runtime.js",
       "relativePath": "modules/draw/shared/image-job-recovery-runtime.js",
       "extension": ".js",
-      "sizeBytes": 25272
+      "sizeBytes": 26444
     },
     {
       "source": "littlewhitebox",
@@ -4696,7 +4738,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/image-request-outcome.js",
       "relativePath": "modules/draw/shared/image-request-outcome.js",
       "extension": ".js",
-      "sizeBytes": 1003
+      "sizeBytes": 1086
     },
     {
       "source": "littlewhitebox",
@@ -4794,7 +4836,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/multimodal-image-protocol.cjs",
       "relativePath": "modules/draw/shared/multimodal-image-protocol.cjs",
       "extension": ".cjs",
-      "sizeBytes": 3280
+      "sizeBytes": 11200
     },
     {
       "source": "littlewhitebox",
@@ -4857,7 +4899,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/prepared-image-input.js",
       "relativePath": "modules/draw/shared/prepared-image-input.js",
       "extension": ".js",
-      "sizeBytes": 1963
+      "sizeBytes": 2045
     },
     {
       "source": "littlewhitebox",
@@ -4871,7 +4913,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/prepared-slot-executor.js",
       "relativePath": "modules/draw/shared/prepared-slot-executor.js",
       "extension": ".js",
-      "sizeBytes": 14603
+      "sizeBytes": 14706
     },
     {
       "source": "littlewhitebox",
@@ -5004,14 +5046,14 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/public-gallery.js",
       "relativePath": "modules/draw/shared/public-gallery.js",
       "extension": ".js",
-      "sizeBytes": 2554
+      "sizeBytes": 2619
     },
     {
       "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/public-image-job.js",
       "relativePath": "modules/draw/shared/public-image-job.js",
       "extension": ".js",
-      "sizeBytes": 1397
+      "sizeBytes": 1414
     },
     {
       "source": "littlewhitebox",
@@ -5543,7 +5585,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/draw-delivery-journey.test.js",
       "relativePath": "modules/draw/shared/tests/draw-delivery-journey.test.js",
       "extension": ".js",
-      "sizeBytes": 9968
+      "sizeBytes": 10235
     },
     {
       "source": "littlewhitebox",
@@ -5557,7 +5599,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/draw-run-contract.test.js",
       "relativePath": "modules/draw/shared/tests/draw-run-contract.test.js",
       "extension": ".js",
-      "sizeBytes": 9079
+      "sizeBytes": 10621
     },
     {
       "source": "littlewhitebox",
@@ -5673,6 +5715,13 @@
     },
     {
       "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/helpers/image-decoder.js",
+      "relativePath": "modules/draw/shared/tests/helpers/image-decoder.js",
+      "extension": ".js",
+      "sizeBytes": 364
+    },
+    {
+      "source": "littlewhitebox",
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/helpers/in-process-tool-host.js",
       "relativePath": "modules/draw/shared/tests/helpers/in-process-tool-host.js",
       "extension": ".js",
@@ -5725,7 +5774,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/draw/shared/tests/image-job-recovery-runtime.test.js",
       "relativePath": "modules/draw/shared/tests/image-job-recovery-runtime.test.js",
       "extension": ".js",
-      "sizeBytes": 22715
+      "sizeBytes": 27225
     },
     {
       "source": "littlewhitebox",
@@ -21699,7 +21748,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/package.json",
       "relativePath": "package.json",
       "extension": ".json",
-      "sizeBytes": 2706
+      "sizeBytes": 2866
     },
     {
       "source": "littlewhitebox",
@@ -21713,7 +21762,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/scripts/build-agent-core-node.mjs",
       "relativePath": "scripts/build-agent-core-node.mjs",
       "extension": ".mjs",
-      "sizeBytes": 11045
+      "sizeBytes": 12693
     },
     {
       "source": "littlewhitebox",
@@ -21804,7 +21853,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/scripts/build/license-supplements.mjs",
       "relativePath": "scripts/build/license-supplements.mjs",
       "extension": ".mjs",
-      "sizeBytes": 2101
+      "sizeBytes": 2249
     },
     {
       "source": "littlewhitebox",
@@ -21812,6 +21861,13 @@
       "relativePath": "scripts/build/licenses/jsondiffpatch-0.7.7.txt",
       "extension": ".txt",
       "sizeBytes": 1108
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/scripts/build/licenses/omggif-1.0.10.txt",
+      "relativePath": "scripts/build/licenses/omggif-1.0.10.txt",
+      "extension": ".txt",
+      "sizeBytes": 1065
     },
     {
       "source": "littlewhitebox",
@@ -22301,7 +22357,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/server-plugin/littlewhitebox-server/tests/provider-adapters.test.js",
       "relativePath": "server-plugin/littlewhitebox-server/tests/provider-adapters.test.js",
       "extension": ".js",
-      "sizeBytes": 19537
+      "sizeBytes": 19652
     },
     {
       "source": "littlewhitebox",

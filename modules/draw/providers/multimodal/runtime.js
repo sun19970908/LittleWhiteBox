@@ -20,10 +20,10 @@ export function createMultimodalPublicGeneration(provider, jobs = client, plan =
 }
 
 export async function captureMultimodalGeneration(execution, resolveScene = resolveDrawAgentProviderConfig) {
-    const { apiBaseUrl, apiKey, timeout, sendMode, overrideSize, paramsPresets, selectedParamsPresetId, promptPresets, selectedPromptPresetId } = execution;
+    const { apiBaseUrl, apiKey, timeout, sendMode, imageApi, responsesModel, overrideSize, paramsPresets, selectedParamsPresetId, promptPresets, selectedPromptPresetId } = execution;
     const { providerConfig: sceneConfig } = await resolveScene({ timeout });
     return { execution, sceneConfig, fingerprint: {
-        imageConnection: sha256(stableSerialize({ apiBaseUrl, apiKey, sendMode })),
+        imageConnection: sha256(stableSerialize({ apiBaseUrl, apiKey, sendMode, imageApi, responsesModel })),
         sceneConfig: sha256(stableSerialize(sceneConfig)),
         timeout, overrideSize,
         paramsPreset: paramsPresets.find(preset => preset.id === selectedParamsPresetId),

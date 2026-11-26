@@ -107,6 +107,27 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
                             <div id="mm-backend-guide"></div>
                         </div>
                     </div>
+                    <div id="mm-image-api" class="form-group" hidden>
+                        <span class="form-label" id="mm-image-api-label" data-copy="imageApi"></span>
+                        <div class="btn-group" role="group" aria-labelledby="mm-image-api-label">
+                            <button class="btn mm-send-mode" type="button" data-image-api="images" data-copy="imagesApi"></button>
+                            <button class="btn mm-send-mode" type="button" data-image-api="responses" data-copy="responsesApi"></button>
+                        </div>
+                        <p id="mm-images-hint" class="form-hint" data-copy="imagesHint"></p>
+                        <p id="mm-responses-hint" class="form-hint" data-copy="responsesHint" hidden></p>
+                        <div id="mm-responses-model" hidden>
+                            <label class="form-group">
+                                <span class="form-label" data-copy="responsesModel"></span>
+                                <input name="responsesModel" class="input" type="text" spellcheck="false" autocomplete="off" aria-describedby="mm-responses-model-hint">
+                                <span class="form-hint" id="mm-responses-model-hint" data-copy="responsesModelHint"></span>
+                            </label>
+                            <div class="btn-group">
+                                <button id="mm-pull-models" type="button" class="btn" data-copy="pullModels"></button>
+                                <select id="mm-model-list" class="input" data-label="chooseModel" hidden></select>
+                            </div>
+                            <div id="mm-model-status" class="status-text" role="status"></div>
+                        </div>
+                    </div>
                     <button id="mm-api-save" class="btn btn-primary" type="button"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> <span data-copy="save"></span></button>
                     <div id="mm-api-status" class="status-text" role="status"></div>
                 </fieldset>

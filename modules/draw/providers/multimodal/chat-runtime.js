@@ -38,7 +38,7 @@ import {
 } from '../../shared/backend-image-jobs.js';
 import { submitRecoverableImageJob } from '../../shared/recoverable-image-jobs.js';
 import { buildPlannerOptions, planDirectInput, runMultimodalScenePlan } from './planning.js';
-import { compileMultimodalBatch, createGenerationRecipe } from './compiler.js';
+import { compileMultimodalBatch, createGenerationRecipe, openAiImageMetadata } from './compiler.js';
 import { getSizeOptions as providerSizeOptions, providerDefinition } from './settings-model.js';
 import { getSettings, loadSettings, subscribeSettings, updateSettingsPersistent as updateProviderSettings } from './settings.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
@@ -102,7 +102,7 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
                 onStateChange: (state, data) => reportImageBackendJobState(onStateChange, state, data),
                 onItemReady: async ({ response, ...details }) => onItemReady?.({ ...details, base64: await readImageBackendResultBase64(response) }),
                 onItemSettled: item => !item.alreadyDelivered && onItemSettled?.({ ...item,
-                    error: item.source === 'frontend' ? item.error : createBackendItemError(item) }),
+                    error: item.source === 'frontend' ? item.error : createBackendItemError(item, context) }),
             });
         } finally { scope.dispose(); }
     }
@@ -137,12 +137,13 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
         });
         if (input.nativeMessage) {
             let recipe;
+            const providerMetadata = provider === 'openai' ? openAiImageMetadata(config) : undefined;
             job.nativeChat = getImageChatIdentity(input.ctx);
             const checkChat = () => cancelIfChatLeft(job, getImageChatIdentity(getContext()));
             return submitPreparedChatImages({ ...input, filePrefix, signal, backend, followReloadedSlot: true,
                 // The original input belongs to the chat slot, survives reload,
                 // and stays editable even when the scene model fails.
-                metadata: input.tasks.map(task => ({ tags: task.scene })),
+                metadata: input.tasks.map(task => ({ tags: task.scene, providerMetadata })),
                 prepareItem: index => {
                     checkChat();
                     signal.throwIfAborted();

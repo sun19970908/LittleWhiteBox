@@ -24,9 +24,9 @@ export function createDirectGeneration(provider, { jobs, frontend, plan, snapsho
                 onStateChange: (state, data) => onProgress?.({ state, ...data }) });
             signal?.throwIfAborted();
             // Only the adapted scene and transport fields may reach the image provider.
-            const { context, delay, items: [item] } = compileMultimodalBatch(provider,
+            const { context, delay, items: [item], artifacts: [artifact] } = compileMultimodalBatch(provider,
                 [{ scene: adapted.prompt, referenceImages: adapted.referenceImages }], recipe);
-            onPrepared?.({ presetId: getActiveParamsPreset(settings).id });
+            onPrepared?.({ presetId: getActiveParamsPreset(settings).id, ...(artifact.providerMetadata ? { providerMetadata: artifact.providerMetadata } : {}) });
             const requestItem = { ...item, request: { ...item.request, resultMode: 'all' } };
             if (settings.sendMode === 'backend') {
                 return runPublicImageJob(jobs, { provider, context, delay, items: [requestItem] }, { signal, onProgress });

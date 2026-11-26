@@ -152,6 +152,7 @@ import { submitPreparedChatImages, registerPreparedImageProvider } from "../../s
 import { prepareImageInput } from '../../shared/prepared-image-input.js';
 import { acquireFloorImageJob, getFloorImageJob, getFloorImageJobs, getFloorImagePhase, getFloorImageState, releaseFloorImageJob, observeFloorImageJob, failFloorImageJob, clearFloorImageJobs, resolveFloorImageJobTarget, rebaseFloorImageJobsAfterSwipeDeletion } from '../../shared/floor-image-job.js';
 import { createImageRequestAttempt, imageHttpFailure, withImageRequestOutcome, ImageRequestOutcome } from '../../shared/image-request-outcome.js';
+import executionError from './execution-error.cjs';
 import { createImageCardRedrawProvider } from "../../shared/image-card-redraw-provider.js";
 import { deleteImageFromCard, redrawImageCard, removeChatImageSlot, removeFloorFailedImageCards, restoreImageCard, retryFloorFailedImageCards } from "../../shared/image-card-actions.js";
 import { toggleImageCardControls } from '../../shared/image-card-controls.js';
@@ -1109,12 +1110,7 @@ async function fetchComfyDirectImageFromWorkflow(workflow, {
         if (!item) throw new Error('ComfyUI 未返回生成结果');
 
         if (item.status?.status_str === 'error') {
-            const errorMessages = item.status?.messages
-                ?.filter(it => it[0] === 'execution_error')
-                .map(it => it[1])
-                .map(it => `${it.node_type} [${it.node_id}] ${it.exception_type}: ${it.exception_message}`)
-                .join('\n') || '';
-            throw withImageRequestOutcome(new Error(`ComfyUI 生成失败${errorMessages ? `\n\n${errorMessages}` : ''}`), ImageRequestOutcome.REJECTED);
+            throw withImageRequestOutcome(executionError.comfyExecutionError(item.status), ImageRequestOutcome.REJECTED);
         }
 
         const imgInfo = resolveComfyDirectOutputImage(item, workflow, preferredSaveImageNodeId);

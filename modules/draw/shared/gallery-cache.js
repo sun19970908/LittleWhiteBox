@@ -618,6 +618,7 @@ export async function storePreview(opts) {
         chapterPath = '',
         chapterTitle = '',
         continuityChars = null,
+        providerMetadata,
         presetId = '',
         vibeNames = '',
     } = opts;
@@ -655,6 +656,7 @@ export async function storePreview(opts) {
                     base64: workingBase64, tags, title: String(title || ''), positive, savedUrl, status, errorType,
                     errorMessage, characterPrompts, negativePrompt, postPrompt, orientation,
                     continuityChars: Array.isArray(continuityChars) ? continuityChars : null,
+                    ...(providerMetadata ? { providerMetadata } : {}),
                     vibeNames: String(vibeNames || ''),
                     // Only creation grants automatic placement; a late result cannot restore it.
                     placement: attachment ?? null,
@@ -697,6 +699,7 @@ export async function storeFailedPlaceholder(opts) {
         postPrompt: opts.postPrompt ?? null,
         orientation: opts.orientation ?? null,
         vibeNames: opts.vibeNames || '',
+        providerMetadata: opts.providerMetadata,
     });
 }
 

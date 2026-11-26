@@ -2,6 +2,7 @@ import { MULTIMODAL_COPY as COPY } from './copy.js';
 import { normalizeMaxImagesOverride } from '../../shared/max-images-override.js';
 import { normalizeLayout } from '../../shared/scene-planner-layout.js';
 import { NATURAL_PROMPT_DEFAULTS } from './prompts.js';
+import protocol from '../../shared/multimodal-image-protocol.cjs';
 
 export const PROVIDERS = Object.freeze({
     gemini: Object.freeze({ label: 'Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1', model: 'gemini-nano-banana-2.1' }),
@@ -12,7 +13,9 @@ export const GEMINI_IMAGE_SIZES = Object.freeze(['1K', '2K', '4K']);
 export const OPENAI_SIZES = Object.freeze(['auto', '1024x1024', '1536x1024', '1024x1536']);
 export const OPENAI_QUALITIES = Object.freeze(['auto', 'low', 'medium', 'high']);
 export const OPENAI_BACKGROUNDS = Object.freeze(['auto', 'opaque', 'transparent']);
-export const API_FIELDS = Object.freeze(['apiBaseUrl', 'apiKey', 'timeout', 'sendMode']);
+const API_FIELDS = Object.freeze(['apiBaseUrl', 'apiKey', 'timeout', 'sendMode']);
+const OPENAI_API_FIELDS = Object.freeze([...API_FIELDS, 'imageApi', 'responsesModel']);
+export const apiFieldsFor = provider => provider === 'openai' ? OPENAI_API_FIELDS : API_FIELDS;
 const DEFAULT_SEND_MODE = 'frontend';
 
 export function providerDefinition(provider) {
@@ -25,7 +28,8 @@ export function defaultParams(provider) {
         : { model, size: 'auto', quality: 'auto', background: 'auto' };
 }
 export function createDefaultSettings(provider) {
-    const config = { apiBaseUrl: providerDefinition(provider).baseUrl, apiKey: '', timeout: 180000, sendMode: DEFAULT_SEND_MODE };
+    const config = { apiBaseUrl: providerDefinition(provider).baseUrl, apiKey: '', timeout: 180000, sendMode: DEFAULT_SEND_MODE,
+        ...(provider === 'openai' ? protocol.readOpenAiImageApi() : {}) };
     return { ...config,
         apiPresets: [{ id: 'default', name: COPY.defaultPreset, config: { ...config } }], activeApiPresetId: 'default',
         paramsPresets: [{ id: 'default', name: COPY.defaultPreset, positivePrefix: '', params: defaultParams(provider), maxImages: 1 }],
@@ -69,7 +73,16 @@ export function getEffectiveParams(provider, settings, overrides = {}) {
     const size = overrideSize === 'default' ? {} : { [provider === 'gemini' ? 'aspectRatio' : 'size']: overrideSize };
     return validateParams(provider, { ...getActiveParamsPreset(settings).params, ...size, ...overrides });
 }
-export function validateConnection(config) {
+export function validateOpenAiImageApi(config) {
+    try { return protocol.readOpenAiImageApi(config); }
+    catch (error) {
+        if (error.code === protocol.OPENAI_IMAGE_CODES.invalidApi) error.message = COPY.invalidImageApi;
+        if (error.code === protocol.OPENAI_IMAGE_CODES.missingModel) error.message = COPY.missingResponsesModel;
+        throw error;
+    }
+}
+
+export function validateConnection(provider, config) {
     let url;
     try { url = new URL(config.apiBaseUrl); } catch { throw new TypeError(COPY.invalidUrl); }
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new TypeError(COPY.invalidUrl);
@@ -77,7 +90,10 @@ export function validateConnection(config) {
     if (!Number.isInteger(config.timeout) || config.timeout < 10000 || config.timeout > 600000) throw new TypeError(COPY.invalidParameter('timeout'));
     const { sendMode = DEFAULT_SEND_MODE } = config;
     if (!['frontend', 'backend'].includes(sendMode)) throw new TypeError(COPY.sendModeInvalid);
-    return { apiBaseUrl: url.href.replace(/\/+$/, ''), apiKey: config.apiKey.trim(), timeout: config.timeout, sendMode };
+    const imageConnection = provider === 'openai' ? {
+        ...validateOpenAiImageApi(config), responsesModel: typeof config.responsesModel === 'string' ? config.responsesModel.trim() : '',
+    } : {};
+    return { apiBaseUrl: url.href.replace(/\/+$/, ''), apiKey: config.apiKey.trim(), timeout: config.timeout, sendMode, ...imageConnection };
 }
 function validatePresetList(list, selected) {
     if (!Array.isArray(list) || !list.length || !list.some(item => item.id === selected)) throw new TypeError(COPY.missingPreset);
@@ -100,8 +116,9 @@ export function normalizeSettings(provider, saved) {
         if (typeof saved[key] !== 'boolean') throw new TypeError(COPY.invalidParameter(key));
     }
     if (saved.overrideMaxImages !== null && normalizeMaxImagesOverride(saved.overrideMaxImages) !== saved.overrideMaxImages) throw new TypeError(COPY.invalidParameter('overrideMaxImages'));
-    return { ...validateConnection(saved.apiPresets.find(item => item.id === saved.activeApiPresetId).config),
-        apiPresets: saved.apiPresets.map(item => ({ id: item.id, name: item.name.trim(), config: validateConnection(item.config) })),
+    const apiPresets = saved.apiPresets.map(item => ({ id: item.id, name: item.name.trim(), config: validateConnection(provider, item.config) }));
+    return { ...apiPresets.find(item => item.id === saved.activeApiPresetId).config,
+        apiPresets,
         activeApiPresetId: saved.activeApiPresetId,
         paramsPresets: saved.paramsPresets.map(item => {
             if (typeof item.positivePrefix !== 'string' || normalizeMaxImagesOverride(item.maxImages) !== item.maxImages || item.maxImages === null) throw new TypeError(COPY.invalidSettings);

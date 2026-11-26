@@ -12,8 +12,9 @@ import { createMultimodalFrontendTransport } from './frontend-transport.js';
 import service from '../../server/image-jobs/service.js';
 import gemini from '../../server/providers/gemini/adapter.js';
 import openai from '../../server/providers/openai/adapter.js';
+import { decodeFixtureImage } from '../../shared/tests/helpers/image-decoder.js';
 
-const image = Uint8Array.of(137, 80, 78, 71, 13, 10, 26, 10, 0);
+const image = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64'));
 const refs = [{ mimeType: 'image/png', data: Buffer.from(image).toString('base64') }];
 const description = 'A fully clothed traveler gazes out over a moonlit river.';
 const makeSettings = provider => ({ ...createDefaultSettings(provider), apiKey: 'test-key', apiBaseUrl: 'https://image.example.test/v1', sendMode: 'backend' });
@@ -25,7 +26,7 @@ for (const provider of ['gemini', 'openai']) {
         const calls = [];
         const adapter = createDirectGeneration(provider, {
             plan: async (_id, input) => ({ ...input, prompt: description }),
-            frontend: createMultimodalFrontendTransport(provider, { fetchImage: async (url, init) => {
+            frontend: createMultimodalFrontendTransport(provider, { decodeImage: decodeFixtureImage, fetchImage: async (url, init) => {
                 calls.push({ url: url.href, init });
                 return Response.json(provider === 'gemini'
                     ? { candidates: [{ content: { parts: [{ inlineData: refs[0] }] } }] }
@@ -87,7 +88,8 @@ for (const provider of ['gemini', 'openai']) {
             jobs: { async runJob(job, handlers) {
                 stages.push('submit');
                 assert.equal(job.provider, provider);
-                assert.deepEqual(job.context, { url: settings.apiBaseUrl, key: settings.apiKey });
+                assert.deepEqual(job.context, { url: settings.apiBaseUrl, key: settings.apiKey,
+                    ...(provider === 'openai' ? { imageApi: 'images', responsesModel: '' } : {}) });
                 assert.equal(job.items.length, 1);
                 assert.equal(handlers.retryCreate, false);
                 const { request } = job.items[0];
@@ -135,6 +137,19 @@ for (const provider of ['gemini', 'openai']) {
     });
 }
 
+test('Gemini refuses an undecodable image before either sending mode hands it to the gallery', async t => {
+    const context = { url: 'https://image.example.test/v1', key: 'fixture-key' };
+    const { items: [item] } = compileMultimodalBatch('gemini', [{ scene: description }], createGenerationRecipe('gemini', makeSettings('gemini')));
+    const fetchImage = t.mock.method(globalThis, 'fetch', async () => Response.json({ candidates: [{ content: { parts: [
+        { inlineData: { mimeType: 'image/png', data: 'iVBORw0KGgo=' } },
+    ] } }] }));
+    const signal = new AbortController().signal;
+    const frontend = createMultimodalFrontendTransport('gemini', { decodeImage: decodeFixtureImage });
+    await assert.rejects(frontend.requestImage(context, item, { signal }), { code: 'invalid_result', imageRequestOutcome: 'rejected' });
+    await assert.rejects(gemini.execute({ context, item, signal }), { code: 'invalid_result' });
+    assert.equal(fetchImage.mock.callCount(), 2);
+});
+
 test('direct requests still deliver and honor both cancellation and timeout without AbortSignal.any', async () => {
     const any = Object.getOwnPropertyDescriptor(AbortSignal, 'any');
     const timeout = Object.getOwnPropertyDescriptor(AbortSignal, 'timeout');
@@ -146,7 +161,7 @@ test('direct requests still deliver and honor both cancellation and timeout with
         const { context, items: [item] } = compileMultimodalBatch('openai', [{ scene: description }], createGenerationRecipe('openai', settings));
         const cancel = new AbortController();
         let interrupt;
-        const transport = createMultimodalFrontendTransport('openai', { fetchImage: async (_url, { signal }) => {
+        const transport = createMultimodalFrontendTransport('openai', { decodeImage: decodeFixtureImage, fetchImage: async (_url, { signal }) => {
             interrupt?.();
             signal.throwIfAborted();
             return Response.json({ data: [{ b64_json: refs[0].data }] });

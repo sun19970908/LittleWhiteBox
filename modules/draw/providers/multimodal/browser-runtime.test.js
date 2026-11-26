@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { fixture } from '../../shared/tests/helpers/draw-journey.js';
+import { decodeFixtureImage } from '../../shared/tests/helpers/image-decoder.js';
 
-const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN3sAAAAASUVORK5CYII=';
+const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
 const finalPrompt = raw => `An adapted illustration of ${raw}.`;
 const registration = {
     'script.js': 'export const getRequestHeaders=()=>({});export const syncMesToSwipe=()=>true;export const messageFormatting=text=>text;export const saveChatDebounced=()=>globalThis.__drawJourneyReview.ctx.saveChat();',
@@ -68,7 +69,12 @@ async function setup(lines, stubs = {}, sources = []) {
     host.plannerInputs = [];
     host.imageRequests = [];
     host.defaultSettings = h.api.createDefaultSettings;
-    return { ...h, host };
+    const previousBitmap = globalThis.createImageBitmap;
+    globalThis.createImageBitmap = async blob => {
+        await decodeFixtureImage(blob);
+        return { width: 1, height: 1, close() {} };
+    };
+    return { ...h, host, stop() { globalThis.createImageBitmap = previousBitmap; h.stop(); } };
 }
 
 for (const provider of ['gemini', 'openai']) {

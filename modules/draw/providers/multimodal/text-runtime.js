@@ -3,6 +3,8 @@ import { autoSaveDeliveredImage } from '../../shared/image-autosave.js';
 import { createImageIdentifiers } from '../../shared/prepared-image-placement.js';
 import { classifyError } from '../../shared/draw-common.js';
 import { observeBackgroundTask } from '../../../../shared/common/async-errors.js';
+import { PreviewStatus } from '../../shared/image-record.js';
+import protocol from '../../shared/multimodal-image-protocol.cjs';
 
 function textGalleryMeta(options) {
     if (options.source === 'ebook') {
@@ -51,7 +53,10 @@ export async function runTextImages({ options, sceneSource, filePrefix, signal, 
             const { slotId, imgId, previewMetadata } = items[index];
             const problem = classifyError(error);
             await guard?.();
-            await storeFailedPlaceholder({ ...gallery, ...previewMetadata, slotId, imgId,
+            const { interrupted, timedOut } = protocol.OPENAI_IMAGE_CODES;
+            const unknown = error?.code === interrupted || error?.code === timedOut;
+            const storeFailure = unknown ? storePreview : storeFailedPlaceholder;
+            await storeFailure({ ...gallery, ...previewMetadata, slotId, imgId, status: unknown ? PreviewStatus.UNKNOWN : PreviewStatus.FAILED,
                 errorType: problem.code, errorMessage: error?.message || problem.desc });
             images[index] = { slotId, ...previewMetadata, placement: tasks[index].placement, success: false, error: problem };
         },

@@ -4,7 +4,8 @@ import { createPresetListKit } from '../../shared/preset-list-kit.js';
 import { pickNeighborAfterRemoval, reorderPresetsByIds } from '../../shared/preset-order.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
 
-export function bindSettingsPresetList({ root, label, getState, persist, listKey, selectionKey, readFields, fillFields, fieldset, validateFields = () => {} }) {
+export function bindSettingsPresetList({ root, label, getState, persist, listKey, selectionKey, readFields, fillFields, fieldset,
+    validateFields = () => {}, onDraftPreserved = () => {} }) {
     const document = root.ownerDocument;
     const view = document.defaultView;
     root.classList.add('card', 'preset-list-card');
@@ -41,12 +42,15 @@ export function bindSettingsPresetList({ root, label, getState, persist, listKey
     const fieldsOf = ({ id, name, ...fields }) => fields;
     const { confirm, prompt } = { confirm: view.confirm.bind(view), prompt: view.prompt.bind(view) };
     const isDirty = () => current && JSON.stringify(readFields()) !== JSON.stringify(fieldsOf(current));
-    function render({ force = false } = {}) {
+    function render({ force = false, preserveDraft = false } = {}) {
         const state = getState();
         const items = state[listKey];
         const next = items.find(item => item.id === state[selectionKey]);
         const preserve = !force && isDirty();
-        if (!preserve && (force || JSON.stringify(next) !== JSON.stringify(current))) {
+        if (preserveDraft && next.id === current.id) {
+            current = next;
+            onDraftPreserved();
+        } else if (!preserve && (force || JSON.stringify(next) !== JSON.stringify(current))) {
             current = next;
             fillFields(fieldsOf(next), next.id);
         }
@@ -60,10 +64,11 @@ export function bindSettingsPresetList({ root, label, getState, persist, listKey
         if (busy) return false;
         busy = true;
         render();
+        const initialFields = JSON.stringify(readFields());
         report('pending', COPY.saving);
         try {
             await persist(mutator);
-            render({ force: !keepFields });
+            render({ force: !keepFields, preserveDraft: JSON.stringify(readFields()) !== initialFields });
             report('success', success);
             return true;
         } catch (error) {

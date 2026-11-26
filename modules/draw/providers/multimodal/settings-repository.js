@@ -1,4 +1,4 @@
-import { API_FIELDS, createDefaultSettings, normalizeSettings, validateConnection } from './settings-model.js';
+import { apiFieldsFor, createDefaultSettings, normalizeSettings, validateConnection } from './settings-model.js';
 
 export function createSettingsRepository(getStorage) {
     const cache = new Map(), queues = new Map(), listeners = new Map();
@@ -16,11 +16,11 @@ export function createSettingsRepository(getStorage) {
             const draft = await load(provider);
             await mutator(draft);
             const selected = draft.apiPresets.find(item => item.id === draft.activeApiPresetId);
-            if (selected) selected.config = validateConnection(draft);
+            if (selected) selected.config = validateConnection(provider, draft);
             const normalized = normalizeSettings(provider, draft);
             const persisted = structuredClone(normalized);
             // Active connection is a projection, not a second persisted copy.
-            for (const field of API_FIELDS) delete persisted[field];
+            for (const field of apiFieldsFor(provider)) delete persisted[field];
             await getStorage(provider).setAndSave('settings', persisted);
             cache.set(provider, normalized);
             for (const listener of listeners.get(provider) || []) {

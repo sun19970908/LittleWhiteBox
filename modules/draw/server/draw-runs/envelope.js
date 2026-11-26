@@ -4,6 +4,7 @@ const { MAX_TIMEOUT_MS } = require('../providers/upstream.js');
 const vertexContract = require('../../../agent-core/vertex-contract.cjs');
 const { normalizeImageApiContext } = require('../providers/image-api.js');
 const { validateReferenceImages } = require('../../shared/reference-image-contract.cjs');
+const { readOpenAiImageApi } = require('../../shared/multimodal-image-protocol.cjs');
 
 const { MAX_ENVELOPE_BYTES } = require('../../../../server-plugin/littlewhitebox-server/runtime-contract.js');
 const MAX_IMAGE_ITEMS = 20;
@@ -364,13 +365,15 @@ function validateGenerationRecipe(provider, value, imageCount) {
         requireString(recipe.promptOverride, `${path}.promptOverride`, { allowEmpty: true });
         requireString(recipe.negativePromptOverride, `${path}.negativePromptOverride`, { allowEmpty: true });
     } else if (NATURAL_IMAGE_PROVIDERS.has(provider)) {
-        recipe = assertExactKeys(value, ['apiBaseUrl', 'apiKey', 'timeout', 'delayMs', 'params', 'referenceImages'], path);
+        const fields = ['apiBaseUrl', 'apiKey', 'timeout', 'delayMs', 'params', 'referenceImages'];
+        recipe = assertExactKeys(value, provider === 'openai' ? [...fields, 'imageApi', 'responsesModel'] : fields, path, fields);
         requirePositiveNumber(recipe.timeout, `${path}.timeout`);
         requireImageDelay(recipe.delayMs, `${path}.delayMs`);
         assertPlainObject(recipe.params, `${path}.params`);
         try {
             normalizeImageApiContext({ url: recipe.apiBaseUrl, key: recipe.apiKey }, { urlField: `${path}.apiBaseUrl`, keyField: `${path}.apiKey` });
             validateReferenceImages(recipe.referenceImages, `${path}.referenceImages`);
+            if (provider === 'openai') readOpenAiImageApi(recipe);
         } catch (error) {
             throw invalid(error.message);
         }

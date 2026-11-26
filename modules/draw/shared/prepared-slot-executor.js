@@ -81,7 +81,7 @@ export async function executePreparedSlots({ items, backend, store, remove, sele
     const fail = async (index, error, guard, commitDelivery) => {
         if (results.has(index) || deliveryErrors.has(index)) return;
         const kind = signal?.aborted ? DRAW_SLOT_ERRORS.interrupted : classifyError(error);
-        const unknown = !backend && started.has(index)
+        const unknown = error?.imageRequestOutcome === ImageRequestOutcome.UNKNOWN || !backend && started.has(index)
             && ![ImageRequestOutcome.NOT_SUBMITTED, ImageRequestOutcome.REJECTED].includes(error?.imageRequestOutcome);
         // 结果拿不准时状态记 UNKNOWN；给用户看的只是实际原因（超时、服务不可用……）。
         const problem = unknown && !error?.message ? DRAW_SLOT_ERRORS.unknown : kind;
@@ -158,7 +158,7 @@ export async function executePreparedSlots({ items, backend, store, remove, sele
                         const item = items[sourceIndex];
                         return { index, slotId: item.slotId, imgId: item.imgId, discarded: item.discarded,
                         previewMetadata: { tags: item.tags, title: item.title, positive: item.positive, postPrompt: item.postPrompt, presetId: item.presetId,
-                            orientation: item.orientation ?? null,
+                            orientation: item.orientation ?? null, providerMetadata: item.providerMetadata,
                             characterPrompts: item.characterPrompts, negativePrompt: item.negativePrompt,
                             vibeNames: item.vibeNames || '',
                             continuityChars: Array.isArray(item.continuityChars) ? item.continuityChars : null } };

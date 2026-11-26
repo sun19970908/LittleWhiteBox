@@ -141,7 +141,7 @@ test('settings writes serialize mutators and publish only confirmed changes', as
     dispose();
 });
 
-test('API presets keep their own send mode across switches and reload', async () => {
+test('API presets keep the transport, image API, and calling model together through saves and switches', async () => {
     let disk;
     const create = () => createSettingsRepository(() => ({
         getStrict: async () => structuredClone(disk),
@@ -151,15 +151,21 @@ test('API presets keep their own send mode across switches and reload', async ()
     const repository = create();
     const settings = await repository.load(provider);
     assert.equal(settings.sendMode, 'frontend');
+    assert.equal(settings.imageApi, 'images');
+    await assert.rejects(repository.update(provider, draft => { draft.imageApi = 'responses'; }), { code: 'missing_responses_model' });
+    assert.equal(disk, undefined);
     const switchTo = id => repository.update(provider, draft => {
         draft.activeApiPresetId = id;
         Object.assign(draft, draft.apiPresets.find(preset => preset.id === id).config);
     });
     await repository.update(provider, draft => {
-        draft.apiPresets.push({ id: 'proxy', name: 'Proxy', config: { ...draft.apiPresets[0].config, sendMode: 'backend' } });
+        draft.apiPresets.push({ id: 'proxy', name: 'Proxy', config: { ...draft.apiPresets[0].config, sendMode: 'backend',
+            imageApi: 'responses', responsesModel: '  relay-caller  ' } });
     });
-    assert.equal((await switchTo('proxy')).sendMode, 'backend');
-    assert.equal(Object.hasOwn(disk, 'sendMode'), false);
-    assert.equal((await create().load(provider)).sendMode, 'backend');
-    assert.equal((await switchTo('default')).sendMode, 'frontend');
+    const transport = ({ sendMode, imageApi, responsesModel }) => ({ sendMode, imageApi, responsesModel });
+    const proxy = { sendMode: 'backend', imageApi: 'responses', responsesModel: 'relay-caller' };
+    assert.deepEqual(transport(await switchTo('proxy')), proxy);
+    for (const field of Object.keys(proxy)) assert.equal(Object.hasOwn(disk, field), false);
+    assert.deepEqual(transport(await create().load(provider)), proxy);
+    assert.deepEqual(transport(await switchTo('default')), { sendMode: 'frontend', imageApi: 'images', responsesModel: '' });
 });

@@ -106,6 +106,7 @@ export function bindPromptEditor({ document, provider, getState, persist, getPre
     const bar = bindSettingsPresetList({
         root: document.querySelector('[data-presets="prompt"]'), label: COPY.prompts, getState, persist,
         listKey: 'promptPresets', selectionKey: 'selectedPromptPresetId', readFields,
+        onDraftPreserved: updateDraftNotice,
         validateFields: value => parseFieldDescriptions(value.fieldDescriptions),
         fillFields: (value, id) => {
             owner = id;

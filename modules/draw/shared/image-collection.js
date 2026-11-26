@@ -19,6 +19,25 @@ export function imageBlob(value) {
     return new Blob([bytes], { type: imageMime(bytes) });
 }
 
+export async function ensureDecodableImage(blob) {
+    try {
+        if (typeof createImageBitmap === 'function') {
+            const bitmap = await createImageBitmap(blob);
+            try { if (bitmap.width && bitmap.height) return; }
+            finally { bitmap.close(); }
+        } else {
+            const url = URL.createObjectURL(blob);
+            try {
+                const image = new Image();
+                image.src = url;
+                await image.decode();
+                if (image.naturalWidth && image.naturalHeight) return;
+            } finally { URL.revokeObjectURL(url); }
+        }
+    } catch (cause) { throw new MediaApiError('invalid_result', { cause }); }
+    throw new MediaApiError('invalid_result');
+}
+
 export function decodeImageList(values) {
     const images = [];
     if (!Array.isArray(values) || !values.length) throw new MediaApiError('invalid_result');

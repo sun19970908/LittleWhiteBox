@@ -30,6 +30,7 @@ export function capturePublicGallery(request, provider) {
                     characterPrompts: request.characterPrompts,
                     presetId: metadata.presetId ?? request.paramsPresetId,
                     vibeNames: metadata.vibeNames || '',
+                    providerMetadata: metadata.providerMetadata,
                 });
             } catch (error) {
                 failures.push(error);

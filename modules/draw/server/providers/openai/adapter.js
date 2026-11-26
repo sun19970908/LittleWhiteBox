@@ -1,7 +1,7 @@
 'use strict';
 
-const { normalizeImageApi, postImageApi, decodeImageResult } = require('../image-api.js');
-const { protocols: { openai } } = require('../../../shared/multimodal-image-protocol.cjs');
+const { normalizeImageApi, normalizeImageApiContext, postImageApi, decodeImageResult } = require('../image-api.js');
+const { protocols: { openai }, readOpenAiImageApi, validateOpenAiImagePrompt, OPENAI_IMAGE_CODES } = require('../../../shared/multimodal-image-protocol.cjs');
 
 const SETTINGS = Object.freeze({
     size: value => typeof value === 'string' && /^(?:auto|[1-9]\d*x[1-9]\d*)$/.test(value),
@@ -11,12 +11,10 @@ const SETTINGS = Object.freeze({
     n: value => Number.isInteger(value) && value >= 1 && value <= 10,
 });
 
-function normalizePayload(payload) {
+function normalizePayload(payload, context) {
     const model = typeof payload.model === 'string' && payload.model.trim();
     if (!model) throw new Error('payload.model is required');
-    if (typeof payload.prompt !== 'string' || !payload.prompt.trim() || payload.prompt.length > 32000) {
-        throw new Error('payload.prompt must contain between 1 and 32000 characters');
-    }
+    validateOpenAiImagePrompt(payload.prompt);
     const normalized = { model, prompt: payload.prompt };
     for (const [key, value] of Object.entries(payload)) {
         if (key === 'model' || key === 'prompt') continue;
@@ -26,18 +24,31 @@ function normalizePayload(payload) {
     if (normalized.background === 'transparent' && normalized.output_format === 'jpeg') {
         throw new Error('payload.background cannot be transparent when output_format is jpeg');
     }
+    if (context.imageApi === 'responses' && normalized.n !== undefined && normalized.n !== 1) {
+        throw new Error('payload.n must be 1 with Responses');
+    }
     return normalized;
 }
 
 function normalize(context, items, helpers) {
-    return normalizeImageApi(context, items, helpers, normalizePayload);
+    return normalizeImageApi(context, items, helpers, normalizePayload, config => ({
+        ...normalizeImageApiContext(config), ...readOpenAiImageApi(config),
+    }));
 }
 
 async function execute({ context, item, signal }) {
-    const { url, ...request } = openai.request(context, item.request);
-    const data = await postImageApi(url, { ...request, signal, providerName: 'OpenAI GPT Image', errorReason: openai.errorReason });
-    const { values, incomplete } = openai.result(data, item.request.payload);
-    return decodeImageResult(values, { providerName: 'OpenAI GPT Image', resultMode: item.request.resultMode, incomplete, signal });
+    try {
+        const { url, ...request } = openai.request(context, item.request);
+        const { values, incomplete } = await postImageApi(url, { ...request, signal,
+            onConnectionLost: () => Object.assign(new Error(), { code: OPENAI_IMAGE_CODES.connectionLost }),
+            readResult: (response, readJson) => openai.readResult(response, context, item.request.payload, readJson),
+            httpError: (response, readJson) => openai.httpError(response, context, readJson),
+        });
+        return await decodeImageResult(values, { providerName: 'OpenAI GPT Image', resultMode: item.request.resultMode, incomplete, signal });
+    } catch (error) {
+        const { formatOpenAiImageError } = await import('../../../providers/multimodal/openai-image-errors.js');
+        throw formatOpenAiImageError(error, item.request.referenceImages?.length);
+    }
 }
 
 module.exports = { execute, normalize };
