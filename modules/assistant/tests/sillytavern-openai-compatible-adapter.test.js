@@ -1330,8 +1330,10 @@ test('sillytavern Google adapter streams function calls through host generate en
         assert.equal(requests[0].body.stream, true);
         assert.equal(requests[0].body.use_sysprompt, true);
         assert.equal(result.text, '我先写一个测试文件。');
+        const replayId = result.providerPayload.googleContent.parts.find(part => part.functionCall)?.functionCall.id;
+        assert.ok(typeof replayId === 'string' && replayId.length > 0);
         assert.deepEqual(result.toolCalls, [{
-            id: 'st-google-tool-1',
+            id: replayId,
             name: 'Write',
             arguments: '{"filePath":"book/notes/test.md","content":"hello"}',
         }]);

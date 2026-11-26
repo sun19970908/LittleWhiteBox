@@ -4,6 +4,7 @@
     "type": "module",
     "scripts": {
         "build": "npm run lint && node scripts/build.mjs",
+        "release:prepare": "node scripts/prepare-release.mjs",
         "check": "node scripts/check.mjs",
         "test": "node scripts/test.mjs",
         "lint": "node scripts/check-project.mjs && node scripts/check-garbled.js && node scripts/check-relative-imports.mjs && eslint . --ext .js,.mjs,.cjs,.ts,.mts,.cts,.vue,.html --max-warnings 0",

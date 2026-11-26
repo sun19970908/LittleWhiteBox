@@ -216,7 +216,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/docs/user/draw.md",
       "relativePath": "docs/user/draw.md",
       "extension": ".md",
-      "sizeBytes": 25842
+      "sizeBytes": 25879
     },
     {
       "source": "littlewhitebox",
@@ -2470,7 +2470,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/modules/assistant/tests/sillytavern-openai-compatible-adapter.test.js",
       "relativePath": "modules/assistant/tests/sillytavern-openai-compatible-adapter.test.js",
       "extension": ".js",
-      "sizeBytes": 97998
+      "sizeBytes": 98178
     },
     {
       "source": "littlewhitebox",
@@ -21776,7 +21776,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/package.json",
       "relativePath": "package.json",
       "extension": ".json",
-      "sizeBytes": 2866
+      "sizeBytes": 2929
     },
     {
       "source": "littlewhitebox",
@@ -21853,7 +21853,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/scripts/build/README.md",
       "relativePath": "scripts/build/README.md",
       "extension": ".md",
-      "sizeBytes": 16926
+      "sizeBytes": 17776
     },
     {
       "source": "littlewhitebox",
@@ -22064,6 +22064,13 @@
       "relativePath": "scripts/prepare-map-scene-assets.mjs",
       "extension": ".mjs",
       "sizeBytes": 9548
+    },
+    {
+      "source": "littlewhitebox",
+      "publicPath": "scripts/extensions/third-party/LittleWhiteBox/scripts/prepare-release.mjs",
+      "relativePath": "scripts/prepare-release.mjs",
+      "extension": ".mjs",
+      "sizeBytes": 2521
     },
     {
       "source": "littlewhitebox",
@@ -22644,7 +22651,7 @@
       "publicPath": "scripts/extensions/third-party/LittleWhiteBox/vite.plugin.config.mjs",
       "relativePath": "vite.plugin.config.mjs",
       "extension": ".mjs",
-      "sizeBytes": 6069
+      "sizeBytes": 6102
     },
     {
       "source": "littlewhitebox",
