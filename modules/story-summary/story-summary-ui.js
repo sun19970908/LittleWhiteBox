@@ -369,6 +369,7 @@ const VECTOR_API_TIMEOUT_NORMALIZERS = {
     };
     let relationChart = null;
     let relationChartFullscreen = null;
+    let relationBackgroundClick = null;
     let currentEditSection = null;
     let graphEditor = null, graphSaveId = 0;
     let currentEditBaseline = null;
@@ -1725,13 +1726,15 @@ const VECTOR_API_TIMEOUT_NORMALIZERS = {
             }
         });
 
-        relationChart.getZr().off('click');
-        relationChart.getZr().on('click', p => {
+        const renderer = relationChart.getZr();
+        if (relationBackgroundClick) renderer.off('click', relationBackgroundClick);
+        relationBackgroundClick = p => {
             if (!p.target) {
                 hideRelationTooltip();
                 updateChart(allNodes, allLinks);
             }
-        });
+        };
+        renderer.on('click', relationBackgroundClick);
     }
 
     function selectCharacter(id) {

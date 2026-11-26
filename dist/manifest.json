@@ -1,5 +1,5 @@
 {
-  "buildId": "f8a885b15da5a89c7e46",
+  "buildId": "955713bc5728c3ea8ddd",
   "entries": {
     "apps/assistant": {
       "file": "apps/assistant-H9Pe_d5u.js",
@@ -36,7 +36,7 @@
       ]
     },
     "apps/story-summary": {
-      "file": "apps/story-summary-DHxiu5CM.js",
+      "file": "apps/story-summary-DDoj9AM9.js",
       "css": [
         "assets/settings-ui-3BrbRAIN.css"
       ]
@@ -208,7 +208,7 @@
         "assets/settings-ui-3BrbRAIN.css"
       ]
     },
-    "apps/story-summary-DHxiu5CM.js": {
+    "apps/story-summary-DDoj9AM9.js": {
       "imports": [
         "shared/relation-graph-B2HrlXG_.js",
         "shared/identifier-BmY7aKNz.js",
