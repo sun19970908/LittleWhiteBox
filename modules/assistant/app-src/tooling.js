@@ -3,7 +3,7 @@ import { COORDINATION_TOOLS, SKILL_MANAGEMENT_TOOLS } from '../skills/contract.j
 import { formatWebSearchResults, WEB_SEARCH_TOOL_NAME, WEB_FETCH_TOOL_NAME, getWebSearchToolDefinition, getWebFetchToolDefinition, isWebConfigured } from '../../agent-core/web/tools.js';
 import { ACTIVITY_COPY } from './ui/activity-copy.js';
 import { getToolResultReadDefinition, TOOL_RESULT_READ, withPagedToolResult } from '../../agent-core/runtime/tool-result-contract.js';
-import { CARD_TOOL, CARD_ASSETS_TOOL } from '../../card-workspace/assistant-contract.js';
+import { CARD_TOOL, CARD_ASSETS_TOOL, SET_CARD_AVATAR_ACTION } from '../../card-workspace/assistant-contract.js';
 import { drawTools, DRAW_IMAGE, DRAW_PRESETS, SAVE_DRAW_IMAGES, DRAW_COPY } from '../../draw/assistant/contract.js';
 import { READ_IMAGE, READ_IMAGE_TOOL, IMAGE_COPY, imageResultFiles } from '../shared/image-tools.js';
 import { COPY as CARD_COPY } from '../../card-workspace/copy.js';
@@ -685,6 +685,7 @@ export function describeToolCall(name, args = {}) {
         case TOOL_NAMES.INSPECT_PAGE:
             return INSPECTION_COPY.label;
         case TOOL_NAMES.CARD_FILES:
+            if (args.action === SET_CARD_AVATAR_ACTION) return CARD_COPY.setAvatar;
             return args.action === 'save' ? CARD_COPY.save : CARD_COPY.open;
         case TOOL_NAMES.LS:
             return `查看目录 ${args.path || ''}${args.offset ? `:${args.offset}` : ''}`.trim();
@@ -926,6 +927,10 @@ export function formatToolResultDisplay(message) {
             summary: message.content || '',
             details: '',
         };
+    }
+
+    if (message.toolName === TOOL_NAMES.CARD_FILES && parsed.ok === true && parsed.sourcePath) {
+        return { summary: CARD_COPY.avatarSaved(parsed.name), details: parsed.sourcePath };
     }
 
     if (message.toolName === TOOL_NAMES.CARD_ASSETS) {

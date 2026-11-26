@@ -44,7 +44,7 @@ export type DrawRequest = DrawRequestBase & (
         workflowMode?: 'simple' | 'custom'; customWorkflow?: ComfyWorkflow }
     | { provider?: 'gemini'; params?: { model?: string; aspectRatio?: string; imageSize?: '1K' | '2K' | '4K' }; referenceImages?: DrawReferenceImage[] }
     | { provider?: 'openai'; params?: { model?: string; size?: string; quality?: 'auto' | 'low' | 'medium' | 'high';
-        background?: 'auto' | 'opaque' | 'transparent' }; referenceImages?: DrawReferenceImage[] }
+        background?: 'auto' | 'opaque' | 'transparent'; outputFormat?: 'jpeg' | 'png' | 'webp' }; referenceImages?: DrawReferenceImage[] }
 );
 export interface DrawResult {
     images: Blob[];

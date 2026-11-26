@@ -30,7 +30,7 @@ const byteStream = (data, size = 7) => {
 const stream = (...events) => byteStream(events.map(frame).join(''));
 
 for (const mode of ['frontend', 'backend']) {
-    test(`${mode}: Responses uses the selected connection and only a finished image; known failures and unknown results never resend`, async t => {
+    test(`${mode}: GPT Image sends the selected format and fixed low moderation; Responses never resends failures`, async t => {
         const calls = [];
         let reply;
         const fetchImage = async (url, request) => {
@@ -39,11 +39,11 @@ for (const mode of ['frontend', 'backend']) {
         };
         const frontend = createMultimodalFrontendTransport('openai', { fetchImage, decodeImage: decodeFixtureImage });
         if (mode === 'backend') t.mock.method(globalThis, 'fetch', fetchImage);
-        const run = async ({ referenceImages, imageApi = 'responses', all = false, description = prompt } = {}) => {
+        const run = async ({ referenceImages, imageApi = 'responses', all = false, description = prompt, params = {} } = {}) => {
             const settings = { ...createDefaultSettings('openai'), apiBaseUrl: 'https://images.example.test/custom/v1',
                 apiKey: 'offline-token', imageApi, responsesModel: 'relay-caller', sendMode: mode };
             const { context, delay, items } = compileMultimodalBatch('openai', [{ scene: description }],
-                createGenerationRecipe('openai', settings, { referenceImages, params: { size: '1536x1024', quality: 'high', background: 'opaque' } }));
+                createGenerationRecipe('openai', settings, { referenceImages, params: { size: '1536x1024', quality: 'high', background: 'opaque', ...params } }));
             if (all) items[0].request.resultMode = 'all';
             const signal = new AbortController().signal;
             if (mode === 'frontend') return frontend.requestImage(context, items[0], { signal });
@@ -59,7 +59,8 @@ for (const mode of ['frontend', 'backend']) {
         for (const referenceImages of [undefined, images]) {
             reply = () => stream(partial, completed({ type: 'message', content: [] }, final));
             const all = Boolean(referenceImages);
-            const result = await run({ referenceImages, all });
+            const params = referenceImages ? { outputFormat: 'webp', background: 'transparent' } : {};
+            const result = await run({ referenceImages, all, params });
             assert.equal(all ? Buffer.from(await result[0].arrayBuffer()).toString('base64') : result, png);
             const call = calls.at(-1);
             assert.equal(call.url, 'https://images.example.test/custom/v1/responses');
@@ -72,7 +73,8 @@ for (const mode of ['frontend', 'backend']) {
                     { type: 'input_image', image_url: `data:image/png;base64,${png}` },
                 ] : [])] }],
                 tools: [{ type: 'image_generation', model: 'gpt-image-2.6-flare', size: '1536x1024', quality: 'high',
-                    background: 'opaque', output_format: 'png', action: referenceImages ? 'edit' : 'generate' }],
+                    background: referenceImages ? 'transparent' : 'opaque', output_format: referenceImages ? 'webp' : 'jpeg',
+                    moderation: 'low', action: referenceImages ? 'edit' : 'generate' }],
             });
         }
         reply = () => stream(completed({ type: 'message', content: [{ text: 'Only text' }] }));
@@ -127,6 +129,26 @@ for (const mode of ['frontend', 'backend']) {
             await assert.rejects(run({ imageApi, description: 'a'.repeat(32001) }), { code: 'invalid_image_prompt' });
             assert.equal(calls.length, beforeInvalid);
         }
+        reply = () => Response.json({ data: [{ b64_json: png }] });
+        await run({ imageApi: 'images' });
+        assert.equal(new URL(calls.at(-1).url).pathname, '/custom/v1/images/generations');
+        assert.deepEqual(JSON.parse(calls.at(-1).body), { model: 'gpt-image-2.6-flare', prompt, size: '1536x1024',
+            quality: 'high', background: 'opaque', output_format: 'jpeg', n: 1, moderation: 'low' });
+        await run({ imageApi: 'images', referenceImages: images, params: { outputFormat: 'png', background: 'transparent' } });
+        const edit = calls.at(-1);
+        assert.equal(new URL(edit.url).pathname, '/custom/v1/images/edits');
+        assert.deepEqual(Object.fromEntries([...edit.body].filter(([key]) => key !== 'image[]')), {
+            model: 'gpt-image-2.6-flare', prompt, size: '1536x1024', quality: 'high',
+            background: 'transparent', output_format: 'png', n: '1', moderation: 'low',
+        });
+        assert.equal(edit.body.getAll('image[]').length, images.length);
+        const beforeIncompatible = calls.length;
+        for (const imageApi of ['images', 'responses']) {
+            await assert.rejects(run({ imageApi, params: { background: 'transparent', outputFormat: 'jpeg' } }), {
+                code: 'image_transparency_requires_alpha', imageRequestOutcome: 'not-submitted',
+            });
+        }
+        assert.equal(calls.length, beforeIncompatible);
     });
 }
 

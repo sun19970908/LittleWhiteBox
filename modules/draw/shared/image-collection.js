@@ -4,11 +4,16 @@ import { MediaApiError } from '../../../shared/media-api.js';
 const MAX_BYTES = 128 * 1024 * 1024;
 export const IMAGE_COLLECTION_MIME = 'application/vnd.littlewhitebox.images+zip';
 
-export function imageMime(bytes) {
+export function detectImageMime(bytes) {
     if (bytes.length >= 8 && [137, 80, 78, 71, 13, 10, 26, 10].every((value, i) => bytes[i] === value)) return 'image/png';
     if (bytes[0] === 255 && bytes[1] === 216 && bytes[2] === 255) return 'image/jpeg';
     if (strFromU8(bytes.subarray(0, 4)) === 'RIFF' && strFromU8(bytes.subarray(8, 12)) === 'WEBP') return 'image/webp';
     if (/^GIF8[79]a$/.test(strFromU8(bytes.subarray(0, 6)))) return 'image/gif';
+}
+
+export function imageMime(bytes) {
+    const mime = detectImageMime(bytes);
+    if (mime) return mime;
     throw new MediaApiError('invalid_result');
 }
 

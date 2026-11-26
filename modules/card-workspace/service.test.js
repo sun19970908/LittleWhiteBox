@@ -9,6 +9,7 @@ import * as files from './files.js';
 import * as documents from './item-document.js';
 import { equalText } from './comparison.js';
 import { COPY } from './copy.js';
+import { SET_CARD_AVATAR_ACTION } from './assistant-contract.js';
 import { cardFileDirectory } from './display.js';
 import { ASSET_FIELD } from './asset-task.js';
 import { createCardLifecycle } from './lifecycle.js';
@@ -25,7 +26,7 @@ async function edit(content) {
 }
 function harness(readDesign, saveFile, data = {}) {
     const source = readFileSync(new URL('./service.js', import.meta.url), 'utf8').replace(/^import .*;\r?\n/gm, '').replace(/^export /gm, '');
-    return runInNewContext(source + '\nrunCardFiles', { ...workspace, ...files, ...documents, equalText, COPY, Set,
+    return runInNewContext(source + '\nrunCardFiles', { ...workspace, ...files, ...documents, equalText, COPY, Set, SET_CARD_AVATAR_ACTION,
         saveFile, flattenLocalSourceFiles, normalizeLocalSourceFile,
         currentCard: () => ({ avatar: 'fixture.png', name: 'fixture' }),
         readCharacter: async () => ({ data }), linkedBooks: () => [], readDesign,

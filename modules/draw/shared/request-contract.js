@@ -1,5 +1,5 @@
 import { DRAW_DIMENSION_BOUNDS, NOVEL_FIXED_DRAW_SIZES } from './draw-size.js';
-import { GEMINI_ASPECT_RATIOS, GEMINI_IMAGE_SIZES, OPENAI_SIZES, OPENAI_QUALITIES, OPENAI_BACKGROUNDS } from '../providers/multimodal/settings-model.js';
+import { GEMINI_ASPECT_RATIOS, GEMINI_IMAGE_SIZES, OPENAI_SIZES, OPENAI_QUALITIES, OPENAI_BACKGROUNDS, OPENAI_OUTPUT_FORMATS } from '../providers/multimodal/settings-model.js';
 // JSON-representable public drawing fields. Callback controls stay host-owned.
 const text = description => ({ type: 'string', ...(description ? { description } : {}) });
 const number = { type: 'number' }, integer = { type: 'integer' }, positiveInteger = { type: 'integer', minimum: 1 }, boolean = { type: 'boolean' };
@@ -31,6 +31,7 @@ export const DRAW_REQUEST_PROPERTIES = Object.freeze({
         restore_faces: boolean, tiling: boolean, enable_hr: boolean, hr_scale: number, hr_upscaler: text(), denoising_strength: number, clip_skip: positiveInteger,
         cfg: number, positivePrefix: text(), negativePrefix: text(),
         aspectRatio: text(), imageSize: text(), size: text(), quality: text(), background: text(),
+        outputFormat: { type: 'string', enum: OPENAI_OUTPUT_FORMATS, description: 'GPT Image output format. Omitted: use the parameter preset. Transparent backgrounds require PNG or WebP.' },
     }, additionalProperties: false },
     seed: { type: 'integer', minimum: 0, description: 'ComfyUI seed. NovelAI and SD WebUI use params.seed.' },
     workflowMode: { type: 'string', enum: ['simple', 'custom'], description: 'ComfyUI workflow mode.' },

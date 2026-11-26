@@ -44,6 +44,9 @@ export function toolOutcome(result, toolName = result?.toolName) {
         return { status: 'failed', note: shortText(result.message || result.execution?.errorMessage || result.error) };
     }
     if (result.skippedFiles > 0) return { status: 'partial', note: '' };
+    if (toolName === TOOL_NAMES.CARD_FILES && result.ok === true && result.previewRefreshFailed === true) {
+        return { status: 'succeeded', note: CARD_COPY.avatarRefreshFailed };
+    }
     // Current read/search tools return their data directly; failures use ok:false
     // or the host error channel. An absent ok field is not a legacy format.
     return { status: 'succeeded', note: toolName === TOOL_NAMES.CARD_ASSETS && result.draft && result.requiresWriteback

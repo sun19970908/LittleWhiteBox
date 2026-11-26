@@ -192,7 +192,7 @@ images.destroy();
 这两个服务使用 `provider: 'gemini'` / `'openai'`，需要配置图片接口、小白X 后端和共用场景 Agent。`prompt`、`positivePrefix`、`negativePrompt`、`characterPrompts` 的文字都作为改编材料，由 Agent 输出完整的非露骨画面描述；不会把原始文字再拼到改编结果后面。`characterPrompts.center` 不受支持。
 
 - Gemini 的 `params`：`model`、`aspectRatio`（设置页提供的比例，如 `'16:9'`）、`imageSize`（`'1K'` / `'2K'` / `'4K'`）。
-- GPT Image 的 `params`：`model`、`size`（`'auto'` / `'1024x1024'` / `'1536x1024'` / `'1024x1536'`）、`quality`（`'auto'` / `'low'` / `'medium'` / `'high'`）、`background`（`'auto'` / `'opaque'` / `'transparent'`）。
+- GPT Image 的 `params`：`model`、`size`（`'auto'` / `'1024x1024'` / `'1536x1024'` / `'1024x1536'`）、`quality`（`'auto'` / `'low'` / `'medium'` / `'high'`）、`background`（`'auto'` / `'opaque'` / `'transparent'`）、`outputFormat`（`'jpeg'` / `'png'` / `'webp'`）。省略格式时沿用参数预设；透明背景需选 PNG 或 WebP。
 - `overrideSize`：`'default'` 跟随预设；Gemini 填比例，GPT Image 填上述尺寸（包括由服务判断尺寸的 `'auto'`）。明确传入的 `params.aspectRatio` / `params.size` 优先。
 - 顶层 `referenceImages`：可选数组，每项 `{ mimeType, data }`。`mimeType` 是 `'image/png'` / `'image/jpeg'` / `'image/webp'`；`data` 是纯 base64 图片字节，不含 Data URL 前缀。最多 14 张，解码后的总大小不超过 4 MiB。其他后端不接受此字段。
 

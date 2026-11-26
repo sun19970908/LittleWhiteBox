@@ -7,8 +7,10 @@ const OPENAI_IMAGE_CODES = Object.freeze({
     imagesNotFound: 'images_not_found', responsesNotFound: 'responses_not_found',
     noImage: 'responses_no_image', failed: 'responses_image_failed', interrupted: 'responses_stream_interrupted',
     timedOut: 'responses_timeout', connectionLost: 'image_connection_lost', invalidPrompt: 'invalid_image_prompt',
+    invalidOutputFormat: 'invalid_image_output_format', transparentFormat: 'image_transparency_requires_alpha',
 });
 const OPENAI_IMAGE_PROMPT_LIMIT = 32000;
+const OPENAI_IMAGE_OUTPUT_FORMATS = Object.freeze(['jpeg', 'png', 'webp']);
 const OPENAI_ERROR_REASONS = new Set([
     'not_found', 'model_not_found', 'invalid_api_key', 'invalid_request_error', 'invalid_value',
     'invalid_image', 'invalid_image_format', 'invalid_image_url', 'unsupported_image', 'unsupported_value',
@@ -33,6 +35,14 @@ function validateOpenAiImagePrompt(prompt) {
     if (typeof prompt !== 'string' || !prompt.trim() || prompt.length > OPENAI_IMAGE_PROMPT_LIMIT) {
         throw protocolError(OPENAI_IMAGE_CODES.invalidPrompt);
     }
+}
+
+function readOpenAiImageOutputFormat(format, background) {
+    // A preset without a format can still explicitly request a transparent background.
+    const value = format === undefined ? (background === 'transparent' ? 'png' : 'jpeg') : format;
+    if (!OPENAI_IMAGE_OUTPUT_FORMATS.includes(value)) throw protocolError(OPENAI_IMAGE_CODES.invalidOutputFormat);
+    if (background === 'transparent' && value === 'jpeg') throw protocolError(OPENAI_IMAGE_CODES.transparentFormat);
+    return value;
 }
 
 function openaiErrorReason(error) {
@@ -88,19 +98,20 @@ function geminiResult(data) {
     return { values, incomplete: Boolean(reason), reason, code: blocked ? 'image_blocked' : 'no_image' };
 }
 
-function openaiRequest(context, { payload, referenceImages = [] }) {
+function openaiRequest(context, { payload: input, referenceImages = [] }) {
+    const payload = { ...input, moderation: 'low' };
     validateOpenAiImagePrompt(payload.prompt);
     const headers = { Authorization: `Bearer ${context.key}` };
     const { imageApi, responsesModel } = readOpenAiImageApi(context);
     if (imageApi === 'responses') {
-        const { model, prompt, size, quality, background, output_format } = payload;
+        const { model, prompt, size, quality, background, output_format, moderation } = payload;
         return { url: endpoint(context.url, '/responses'), headers: { ...headers, 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 model: responsesModel,
                 input: [{ role: 'user', content: [{ type: 'input_text', text: prompt }, ...referenceImages.map(({ mimeType, data }) => ({
                     type: 'input_image', image_url: `data:${mimeType};base64,${data}`,
                 }))] }],
-                tools: [{ type: 'image_generation', model, size, quality, background, output_format,
+                tools: [{ type: 'image_generation', model, size, quality, background, output_format, moderation,
                     action: referenceImages.length ? 'edit' : 'generate' }],
                 tool_choice: 'required', stream: true,
             }),
@@ -212,4 +223,5 @@ const protocols = Object.freeze({
     openai: { request: openaiRequest, readResult: readOpenAiImageResult, httpError: openaiHttpError },
 });
 
-module.exports = { protocols, upstreamReason, readOpenAiImageApi, validateOpenAiImagePrompt, OPENAI_IMAGE_CODES, OPENAI_IMAGE_PROMPT_LIMIT };
+module.exports = { protocols, upstreamReason, readOpenAiImageApi, readOpenAiImageOutputFormat, validateOpenAiImagePrompt,
+    OPENAI_IMAGE_CODES, OPENAI_IMAGE_OUTPUT_FORMATS, OPENAI_IMAGE_PROMPT_LIMIT };

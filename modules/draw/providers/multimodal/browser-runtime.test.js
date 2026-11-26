@@ -4,6 +4,7 @@ import { fixture } from '../../shared/tests/helpers/draw-journey.js';
 import { decodeFixtureImage } from '../../shared/tests/helpers/image-decoder.js';
 
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=';
+const webp = 'UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA';
 const finalPrompt = raw => `An adapted illustration of ${raw}.`;
 const registration = {
     'script.js': 'export const getRequestHeaders=()=>({});export const syncMesToSwipe=()=>true;export const messageFormatting=text=>text;export const saveChatDebounced=()=>globalThis.__drawJourneyReview.ctx.saveChat();',
@@ -75,6 +76,44 @@ async function setup(lines, stubs = {}, sources = []) {
         return { width: 1, height: 1, close() {} };
     };
     return { ...h, host, stop() { globalThis.createImageBitmap = previousBitmap; h.stop(); } };
+}
+
+// A paid result keeps its bytes and actual extension, even when the service ignores the requested format.
+for (const sendMode of ['frontend', 'backend']) {
+    test(`GPT Image ${sendMode}: save the returned format and warn once without repurchasing a mismatched image`, async () => {
+        const h = await setup(['A traveler walks through a quiet doorway.'],
+            { 'image-save.js': 'export const getImageFolderName=()=>"fixture";export const saveImageToServer=async image=>{globalThis.__drawJourneyReview.saved.push(image);return "/fixture/"+image.fileName+"."+image.format};' });
+        const { api, host } = h;
+        const runtime = api.multimodalProviders.openai;
+        const sent = [];
+        let result = webp;
+        host.saved = [];
+        host.sendMode = sendMode;
+        globalThis.fetch = async (_url, options) => {
+            sent.push(JSON.parse(options.body).output_format);
+            return Response.json({ data: [{ b64_json: result }] });
+        };
+        host.imageFor = payload => {
+            sent.push(payload.output_format);
+            return result;
+        };
+        try {
+            await runtime.init();
+            for (const [image, extension, warnings] of [[webp, 'webp', 0], [png, 'png', 1]]) {
+                result = image;
+                const drawn = await runtime.facade.generateImagesFromText({
+                    source: 'ebook', text: 'A boat floats on a lake.', promptOverride: 'A boat on a lake',
+                    params: { outputFormat: 'webp' },
+                });
+                assert.equal(drawn.success, 1);
+                const [{ imgId }] = drawn.images;
+                await api.savePreviewImage(imgId);
+                assert.deepEqual([host.saved.at(-1).base64, host.saved.at(-1).format], [image, extension]);
+                assert.equal(h.counters.warnings.length, warnings);
+            }
+            assert.deepEqual(sent, ['webp', 'webp']);
+        } finally { runtime.cleanup(); h.stop(); }
+    });
 }
 
 for (const provider of ['gemini', 'openai']) {

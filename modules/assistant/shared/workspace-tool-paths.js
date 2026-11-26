@@ -2,7 +2,7 @@ import { TOOL_NAMES } from '../app-src/tooling.js';
 import { readableCardWorkspacePath, readableCardWorkspaceRelativePath, storedCardWorkspacePath } from '../../card-workspace/paths.js';
 
 const TOOL_PATH_FIELDS = new Map([
-    [TOOL_NAMES.CARD_FILES, ['paths']],
+    [TOOL_NAMES.CARD_FILES, ['paths', 'sourcePath']],
     [TOOL_NAMES.CARD_ASSETS, ['rootPath', 'taskPath', 'sourcePath']],
     [TOOL_NAMES.READ_IMAGE, ['path']],
     [TOOL_NAMES.DRAW_IMAGE, ['outputDir']],

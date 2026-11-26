@@ -12,6 +12,8 @@ import { planDirectInput } from './planning.js';
 import { getActiveParamsPreset, PROVIDERS } from './settings-model.js';
 import { getSettings, loadSettings } from './settings.js';
 import { createMultimodalFrontendTransport } from './frontend-transport.js';
+import { drawNotify } from '../../shared/draw-toast.js';
+import { formatOpenAiImageMismatch } from './openai-image-errors.js';
 
 const client = createImageBackendJobsClient({ getHeaders: getRequestHeaders, getOwner: getCurrentUserHandle });
 
@@ -53,8 +55,12 @@ export const multimodalProviders = Object.fromEntries(Object.keys(PROVIDERS).map
             return captureMultimodalGeneration(getSettings(provider));
         },
         async generateImage({ generationConfig = getSettings(provider), sceneConfig, onQueueStateChange, signal, ...request } = {}) {
+            let requested;
             const [image] = await publicGeneration.generate(request, generationConfig, { signal, sceneConfig,
+                onPrepared: ({ providerMetadata }) => { requested = providerMetadata?.requestedOutputFormat; },
                 onProgress: ({ state, ...info }) => onQueueStateChange?.(state === 'progress' ? 'start' : state, info) });
+            const notice = formatOpenAiImageMismatch(requested, image.type);
+            if (notice) drawNotify.warning(notice);
             return readImageBlobBase64(image);
         },
     };

@@ -3,6 +3,14 @@ import { ImageRequestOutcome, imageHttpOutcome, withImageRequestOutcome } from '
 import { MULTIMODAL_COPY as COPY } from './copy.js';
 
 const codes = protocol.OPENAI_IMAGE_CODES;
+const imageFormatLabels = Object.fromEntries([...protocol.OPENAI_IMAGE_OUTPUT_FORMATS, 'gif'].map(format => [`image/${format}`, COPY[format]]));
+
+export function formatOpenAiImageMismatch(requested, mime) {
+    if (!protocol.OPENAI_IMAGE_OUTPUT_FORMATS.includes(requested)) return '';
+    const actual = imageFormatLabels[mime];
+    const expected = COPY[requested];
+    return actual && actual !== expected ? COPY.outputFormatMismatch(expected, actual) : '';
+}
 
 const messages = Object.freeze({
     [codes.imagesNotFound]: () => COPY.imagesNotFound,
@@ -13,6 +21,8 @@ const messages = Object.freeze({
     [codes.connectionLost]: () => COPY.responsesInterrupted,
     [codes.timedOut]: () => COPY.responsesTimedOut,
     [codes.invalidPrompt]: () => COPY.invalidOpenAiPrompt(protocol.OPENAI_IMAGE_PROMPT_LIMIT),
+    [codes.invalidOutputFormat]: () => COPY.invalidOutputFormat,
+    [codes.transparentFormat]: () => COPY.transparentOutputFormat,
     invalid_result: () => COPY.invalidOpenAiImage,
     upstream_error: (status, reason) => (imageHttpOutcome(status) === ImageRequestOutcome.UNKNOWN
         ? COPY.openAiUnknownHttp(status, reason) : COPY.openAiHttpFailure(status, reason)),
@@ -22,7 +32,7 @@ export const isOpenAiImageDisplayError = error => Object.hasOwn(messages, error?
 export function openAiResultOutcome({ code, status }) {
     if ([codes.interrupted, codes.timedOut, codes.connectionLost].includes(code)) return ImageRequestOutcome.UNKNOWN;
     if ([codes.failed, codes.noImage, 'invalid_result'].includes(code)) return ImageRequestOutcome.REJECTED;
-    if (code === codes.invalidPrompt) return ImageRequestOutcome.NOT_SUBMITTED;
+    if ([codes.invalidPrompt, codes.invalidOutputFormat, codes.transparentFormat].includes(code)) return ImageRequestOutcome.NOT_SUBMITTED;
     if (status) return imageHttpOutcome(status);
 }
 

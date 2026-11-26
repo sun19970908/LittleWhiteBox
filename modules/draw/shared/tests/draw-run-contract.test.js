@@ -80,7 +80,7 @@ test('background GPT Image floors keep the selected Responses calling model sepa
     assert.equal(context.imageApi, 'responses');
     assert.equal(context.responsesModel, 'fixture-caller');
     assert.equal(items[0].request.payload.model, settings.paramsPresets[0].params.model);
-    assert.deepEqual(artifacts[0].providerMetadata, { imageApi: 'responses', responsesModel: 'fixture-caller' });
+    assert.deepEqual(artifacts[0].providerMetadata, { imageApi: 'responses', responsesModel: 'fixture-caller', requestedOutputFormat: 'jpeg' });
     envelope.generationRecipe.responsesModel = '';
     assert.throws(() => validate(envelope), { code: 'invalid_draw_run' });
 });

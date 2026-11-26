@@ -65,11 +65,12 @@ test('GPT Image sends JSON generations and multipart edits with ordered binary i
     assert.equal(editUrl.href, 'https://custom.example.test/openai/v1/images/edits');
     for (const init of [generate, edit]) assert.equal(init.headers.Authorization, 'Bearer sample-key');
     assert.equal(generate.headers['Content-Type'], 'application/json');
-    assert.deepEqual(JSON.parse(generate.body), openaiPayload);
+    const expected = { ...openaiPayload, moderation: 'low' };
+    assert.deepEqual(JSON.parse(generate.body), expected);
     const editRequest = new Request(editUrl, edit);
     assert.match(editRequest.headers.get('content-type'), /^multipart\/form-data; boundary=/);
     const form = await editRequest.formData();
-    for (const [key, value] of Object.entries(openaiPayload)) assert.equal(form.get(key), String(value));
+    for (const [key, value] of Object.entries(expected)) assert.equal(form.get(key), String(value));
     const files = form.getAll('image[]');
     assert.deepEqual(files.map(file => file.type), ['image/png', 'image/jpeg']);
     assert.deepEqual(await Promise.all(files.map(async file => Buffer.from(await file.arrayBuffer()))), [png, jpeg]);

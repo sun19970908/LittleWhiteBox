@@ -78,3 +78,11 @@ test('card draft receipts and partial listings keep their distinct user-visible 
     assert.equal(toolOutcome({ ok: false, status: 'partial', tasks: [{}], errors: [{}] }, 'CardAssets').status, 'partial');
     assert.equal(toolOutcome({ ok: false, status: 'failed', tasks: [], errors: [{}] }, 'CardAssets').status, 'failed');
 });
+
+test('avatar refresh failure stays in the existing successful tool result', () => {
+    const saved = { ok: true };
+    assert.deepEqual(toolOutcome(saved, 'CardFiles'), { status: 'succeeded', note: '' });
+    const needsRefresh = toolOutcome({ ...saved, previewRefreshFailed: true }, 'CardFiles');
+    assert.equal(needsRefresh.status, 'succeeded');
+    assert.ok(needsRefresh.note);
+});

@@ -1,13 +1,12 @@
 'use strict';
 
 const { normalizeImageApi, normalizeImageApiContext, postImageApi, decodeImageResult } = require('../image-api.js');
-const { protocols: { openai }, readOpenAiImageApi, validateOpenAiImagePrompt, OPENAI_IMAGE_CODES } = require('../../../shared/multimodal-image-protocol.cjs');
+const { protocols: { openai }, readOpenAiImageApi, readOpenAiImageOutputFormat, validateOpenAiImagePrompt, OPENAI_IMAGE_CODES } = require('../../../shared/multimodal-image-protocol.cjs');
 
 const SETTINGS = Object.freeze({
     size: value => typeof value === 'string' && /^(?:auto|[1-9]\d*x[1-9]\d*)$/.test(value),
     quality: value => ['auto', 'low', 'medium', 'high', 'xhigh', 'max'].includes(value),
     background: value => ['auto', 'opaque', 'transparent'].includes(value),
-    output_format: value => ['png', 'jpeg', 'webp'].includes(value),
     n: value => Number.isInteger(value) && value >= 1 && value <= 10,
 });
 
@@ -17,13 +16,11 @@ function normalizePayload(payload, context) {
     validateOpenAiImagePrompt(payload.prompt);
     const normalized = { model, prompt: payload.prompt };
     for (const [key, value] of Object.entries(payload)) {
-        if (key === 'model' || key === 'prompt') continue;
+        if (key === 'model' || key === 'prompt' || key === 'output_format') continue;
         if (!Object.hasOwn(SETTINGS, key) || !SETTINGS[key](value)) throw new Error(`payload.${key} is not supported or is invalid`);
         normalized[key] = value;
     }
-    if (normalized.background === 'transparent' && normalized.output_format === 'jpeg') {
-        throw new Error('payload.background cannot be transparent when output_format is jpeg');
-    }
+    normalized.output_format = readOpenAiImageOutputFormat(payload.output_format, normalized.background);
     if (context.imageApi === 'responses' && normalized.n !== undefined && normalized.n !== 1) {
         throw new Error('payload.n must be 1 with Responses');
     }

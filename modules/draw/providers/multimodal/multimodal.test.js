@@ -80,6 +80,26 @@ test('old tag-based providers keep their existing character contract', () => {
     assert.notEqual(characters.maxItems, 0);
 });
 
+test('GPT Image presets default to JPEG without losing saved transparency or a selected format', () => {
+    const settings = createDefaultSettings('openai');
+    const [defaultPreset] = settings.paramsPresets;
+    assert.equal(defaultPreset.params.outputFormat, 'jpeg');
+    const previousParams = { ...defaultPreset.params };
+    delete previousParams.outputFormat;
+    settings.paramsPresets = [
+        { ...defaultPreset, params: previousParams },
+        { ...defaultPreset, id: 'transparent', name: 'Transparent', params: { ...previousParams, background: 'transparent' } },
+        { ...defaultPreset, id: 'webp', name: 'WebP', params: { ...previousParams, outputFormat: 'webp' } },
+    ];
+    const loaded = normalizeSettings('openai', settings);
+    assert.deepEqual(loaded.paramsPresets.map(item => item.params.outputFormat), ['jpeg', 'png', 'webp']);
+    for (const [selectedParamsPresetId, format] of [['default', 'jpeg'], ['transparent', 'png'], ['webp', 'webp']]) {
+        loaded.selectedParamsPresetId = selectedParamsPresetId;
+        const batch = compileOpenAi([{ scene: finalScene }], createGenerationRecipe('openai', normalizeSettings('openai', loaded)));
+        assert.equal(batch.items[0].request.payload.output_format, format);
+    }
+});
+
 test('invalid or incomplete adaptation never yields an image request', () => {
     for (const tasks of [[], [{ scene: '' }], [{ scene: finalScene }, { scene: finalScene }], [{ scene: finalScene, chars: [{}] }]]) {
         assert.throws(() => adaptedDirectInput({ prompt: 'source' }, tasks));

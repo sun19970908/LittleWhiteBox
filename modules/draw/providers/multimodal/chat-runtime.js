@@ -147,7 +147,11 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
                 prepareItem: index => {
                     checkChat();
                     signal.throwIfAborted();
-                    return adapt(input.tasks[index], recipe ??= recipeFor(config, input));
+                    if (!recipe) {
+                        recipe = recipeFor(config, input);
+                        if (providerMetadata) providerMetadata.requestedOutputFormat = recipe.params.outputFormat;
+                    }
+                    return adapt(input.tasks[index], recipe);
                 },
                 run: ({ preparedItems, ...handlers }) => {
                     const compiledBatch = compileMultimodalBatch(provider, preparedItems, recipe);

@@ -3,6 +3,7 @@ import { normalizeMaxImagesOverride } from '../../shared/max-images-override.js'
 import { normalizeLayout } from '../../shared/scene-planner-layout.js';
 import { NATURAL_PROMPT_DEFAULTS } from './prompts.js';
 import protocol from '../../shared/multimodal-image-protocol.cjs';
+import { formatOpenAiImageError } from './openai-image-errors.js';
 
 export const PROVIDERS = Object.freeze({
     gemini: Object.freeze({ label: 'Gemini', baseUrl: 'https://generativelanguage.googleapis.com/v1', model: 'gemini-nano-banana-2.1' }),
@@ -13,6 +14,7 @@ export const GEMINI_IMAGE_SIZES = Object.freeze(['1K', '2K', '4K']);
 export const OPENAI_SIZES = Object.freeze(['auto', '1024x1024', '1536x1024', '1024x1536']);
 export const OPENAI_QUALITIES = Object.freeze(['auto', 'low', 'medium', 'high']);
 export const OPENAI_BACKGROUNDS = Object.freeze(['auto', 'opaque', 'transparent']);
+export const OPENAI_OUTPUT_FORMATS = protocol.OPENAI_IMAGE_OUTPUT_FORMATS;
 const API_FIELDS = Object.freeze(['apiBaseUrl', 'apiKey', 'timeout', 'sendMode']);
 const OPENAI_API_FIELDS = Object.freeze([...API_FIELDS, 'imageApi', 'responsesModel']);
 export const apiFieldsFor = provider => provider === 'openai' ? OPENAI_API_FIELDS : API_FIELDS;
@@ -25,7 +27,7 @@ export function providerDefinition(provider) {
 export function defaultParams(provider) {
     const { model } = providerDefinition(provider);
     return provider === 'gemini' ? { model, aspectRatio: '1:1', imageSize: '1K' }
-        : { model, size: 'auto', quality: 'auto', background: 'auto' };
+        : { model, size: 'auto', quality: 'auto', background: 'auto', outputFormat: protocol.readOpenAiImageOutputFormat() };
 }
 export function createDefaultSettings(provider) {
     const config = { apiBaseUrl: providerDefinition(provider).baseUrl, apiKey: '', timeout: 180000, sendMode: DEFAULT_SEND_MODE,
@@ -57,7 +59,12 @@ export function validateParams(provider, params) {
     for (const [key, choices] of Object.entries(fields)) {
         if (!choices.includes(params[key])) throw new TypeError(COPY.invalidParameter(`params.${key}`));
     }
-    return { ...params, model: params.model.trim() };
+    const normalized = { ...params, model: params.model.trim() };
+    if (provider === 'openai') {
+        try { return { ...normalized, outputFormat: protocol.readOpenAiImageOutputFormat(params.outputFormat, params.background) }; }
+        catch (error) { throw formatOpenAiImageError(error); }
+    }
+    return normalized;
 }
 export function getSizeOptions(provider) {
     providerDefinition(provider);

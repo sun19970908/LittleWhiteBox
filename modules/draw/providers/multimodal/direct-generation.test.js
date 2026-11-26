@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import Ajv from 'ajv';
+import { drawTools } from '../../assistant/contract.js';
 import { Buffer } from 'node:buffer';
 import test from 'node:test';
 import { createDrawPublicApi } from '../../shared/public-api.js';
@@ -19,6 +21,25 @@ const refs = [{ mimeType: 'image/png', data: Buffer.from(image).toString('base64
 const description = 'A fully clothed traveler gazes out over a moonlit river.';
 const makeSettings = provider => ({ ...createDefaultSettings(provider), apiKey: 'test-key', apiBaseUrl: 'https://image.example.test/v1', sendMode: 'backend' });
 const wireText = (provider, item) => provider === 'gemini' ? item.payload.contents[0].parts[0].text : item.payload.prompt;
+
+test('the assistant can request GPT Image WebP for this call without changing the saved preset', async () => {
+    const validate = new Ajv().compile(drawTools()[0].function.parameters);
+    const request = { provider: 'openai', prompt: 'Draw a paper lantern', params: { outputFormat: 'webp' } };
+    assert.equal(validate(request), true);
+    assert.equal(validate({ ...request, params: { outputFormat: 'gif' } }), false);
+    const settings = { ...makeSettings('openai'), sendMode: 'frontend' };
+    const captured = [];
+    const adapter = createDirectGeneration('openai', {
+        plan: async () => ({ prompt: description }),
+        frontend: { async requestImage(_context, item) {
+            captured.push(item.request.payload.output_format);
+            return [new Blob([image], { type: 'image/png' })];
+        } },
+    });
+    await adapter.generate(request, settings);
+    await adapter.generate({ prompt: request.prompt }, settings);
+    assert.deepEqual(captured, ['webp', 'jpeg']);
+});
 
 for (const provider of ['gemini', 'openai']) {
     test(`${provider}: front-end generation and edits use the custom address without a backend job`, async () => {

@@ -5,8 +5,9 @@ import { getEffectiveParams, providerDefinition, validateParams, isSupportedSize
 import { MULTIMODAL_COPY as COPY } from './copy.js';
 import { formatOpenAiImageError } from './openai-image-errors.js';
 
-export function openAiImageMetadata({ imageApi, responsesModel }) {
-    return { imageApi, ...(imageApi === 'responses' ? { responsesModel } : {}) };
+export function openAiImageMetadata({ imageApi, responsesModel }, requestedOutputFormat) {
+    return { imageApi, ...(imageApi === 'responses' ? { responsesModel } : {}),
+        ...(requestedOutputFormat ? { requestedOutputFormat } : {}) };
 }
 
 export function validateMultimodalInput(provider, input) {
@@ -51,7 +52,7 @@ export function buildMultimodalRequest(provider, input) {
     try { protocol.validateOpenAiImagePrompt(prompt); }
     catch (error) { throw formatOpenAiImageError(error); }
     return { payload: { model: params.model, prompt, size: params.size,
-        quality: params.quality, background: params.background, output_format: 'png', n: 1 },
+        quality: params.quality, background: params.background, output_format: params.outputFormat, n: 1 },
         ...(referenceImages.length ? { referenceImages } : {}),
     };
 }
@@ -75,7 +76,7 @@ export function compileMultimodalBatch(provider, scenePlan, recipe) {
         if (task.chars?.length || task.characterPrompts?.length) throw new TypeError(COPY.unadaptedInput);
         const input = { prompt: task.scene, params, referenceImages: task.referenceImages ?? recipe.referenceImages };
         return { task, tags: input.prompt, promptData: { positive: input.prompt, negative: '', characterPrompts: [] },
-            ...(provider === 'openai' ? { providerMetadata: openAiImageMetadata(context) } : {}),
+            ...(provider === 'openai' ? { providerMetadata: openAiImageMetadata(context, params.outputFormat) } : {}),
             request: buildMultimodalRequest(provider, input) };
     });
     const delay = Math.max(1, recipe.delayMs || 0);

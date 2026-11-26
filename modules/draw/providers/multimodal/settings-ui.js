@@ -22,7 +22,7 @@ import { markNewGroupsOff } from '../../shared/character-group-presets.js';
 import { normalizePlannerRetry } from '../../shared/planner-retry.js';
 import { MAX_IMAGES_OVERRIDE_MIN, MAX_IMAGES_OVERRIDE_MAX } from '../../shared/max-images-override.js';
 import { apiFieldsFor, createDefaultSettings, defaultParams, GEMINI_ASPECT_RATIOS, GEMINI_IMAGE_SIZES,
-    OPENAI_BACKGROUNDS, OPENAI_QUALITIES, OPENAI_SIZES, providerDefinition } from './settings-model.js';
+    OPENAI_BACKGROUNDS, OPENAI_OUTPUT_FORMATS, OPENAI_QUALITIES, OPENAI_SIZES, providerDefinition } from './settings-model.js';
 import { getSettings, loadSettings, subscribeSettings, updateSettingsPersistent } from './settings.js';
 import { bindPromptEditor } from './settings-prompt-editor.js';
 import { bindSettingsPresetList } from './settings-preset-list.js';
@@ -40,7 +40,7 @@ const NAVIGATION = [
 const TABS = NAVIGATION.map(([tab]) => tab);
 const MODEL_OPTIONS = {
     gemini: { aspectRatio: GEMINI_ASPECT_RATIOS, imageSize: GEMINI_IMAGE_SIZES },
-    openai: { size: OPENAI_SIZES, quality: OPENAI_QUALITIES, background: OPENAI_BACKGROUNDS },
+    openai: { size: OPENAI_SIZES, quality: OPENAI_QUALITIES, background: OPENAI_BACKGROUNDS, outputFormat: OPENAI_OUTPUT_FORMATS },
 };
 const optionLabel = value => COPY[value === 'auto' ? 'autoValue' : value] || value;
 const sessions = new Map();
