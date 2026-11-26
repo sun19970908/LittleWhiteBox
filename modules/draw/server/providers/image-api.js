@@ -4,6 +4,7 @@ const {
     createUpstreamError, detectImageMime, readErrorText, readJsonResponse,
 } = require('./upstream.js');
 const { base64Size, validateReferenceImages } = require('../../shared/reference-image-contract.cjs');
+const { upstreamReason } = require('../../shared/multimodal-image-protocol.cjs');
 
 function isObject(value) {
     return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -47,10 +48,6 @@ function normalizeImageApi(context, items, { parseTimeout }, normalizePayload) {
     return { context: normalizedContext, items: normalized };
 }
 
-function upstreamReason(value) {
-    return typeof value === 'string' && /^[a-z][a-z0-9_]{0,79}$/i.test(value) ? value : '';
-}
-
 async function postImageApi(url, { headers, body, signal, providerName, errorReason }) {
     // Redirects could forward an API key header or a private reference image to another origin.
     const response = await fetch(url, { method: 'POST', headers, body, signal, redirect: 'manual' });
@@ -74,11 +71,10 @@ function imageResultError(message, code = 'invalid_result') {
     return Object.assign(new Error(message), { code });
 }
 
-async function decodeImageResult(values, { providerName, resultMode, expectedCount, incomplete = false, missingError, signal }) {
+async function decodeImageResult(values, { providerName, resultMode, incomplete = false, missingError, signal }) {
     if (!values.length) throw missingError || imageResultError(`${providerName} did not return an image`, 'no_image');
     if (resultMode !== 'all') signal.throwIfAborted();
     const images = [];
-    incomplete ||= expectedCount !== undefined && values.length < expectedCount;
     for (const { data, mimeType } of values) {
         const buffer = base64Size(data) > 0 ? Buffer.from(data, 'base64') : null;
         const mime = buffer && detectImageMime(buffer);
@@ -95,4 +91,4 @@ async function decodeImageResult(values, { providerName, resultMode, expectedCou
     return { buffer: Buffer.from(packImageCollection(images, incomplete)), mime: IMAGE_COLLECTION_MIME };
 }
 
-module.exports = { isObject, normalizeImageApiContext, normalizeImageApi, upstreamReason, postImageApi, imageResultError, decodeImageResult };
+module.exports = { isObject, normalizeImageApiContext, normalizeImageApi, postImageApi, imageResultError, decodeImageResult };

@@ -228,6 +228,10 @@ export async function executePreparedScenePlanner(prepared, options = {}) {
     // 只针对上一次失败：每次重试都从原始 task 重新拼，纠错消息不会逐轮累积。
     let retryCorrection = '';
     let response;
+    if (options.onAgentRequest) {
+        options.signal?.throwIfAborted();
+        options.onAgentRequest(structuredClone(task));
+    }
     for (;;) {
         try {
             response = await agentCaller({

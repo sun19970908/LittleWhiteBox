@@ -2,11 +2,12 @@ import referenceContract from '../../shared/reference-image-contract.cjs';
 import { formatScenePlannerProgress } from '../../shared/draw-capsule-copy.js';
 import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
+import { naturalPlannerOptions } from './planning-input.js';
 
 const { validateReferenceImages, MAX_REFERENCE_BYTES, MAX_REFERENCE_IMAGES, MIME_TYPES } = referenceContract;
 const LIMIT_NOTE = COPY.referenceLimit(MAX_REFERENCE_IMAGES, MAX_REFERENCE_BYTES / 1024 ** 2);
 
-export function bindTestView({ document, provider, getSettings, report, loadRuntime = () => import('./runtime.js'),
+export function bindTestView({ document, provider, getSettings, report, onPreviewChange, loadRuntime = () => import('./runtime.js'),
     readBlob = async blob => (await import('../../shared/gallery-cache.js')).blobToDataUrl(blob) }) {
     const $ = id => document.getElementById(id);
     const picker = $('mm-reference-files');
@@ -22,6 +23,7 @@ export function bindTestView({ document, provider, getSettings, report, loadRunt
     let adding = false;
     let active = null;
     let destroyed = false;
+    let lastAgentRequest = null;
     const url = document.defaultView.URL;
 
     picker.accept = MIME_TYPES.join(',');
@@ -124,6 +126,12 @@ export function bindTestView({ document, provider, getSettings, report, loadRunt
             })]);
         }));
     }
+    const getRequest = () => ({
+        prompt: prompt.value.trim(),
+        referenceImages: references.map(({ mimeType, data }) => ({ mimeType, data })),
+    });
+    // The scene Agent sees reference count, not bytes or image-service credentials.
+    const previewKey = (input, settings) => JSON.stringify([input.prompt, naturalPlannerOptions(provider, settings, input)]);
     async function generate() {
         if (active || adding) return;
         if (!prompt.value.trim()) { testStatus('error', COPY.missingPrompt); prompt.focus(); return; }
@@ -131,15 +139,22 @@ export function bindTestView({ document, provider, getSettings, report, loadRunt
         const { signal } = controller;
         active = controller;
         const settings = getSettings();
-        const text = prompt.value.trim();
-        const referenceImages = references.map(({ mimeType, data }) => ({ mimeType, data }));
+        const request = getRequest();
+        const key = previewKey(request, settings);
+        lastAgentRequest = null;
+        onPreviewChange?.();
         setControls();
         testStatus('pending', COPY.analysis);
         try {
             const runtime = await loadRuntime();
             signal.throwIfAborted();
             const { images } = await runtime.generateTestImage(provider, {
-                settings, prompt: text, referenceImages, signal,
+                ...request, settings, signal,
+                onAgentRequest: task => {
+                    if (destroyed || signal.aborted) return;
+                    lastAgentRequest = { key, task };
+                    onPreviewChange?.();
+                },
                 onProgress: progress => {
                     if (destroyed || signal.aborted) return;
                     testStatus('pending', progress.state === 'llm' ? formatScenePlannerProgress(progress)
@@ -170,6 +185,10 @@ export function bindTestView({ document, provider, getSettings, report, loadRunt
     submit.addEventListener('click', observeAsyncCallback(generate, { source: import.meta.url, operation: 'generateTestImage' }));
     cancel.addEventListener('click', () => active?.abort());
     return {
+        getPreview(settings) {
+            const input = getRequest();
+            return { input, sentRequest: lastAgentRequest?.key === previewKey(input, settings) ? lastAgentRequest.task : null };
+        },
         destroy() {
             destroyed = true;
             active?.abort();

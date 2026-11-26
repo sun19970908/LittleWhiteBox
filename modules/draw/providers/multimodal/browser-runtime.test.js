@@ -5,7 +5,7 @@ import { fixture } from '../../shared/tests/helpers/draw-journey.js';
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aN3sAAAAASUVORK5CYII=';
 const finalPrompt = raw => `An adapted illustration of ${raw}.`;
 const registration = {
-    'script.js': 'export const getRequestHeaders=()=>({});export const syncMesToSwipe=()=>true;export const messageFormatting=text=>text;',
+    'script.js': 'export const getRequestHeaders=()=>({});export const syncMesToSwipe=()=>true;export const messageFormatting=text=>text;export const saveChatDebounced=()=>globalThis.__drawJourneyReview.ctx.saveChat();',
     'server-storage.js': 'export const NovelDrawStorage={getStrict:async()=>null};',
     'draw-agent.js': 'export const resolveDrawAgentProviderConfig=async()=>{throw new Error("unexpected live planner resolution")};',
     'image-autosave.js': 'export const autoSaveDeliveredImage=async()=>false;export const imageFilePrefix=provider=>provider;',
@@ -16,10 +16,11 @@ const registration = {
         signal?.throwIfAborted();
         return {...input,prompt:(${finalPrompt.toString()})(input.prompt) + (sceneConfig ? ' ' + sceneConfig.model : ''),positivePrefix:'',negativePrompt:'',characterPrompts:[]};
     }
-    export const buildPlannerOptions=async()=>({plannerOptions:{}});`,
-    'scene-planner.js': 'export const generateAndParseScenePlan=async()=>[];export const prepareScenePlannerInput=async()=>({});',
+    export const buildPlannerOptions=async()=>({plannerOptions:{}});
+    export const runMultimodalScenePlan=async()=>globalThis.__drawJourneyReview.floorTasks;`,
+    'scene-planner.js': 'export const generateAndParseScenePlan=async()=>globalThis.__drawJourneyReview.floorTasks;export const prepareScenePlannerInput=async()=>({});',
     'draw-run-browser.js': 'export const submitProviderDrawRun=async()=>({status:"accepted"});',
-    'draw-run-controls.js': 'export const cancelFloorDrawWork=async()=>true;export const captureDrawCancellationTarget=()=>({});',
+    'draw-run-controls.js': 'export const cancelFloorDrawWork=async(_id,{jobs})=>{ for(const job of jobs) job.controller.abort();return true; };export const captureDrawCancellationTarget=()=>({});',
     'backend-image-jobs.js': `export const createImageBackendJobsClient=()=>({
         async runJob(request,handlers) {
             const host = globalThis.__drawJourneyReview;
@@ -57,7 +58,7 @@ const registration = {
     'settings-ui.js': 'export const openSettings=async()=>{};export const closeSettings=()=>{};',
 };
 
-const settingsStub = `const settings=provider=>({ ...globalThis.__drawJourneyReview.defaultSettings(provider),apiKey:'offline-key' });
+const settingsStub = `const settings=provider=>({ ...globalThis.__drawJourneyReview.defaultSettings(provider),apiKey:'offline-key',sendMode:globalThis.__drawJourneyReview.sendMode ?? 'backend' });
     export const getSettings=settings, loadSettings=async provider=>settings(provider), subscribeSettings=()=>()=>{},updateSettingsPersistent=async()=>{};`;
 
 async function setup(lines, stubs = {}, sources = []) {
@@ -68,6 +69,76 @@ async function setup(lines, stubs = {}, sources = []) {
     host.imageRequests = [];
     host.defaultSettings = h.api.createDefaultSettings;
     return { ...h, host };
+}
+
+for (const provider of ['gemini', 'openai']) {
+    test(`${provider}: browser text drawing saves both delivered pictures and real HTTP failures`, async () => {
+        const { host, api, stop } = await setup(['text']);
+        const runtime = api.multimodalProviders[provider];
+        host.sendMode = 'frontend';
+        host.floorTasks = [{ scene: 'A doorway', placement: { mode: 'tail' } }];
+        host.beforeStatus = () => assert.fail('frontend must not check the plugin');
+        const body = provider === 'gemini'
+            ? { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png } }] } }] }
+            : { data: [{ b64_json: png }] };
+        let requests = 0;
+        globalThis.fetch = async () => ++requests === 1 ? Response.json(body) : new Response(null, { status: 400 });
+        try {
+            await runtime.init();
+            const drawn = await runtime.facade.generateImagesFromText({ source: 'ebook', text: 'She opens the door.' });
+            assert.equal(drawn.success, 1);
+            assert.equal((await api.getDisplayPreviewForSlot(drawn.images[0].slotId)).preview.base64, png);
+            const failed = await runtime.facade.generateImagesFromText({ source: 'tavern', text: 'She enters the hall.' });
+            assert.equal(failed.success, 0);
+            const [entry] = await api.getPreviewsBySlot(failed.images[0].slotId);
+            assert.equal(entry.status, 'failed');
+            assert.match(entry.errorMessage, /400/);
+            assert.equal(requests, 2);
+        } finally { runtime.cleanup(); stop(); }
+    });
+
+    test(`${provider}: browser floor and redraw deliver to the same chat without the plugin`, async () => {
+        const source = 'Two friends wait outside. The door opens. Lamps light the hall.';
+        const h = await setup([source]);
+        const { host, api } = h;
+        const runtime = api.multimodalProviders[provider];
+        const entered = Promise.withResolvers();
+        const sent = [];
+        host.sendMode = 'frontend';
+        host.floorTasks = ['A doorway', 'A lamp', 'A hallway'].map(scene => ({ scene, placement: { mode: 'tail' } }));
+        host.beforeStatus = () => { throw new Error('frontend must not check the plugin'); };
+        globalThis.fetch = async (url, options) => {
+            assert.equal(new URL(url).hostname, new URL(api.createDefaultSettings(provider).apiBaseUrl).hostname);
+            sent.push(JSON.parse(options.body));
+            if (sent.length === 2) {
+                entered.resolve();
+                await new Promise((_, reject) => options.signal.addEventListener('abort', () => reject(options.signal.reason), { once: true }));
+            }
+            const body = provider === 'gemini'
+                ? { candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: png } }] } }] }
+                : { data: [{ b64_json: png }] };
+            return Response.json(body);
+        };
+        try {
+            await runtime.init();
+            const draw = runtime.facade.generateAndInsertImages({ messageId: 0 });
+            await Promise.race([entered.promise, draw.then(() => assert.fail('second image never started'))]);
+            await runtime.facade.abortGeneration(0);
+            const result = await draw;
+            assert.equal(result.success, 1);
+            assert.equal(result.aborted, true);
+            assert.equal(sent.length, 2);
+            assert.equal(host.imageRequests.length, 0);
+            const first = result.results.find(item => item.success);
+            assert.ok(h.persisted()[0].mes.includes(`[image:${first.slotId}]`));
+            assert.equal((await api.getDisplayPreviewForSlot(first.slotId)).preview.base64, png);
+            const retry = await api.generatePreparedChatImages(provider, { ctx: h.ctx, message: h.messages[0],
+                messageId: 0, sourceText: h.messages[0].mes, tasks: [{ scene: 'A new lamp', placement: { mode: 'existing', slotId: first.slotId } }] });
+            assert.equal(retry.results[0].slotId, first.slotId);
+            assert.equal(retry.success, 1);
+            assert.equal((await api.getPreviewsBySlot(first.slotId)).length, 2);
+        } finally { runtime.cleanup(); h.stop(); }
+    });
 }
 
 // Actual browser runtime/registered chat or API entry, with no responses or
@@ -286,7 +357,7 @@ test('a rejected second batch leaves the first twenty delivered images intact', 
 test('shared cache and active requests are separated by the scene snapshot; fingerprints contain no credentials', async () => {
     const h = await setup(['text']);
     const provider = 'gemini', { facade } = h.api.multimodalProviders[provider];
-    const imageSettings = { ...h.api.createDefaultSettings(provider), apiKey: 'image-private' };
+    const imageSettings = { ...h.api.createDefaultSettings(provider), apiKey: 'image-private', sendMode: 'backend' };
     const planGate = Promise.withResolvers();
     let model = 'model-A';
     const snapshot = execution => h.api.captureMultimodalGeneration(execution,
@@ -331,26 +402,44 @@ test('try and redraw use the stored scene retry limit; retrying or cancelling ne
             'var-commands.js': 'export const replaceXbGetVarInString=text=>text;export const replaceXbGetVarYamlInString=text=>text;',
             'server-storage.js': `export const NovelDrawStorage={getStrict:async()=>({plannerMaxRetries:${retries}})};`,
             'draw-agent.js': 'export const resolveDrawAgentProviderConfig=()=>{throw new Error("unexpected live planner resolution")};export const beginDrawScenePlannerDiagnostic=()=>{};export const callDrawScenePlannerAgent=()=>{};',
-        }, ['../providers/multimodal/planning.js', '../providers/multimodal/direct-generation.js', 'scene-planner.js']);
+            'custom-tool-sandbox.js': `export function createSandboxToolHost() {
+                const host = globalThis.__drawJourneyReview;
+                return { define() { ++host.toolDefinitions; return { name: 'note', parameters: { type: 'object', properties: {} } }; },
+                    invoke() {}, dispose() { ++host.toolDisposals; } };
+            }`,
+        }, ['../providers/multimodal/planning.js', '../providers/multimodal/direct-generation.js', 'scene-planner.js', 'scene-planner-layout.js']);
         const { api, host } = h;
-        const settings = { ...api.createDefaultSettings(provider), apiKey: 'offline-key' };
-        const request = { prompt: 'a bridge over a river' };
+        const settings = { ...api.createDefaultSettings(provider), apiKey: 'offline-key', sendMode: 'backend' };
+        settings.paramsPresets[0].positivePrefix = 'ink wash';
+        settings.promptPresets[0].layout = api.addBlock(api.createDefaultLayout(), api.createCustomBlock({ tool: { code: 'return {};' } }));
+        const request = { prompt: 'a bridge over a river {{fixture_macro}}', negativePrompt: 'no vehicles',
+            characterPrompts: [{ name: 'Dawn', prompt: 'silver coat' }] };
         const scene = 'A stone bridge over a quiet river.';
-        let attempts = 0, onRetry;
+        let attempts = 0, expanded = 0, onRetry;
+        host.toolDefinitions = host.toolDisposals = 0;
+        const expansionOptions = { runtime: { substituteParams: text => text.replace('{{fixture_macro}}', () => `macro-${++expanded}`) } };
+        const preview = await api.previewDirectInput(provider, request, settings, { expansionOptions });
+        assert.equal(expanded, 0);
+        assert.equal(host.toolDefinitions, 0);
+        assert.match(JSON.stringify(preview), /\{\{fixture_macro\}\}/);
+        let received, published;
         const plan = (id, input, config, options) => api.planDirectInput(id, input, config, { ...options,
             async plan(planner) {
-                const prepared = await api.prepareScenePlannerInput({ ...planner, agentCaller: true,
-                    expansionOptions: { runtime: { substituteParams: text => text } } });
-                return api.executePreparedScenePlanner(prepared, { signal: planner.signal,
-                    async sleep(_delay, signal) { onRetry?.(); signal?.throwIfAborted(); },
-                    async agentCaller({ validateResult }) {
-                        if (++attempts <= 2) throw new Error('temporary planner failure');
-                        const result = { toolCalls: [{ name: 'submit_scene_plan', arguments: JSON.stringify({
-                            images: [{ index: 1, insert_after: 1, scene, characters: [] }],
-                        }) }] };
-                        return { result, parsed: validateResult(result) };
-                    },
-                });
+                const { customToolHost } = planner;
+                const prepared = await api.prepareScenePlannerInput({ ...planner, agentCaller: true, expansionOptions, keepCustomToolHost: true });
+                try {
+                    return await api.executePreparedScenePlanner(prepared, { signal: planner.signal, customToolHost, onAgentRequest: planner.onAgentRequest,
+                        async sleep(_delay, signal) { onRetry?.(); signal?.throwIfAborted(); },
+                        async agentCaller({ task, validateResult }) {
+                            received ??= structuredClone(task);
+                            if (++attempts <= 2) throw new Error('temporary planner failure');
+                            const result = { toolCalls: [{ name: 'submit_scene_plan', arguments: JSON.stringify({
+                                images: [{ index: 1, insert_after: 1, scene, characters: [] }],
+                            }) }] };
+                            return { result, parsed: validateResult(result) };
+                        },
+                    });
+                } finally { customToolHost?.dispose(); }
             },
         });
         const adapter = api.createMultimodalPublicGeneration(provider, { async runJob(job, handlers) {
@@ -359,14 +448,22 @@ test('try and redraw use the stored scene retry limit; retrying or cancelling ne
                 { headers: { 'content-type': 'image/png' } }) });
         } }, plan);
         try {
-            const testImage = adapter.generate(request, settings);
+            const capture = task => { assert.equal(published, undefined); published = task; };
+            const testImage = adapter.generate(request, settings, { onAgentRequest: capture });
             if (retries === 0) {
                 await assert.rejects(testImage, { code: 'PROVIDER_REQUEST_FAILED' });
+                assert.deepEqual(published, received);
                 assert.equal(attempts, 1);
                 assert.equal(host.imageRequests.length, 0);
                 continue;
             }
             assert.equal((await testImage).length, 1);
+            assert.deepEqual(published, received);
+            assert.match(JSON.stringify(published), /macro-1/);
+            assert.ok(published.tools.some(tool => tool.function.name === 'note'));
+            assert.equal(expanded, 1);
+            assert.equal(host.toolDefinitions, 1);
+            assert.equal(host.toolDisposals, 1);
             assert.equal(attempts, 3);
             assert.equal(host.imageRequests.length, 1);
             attempts = 0;

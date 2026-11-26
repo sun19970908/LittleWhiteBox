@@ -10,14 +10,18 @@ import {
 } from '../../shared/draw-common.js';
 import { getSharedDrawSettings, loadSharedDrawSettings } from '../../shared/draw-settings.js';
 import { stripDrawImageSlots } from '../../shared/image-marker-syntax.js';
+import { normalizeMessageSceneSourceText } from '../../shared/scene-source.js';
+import { bindScenePlanSource } from '../../shared/scene-placement.js';
+import { retryScenePlanning } from '../../shared/planner-retry.js';
+import { requestDrawChatSave } from '../../shared/draw-chat-save.js';
 import { DRAW_SLOT_COPY, DRAW_SLOT_ERRORS } from '../../shared/image-record.js';
 import { getImageChatIdentity } from '../../shared/chat-image-persistence.js';
 import { adaptUnplannedTask } from './direct-generation.js';
 import { runTextImages } from './text-runtime.js';
-import { generateAndParseScenePlan, prepareScenePlannerInput } from '../../shared/scene-planner.js';
+import { prepareScenePlannerInput } from '../../shared/scene-planner.js';
 import { submitProviderDrawRun } from '../../shared/draw-run-browser.js';
 import { cancelFloorDrawWork, captureDrawCancellationTarget } from '../../shared/draw-run-controls.js';
-import { getDrawRunAutomaticCompletion, listActiveSwipeDrawRunMarkers } from '../../shared/draw-run-markers.js';
+import { getDrawRunAutomaticCompletion, listActiveSwipeDrawRunMarkers, setDrawRunAutomaticCompletion } from '../../shared/draw-run-markers.js';
 import {
     acquireFloorImageJob, clearFloorImageJobs, failFloorImageJob, getFloorImageJob, getFloorImageJobs,
     getFloorImagePhase, getFloorImageState, observeFloorImageJob, rebaseFloorImageJobsAfterSwipeDeletion,
@@ -33,16 +37,18 @@ import {
     hasImageBackendJobsCapability, IMAGE_JOBS_UNAVAILABLE_MESSAGE, readImageBackendResultBase64, reportImageBackendJobState,
 } from '../../shared/backend-image-jobs.js';
 import { submitRecoverableImageJob } from '../../shared/recoverable-image-jobs.js';
-import { buildPlannerOptions, planDirectInput } from './planning.js';
+import { buildPlannerOptions, planDirectInput, runMultimodalScenePlan } from './planning.js';
 import { compileMultimodalBatch, createGenerationRecipe } from './compiler.js';
 import { getSizeOptions as providerSizeOptions, providerDefinition } from './settings-model.js';
 import { getSettings, loadSettings, subscribeSettings, updateSettingsPersistent as updateProviderSettings } from './settings.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
+import { createMultimodalFrontendTransport } from './frontend-transport.js';
 
 export function createMultimodalChatRuntime(provider, client, { openSettings, closeSettings }) {
     const label = providerDefinition(provider).label;
     const events = createModuleEvents(`${provider}Draw`);
     const monitors = createImageBackendJobMonitorRegistry({ active: false });
+    const frontend = createMultimodalFrontendTransport(provider);
     const jobs = new Map();
     const settings = () => getSettings(provider);
     const adaptTask = (task, config, options) => adaptUnplannedTask(provider, task, config, { ...options, plan: planDirectInput });
@@ -76,7 +82,11 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
         return selected.length > 0;
     }
 
-    async function runBatch({ compiledBatch, recoverable, signal, backendCancel, monitorGeneration, checkChat, onStateChange, onItemReady, onItemSettled }) {
+    function runBatch(options) {
+        return options.backend ? runBackendBatch(options) : frontend.runBatch(options);
+    }
+
+    async function runBackendBatch({ compiledBatch, recoverable, signal, backendCancel, monitorGeneration, checkChat, onStateChange, onItemReady, onItemSettled }) {
         signal?.throwIfAborted();
         const scope = monitors.createScope(backendCancel ? signal : null, monitorGeneration);
         try {
@@ -102,13 +112,13 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
         return createGenerationRecipe(provider, config, options);
     }
 
-    async function submitPrepared(input, tasks, recipe, monitorGeneration) {
+    async function submitPrepared(input, tasks, recipe, monitorGeneration, backend) {
         const { job } = input;
         const { metadata, compiledBatch } = prepareImageInput(provider, tasks, recipe);
         job.phase = 'gen';
         return submitPreparedChatImages({ ...input, tasks, metadata, filePrefix,
-            signal: job.controller.signal, backend: true,
-            run: handlers => runBatch({ ...handlers, compiledBatch, backendCancel: job.backendCancel.signal, monitorGeneration }),
+            signal: job.controller.signal, backend,
+            run: handlers => runBatch({ ...handlers, backend, compiledBatch, backendCancel: job.backendCancel.signal, monitorGeneration }),
         });
     }
 
@@ -119,6 +129,7 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
         const { job, onStateChange } = input;
         const signal = job.controller.signal;
         const config = input.settings || settings();
+        const backend = config.sendMode === 'backend';
         job.phase = 'llm';
         const adapt = (task, recipe) => adaptTask(task, config, {
             signal, onStateChange, promptOverride: input.promptOverride, negativePrompt: input.negativePromptOverride,
@@ -128,7 +139,7 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
             let recipe;
             job.nativeChat = getImageChatIdentity(input.ctx);
             const checkChat = () => cancelIfChatLeft(job, getImageChatIdentity(getContext()));
-            return submitPreparedChatImages({ ...input, filePrefix, signal, backend: true, followReloadedSlot: true,
+            return submitPreparedChatImages({ ...input, filePrefix, signal, backend, followReloadedSlot: true,
                 // The original input belongs to the chat slot, survives reload,
                 // and stays editable even when the scene model fails.
                 metadata: input.tasks.map(task => ({ tags: task.scene })),
@@ -140,7 +151,7 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
                 run: ({ preparedItems, ...handlers }) => {
                     const compiledBatch = compileMultimodalBatch(provider, preparedItems, recipe);
                     job.phase = 'gen';
-                    return runBatch({ ...handlers, compiledBatch, backendCancel: job.backendCancel.signal, monitorGeneration, checkChat });
+                    return runBatch({ ...handlers, backend, compiledBatch, backendCancel: job.backendCancel.signal, monitorGeneration, checkChat });
                 },
             });
         }
@@ -149,7 +160,7 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
         for (const task of input.tasks) {
             tasks.push(await adapt(task, recipe));
         }
-        return submitPrepared(input, tasks, recipe, monitorGeneration);
+        return submitPrepared(input, tasks, recipe, monitorGeneration, backend);
     }
 
     async function generateAndInsertImages(input = {}) {
@@ -165,21 +176,39 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
             signal.throwIfAborted();
             const { ctx, message, messageId: liveId } = resolveFloorImageJobTarget(job, getContext());
             if (message.is_user) throw new Error(DRAW_SLOT_COPY.sourceChanged);
-            const recipe = recipeFor(config, input);
+            const manual = sharedSettings.autoGenerateImages === false;
+            const backend = config.sendMode === 'backend';
+            const recipe = manual ? createGenerationRecipe(provider, config, input) : recipeFor(config, input);
+            const planOptions = () => buildPlannerOptions(provider, { message, settings: config,
+                sharedSettings, signal, onStateChange: report, negativePrompt: negativePromptOverride,
+                referenceImages: recipe.referenceImages });
+            const preparedInput = sourceText => ({ ctx, message, messageId: liveId, sourceText, job, onStateChange: report,
+                swipeIndex: job.swipeIndex, manual, onPlacement: () => requestDrawChatSave(ctx) });
             if (promptOverride?.trim()) {
                 const sourceText = message.mes;
                 job.phase = 'llm';
                 const task = await adaptTask({ scene: promptOverride, placement: { mode: 'tail' } }, config,
                     { signal, onStateChange: report, negativePrompt: negativePromptOverride, referenceImages: recipe.referenceImages });
-                return await submitPrepared({ ctx, message, messageId: liveId, sourceText, job, onStateChange: report,
-                    swipeIndex: job.swipeIndex }, [task], recipe, monitorGeneration);
+                return await submitPrepared(preparedInput(sourceText), [task], recipe, monitorGeneration, backend);
+            }
+            if (!backend || manual) {
+                job.phase = 'llm';
+                report('llm', toScenePlannerProgress());
+                const { sourceText, tasks } = await retryScenePlanning(async () => {
+                    resolveFloorImageJobTarget(job, getContext());
+                    const { sceneSource, plannerOptions } = await planOptions();
+                    const planned = await runMultimodalScenePlan(plannerOptions);
+                    signal.throwIfAborted();
+                    resolveFloorImageJobTarget(job, getContext());
+                    return { sourceText: message.mes,
+                        tasks: bindScenePlanSource(planned, sceneSource, normalizeMessageSceneSourceText(message.mes)) };
+                }, { maxRetries: sharedSettings.plannerMaxRetries, signal, onStateChange: report });
+                return await submitPrepared(preparedInput(sourceText), tasks, recipe, monitorGeneration, false);
             }
             job.phase = 'submitting';
             return await submitProviderDrawRun({ ctx, message, messageId: liveId, provider, signal, automatic,
                 async preparePlanner({ maxPlanImages }) {
-                    const { plannerOptions } = await buildPlannerOptions(provider, { message, settings: config,
-                        sharedSettings, signal, onStateChange: report, negativePrompt: negativePromptOverride,
-                        referenceImages: recipe.referenceImages });
+                    const { plannerOptions } = await planOptions();
                     return prepareScenePlannerInput({ ...plannerOptions, maxPlanImages, executionTarget: 'server' });
                 },
                 createGenerationRecipe: () => recipe,
@@ -209,12 +238,12 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
                 useWorldbook: false, stripImageMarkers: false, negativePrompt: options.negativePromptOverride,
                 referenceImages: recipe.referenceImages });
             sceneSource = planned.sceneSource;
-            tasks = await generateAndParseScenePlan(planned.plannerOptions);
+            tasks = await runMultimodalScenePlan(planned.plannerOptions);
         }
         signal?.throwIfAborted();
         return runTextImages({ options, sceneSource, filePrefix, signal,
             ...prepareImageInput(provider, tasks, recipe), tasks,
-            run: handlers => runBatch({ ...handlers, signal, monitorGeneration }) });
+            run: handlers => runBatch({ ...handlers, backend: config.sendMode === 'backend', signal, monitorGeneration }) });
     }
 
     const getSizeOptions = () => providerSizeOptions(provider);
@@ -277,13 +306,23 @@ export function createMultimodalChatRuntime(provider, client, { openSettings, cl
     }
     async function autoGenerate() {
         if (!ready || settings().mode !== 'auto') return;
-        const { chat } = getContext();
+        const ctx = getContext();
+        const { chat } = ctx;
         const messageId = (chat?.length ?? 0) - 1;
         const message = chat?.[messageId];
+        const swipeIndex = message?.swipe_id ?? 0;
         if (!message || message.is_user || stripDrawImageSlots(message.mes).trim().length < 50 || getJob(messageId)
-            || getDrawRunAutomaticCompletion(message, message.swipe_id ?? 0, provider)
+            || getDrawRunAutomaticCompletion(message, swipeIndex, provider)
             || listActiveSwipeDrawRunMarkers(message).length) return;
-        try { await generateAndInsertImages({ messageId, automatic: true }); }
+        try {
+            const result = await generateAndInsertImages({ messageId, automatic: true });
+            const live = getContext();
+            const liveId = live.chat?.indexOf(message) ?? -1;
+            if (!result?.status && !result?.aborted && live.chat === chat && liveId >= 0 && (message.swipe_id ?? 0) === swipeIndex) {
+                setDrawRunAutomaticCompletion({ message, messageId: liveId, swipeIndex, provider, completed: true, syncActiveSwipe: syncMesToSwipe });
+                requestDrawChatSave(live);
+            }
+        }
         catch (error) { if (!error.drawTaskReported) drawNotify.error(error.message); }
     }
 

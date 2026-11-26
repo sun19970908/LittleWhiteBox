@@ -1,8 +1,7 @@
 'use strict';
 
-const { endpoint } = require('../upstream.js');
 const { normalizeImageApi, postImageApi, decodeImageResult } = require('../image-api.js');
-const { MIME_EXTENSIONS } = require('../../../shared/reference-image-contract.cjs');
+const { protocols: { openai } } = require('../../../shared/multimodal-image-protocol.cjs');
 
 const SETTINGS = Object.freeze({
     size: value => typeof value === 'string' && /^(?:auto|[1-9]\d*x[1-9]\d*)$/.test(value),
@@ -35,26 +34,10 @@ function normalize(context, items, helpers) {
 }
 
 async function execute({ context, item, signal }) {
-    const { payload, resultMode, referenceImages } = item.request;
-    const headers = { Authorization: `Bearer ${context.key}` };
-    const edit = Boolean(referenceImages?.length);
-    const url = endpoint(context.url, `/images/${edit ? 'edits' : 'generations'}`, { appendPath: true });
-    let body;
-    if (edit) {
-        body = new FormData();
-        for (const [key, value] of Object.entries(payload)) body.set(key, String(value));
-        referenceImages.forEach(({ data, mimeType }, index) => {
-            body.append('image[]', new Blob([Buffer.from(data, 'base64')], { type: mimeType }), `reference-${index + 1}.${MIME_EXTENSIONS[mimeType]}`);
-        });
-    } else {
-        headers['Content-Type'] = 'application/json';
-        body = JSON.stringify(payload);
-    }
-    const data = await postImageApi(url, {
-        headers, body, signal, providerName: 'OpenAI GPT Image', errorReason: error => error?.code ?? error?.type,
-    });
-    const values = Array.isArray(data?.data) ? data.data.map(image => ({ data: image?.b64_json })) : [];
-    return decodeImageResult(values, { providerName: 'OpenAI GPT Image', resultMode, expectedCount: payload.n, signal });
+    const { url, ...request } = openai.request(context, item.request);
+    const data = await postImageApi(url, { ...request, signal, providerName: 'OpenAI GPT Image', errorReason: openai.errorReason });
+    const { values, incomplete } = openai.result(data, item.request.payload);
+    return decodeImageResult(values, { providerName: 'OpenAI GPT Image', resultMode: item.request.resultMode, incomplete, signal });
 }
 
 module.exports = { execute, normalize };

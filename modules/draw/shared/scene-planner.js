@@ -263,7 +263,9 @@ async function buildScenePlannerRequest(options = {}) {
     );
     const promptConfig = getEffectivePromptConfig(customPrompts, promptDefaults);
     const fieldDescriptions = parseFieldDescriptions(promptConfig.fieldDescriptions);
-    const runtime = await resolveExpansionRuntime(options.expansionOptions);
+    // A template preview neither executes host macros nor initializes user tools.
+    const preview = options.preview === true;
+    const runtime = preview ? {} : await resolveExpansionRuntime(options.expansionOptions);
     const slots = createPromptSlots(['worldInfo', 'characterInfo', 'continuity', 'lastMessage']);
 
     try {
@@ -274,7 +276,7 @@ async function buildScenePlannerRequest(options = {}) {
         // is locked, while the placement map stays anchored to the unexpanded source snapshot.
         const expandedMessageText = await expandScenePromptText(sceneSource.numberedContent, runtime);
         const expandedContent = stripScenePointMarkers(expandedMessageText);
-        const nativeWorldInfo = useWorldInfo
+        const nativeWorldInfo = useWorldInfo && !preview
             ? await buildNativeWorldInfoForDraw(expandedContent, presentCharacters, options.worldInfoResolver)
             : '';
         const expandedWorldInfo = await expandScenePromptText(
@@ -302,7 +304,7 @@ async function buildScenePlannerRequest(options = {}) {
         const { layout } = normalizeLayout(customPrompts?.layout);
         // 后台只捕获源码；工具初始化由实际执行任务的沙盒负责。
         const customToolSources = options.executionTarget === 'server' ? snapshotCustomToolSources(layout) : [];
-        const customTools = options.executionTarget === 'server' ? []
+        const customTools = options.executionTarget === 'server' || preview ? []
             : await resolveCustomToolDefinitions(layout, options.customToolHost, { signal: options.signal });
         const plan = planScenePlannerMessages({
             layout,
@@ -355,7 +357,7 @@ async function buildScenePlannerRequest(options = {}) {
         const handoffTools = createScenePlannerHandoffTools({ documents });
         const prompt = { systemPrompt: String(options.systemInstruction || ''), messages };
         const readyMessages = stripToolProtocolMarker(markToolProtocolMessages(messages));
-        await emitScenePromptReady(runtime, readyMessages);
+        if (!preview) await emitScenePromptReady(runtime, readyMessages);
         return {
             prompt,
             handoffTools,
@@ -462,6 +464,7 @@ export async function generateAndParseScenePlan(options = {}) {
             signal: options.signal,
             diagnostic,
             onDiagnosticUpdate: options.onDiagnosticUpdate,
+            onAgentRequest: options.onAgentRequest,
             agentCaller: options.agentCaller || callDrawScenePlannerAgent,
             agentOptions: options.agentOptions,
             agentCore: options.agentCore,

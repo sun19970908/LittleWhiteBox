@@ -5,7 +5,7 @@ import { setImmediate as nextTurn } from 'node:timers/promises';
 import { parseHTML } from 'linkedom';
 import { createDefaultSettings } from './settings-model.js';
 import { createSettingsRepository } from './settings-repository.js';
-import { bindSettingsPresetBar } from './settings-preset-bar.js';
+import { bindSettingsPresetList } from './settings-preset-list.js';
 import { bindTestView } from './settings-test-view.js';
 
 const PAGE = readFileSync(new URL('./settings.html', import.meta.url), 'utf8');
@@ -26,16 +26,14 @@ test('parameter presets save drafts, survive failed writes, switch and delete sa
     const root = document.querySelector('[data-presets="params"]');
     const input = document.querySelector('[name="positivePrefix"]');
     let fields;
-    const bar = bindSettingsPresetBar({ root, label: 'Parameters', getState: () => settings.get(provider),
+    const bar = bindSettingsPresetList({ root, label: 'Parameters', getState: () => settings.get(provider),
         persist: mutator => settings.update(provider, mutator), listKey: 'paramsPresets', selectionKey: 'selectedParamsPresetId',
         readFields: () => ({ ...fields, positivePrefix: input.value }),
         fillFields: value => { fields = value; input.value = value.positivePrefix; },
     });
     const action = async action => { root.querySelector(`[data-preset-action="${action}"]`).click(); await nextTurn(); };
-    const select = root.querySelector('select');
     const selectPreset = async id => {
-        for (const option of select.options) option.toggleAttribute('selected', option.value === id);
-        select.dispatchEvent(new window.Event('change'));
+        root.querySelector(`.preset-row[data-preset-id="${id}"]`).click();
         await nextTurn();
     };
     input.value = 'Watercolor';
@@ -52,7 +50,12 @@ test('parameter presets save drafts, survive failed writes, switch and delete sa
     assert.ok(root.querySelector('[role="status"]').classList.contains('error'));
     failure = false;
     name = 'Illustration';
-    await action('rename');
+    const renameInput = root.querySelector('[aria-current="true"] input');
+    renameInput.dispatchEvent(new window.Event('focusin', { bubbles: true }));
+    renameInput.value = name;
+    renameInput.dispatchEvent(new window.Event('change', { bubbles: true }));
+    renameInput.dispatchEvent(new window.Event('focusout', { bubbles: true }));
+    await nextTurn();
     assert.equal(persisted.paramsPresets[1].name, name);
     assert.equal(input.value, 'Unsaved');
     await selectPreset('default');
@@ -60,9 +63,11 @@ test('parameter presets save drafts, survive failed writes, switch and delete sa
     assert.equal(input.value, '');
     await selectPreset(portrait);
     assert.equal(input.value, 'Watercolor');
-    await action('delete');
+    root.querySelector(`[data-preset-action="delete"][data-preset-id="${portrait}"]`).click();
+    await nextTurn();
     assert.deepEqual(persisted.paramsPresets.map(item => item.id), ['default']);
     assert.equal(persisted.selectedParamsPresetId, 'default');
+    bar.destroy();
 });
 
 test('uploaded references reach only the current test request; removed and closed references do not leak', async () => {

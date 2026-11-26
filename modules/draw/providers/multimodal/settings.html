@@ -57,6 +57,7 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
                             <button class="btn" id="mm-reference-upload" type="button"><i class="fa-solid fa-upload" aria-hidden="true"></i> <span data-copy="uploadReferences"></span></button>
                             <input id="mm-reference-files" type="file" multiple hidden>
                             <button class="btn" id="mm-reference-clear" type="button" data-copy="clearReferences" hidden></button>
+                            <span class="form-hint" data-copy="uploadFormats"></span>
                         </div>
                         <p class="form-hint" data-copy="referencesHint"></p>
                         <p class="form-hint" id="mm-reference-limit"></p>
@@ -74,8 +75,6 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
                 </div>
                 <div class="tip-box"><i class="fa-solid fa-lightbulb" aria-hidden="true"></i><div>
                     <div data-draw-usage></div>
-                    <div data-copy="agentNote"></div>
-                    <div data-copy="testUsesSaved"></div>
                 </div></div>
             </section>
             <section class="view" data-page="api">
@@ -85,7 +84,6 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
                     <label class="form-group">
                         <span class="form-label" data-copy="apiBaseUrl"></span>
                         <input name="apiBaseUrl" class="input" type="url" spellcheck="false" autocomplete="off">
-                        <span class="form-hint" data-copy="addressHint"></span>
                     </label>
                     <div class="form-row">
                         <label class="form-group">
@@ -97,9 +95,18 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
                             <input name="timeout" class="input" type="number" min="10" max="600" step="1">
                         </label>
                     </div>
-                    <p class="form-hint" data-copy="imageApiNote"></p>
-                    <p class="form-hint" data-copy="backendHint"></p>
-                    <div id="mm-backend-guide"></div>
+                    <div class="form-group">
+                        <span class="form-label" id="mm-send-label" data-copy="sendMode"></span>
+                        <div class="btn-group" role="group" aria-labelledby="mm-send-label">
+                            <button class="btn mm-send-mode" type="button" data-send-mode="frontend"><i class="fa-solid fa-globe" aria-hidden="true"></i> <span data-copy="frontend"></span></button>
+                            <button class="btn mm-send-mode" type="button" data-send-mode="backend"><i class="fa-solid fa-server" aria-hidden="true"></i> <span data-copy="backend"></span></button>
+                        </div>
+                        <p id="mm-frontend-hint" class="form-hint" data-copy="frontendHint"></p>
+                        <div id="mm-backend-status" hidden>
+                            <p id="mm-backend-message" class="form-hint" role="status"></p>
+                            <div id="mm-backend-guide"></div>
+                        </div>
+                    </div>
                     <button id="mm-api-save" class="btn btn-primary" type="button"><i class="fa-solid fa-floppy-disk" aria-hidden="true"></i> <span data-copy="save"></span></button>
                     <div id="mm-api-status" class="status-text" role="status"></div>
                 </fieldset>
@@ -141,8 +148,8 @@ loadBuildEntry('runtime/draw-settings').catch(reportBuildFailure);
             </section>
             <section class="view" data-page="prompts">
                 <div class="view-header"><h2 class="view-title" data-copy="prompts"></h2></div>
-                <div data-presets="prompt"></div>
                 <p class="form-hint" data-copy="promptCustomization"></p>
+                <div data-presets="prompt"></div>
                 <div id="mm-layout"></div>
                 <div id="mm-prompt-editors" hidden></div>
                 <div id="mm-extra-prompt-fields"></div>

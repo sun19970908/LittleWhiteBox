@@ -37,7 +37,7 @@ export async function runTextImages({ options, sceneSource, filePrefix, signal, 
         recoverable: { plan: { delivery: { mode: 'gallery' }, gallery, items }, commitPlacements: () => !signal?.aborted },
         async onItemReady({ index, base64, guard }) {
             const { slotId, imgId, previewMetadata } = items[index];
-            await guard();
+            await guard?.();
             await storePreview({ ...gallery, ...previewMetadata, slotId, imgId, base64 });
             await setSlotSelection(slotId, imgId);
             images[index] = { slotId, imgId, ...previewMetadata, placement: tasks[index].placement,
@@ -50,7 +50,7 @@ export async function runTextImages({ options, sceneSource, filePrefix, signal, 
             if (signal?.aborted || state === 'ready' || state === 'consumed') return;
             const { slotId, imgId, previewMetadata } = items[index];
             const problem = classifyError(error);
-            await guard();
+            await guard?.();
             await storeFailedPlaceholder({ ...gallery, ...previewMetadata, slotId, imgId,
                 errorType: problem.code, errorMessage: error?.message || problem.desc });
             images[index] = { slotId, ...previewMetadata, placement: tasks[index].placement, success: false, error: problem };

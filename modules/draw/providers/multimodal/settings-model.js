@@ -12,7 +12,8 @@ export const GEMINI_IMAGE_SIZES = Object.freeze(['1K', '2K', '4K']);
 export const OPENAI_SIZES = Object.freeze(['auto', '1024x1024', '1536x1024', '1024x1536']);
 export const OPENAI_QUALITIES = Object.freeze(['auto', 'low', 'medium', 'high']);
 export const OPENAI_BACKGROUNDS = Object.freeze(['auto', 'opaque', 'transparent']);
-export const API_FIELDS = Object.freeze(['apiBaseUrl', 'apiKey', 'timeout']);
+export const API_FIELDS = Object.freeze(['apiBaseUrl', 'apiKey', 'timeout', 'sendMode']);
+const DEFAULT_SEND_MODE = 'frontend';
 
 export function providerDefinition(provider) {
     if (!Object.hasOwn(PROVIDERS, provider)) throw new TypeError(COPY.unknownProvider);
@@ -24,7 +25,7 @@ export function defaultParams(provider) {
         : { model, size: 'auto', quality: 'auto', background: 'auto' };
 }
 export function createDefaultSettings(provider) {
-    const config = { apiBaseUrl: providerDefinition(provider).baseUrl, apiKey: '', timeout: 180000 };
+    const config = { apiBaseUrl: providerDefinition(provider).baseUrl, apiKey: '', timeout: 180000, sendMode: DEFAULT_SEND_MODE };
     return { ...config,
         apiPresets: [{ id: 'default', name: COPY.defaultPreset, config: { ...config } }], activeApiPresetId: 'default',
         paramsPresets: [{ id: 'default', name: COPY.defaultPreset, positivePrefix: '', params: defaultParams(provider), maxImages: 1 }],
@@ -74,7 +75,9 @@ export function validateConnection(config) {
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash) throw new TypeError(COPY.invalidUrl);
     if (typeof config.apiKey !== 'string') throw new TypeError(COPY.invalidParameter('apiKey'));
     if (!Number.isInteger(config.timeout) || config.timeout < 10000 || config.timeout > 600000) throw new TypeError(COPY.invalidParameter('timeout'));
-    return { apiBaseUrl: url.href.replace(/\/+$/, ''), apiKey: config.apiKey.trim(), timeout: config.timeout };
+    const { sendMode = DEFAULT_SEND_MODE } = config;
+    if (!['frontend', 'backend'].includes(sendMode)) throw new TypeError(COPY.sendModeInvalid);
+    return { apiBaseUrl: url.href.replace(/\/+$/, ''), apiKey: config.apiKey.trim(), timeout: config.timeout, sendMode };
 }
 function validatePresetList(list, selected) {
     if (!Array.isArray(list) || !list.length || !list.some(item => item.id === selected)) throw new TypeError(COPY.missingPreset);

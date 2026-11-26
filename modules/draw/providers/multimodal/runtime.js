@@ -11,18 +11,19 @@ import { createMultimodalChatRuntime } from './chat-runtime.js';
 import { planDirectInput } from './planning.js';
 import { getActiveParamsPreset, PROVIDERS } from './settings-model.js';
 import { getSettings, loadSettings } from './settings.js';
+import { createMultimodalFrontendTransport } from './frontend-transport.js';
 
 const client = createImageBackendJobsClient({ getHeaders: getRequestHeaders, getOwner: getCurrentUserHandle });
 
-export function createMultimodalPublicGeneration(provider, jobs = client, plan = planDirectInput) {
-    return createDirectGeneration(provider, { jobs, plan, snapshot: () => loadSettings(provider) });
+export function createMultimodalPublicGeneration(provider, jobs = client, plan = planDirectInput, frontend = createMultimodalFrontendTransport(provider)) {
+    return createDirectGeneration(provider, { jobs, frontend, plan, snapshot: () => loadSettings(provider) });
 }
 
 export async function captureMultimodalGeneration(execution, resolveScene = resolveDrawAgentProviderConfig) {
-    const { apiBaseUrl, apiKey, timeout, overrideSize, paramsPresets, selectedParamsPresetId, promptPresets, selectedPromptPresetId } = execution;
+    const { apiBaseUrl, apiKey, timeout, sendMode, overrideSize, paramsPresets, selectedParamsPresetId, promptPresets, selectedPromptPresetId } = execution;
     const { providerConfig: sceneConfig } = await resolveScene({ timeout });
     return { execution, sceneConfig, fingerprint: {
-        imageConnection: sha256(stableSerialize({ apiBaseUrl, apiKey })),
+        imageConnection: sha256(stableSerialize({ apiBaseUrl, apiKey, sendMode })),
         sceneConfig: sha256(stableSerialize(sceneConfig)),
         timeout, overrideSize,
         paramsPreset: paramsPresets.find(preset => preset.id === selectedParamsPresetId),
@@ -60,8 +61,11 @@ export const multimodalProviders = Object.fromEntries(Object.keys(PROVIDERS).map
     return [provider, { ...chat, facade, publicGeneration }];
 }));
 
-export async function generateTestImage(provider, { settings, signal, onProgress, ...request } = {}) {
+export async function generateTestImage(provider, { settings, signal, onProgress, onAgentRequest, ...request } = {}) {
     const saveImages = capturePublicGallery(request, provider);
     const { publicGeneration: adapter } = multimodalProviders[provider];
-    return generateCollectedDrawResult({ adapter, request, settings: settings ?? await adapter.snapshot(), saveImages, signal, onProgress });
+    return generateCollectedDrawResult({
+        adapter: { generate: (input, config, options) => adapter.generate(input, config, { ...options, onAgentRequest }) },
+        request, settings: settings ?? await adapter.snapshot(), saveImages, signal, onProgress,
+    });
 }

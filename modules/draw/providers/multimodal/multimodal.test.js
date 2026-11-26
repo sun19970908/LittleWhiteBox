@@ -140,3 +140,26 @@ test('settings writes serialize mutators and publish only confirmed changes', as
     assert.equal(repository.get('gemini').showFloorButton, false);
     dispose();
 });
+
+test('API presets keep their own send mode across switches and reload', async () => {
+    let disk;
+    const create = () => createSettingsRepository(() => ({
+        getStrict: async () => structuredClone(disk),
+        setAndSave: async (_key, value) => { disk = structuredClone(value); },
+    }));
+    const provider = 'openai';
+    const repository = create();
+    const settings = await repository.load(provider);
+    assert.equal(settings.sendMode, 'frontend');
+    const switchTo = id => repository.update(provider, draft => {
+        draft.activeApiPresetId = id;
+        Object.assign(draft, draft.apiPresets.find(preset => preset.id === id).config);
+    });
+    await repository.update(provider, draft => {
+        draft.apiPresets.push({ id: 'proxy', name: 'Proxy', config: { ...draft.apiPresets[0].config, sendMode: 'backend' } });
+    });
+    assert.equal((await switchTo('proxy')).sendMode, 'backend');
+    assert.equal(Object.hasOwn(disk, 'sendMode'), false);
+    assert.equal((await create().load(provider)).sendMode, 'backend');
+    assert.equal((await switchTo('default')).sendMode, 'frontend');
+});

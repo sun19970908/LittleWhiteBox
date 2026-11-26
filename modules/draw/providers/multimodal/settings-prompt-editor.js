@@ -1,18 +1,17 @@
-import { observeAsyncCallback } from '../../../../shared/common/async-errors.js';
+import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 import { createPromptLayoutEditor, normalizeLayout } from '../../shared/prompt-layout-editor.js';
-import { buildScenePlannerChainPreview } from '../../shared/scene-planner-frame.js';
-import { renderScenePlannerChain } from '../../shared/scene-planner-chain-view.js';
 import { parseFieldDescriptions } from '../../shared/scene-plan-descriptions.js';
 import { NATURAL_PROMPT_DEFAULTS } from './prompts.js';
-import { naturalPlannerOptions } from './planning-input.js';
-import { bindSettingsPresetBar } from './settings-preset-bar.js';
+import { previewDirectInput } from './planning.js';
+import { bindSettingsPresetList } from './settings-preset-list.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
 
 const TEMPLATE_FILE_TYPE = 'lwb-natural-draw-prompt';
 const TEMPLATE_FILE_VERSION = 1;
 const FIELD_KEYS = Object.keys(NATURAL_PROMPT_DEFAULTS);
 
-export function bindPromptEditor({ document, provider, getState, persist }) {
+export function bindPromptEditor({ document, provider, getState, persist, getPreview,
+    buildPreview = previewDirectInput }) {
     const view = document.defaultView;
     const parking = document.getElementById('mm-prompt-editors');
     const container = document.getElementById('mm-layout');
@@ -41,33 +40,38 @@ export function bindPromptEditor({ document, provider, getState, persist }) {
     const fixed = create('details', 'draw-disclosure');
     const system = create('pre', 'mm-system-rule');
     fixed.append(create('summary', '', COPY.fixedSystemRule), system);
-    const chainRoot = create('div', 'prompt-chain-container');
+    const chainRoot = create('pre', 'mm-request-preview');
     const status = create('div', 'status-text');
-    preview.append(summary, fixed, status, chainRoot);
+    const previewNote = create('p', 'form-hint');
+    const draftNotice = create('p', 'form-hint', COPY.previewUnsaved);
+    draftNotice.hidden = true;
+    preview.append(summary, previewNote, draftNotice, fixed, status, chainRoot);
+    let previewSequence = 0;
 
-    function renderPreview() {
+    async function renderPreview() {
+        const sequence = ++previewSequence;
         if (!preview.open || !owner) return;
+        status.textContent = '';
+        chainRoot.textContent = '';
         try {
             const settings = getState();
-            const preset = { id: owner, ...readFields() };
-            settings.selectedPromptPresetId = owner;
-            settings.promptPresets = [preset];
-            const { plannerProfile, systemInstruction, modelGuide } = naturalPlannerOptions(provider, settings);
-            const descriptions = parseFieldDescriptions(preset.fieldDescriptions);
-            const chain = buildScenePlannerChainPreview({
-                profile: plannerProfile, descriptions, layout: draftLayout,
-                builtinTexts: { opening: preset.topSystem, guide: modelGuide, rules: preset.sceneRules },
-            });
-            system.textContent = systemInstruction;
-            status.textContent = '';
-            renderScenePlannerChain(chainRoot, chain);
+            const { input, sentRequest } = getPreview(settings);
+            previewNote.textContent = sentRequest ? COPY.previewSent : input.prompt ? COPY.previewTemplate : COPY.previewSample;
+            const { systemPrompt, ...request } = sentRequest
+                ?? await buildPreview(provider, { ...input, prompt: input.prompt || COPY.samplePrompt }, settings);
+            if (sequence !== previewSequence) return;
+            system.textContent = systemPrompt;
+            chainRoot.textContent = JSON.stringify(request, null, 2);
         } catch (error) {
+            if (sequence !== previewSequence) return;
             status.className = 'status-text error';
             status.textContent = error.message;
-            chainRoot.replaceChildren();
+            system.textContent = '';
         }
     }
-    preview.addEventListener('toggle', renderPreview);
+    const refreshPreview = () => observeBackgroundTask(renderPreview(), { source: import.meta.url, operation: 'renderRequestPreview' });
+    const updateDraftNotice = () => { draftNotice.hidden = !bar.isDirty(); };
+    preview.addEventListener('toggle', refreshPreview);
     for (const [id, keys] of Object.entries(blocks)) {
         const editor = create('div');
         editors[id] = editor;
@@ -77,12 +81,11 @@ export function bindPromptEditor({ document, provider, getState, persist }) {
             field.rows = 5;
             fields[key] = field;
             label.append(create('span', 'form-label', COPY[key]), field);
-            field.addEventListener('input', () => layoutEditor.refreshSummaries());
-            field.addEventListener('change', renderPreview);
+            field.addEventListener('input', () => { layoutEditor.refreshSummaries(); updateDraftNotice(); });
             editor.append(label, button(COPY.restoreDefault, () => {
                 field.value = NATURAL_PROMPT_DEFAULTS[key];
                 layoutEditor.refreshSummaries();
-                renderPreview();
+                updateDraftNotice();
             }));
         }
         parking.append(editor);
@@ -91,7 +94,7 @@ export function bindPromptEditor({ document, provider, getState, persist }) {
         document, container, builtinEditors: editors, editorParking: parking,
         getOwnerKey: () => owner, getLayout: () => draftLayout,
         getSavedLayout: () => getState().promptPresets.find(item => item.id === owner)?.layout,
-        onChange: next => { draftLayout = next; },
+        onChange: next => { draftLayout = next; updateDraftNotice(); },
         confirm: text => view.confirm(text),
         describeBuiltin: id => editors[id] ? {
             label: id === 'guide' ? COPY.tagGuideContent : undefined,
@@ -100,16 +103,17 @@ export function bindPromptEditor({ document, provider, getState, persist }) {
         } : null,
         collapseId: 'prompt-layout',
     });
-    const bar = bindSettingsPresetBar({
+    const bar = bindSettingsPresetList({
         root: document.querySelector('[data-presets="prompt"]'), label: COPY.prompts, getState, persist,
         listKey: 'promptPresets', selectionKey: 'selectedPromptPresetId', readFields,
         validateFields: value => parseFieldDescriptions(value.fieldDescriptions),
         fillFields: (value, id) => {
             owner = id;
             draftLayout = value.layout;
+            draftNotice.hidden = true;
             for (const key of FIELD_KEYS) fields[key].value = value[key];
             layoutEditor.render();
-            renderPreview();
+            refreshPreview();
         },
     });
     const tools = create('div', 'btn-group');
@@ -148,9 +152,11 @@ export function bindPromptEditor({ document, provider, getState, persist }) {
             draftLayout = undefined;
             for (const key of FIELD_KEYS) fields[key].value = NATURAL_PROMPT_DEFAULTS[key];
             layoutEditor.render();
-            renderPreview();
+            updateDraftNotice();
         }),
     );
-    extra.append(create('p', 'form-hint', COPY.promptSectionsHint), tools, preview);
-    return { render: bar.render, isDirty: bar.isDirty, destroy: () => layoutEditor.destroy() };
+    extra.append(tools, preview);
+    return { render() { bar.render(); updateDraftNotice(); refreshPreview(); }, isDirty: bar.isDirty, refreshPreview,
+        destroy() { ++previewSequence; bar.destroy(); layoutEditor.destroy(); },
+    };
 }

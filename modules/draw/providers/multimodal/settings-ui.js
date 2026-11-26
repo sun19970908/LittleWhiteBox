@@ -1,4 +1,5 @@
 import { extensionFolderPath } from '../../../../core/constants.js';
+import { getRequestHeaders } from '../../../../../../../../script.js';
 import { observeAsyncCallback, observeBackgroundTask } from '../../../../shared/common/async-errors.js';
 import { DRAW_LAYERS } from '../../shared/draw-visuals.js';
 import { drawNotify } from '../../shared/draw-toast.js';
@@ -8,6 +9,9 @@ import { createApiPresetPage } from '../../shared/api-preset-page.js';
 import { isSameApiConfig } from '../../shared/api-presets.js';
 import { attachDrawAgentSettingsSurface } from '../../shared/agent-settings-surface.js';
 import { mountServerPluginGuide } from '../../../../shared/server-plugin/installation-guide.js';
+import { fetchImageBackendJobsStatus, hasImageBackendJobsCapability, REQUIRED_IMAGE_JOBS_PLUGIN_VERSION } from '../../shared/backend-image-jobs.js';
+import { DRAW_BACKEND_COPY, createDrawBackendStatusCopy } from '../../shared/draw-backend-copy.js';
+import { isDrawingRuntimeHostCompatible } from '../../shared/drawing-runtime-client.js';
 import { invalidateDrawPreviews } from '../../shared/draw-common.js';
 import { mountProviderSettingsSections } from '../../shared/provider-settings-markup.js';
 import { createProviderSettingsSections } from '../../shared/provider-settings-sections.js';
@@ -21,7 +25,7 @@ import { API_FIELDS, createDefaultSettings, defaultParams, GEMINI_ASPECT_RATIOS,
     OPENAI_BACKGROUNDS, OPENAI_QUALITIES, OPENAI_SIZES, providerDefinition } from './settings-model.js';
 import { getSettings, loadSettings, subscribeSettings, updateSettingsPersistent } from './settings.js';
 import { bindPromptEditor } from './settings-prompt-editor.js';
-import { bindSettingsPresetBar } from './settings-preset-bar.js';
+import { bindSettingsPresetList } from './settings-preset-list.js';
 import { bindTestView } from './settings-test-view.js';
 import { MULTIMODAL_COPY as COPY } from './copy.js';
 
@@ -133,7 +137,7 @@ function bindFrame(document, provider) {
     const paramKeys = Object.keys(defaultParams(provider));
     field('maxImages').min = String(MAX_IMAGES_OVERRIDE_MIN);
     field('maxImages').max = String(MAX_IMAGES_OVERRIDE_MAX);
-    const params = bindSettingsPresetBar({
+    const params = bindSettingsPresetList({
         root: q('[data-presets="params"]'), label: COPY.parameters, getState, persist,
         fieldset: $('mm-params-form'), listKey: 'paramsPresets', selectionKey: 'selectedParamsPresetId',
         readFields: () => ({ positivePrefix: field('positivePrefix').value, params: Object.fromEntries(paramKeys.map(key => [key, field(key).value])), maxImages: field('maxImages').value === '' ? null : Number(field('maxImages').value) }),
@@ -143,13 +147,41 @@ function bindFrame(document, provider) {
             for (const key of paramKeys) field(key).value = params[key];
         },
     });
-    const promptEditor = bindPromptEditor({ document, provider, getState, persist });
+    const test = bindTestView({ document, provider, getSettings: getState, report,
+        onPreviewChange: () => promptEditor.refreshPreview() });
+    const promptEditor = bindPromptEditor({ document, provider, getState, persist, getPreview: test.getPreview });
     const apiDefaults = createDefaultSettings(provider);
-    const readConfig = () => ({ apiBaseUrl: field('apiBaseUrl').value.trim(), apiKey: field('apiKey').value.trim(), timeout: Number(field('timeout').value) * 1000 });
+    const sendButtons = [...document.querySelectorAll('[data-send-mode]')];
+    let sendMode;
+    let statusCheck;
+    mountServerPluginGuide($('mm-backend-guide'), 'mm-backend');
+    function setSendMode(next) {
+        if (sendMode === next) return;
+        sendMode = next;
+        const backend = next === 'backend';
+        for (const button of sendButtons) button.setAttribute('aria-pressed', String(button.dataset.sendMode === next));
+        $('mm-backend-status').hidden = !backend;
+        $('mm-frontend-hint').hidden = backend;
+        statusCheck?.abort();
+        if (!backend) return;
+        statusCheck = new AbortController();
+        const { signal } = statusCheck;
+        $('mm-backend-message').textContent = DRAW_BACKEND_COPY.checking;
+        observeBackgroundTask(fetchImageBackendJobsStatus({ getHeaders: getRequestHeaders, signal }).then(status => {
+            if (signal.aborted) return;
+            const copy = createDrawBackendStatusCopy({ version: status.version, minimumVersion: REQUIRED_IMAGE_JOBS_PLUGIN_VERSION });
+            $('mm-backend-message').textContent = !status.ready ? copy.notInstalled
+                : !isDrawingRuntimeHostCompatible(status) ? copy.outdated
+                    : hasImageBackendJobsCapability(status) ? copy.ready : copy.backgroundUnsupported;
+        }).catch(error => { if (!signal.aborted) throw error; }), { source: import.meta.url, operation: 'checkBackend' });
+    }
+    const readConfig = () => ({ apiBaseUrl: field('apiBaseUrl').value.trim(), apiKey: field('apiKey').value.trim(),
+        timeout: Number(field('timeout').value) * 1000, sendMode });
     const fillConfig = config => {
         field('apiBaseUrl').value = config.apiBaseUrl;
         field('apiKey').value = config.apiKey;
         field('timeout').value = config.timeout / 1000;
+        setSendMode(config.sendMode);
     };
     const api = createApiPresetPage({
         presetOptions: { fields: API_FIELDS, normalizeConfig: value => Object.fromEntries(API_FIELDS.map(key => [key, value[key] ?? apiDefaults[key]])) },
@@ -163,7 +195,7 @@ function bindFrame(document, provider) {
     fillConfig(getState());
     api.ensureBar();
     api.bindFormRefresh();
-    mountServerPluginGuide($('mm-backend-guide'), 'mm-backend');
+    for (const button of sendButtons) button.addEventListener('click', () => setSendMode(button.dataset.sendMode));
     on('#mm-api-save', 'click', async event => {
         globalBusy++;
         try { await runSaveButtonTask(event.currentTarget, api.save, { statusElementId: 'mm-api-status' }); }
@@ -205,7 +237,6 @@ function bindFrame(document, provider) {
         const state = getState();
         $('sd-draw-summary-preset').textContent = state.paramsPresets.find(item => item.id === state.selectedParamsPresetId).name;
     }
-    const test = bindTestView({ document, provider, getSettings: getState, report });
     sections.bindGallery();
     $('sd-gallery-save-as-jpeg').checked = shared.saveAsJpeg === true;
     $('sd-gallery-auto-save').checked = shared.autoSaveImages === true;
@@ -305,6 +336,7 @@ function bindFrame(document, provider) {
         });
         document.querySelectorAll('[data-page]').forEach(node => node.classList.toggle('active', node.dataset.page === view));
         if (view === 'llm') agentSurface = attachDrawAgentSettingsSurface({ surface: agentSurface, getRoot: () => $('mm-agent'), logPrefix: label });
+        if (view === 'prompts') promptEditor.refreshPreview();
         if (view === 'gallery') observeBackgroundTask(sections.renderGalleryManagement(), { source: import.meta.url, operation: 'openGallery' });
     }
     document.addEventListener('click', event => {
@@ -329,6 +361,8 @@ function bindFrame(document, provider) {
             sorting.destroy();
             sections.destroyCharacterLibraryUi();
             agentSurface?.destroy();
+            statusCheck?.abort();
+            params.destroy();
             promptEditor.destroy();
             test.destroy();
             api.destroy();

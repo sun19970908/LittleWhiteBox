@@ -6,4 +6,5 @@
 .mm-image-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .mm-image-actions .btn { white-space: normal; }
 .mm-system-rule { white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
-.mm-preset-nav { min-width: 0; }
+.mm-request-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 26rem; overflow: auto; }
+.mm-send-mode[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--bg-primary); font-weight: 500; }
